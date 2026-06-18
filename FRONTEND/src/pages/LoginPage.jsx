@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import API from '../api/axios';
 
@@ -8,14 +8,42 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [lockoutSeconds, setLockoutSeconds] = useState(0);
+
+  // Timer logic for rate-limit lockout
+  useEffect(() => {
+    if (lockoutSeconds <= 0) return;
+
+    const timer = setInterval(() => {
+      setLockoutSeconds((prev) => {
+        if (prev <= 1) {
+          setError(''); // Clear rate limit error when duration expires
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [lockoutSeconds]);
+
+  const formatLockoutTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}m ${secs}s`;
+  };
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
-    setError('');
+    if (lockoutSeconds === 0) {
+      setError('');
+    }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (lockoutSeconds > 0) return;
+    
     setLoading(true);
     setError('');
 
@@ -25,7 +53,13 @@ export default function LoginPage() {
       localStorage.setItem('user', JSON.stringify(res.data.user));
       navigate('/dashboard');
     } catch (err) {
-      setError(err.response?.data?.error || 'Login failed. Please try again.');
+      const isRateLimited = err.response?.status === 429;
+      const errorMsg = err.response?.data?.error || 'Login failed. Please try again.';
+      setError(errorMsg);
+
+      if (isRateLimited && err.response?.data?.retryAfter) {
+        setLockoutSeconds(err.response.data.retryAfter);
+      }
     } finally {
       setLoading(false);
     }
@@ -65,9 +99,18 @@ export default function LoginPage() {
 
           {/* Error Message */}
           {error && (
-            <div className="mb-6 p-3 rounded-xl bg-danger/10 border border-danger/20 text-danger text-sm flex items-center gap-2 animate-slide-up">
+            <div className={`mb-6 p-3 rounded-xl border text-sm flex items-center gap-2 animate-slide-up
+              ${lockoutSeconds > 0 
+                ? 'bg-amber-500/10 border-amber-500/20 text-amber-400' 
+                : 'bg-danger/10 border-danger/20 text-danger'
+              }`}
+            >
               <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                {lockoutSeconds > 0 ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                )}
               </svg>
               {error}
             </div>
@@ -93,8 +136,9 @@ export default function LoginPage() {
                   value={formData.email}
                   onChange={handleChange}
                   required
+                  disabled={lockoutSeconds > 0 || loading}
                   placeholder="you@example.com"
-                  className="w-full pl-11 pr-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all duration-300"
+                  className="w-full pl-11 pr-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed"
                 />
               </div>
             </div>
@@ -117,8 +161,9 @@ export default function LoginPage() {
                   value={formData.password}
                   onChange={handleChange}
                   required
+                  disabled={lockoutSeconds > 0 || loading}
                   placeholder="••••••••"
-                  className="w-full pl-11 pr-12 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all duration-300"
+                  className="w-full pl-11 pr-12 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed"
                 />
                 <button
                   type="button"
@@ -153,10 +198,21 @@ export default function LoginPage() {
             {/* Submit Button */}
             <button
               type="submit"
-              disabled={loading}
-              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-primary to-primary-dark text-white font-semibold text-sm tracking-wide hover:from-primary-light hover:to-primary shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
+              disabled={loading || lockoutSeconds > 0}
+              className={`w-full py-3 px-4 rounded-xl font-semibold text-sm tracking-wide shadow-lg transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer
+                ${lockoutSeconds > 0 
+                  ? 'bg-gradient-to-r from-amber-500/80 to-orange-600/80 text-white shadow-amber-500/20 hover:from-amber-500/80 hover:to-orange-600/80 opacity-90 cursor-not-allowed border border-amber-500/30' 
+                  : 'bg-gradient-to-r from-primary to-primary-dark text-white hover:from-primary-light hover:to-primary shadow-primary/25 hover:shadow-primary/40 disabled:opacity-50 disabled:cursor-not-allowed'
+                }`}
             >
-              {loading ? (
+              {lockoutSeconds > 0 ? (
+                <>
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                  Locked out (Retry in {formatLockoutTime(lockoutSeconds)})
+                </>
+              ) : loading ? (
                 <>
                   <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
