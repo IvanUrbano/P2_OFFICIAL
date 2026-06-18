@@ -1,0 +1,37 @@
+name: TB System CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install backend dependencies
+        run: |
+          cd BACKEND
+          npm install
+
+      - name: Install frontend dependencies
+        run: |
+          cd FRONTEND
+          npm install
+
+      - name: Build frontend
+        run: |
+          cd FRONTEND
+          npm run build
