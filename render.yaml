@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: tb-system-backend
+    env: node
+    plan: free
+    rootDir: BACKEND
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tb-system-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: LOGIN_LIMIT_WINDOW_MINS
+        value: 15
+      - key: LOGIN_LIMIT_MAX
+        value: 5
+      - key: FRONTEND_URL
+        value: https://your-frontend-app.vercel.app
+        sync: false
+
+databases:
+  - name: tb-system-db
+    databaseName: tb_system
+    user: tb_system_user
+    plan: free
