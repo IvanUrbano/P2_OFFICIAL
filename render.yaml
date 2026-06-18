@@ -22,7 +22,7 @@ services:
       - key: LOGIN_LIMIT_MAX
         value: 5
       - key: FRONTEND_URL
-        value: https://your-frontend-app.vercel.app
+        value: https://p2-official.vercel.app
         sync: false
 
 databases:
