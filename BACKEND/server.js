@@ -17,17 +17,26 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:5174',
   'http://localhost:3000',
-  process.env.FRONTEND_URL
+  process.env.FRONTEND_URL, // e.g. https://p2-official.vercel.app
 ].filter(Boolean);
+
+// Also allow any Vercel preview deployment URLs for this project
+const vercelPreviewPattern = /^https:\/\/p2-official[a-z0-9-]*\.vercel\.app$/;
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps, curl, or postman)
+    // Allow requests with no origin (curl, Postman, mobile apps)
     if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*') || origin.startsWith('http://localhost:')) {
+
+    const isAllowed =
+      origin.startsWith('http://localhost:') ||
+      allowedOrigins.includes(origin) ||
+      vercelPreviewPattern.test(origin);
+
+    if (isAllowed) {
       callback(null, true);
     } else {
+      console.warn(`CORS blocked origin: ${origin}`);
       callback(null, false);
     }
   },
