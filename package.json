@@ -1,0 +1,17 @@
+{
+  "name": "tb-system-root",
+  "private": true,
+  "workspaces": [
+    "BACKEND",
+    "FRONTEND"
+  ],
+  "scripts": {
+    "install-all": "npm install",
+    "dev:backend": "npm run dev --prefix BACKEND",
+    "dev:frontend": "npm run dev --prefix FRONTEND",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\""
+  },
+  "dependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
