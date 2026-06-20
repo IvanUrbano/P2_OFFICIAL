@@ -22,9 +22,11 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+      run: |
+        cd FRONTEND
+        npm ci
 
-      - name: Build frontend
-        run: |
-          cd FRONTEND
-          npm run build
+    - name: Build Frontend
+      run: |
+        cd FRONTEND
+        npm run build
