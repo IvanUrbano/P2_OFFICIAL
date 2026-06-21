@@ -7,14 +7,29 @@ const { loginLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
-// ==================== REGISTER ====================
-router.post('/register', async (req, res) => {
+// Middleware to authorize user roles
+const authorizeRoles = (...roles) => {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Access denied. Unauthorized role.' });
+    }
+    next();
+  };
+};
+
+// ==================== REGISTER (Admin Only) ====================
+router.post('/register', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {
-    const { username, email, password } = req.body;
+    const { username, email, password, role } = req.body;
 
     // Validate input
     if (!username || !email || !password) {
       return res.status(400).json({ error: 'All fields are required.' });
+    }
+
+    const userRole = role || 'staff';
+    if (!['admin', 'staff'].includes(userRole)) {
+      return res.status(400).json({ error: 'Invalid role. Must be admin or staff.' });
     }
 
     // Check if user already exists
@@ -33,31 +48,15 @@ router.post('/register', async (req, res) => {
 
     // Insert new user
     const result = await pool.query(
-      'INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id, username, email, created_at',
-      [username, email, hashedPassword]
+      'INSERT INTO users (username, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id, username, email, role, created_at',
+      [username, email, hashedPassword, userRole]
     );
 
     const user = result.rows[0];
 
-    // Generate JWT
-    const token = jwt.sign(
-      { id: user.id, username: user.username, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN }
-    );
-
-    // Set token in cookie
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict', // 'none' required for cross-origin (Vercel ↔ Render)
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
-
     res.status(201).json({
-      message: 'User registered successfully.',
+      message: 'User registered successfully by admin.',
       user,
-      token,
     });
   } catch (err) {
     console.error('Registration error:', err.message);
@@ -92,7 +91,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     // Generate JWT
     const token = jwt.sign(
-      { id: user.id, username: user.username, email: user.email },
+      { id: user.id, username: user.username, email: user.email, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN }
     );
@@ -111,6 +110,7 @@ router.post('/login', loginLimiter, async (req, res) => {
         id: user.id,
         username: user.username,
         email: user.email,
+        role: user.role,
         created_at: user.created_at,
       },
       token,
@@ -131,7 +131,7 @@ router.post('/logout', (req, res) => {
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, email, created_at FROM users WHERE id = $1',
+      'SELECT id, username, email, role, created_at FROM users WHERE id = $1',
       [req.user.id]
     );
 
@@ -143,6 +143,34 @@ router.get('/profile', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Profile error:', err.message);
     res.status(500).json({ error: 'Server error fetching profile.' });
+  }
+});
+
+// ==================== GET ALL USERS (Admin Only) ====================
+router.get('/users', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, username, email, role, created_at FROM users ORDER BY created_at DESC'
+    );
+    res.json({ users: result.rows });
+  } catch (err) {
+    console.error('Fetch users error:', err.message);
+    res.status(500).json({ error: 'Server error fetching users.' });
+  }
+});
+
+// ==================== DELETE USER (Admin Only) ====================
+router.delete('/users/:id', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (parseInt(id) === req.user.id) {
+      return res.status(400).json({ error: 'You cannot delete your own account.' });
+    }
+    await pool.query('DELETE FROM users WHERE id = $1', [id]);
+    res.json({ message: 'User deleted successfully.' });
+  } catch (err) {
+    console.error('Delete user error:', err.message);
+    res.status(500).json({ error: 'Server error deleting user.' });
   }
 });
 

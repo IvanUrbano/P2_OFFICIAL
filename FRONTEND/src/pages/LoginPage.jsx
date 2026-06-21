@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 
 export default function LoginPage() {
@@ -233,12 +233,12 @@ export default function LoginPage() {
             <div className="flex-1 h-px bg-white/10" />
           </div>
 
-          {/* Register Link */}
-          <p className="text-center text-sm text-white/50">
+          {/* Contact Administrator Notice */}
+          <p className="text-center text-sm text-white/40">
             Don't have an account?{' '}
-            <Link to="/register" className="text-primary-light hover:text-white font-medium transition-colors">
-              Create account
-            </Link>
+            <span className="text-white/60 font-medium">
+              Contact your system administrator
+            </span>
           </p>
         </div>
 
