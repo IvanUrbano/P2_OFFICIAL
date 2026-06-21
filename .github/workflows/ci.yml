@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           npm install -g npm@latest
-          npm install
+          npm install --no-package-lock
 
       - name: Build frontend
         run: |
