@@ -9,7 +9,8 @@
     "install-all": "npm install",
     "dev:backend": "npm run dev --prefix BACKEND",
     "dev:frontend": "npm run dev --prefix FRONTEND",
-    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\""
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "vercel-build": "cd FRONTEND && npm install --no-package-lock && npm run build"
   },
   "dependencies": {
     "concurrently": "^8.2.2"
