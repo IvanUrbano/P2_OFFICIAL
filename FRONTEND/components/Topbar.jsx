@@ -35,7 +35,7 @@ export default function Topbar({ user }) {
       className="sticky top-0 z-40"
       style={{ background: '#030507' }}
     >
-      <div className="flex items-center justify-between gap-4 px-6 py-4">
+      <div className="flex items-center justify-between gap-4 px-6 py-5">
 
         {/* Left — page title */}
         <div className="min-w-0">
