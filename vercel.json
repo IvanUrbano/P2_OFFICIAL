@@ -1,7 +1,7 @@
 {
-  "buildCommand": "cd FRONTEND && npm install && npm run build",
+  "buildCommand": "cd FRONTEND && npm run build",
   "outputDirectory": "FRONTEND/dist",
-  "installCommand": "npm install --prefix FRONTEND",
+  "installCommand": "cd FRONTEND && npm install --no-package-lock",
   "rewrites": [
     {
       "source": "/(.*)",
