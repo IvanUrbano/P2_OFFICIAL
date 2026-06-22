@@ -88,39 +88,77 @@ function VizCard({ title, icon, iconColor, children, style = {}, className = '',
 
 function DonutChart({ segments, size = 160 }) {
   const r = 15.91549430918954;
+  const [tooltip, setTooltip] = useState(null);
+
   return (
-    <svg width={size} height={size} viewBox="0 0 42 42">
-      {segments.map((s, i) => (
-        <circle key={i} cx="21" cy="21" r={r} fill="transparent"
-          stroke={s.color} strokeWidth={s.w || 8}
-          strokeDasharray={`${s.pct} ${100 - s.pct}`}
-          strokeDashoffset={-s.offset} />
-      ))}
-    </svg>
+    <div className="relative inline-block">
+      <svg width={size} height={size} viewBox="0 0 42 42">
+        {segments.map((s, i) => (
+          <circle
+            key={i}
+            cx="21" cy="21" r={r}
+            fill="transparent"
+            stroke={s.color}
+            strokeWidth={s.w || 8}
+            strokeDasharray={`${s.pct} ${100 - s.pct}`}
+            strokeDashoffset={-s.offset}
+            style={{ cursor: 'pointer', transition: 'opacity 0.2s' }}
+            onMouseEnter={(e) => {
+              const rect = e.currentTarget.closest('svg').parentElement.getBoundingClientRect();
+              setTooltip({ i, label: s.label, pct: s.pct, color: s.color, x: e.clientX - rect.left, y: e.clientY - rect.top });
+            }}
+            onMouseMove={(e) => {
+              const rect = e.currentTarget.closest('svg').parentElement.getBoundingClientRect();
+              setTooltip(t => t ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+            }}
+            onMouseLeave={() => setTooltip(null)}
+          />
+        ))}
+      </svg>
+
+      {/* Hover Tooltip */}
+      {tooltip && (
+        <div
+          className="pointer-events-none absolute z-20 px-3 py-2 rounded-lg text-xs font-semibold shadow-lg"
+          style={{
+            left: tooltip.x + 8,
+            top: tooltip.y - 36,
+            background: '#ffffff',
+            border: `1px solid ${tooltip.color}`,
+            color: '#0f172a',
+            boxShadow: `0 4px 12px rgba(0,0,0,0.1), 0 0 0 1px ${tooltip.color}22`,
+            whiteSpace: 'nowrap'
+          }}
+        >
+          <span style={{ color: tooltip.color }}>●</span>&nbsp;
+          {tooltip.label} — <strong>{tooltip.pct}%</strong>
+        </div>
+      )}
+    </div>
   );
 }
 
 /* ─── Page Component ─── */
-export default function Dashboard() {
+export default function DashboardPage() {
   // Balanced neon digital healthcare pops overlaying white surfaces
   const outcomeSegments = [
-    { color: '#0066FF', pct: 35, offset: 0 },   // Neon Dark Blue
-    { color: '#00D8F6', pct: 12, offset: 35 },  // Neon Cyan
-    { color: '#ff0055', pct: 18, offset: 47 },  // Medical Alert Magenta
-    { color: '#7c3aed', pct: 15, offset: 65 },  // Tech Purple
-    { color: '#f59e0b', pct: 13, offset: 80 },  // Safety Amber
-    { color: '#cbd5e1', pct: 7, offset: 93 },   // Muted Gray
+    { color: '#0066FF', pct: 35, offset: 0, label: 'Completed' },   // Neon Dark Blue
+    { color: '#EF4444', pct: 12, offset: 35, label: 'Died' },  // Neon Cyan
+    { color: '#94A3B8', pct: 18, offset: 47, label: 'Not Evaluated' },  // Medical Alert Magenta
+    { color: '#7c3aed', pct: 15, offset: 65, label: 'Lost / Defaulted' },  // Tech Purple
+    { color: '#10B981', pct: 13, offset: 80, label: 'Cured' },  // Safety Amber
+    { color: '#ff0055', pct: 7, offset: 93, label: 'Failed' },   // Muted Gray
   ];
 
   const ageSegments = [
-    { color: '#4FD1C5', pct: 25, offset: 0, w: 6 },
-    { color: '#EF4444', pct: 55, offset: -25, w: 6 },
-    { color: '#2E6FAF', pct: 20, offset: -80, w: 6 },
+    { color: '#4FD1C5', pct: 25, offset: 0, w: 6, label: '0–14 yrs' },
+    { color: '#EF4444', pct: 55, offset: -25, w: 6, label: '15–64 yrs' },
+    { color: '#2E6FAF', pct: 20, offset: -80, w: 6, label: '65+ yrs' },
   ];
 
   const genderSegments = [
-    { color: '#2E6FAF', pct: 58, offset: 0, w: 10 },
-    { color: '#4FD1C5', pct: 42, offset: -58, w: 10 },
+    { color: '#2E6FAF', pct: 58, offset: 0, w: 10, label: 'Male' },
+    { color: '#4FD1C5', pct: 42, offset: -58, w: 10, label: 'Female' },
   ];
 
   const [showRiskMatrix, setShowRiskMatrix] = useState(false);
@@ -188,7 +226,7 @@ export default function Dashboard() {
 
       {/* ── Row 1: Line Chart + Bar Chart + Treatment Outcomes ── */}
       <section className="grid gap-5" style={{ gridTemplateColumns: '2fr 1fr 1fr' }}>
-        <VizCard title="Monthly TB Case Trends — 2022–2025 with Forecast" icon="ri-line-chart-line">
+        <VizCard title="Monthly TB Case Trends — 2023–2025 with Forecast" icon="ri-line-chart-line">
           <div className="flex-1" style={{ minHeight: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={trendData}>
@@ -208,10 +246,14 @@ export default function Dashboard() {
 
                 <CartesianGrid strokeDasharray="3 3" />
 
-                <XAxis dataKey="label" />
-                <YAxis />
+                <XAxis dataKey="label" tick={{ fill: '#64748b', fontSize: 10 }} />
+                <YAxis tick={{ fill: '#64748b', fontSize: 10 }} />
 
-                <Tooltip />
+                <Tooltip
+                  contentStyle={chartTooltipStyle}
+                  itemStyle={{ color: '#0f172a' }}
+                  cursor={{ stroke: '#2E6FAF', strokeWidth: 1 }}
+                />
 
                 <Area
                   type="monotone"
@@ -246,7 +288,6 @@ export default function Dashboard() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                 <XAxis type="number" tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} />
                 <YAxis dataKey="name" type="category" tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} width={72} />
-                <RTooltip contentStyle={chartTooltipStyle} itemStyle={{ color: '#0f172a' }} cursor={{ fill: '#f8fafc' }} />
                 <defs>
                   <linearGradient
                     id="barGradient"
@@ -260,6 +301,13 @@ export default function Dashboard() {
                   </linearGradient>
                 </defs>
 
+                <Tooltip
+                  contentStyle={chartTooltipStyle}
+                  itemStyle={{ color: '#0f172a' }}
+                  cursor={{ fill: 'rgba(46,111,175,0.06)' }}
+                  formatter={(val) => [`${val} cases`, 'Cases']}
+                />
+
                 <Bar
                   dataKey="cases"
                   fill="url(#barGradient)"
@@ -270,7 +318,7 @@ export default function Dashboard() {
           </div>
         </VizCard>
 
-        <VizCard title="Treatment Outcomes" icon="ri-pie-chart-2-line">
+        <VizCard title="Treatment Outcome" icon="ri-pie-chart-2-line">
           <div className="flex-1 flex flex-col items-center justify-center">
             <div className="relative">
               <DonutChart
@@ -278,7 +326,7 @@ export default function Dashboard() {
                 size={140}
               />
 
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <div className="text-2xl font-bold">
                   320
                 </div>
@@ -290,11 +338,11 @@ export default function Dashboard() {
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-4 w-full px-1">
               {[
                 { color: '#0066FF', label: 'Completed' },
-                { color: '#00D8F6', label: 'Died' },
-                { color: '#ff0055', label: 'Not Evaluated' },
+                { color: '#EF4444', label: 'Died' },
+                { color: '#94A3B8', label: 'Not Evaluated' },
                 { color: '#7c3aed', label: 'Lost / Defaulted' },
-                { color: '#f59e0b', label: 'Cured' },
-                { color: '#cbd5e1', label: 'Failed' },
+                { color: '#10B981', label: 'Cured' },
+                { color: '#ff0055', label: 'Failed' },
               ].map(l => (
                 <div key={l.label} className="flex items-center gap-1.5 text-[10px] font-bold" style={{ color: '#475569' }}>
                   <span className="w-2 h-2 rounded-full shrink-0" style={{ background: l.color }} />
@@ -306,8 +354,6 @@ export default function Dashboard() {
         </VizCard>
       </section>
 
-      {/* ── Row 2: GIS Map + Age + Gender ── */}
-      {/* ── Row 2: GIS Map + Age + Gender ── */}
       <section
         className="grid gap-5"
         style={{ gridTemplateColumns: '2fr 1fr 1fr' }}
@@ -318,7 +364,8 @@ export default function Dashboard() {
           icon="ri-map-pin-line"
           headerAction={
             <button
-              onClick={() => setShowRiskMatrix(v => !v)}
+              onMouseEnter={() => setShowRiskMatrix(true)}
+              onMouseLeave={() => setShowRiskMatrix(false)}
               className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-all"
               style={{
                 background: showRiskMatrix ? 'rgba(46,111,175,0.15)' : 'rgba(148,163,184,0.08)',

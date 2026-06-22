@@ -192,13 +192,6 @@ body {
   transition: all 0.3s ease;
 }
 
-.glass-card:hover {
-  transform: translateY(-4px);
-
-  box-shadow:
-    0 16px 40px rgba(15, 45, 82, 0.18);
-}
-
 .bg-blob-blue {
   position: absolute;
   width: 400px;
