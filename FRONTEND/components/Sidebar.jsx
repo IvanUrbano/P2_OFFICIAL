@@ -1,3 +1,4 @@
+import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const NAV_ITEMS = [
@@ -12,10 +13,6 @@ const NAV_ITEMS = [
   { icon: 'ri-settings-3-line', label: 'Settings', path: '/settings' },
 ];
 
-/**
- * Shared sidebar — used by Layout.jsx.
- * Active item is detected automatically from the current URL.
- */
 export default function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -28,13 +25,13 @@ export default function Sidebar() {
 
   return (
     <aside
-      className="fixed left-0 top-0 h-screen w-20 flex flex-col items-center justify-between py-6 z-50"
-      style={{ background: '#081018', borderRight: '1px solid rgba(0,191,255,0.10)' }}
+      className="fixed left-0 top-0 h-screen w-20 flex flex-col items-center justify-between py-6 z-50 bg-[#091124]"
+      style={{ borderRight: '1px solid rgba(0, 102, 255, 0.15)' }}
     >
       {/* ── Logo ── */}
       <div
         className="text-2xl"
-        style={{ color: '#00bfff', filter: 'drop-shadow(0 0 12px rgba(0,191,255,0.7))' }}
+        style={{ color: '#0066FF', filter: 'drop-shadow(0 0 8px rgba(0, 102, 255, 0.5))' }}
       >
         <i className="ri-heart-pulse-fill" />
       </div>
@@ -45,33 +42,33 @@ export default function Sidebar() {
           const isActive = location.pathname === item.path;
           return (
             <div key={item.label} className="relative group">
-              {/* Active indicator bar */}
+              {/* Active indicator bar - glowing neon electric blue */}
               {isActive && (
                 <span
                   className="absolute left-0 top-1/4 h-1/2 w-[3px] rounded-r-[4px]"
-                  style={{ background: '#00bfff', boxShadow: '0 0 10px #00bfff' }}
+                  style={{ background: '#0066FF', boxShadow: '0 0 10px #0066FF' }}
                 />
               )}
 
               <button
                 onClick={() => navigate(item.path)}
-                className="w-12 h-12 flex items-center justify-center rounded-xl transition-all duration-200 cursor-pointer"
+                className="w-12 h-12 flex items-center justify-center rounded-xl transition-all duration-200 cursor-pointer hover:bg-slate-800/40"
                 style={{
-                  color: isActive ? '#00bfff' : '#6f8a99',
-                  background: isActive ? 'rgba(0,191,255,0.10)' : 'transparent',
+                  color: isActive ? '#0066FF' : '#526484',
+                  background: isActive ? 'rgba(0, 102, 255, 0.12)' : 'transparent',
                 }}
               >
                 <i className={`${item.icon} text-xl`} />
               </button>
 
-              {/* Hover tooltip */}
+              {/* Hover tooltip - Clean dark panel to complement the sidebar */}
               <span
-                className="pointer-events-none absolute left-14 top-1/2 -translate-y-1/2
-                           whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium text-white
-                           opacity-0 group-hover:opacity-100
+                className="pointer-events-none absolute left-16 top-1/2 -translate-y-1/2
+                           whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-bold text-slate-200
+                           opacity-0 group-hover:opacity-100 border border-slate-800
                            -translate-x-2 group-hover:translate-x-0
                            transition-all duration-200 z-50"
-                style={{ background: '#111', boxShadow: '0 4px 12px rgba(0,0,0,0.6)' }}
+                style={{ background: '#0e1726', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}
               >
                 {item.label}
               </span>
@@ -85,27 +82,27 @@ export default function Sidebar() {
         <div className="relative group">
           <button
             onClick={handleLogout}
-            className="w-12 h-12 flex items-center justify-center rounded-xl transition-all duration-200 cursor-pointer hover:bg-red-500/10"
-            style={{ color: '#6f8a99' }}
+            className="w-12 h-12 flex items-center justify-center rounded-xl transition-all duration-200 cursor-pointer hover:bg-rose-950/30"
+            style={{ color: '#526484' }}
           >
-            <i className="ri-logout-box-r-line text-xl group-hover:text-red-400 transition-colors" />
+            <i className="ri-logout-box-r-line text-xl group-hover:text-rose-500 transition-colors" />
           </button>
 
           {/* Logout tooltip */}
           <span
-            className="pointer-events-none absolute left-14 top-1/2 -translate-y-1/2
-                       whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium text-white
-                       opacity-0 group-hover:opacity-100
+            className="pointer-events-none absolute left-16 top-1/2 -translate-y-1/2
+                       whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-bold text-rose-400
+                       opacity-0 group-hover:opacity-100 border border-rose-950/50
                        -translate-x-2 group-hover:translate-x-0
                        transition-all duration-200 z-50"
-            style={{ background: '#111', boxShadow: '0 4px 12px rgba(0,0,0,0.6)' }}
+            style={{ background: '#0e1726', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}
           >
             Logout
           </span>
         </div>
 
         {/* Version tag */}
-        <span className="text-[10px] text-center" style={{ color: '#6f8a99' }}>V2.4</span>
+        <span className="text-[10px] font-semibold text-center" style={{ color: '#334155' }}>V2.4</span>
       </div>
     </aside>
   );

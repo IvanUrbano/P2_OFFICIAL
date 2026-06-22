@@ -2,7 +2,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 
 /* Map path → readable page title shown in the topbar */
 const PAGE_TITLES = {
-  '/dashboard': { title: 'TBInsight Dashboard', subtitle: 'Monitor tuberculosis trends and support resource prioritization across Pasig City.' },
+  '/dashboard': { title: 'Pasig City Tuberculosis Monitoring Dashboard', subtitle: 'Monitor tuberculosis trends and support resource prioritization across Pasig City.' },
   '/records': { title: 'TB Records', subtitle: 'View and manage individual tuberculosis case records.' },
   '/analytics': { title: 'Analytics', subtitle: 'In-depth analysis of TB case trends and treatment outcomes.' },
   '/data-integration': { title: 'Data Integration', subtitle: 'Sync and manage data from external health systems.' },
@@ -15,94 +15,92 @@ const PAGE_TITLES = {
 
 /**
  * Shared topbar — used by Layout.jsx.
- * Shows current page title, search, notification bell, and user pill with logout.
+ * Bridges the Dark Sidebar and the White Dashboard seamlessly.
  */
 export default function Topbar({ user }) {
   const navigate = useNavigate();
   const location = useLocation();
 
   const page = PAGE_TITLES[location.pathname] ?? { title: 'TBInsight', subtitle: '' };
-  const initials = user?.username ? user.username.slice(0, 2).toUpperCase() : 'TB';
-
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    navigate('/login');
-  };
+  const initials = user?.username ? user.username.slice(0, 2).toUpperCase() : 'AD';
 
   return (
     <header
       className="sticky top-0 z-40"
-      style={{ background: '#030507' }}
+      style={{
+        background: '#ffffff',
+        borderBottom: '1px solid #e2e8f0'
+      }}
     >
-      <div className="flex items-center justify-between gap-4 px-6 py-5">
+      <div className="flex items-center justify-between gap-4 px-6 py-4">
 
-        {/* Left — page title */}
+        {/* Left — Clinical Slate Page Titles */}
         <div className="min-w-0">
-          <h1 className="text-lg font-bold tracking-tight leading-tight truncate" style={{ color: '#eaf8ff' }}>
+          <h1 className="text-lg font-bold tracking-tight leading-tight truncate" style={{ color: '#0f172a' }}>
             {page.title}
           </h1>
           {page.subtitle && (
-            <p className="text-xs mt-0.5 leading-relaxed truncate" style={{ color: '#6f8a99' }}>
+            <p className="text-xs mt-0.5 leading-relaxed truncate font-medium" style={{ color: '#64748b' }}>
               {page.subtitle}
             </p>
           )}
         </div>
 
-        {/* Right — actions */}
+        {/* Right — Actions with Electric/Neon Blue Accents */}
         <div className="flex items-center gap-2.5 shrink-0">
 
-
-
-          {/* Last sync pill */}
+          {/* Last sync pill — Minimal white with subtle neon text pop */}
           <div
-            className="hidden md:flex items-center gap-2 h-9 px-3 rounded-lg text-sm whitespace-nowrap"
-            style={{ background: 'rgba(0,191,255,0.05)', border: '1px solid rgba(0,191,255,0.12)', color: '#9fb3c0' }}
+            className="hidden md:flex items-center gap-2 h-9 px-3 rounded-lg text-xs font-semibold whitespace-nowrap"
+            style={{ background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569' }}
           >
-            <i className="ri-refresh-line" style={{ color: '#6f8a99' }} />
-            <span>Last sync: Today 08:42 AM</span>
+            <i className="ri-refresh-line" style={{ color: '#0066FF' }} />
+            <span>Last sync: <span style={{ color: '#0066FF' }}>Today 08:42 AM</span></span>
           </div>
 
-          {/* Notification bell */}
+          {/* Notification bell — Vibrant interactive accent */}
           <button
-            className="relative w-9 h-9 flex items-center justify-center rounded-lg cursor-pointer transition-colors hover:bg-white/5"
-            style={{ background: 'rgba(0,191,255,0.05)', border: '1px solid rgba(0,191,255,0.12)', color: '#eaf8ff' }}
+            className="relative w-9 h-9 flex items-center justify-center rounded-lg cursor-pointer transition-colors hover:bg-slate-50"
+            style={{ background: '#e6f0ff', border: '1px solid rgba(0, 102, 255, 0.2)', color: '#0066FF' }}
             onClick={() => navigate('/notifications')}
             title="Notifications"
           >
-            <i className="ri-notification-3-line" />
+            <i className="ri-notification-3-line text-base" />
             {/* Pulse badge */}
             <span
               className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full"
-              style={{ background: '#ff4d4d', animation: 'pulse-dot 1.2s ease-in-out infinite' }}
+              style={{ background: '#ff0055', boxShadow: '0 0 6px #ff0055' }}
             />
           </button>
 
-          {/* User pill */}
+          {/* User pill — Ties directly into the Sidebar's unique Dark Navy color */}
           <div
             className="flex items-center gap-2 pl-1 pr-3 py-1 rounded-full"
-            style={{ background: 'rgba(0,191,255,0.03)', border: '1px solid rgba(0,191,255,0.08)' }}
+            style={{ background: '#f1f5f9', border: '1px solid #e2e8f0' }}
           >
             <div
               className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-              style={{ background: 'linear-gradient(135deg,#00bfff,#00b8ff)', color: '#021014' }}
+              style={{
+                background: '#091124', /* Matches the unique dark blue sidebar */
+                color: '#ffffff',
+                border: '1px solid #0066FF' /* Neon blue ring contrast */
+              }}
             >
               {initials}
             </div>
-            <span className="text-sm font-medium hidden sm:block" style={{ color: '#9fb3c0' }}>
-              {user?.username ?? 'Admin'}
+            <span className="text-xs font-bold hidden sm:block" style={{ color: '#334155' }}>
+              {user?.username ?? 'System Admin'}
             </span>
           </div>
-
 
         </div>
 
       </div>
 
-      {/* gradient divider — sits directly below the content row, regardless of which side is taller */}
+      {/* Decorative Neon Progress Strip (Optional styling accent) */}
       <div
-        className="h-px w-full"
-        style={{ background: 'linear-gradient(90deg, #00bfff 0%, rgba(14,165,233,0.3) 40%, transparent 100%)' }}
+        className="h-[2px] w-full"
+        style={{ background: 'linear-gradient(90deg, #0066FF 0%, #00D8F6 50%, transparent 100%)' }}
       />
     </header>
   );

@@ -30,12 +30,28 @@ export default function Layout() {
   if (!user) return null;
 
   return (
-    <div className="flex min-h-screen bg-[var(--color-bg)] text-[var(--color-text)]">
+    <div 
+      className="flex h-screen relative overflow-hidden" 
+      style={{ 
+        background: 'linear-gradient(135deg, #F8FAFC 0%, #EEF4FB 50%, #F5F8FC 100%)', 
+        color: '#0f172a' 
+      }}
+    >
+      {/* Decorative Background Blobs */}
+      <div
+        className="absolute top-10 left-20 w-96 h-96 rounded-full blur-[120px] opacity-20 pointer-events-none"
+        style={{ background: '#2E6FAF' }}
+      />
+      <div
+        className="absolute bottom-10 right-10 w-80 h-80 rounded-full blur-[120px] opacity-20 pointer-events-none"
+        style={{ background: '#4FD1C5' }}
+      />
+
       {/* Fixed sidebar */}
       <Sidebar />
 
       {/* Scrollable page area */}
-      <div className="ml-20 flex-1 flex flex-col min-h-screen">
+      <div className="ml-20 flex-1 flex flex-col h-screen">
         {/* Sticky topbar */}
         <Topbar user={user} />
 

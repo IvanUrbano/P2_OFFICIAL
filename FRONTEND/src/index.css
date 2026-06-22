@@ -1,47 +1,45 @@
 @import "tailwindcss";
 
-/* ==================== TBInsight Surveillance Theme (LIGHT MODE) ==================== */
+/* ==================== TBInsight Surveillance Theme (HYBRID MEDICAL ESTHETIC) ==================== */
 @theme {
-  /* Branding / Accents (Refined for light background contrast) */
-  --color-primary: #0284c7;
-  /* Clean medical blue (sky-600) */
-  --color-primary-light: #38bdf8;
-  /* sky-400 */
-  --color-primary-dark: #0369a1;
-  /* sky-700 */
-  --color-secondary: #059669;
-  /* Emerald green for light contrast */
-  --color-accent: #d97706;
-  /* Amber yellow for visibility */
+  /* Core Colors */
+  --color-primary: #0F2D52;
+  --color-primary-light: #174A7E;
+  --color-primary-dark: #0A1F3D;
 
-  /* Semantic Statuses */
-  --color-danger: #dc2626;
-  /* High-contrast crimson red */
-  --color-success: #16a34a;
-  /* High-contrast success green */
-  --color-warning: #ca8a04;
-  /* Darker yellow/gold to be legible on white */
+  --color-secondary: #10B981;
+  --color-accent: #2E6FAF;
 
-  /* Layout Backgrounds */
-  --color-bg: #030507;
-  /* Dark deep background */
-  --color-surface: #0a111a;
-  /* Slightly lighter dark for sidebar/headers */
-  --color-card: #081018;
-  /* Dashboard card background */
+  --color-teal: #4FD1C5;
+  --color-mint: #6EE7B7;
 
-  /* Typography Structure */
-  --color-text: #eaf8ff;
-  /* Light cyan/white for text */
-  --color-desc: #94a3b8;
-  /* Mid-tone slate gray for primary descriptions */
-  --color-muted: #64748b;
-  /* Muted gray for small labels and tooltips */
+  /* Glassmorphism */
+  --glass-bg: rgba(255, 255, 255, 0.65);
+  --glass-border: rgba(255, 255, 255, 0.35);
+
+  --glass-shadow: 0 8px 32px rgba(15, 45, 82, 0.12);
+
+  --glass-blur: blur(20px);
+
+  /* Status Colors */
+  --color-danger: #FF0055;
+  --color-success: #10B981;
+  --color-warning: #D97706;
+
+  /* Layout */
+  --color-bg: #F8FAFC;
+  --color-surface: #FFFFFF;
+  --color-sidebar: #091124;
+
+  /* Typography */
+  --color-text: #0F172A;
+  --color-desc: #475569;
+  --color-muted: #64748B;
 
   --font-sans: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
-/* ==================== Global ==================== */
+/* ==================== Global Base ==================== */
 html,
 body,
 #root {
@@ -56,30 +54,30 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ==================== Scrollbar (Cleaned up for Light Mode) ==================== */
+/* ==================== Scrollbar (Clean Clinical Slate style) ==================== */
 ::-webkit-scrollbar {
   width: 5px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(0, 0, 0, 0.02);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(2, 132, 199, 0.25);
-  /* Uses primary blue with soft alpha */
+  background: rgba(0, 102, 255, 0.2);
+  /* Soft neon blue alpha */
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(2, 132, 199, 0.45);
+  background: rgba(0, 102, 255, 0.4);
 }
 
 /* ==================== Animations ==================== */
 @keyframes slide-up {
   from {
     opacity: 0;
-    transform: translateY(22px);
+    transform: translateY(16px);
   }
 
   to {
@@ -95,7 +93,7 @@ body {
   }
 
   100% {
-    transform: scale(2.6);
+    transform: scale(2.4);
     opacity: 0;
   }
 }
@@ -113,7 +111,7 @@ body {
 }
 
 .animate-slide-up {
-  animation: slide-up 0.5s ease-out both;
+  animation: slide-up 0.4s ease-out both;
 }
 
 .animate-radar-ping {
@@ -124,7 +122,7 @@ body {
   animation: pulse-dot 1.2s ease-in-out infinite;
 }
 
-/* ==================== Sidebar nav active bar ==================== */
+/* ==================== Sidebar Active Indicator (Glowing Neon Dark Blue) ==================== */
 .nav-active-bar {
   position: absolute;
   left: 0;
@@ -133,35 +131,35 @@ body {
   width: 3px;
   background: var(--color-primary);
   border-radius: 0 4px 4px 0;
-  /* Removed the heavy neon box-shadow for a flatter, premium light UI feel */
+  box-shadow: 0 0 10px var(--color-primary);
+  /* Electric glow in dark sidebar background */
 }
 
-/* ==================== GIS SVG classes (Adjusted for map contrast over white) ==================== */
+/* ==================== GIS SVG Vector Map Layers (Configured for white surface contrast) ==================== */
 .zone-severe {
   fill: var(--color-danger);
-  fill-opacity: 0.15;
+  fill-opacity: 0.06;
   stroke: var(--color-danger);
-  stroke-width: 2;
-  stroke-dasharray: 2, 2;
+  stroke-width: 1.5;
 }
 
 .zone-moderate {
-  fill: var(--color-warning);
-  fill-opacity: 0.12;
-  stroke: var(--color-warning);
-  stroke-width: 2;
+  fill: var(--color-primary);
+  fill-opacity: 0.05;
+  stroke: var(--color-primary);
+  stroke-width: 1.5;
 }
 
 .zone-low {
-  fill: var(--color-primary);
-  fill-opacity: 0.08;
-  stroke: var(--color-primary);
+  fill: var(--color-primary-light);
+  fill-opacity: 0.04;
+  stroke: var(--color-primary-light);
   stroke-width: 1.5;
 }
 
 .zone-label-main {
   fill: var(--color-text);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -173,9 +171,63 @@ body {
 
 .map-node-ring {
   fill: var(--color-primary);
-  fill-opacity: 0.25;
+  fill-opacity: 0.15;
 }
 
 .map-node-dot {
   fill: var(--color-primary);
+}
+
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+
+  border: 1px solid var(--glass-border);
+
+  box-shadow: var(--glass-shadow);
+
+  border-radius: 24px;
+
+  transition: all 0.3s ease;
+}
+
+.glass-card:hover {
+  transform: translateY(-4px);
+
+  box-shadow:
+    0 16px 40px rgba(15, 45, 82, 0.18);
+}
+
+.bg-blob-blue {
+  position: absolute;
+  width: 400px;
+  height: 400px;
+  border-radius: 999px;
+  background: #2E6FAF;
+  filter: blur(120px);
+  opacity: 0.15;
+  pointer-events: none;
+}
+
+.bg-blob-teal {
+  position: absolute;
+  width: 350px;
+  height: 350px;
+  border-radius: 999px;
+  background: #4FD1C5;
+  filter: blur(120px);
+  opacity: 0.15;
+  pointer-events: none;
+}
+
+.bg-blob-mint {
+  position: absolute;
+  width: 300px;
+  height: 300px;
+  border-radius: 999px;
+  background: #6EE7B7;
+  filter: blur(120px);
+  opacity: 0.12;
+  pointer-events: none;
 }
