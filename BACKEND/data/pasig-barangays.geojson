@@ -1,0 +1,156 @@
+{
+  "type": "FeatureCollection",
+  "name": "pasig_barangays",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "Bagong Ilog", "population": 26512 },
+      "geometry": { "type": "Point", "coordinates": [121.0629, 14.5547] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Bambang", "population": 13786 },
+      "geometry": { "type": "Point", "coordinates": [121.0489, 14.5689] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Buting", "population": 11234 },
+      "geometry": { "type": "Point", "coordinates": [121.0432, 14.5612] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Caniogan", "population": 15892 },
+      "geometry": { "type": "Point", "coordinates": [121.0654, 14.5623] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Dela Paz", "population": 28456 },
+      "geometry": { "type": "Point", "coordinates": [121.0912, 14.5734] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Kalawaan", "population": 18234 },
+      "geometry": { "type": "Point", "coordinates": [121.0756, 14.5567] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Kapasigan", "population": 12567 },
+      "geometry": { "type": "Point", "coordinates": [121.0534, 14.5712] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Kapitolyo", "population": 21345 },
+      "geometry": { "type": "Point", "coordinates": [121.0523, 14.5634] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Malinao", "population": 14567 },
+      "geometry": { "type": "Point", "coordinates": [121.0456, 14.5578] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Manggahan", "population": 32145 },
+      "geometry": { "type": "Point", "coordinates": [121.0845, 14.5534] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Maybunga", "population": 27890 },
+      "geometry": { "type": "Point", "coordinates": [121.0812, 14.5623] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Oranbo", "population": 9876 },
+      "geometry": { "type": "Point", "coordinates": [121.0567, 14.5589] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Palatiw", "population": 16789 },
+      "geometry": { "type": "Point", "coordinates": [121.0723, 14.5534] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Pinagbuhatan", "population": 45678 },
+      "geometry": { "type": "Point", "coordinates": [121.0867, 14.5489] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Pineda", "population": 19234 },
+      "geometry": { "type": "Point", "coordinates": [121.0678, 14.5567] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Rosario", "population": 34567 },
+      "geometry": { "type": "Point", "coordinates": [121.0734, 14.5678] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Sagad", "population": 8765 },
+      "geometry": { "type": "Point", "coordinates": [121.0512, 14.5723] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "San Antonio", "population": 23456 },
+      "geometry": { "type": "Point", "coordinates": [121.0578, 14.5623] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "San Joaquin", "population": 18901 },
+      "geometry": { "type": "Point", "coordinates": [121.0645, 14.5534] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "San Jose", "population": 15678 },
+      "geometry": { "type": "Point", "coordinates": [121.0534, 14.5534] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "San Miguel", "population": 12345 },
+      "geometry": { "type": "Point", "coordinates": [121.0467, 14.5634] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "San Nicolas", "population": 11234 },
+      "geometry": { "type": "Point", "coordinates": [121.0478, 14.5678] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Santa Cruz", "population": 9876 },
+      "geometry": { "type": "Point", "coordinates": [121.0489, 14.5712] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Santa Lucia", "population": 13456 },
+      "geometry": { "type": "Point", "coordinates": [121.0545, 14.5589] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Santa Rosa", "population": 10234 },
+      "geometry": { "type": "Point", "coordinates": [121.0556, 14.5567] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Santo Tomas", "population": 8765 },
+      "geometry": { "type": "Point", "coordinates": [121.0567, 14.5534] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Santolan", "population": 21567 },
+      "geometry": { "type": "Point", "coordinates": [121.0934, 14.5812] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Sumilang", "population": 11234 },
+      "geometry": { "type": "Point", "coordinates": [121.0478, 14.5567] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Ugong", "population": 16789 },
+      "geometry": { "type": "Point", "coordinates": [121.0612, 14.5567] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Kapasigan Extension", "population": 7890 },
+      "geometry": { "type": "Point", "coordinates": [121.0545, 14.5734] }
+    }
+  ]
+}

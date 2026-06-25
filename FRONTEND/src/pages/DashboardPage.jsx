@@ -1,38 +1,42 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip as RTooltip, Tooltip, ResponsiveContainer,
   BarChart, Bar, AreaChart, Area,
 } from 'recharts';
+import API from '../api/axios';
 
-/* ─── Mock data ─── */
-const trendData = [
-  { label: 'Jan 22', actual: 68 }, { label: 'Mar 22', actual: 54 },
-  { label: 'May 22', actual: 72 }, { label: 'Jul 22', actual: 60 },
-  { label: 'Sep 22', actual: 80 }, { label: 'Nov 22', actual: 70 },
-  { label: 'Jan 23', actual: 85 }, { label: 'Mar 23', actual: 64 },
-  { label: 'May 23', actual: 90 }, { label: 'Jul 23', actual: 74 },
-  { label: 'Sep 23', actual: 88 }, { label: 'Nov 23', actual: 78 },
-  { label: 'Jan 24', actual: 95 }, { label: 'Mar 24', actual: 82 },
-  { label: 'May 24', actual: 86 }, { label: 'Jul 24', actual: 79 },
-  { label: 'Sep 24', actual: 92 }, { label: 'Nov 24', actual: 84 },
-  { label: 'Jan 25', actual: 88 }, { label: 'Mar 25', actual: 91 },
-  { label: 'May 25', actual: 88 },
-  { label: 'Jul 25', forecast: 95 }, { label: 'Aug 25', forecast: 100 },
-];
+/* ─── Helpers ─── */
+const COLORS = {
+  blue: '#2E6FAF',
+  cyan: '#4FD1C5',
+  red: '#EF4444',
+  green: '#10B981',
+  purple: '#7c3aed',
+  amber: '#F59E0B',
+  gray: '#94A3B8',
+  pink: '#ff0055',
+  darkBlue: '#0066FF',
+};
 
-const barangayData = [
-  { name: 'Rosario', cases: 89 },
-  { name: 'Dela Paz', cases: 82 },
-  { name: 'Santol', cases: 75 },
-  { name: 'San Joaquin', cases: 74 },
-  { name: 'Caniogan', cases: 70 },
-  { name: 'Kapasigan', cases: 65 },
-  { name: 'Bambang', cases: 62 },
-  { name: 'Bagong Ilog', cases: 58 },
-  { name: 'Manggahan', cases: 54 },
-  { name: 'Pinagbuhatan', cases: 48 },
-];
+const OUTCOME_COLORS = {
+  'ON TREATMENT': COLORS.amber,
+  'TREATMENT COMPLETED': COLORS.darkBlue,
+  'CURED': COLORS.green,
+  'DIED': COLORS.red,
+  'LOST TO FOLLOW-UP': COLORS.purple,
+  'EXCLUDED': COLORS.gray,
+};
+
+const AGE_COLORS = {
+  '0-14': COLORS.cyan,
+  '15-24': COLORS.blue,
+  '25-34': COLORS.red,
+  '35-44': COLORS.purple,
+  '45-54': COLORS.green,
+  '55-64': COLORS.amber,
+  '65+': COLORS.gray,
+};
 
 const chartTooltipStyle = {
   backgroundColor: '#ffffff',
@@ -47,12 +51,11 @@ const chartTooltipStyle = {
 function MetricItem({ title, value, icon, color, trend, isLast }) {
   return (
     <div className="p-4 flex flex-col justify-center relative">
-      {/* Subtle vertical divider, not a full box border */}
       {!isLast && (
         <div
           className="absolute right-0 top-1/2 -translate-y-1/2 w-[2px] h-12"
           style={{
-            background: 'rgba(3, 33, 62, 0.3)', /* Made transparent as requested */
+            background: 'rgba(3, 33, 62, 0.3)',
             boxShadow: '0 0 8px rgba(79, 209, 197, 0.4)'
           }}
         />
@@ -116,7 +119,6 @@ function DonutChart({ segments, size = 160 }) {
         ))}
       </svg>
 
-      {/* Hover Tooltip */}
       {tooltip && (
         <div
           className="pointer-events-none absolute z-20 px-3 py-2 rounded-lg text-xs font-semibold shadow-lg"
@@ -140,28 +142,255 @@ function DonutChart({ segments, size = 160 }) {
 
 /* ─── Page Component ─── */
 export default function DashboardPage() {
-  // Balanced neon digital healthcare pops overlaying white surfaces
-  const outcomeSegments = [
-    { color: '#0066FF', pct: 35, offset: 0, label: 'Completed' },   // Neon Dark Blue
-    { color: '#EF4444', pct: 12, offset: 35, label: 'Died' },  // Neon Cyan
-    { color: '#94A3B8', pct: 18, offset: 47, label: 'Not Evaluated' },  // Medical Alert Magenta
-    { color: '#7c3aed', pct: 15, offset: 65, label: 'Lost / Defaulted' },  // Tech Purple
-    { color: '#10B981', pct: 13, offset: 80, label: 'Cured' },  // Safety Amber
-    { color: '#ff0055', pct: 7, offset: 93, label: 'Failed' },   // Muted Gray
-  ];
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const ageSegments = [
-    { color: '#4FD1C5', pct: 25, offset: 0, w: 6, label: '0–14 yrs' },
-    { color: '#EF4444', pct: 55, offset: -25, w: 6, label: '15–64 yrs' },
-    { color: '#2E6FAF', pct: 20, offset: -80, w: 6, label: '65+ yrs' },
-  ];
-
-  const genderSegments = [
-    { color: '#2E6FAF', pct: 58, offset: 0, w: 10, label: 'Male' },
-    { color: '#4FD1C5', pct: 42, offset: -58, w: 10, label: 'Female' },
-  ];
+  // Data states
+  const [summary, setSummary] = useState(null);
+  const [monthlyData, setMonthlyData] = useState([]);
+  const [outcomesData, setOutcomesData] = useState([]);
+  const [demographicsData, setDemographicsData] = useState([]);
+  const [alertsData, setAlertsData] = useState([]);
+  const [forecastsData, setForecastsData] = useState([]);
 
   const [showRiskMatrix, setShowRiskMatrix] = useState(false);
+
+  // Fetch all dashboard data
+  useEffect(() => {
+    const fetchAll = async () => {
+      try {
+        const [summaryRes, monthlyRes, outcomesRes, demographicsRes, alertsRes, forecastsRes] = await Promise.all([
+          API.get('/api/tb/dashboard/summary'),
+          API.get('/api/tb/dashboard/monthly'),
+          API.get('/api/tb/dashboard/outcomes'),
+          API.get('/api/tb/dashboard/demographics'),
+          API.get('/api/tb/alerts'),
+          API.get('/api/tb/forecasts'),
+        ]);
+
+        setSummary(summaryRes.data.summary);
+        setMonthlyData(monthlyRes.data.monthly || []);
+        setOutcomesData(outcomesRes.data.outcomes || []);
+        setDemographicsData(demographicsRes.data.demographics || []);
+        setAlertsData(alertsRes.data.alerts || []);
+        setForecastsData(forecastsRes.data.forecasts || []);
+      } catch (err) {
+        console.error('Dashboard fetch error:', err);
+        setError('Failed to load dashboard data. Make sure the backend is running.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchAll();
+  }, []);
+
+  // Process monthly trend data
+  const trendChartData = useMemo(() => {
+    if (!monthlyData.length) return [];
+
+    // Aggregate across all barangays per month
+    const byMonth = {};
+    monthlyData.forEach(r => {
+      if (!byMonth[r.month]) byMonth[r.month] = 0;
+      byMonth[r.month] += r.case_count;
+    });
+
+    return Object.entries(byMonth)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, cases]) => {
+        const d = new Date(month);
+        const label = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+        return { label, actual: cases, month };
+      });
+  }, [monthlyData]);
+
+  // Process barangay case totals (top 10)
+  const barangayChartData = useMemo(() => {
+    if (!monthlyData.length) return [];
+
+    const byBarangay = {};
+    monthlyData.forEach(r => {
+      if (!byBarangay[r.barangay_name]) byBarangay[r.barangay_name] = 0;
+      byBarangay[r.barangay_name] += r.case_count;
+    });
+
+    return Object.entries(byBarangay)
+      .map(([name, cases]) => ({ name, cases }))
+      .sort((a, b) => b.cases - a.cases)
+      .slice(0, 10);
+  }, [monthlyData]);
+
+  // Process outcome segments
+  const outcomeSegments = useMemo(() => {
+    if (!outcomesData.length) return [];
+
+    const byStatus = {};
+    outcomesData.forEach(r => {
+      const status = r.outcome_status || 'Unknown';
+      byStatus[status] = (byStatus[status] || 0) + Number(r.total);
+    });
+
+    const total = Object.values(byStatus).reduce((s, v) => s + v, 0);
+    let offset = 0;
+
+    return Object.entries(byStatus)
+      .sort(([, a], [, b]) => b - a)
+      .map(([status, count]) => {
+        const pct = Math.round((count / total) * 100);
+        const seg = {
+          color: OUTCOME_COLORS[status] || COLORS.gray,
+          pct,
+          offset,
+          label: status,
+        };
+        offset += pct;
+        return seg;
+      });
+  }, [outcomesData]);
+
+  // Process age segments
+  const ageSegments = useMemo(() => {
+    if (!demographicsData.length) return [];
+
+    const byAge = {};
+    demographicsData.forEach(r => {
+      const group = r.age_group || 'Unknown';
+      byAge[group] = (byAge[group] || 0) + Number(r.total);
+    });
+
+    const total = Object.values(byAge).reduce((s, v) => s + v, 0);
+    let offset = 0;
+
+    // Sort: 0-14, 15-24, 25-34, 35-44, 45-54, 55-64, 65+
+    const ageOrder = ['0-14', '15-24', '25-34', '35-44', '45-54', '55-64', '65+'];
+    return ageOrder
+      .filter(g => byAge[g])
+      .map(group => {
+        const pct = Math.round((byAge[group] / total) * 100);
+        const seg = {
+          color: AGE_COLORS[group] || COLORS.gray,
+          pct,
+          offset,
+          w: 6,
+          label: `${group} yrs`,
+        };
+        offset += pct;
+        return seg;
+      });
+  }, [demographicsData]);
+
+  // Process gender segments
+  const genderSegments = useMemo(() => {
+    if (!demographicsData.length) return [];
+
+    const bySex = {};
+    demographicsData.forEach(r => {
+      const sex = r.sex || 'Unknown';
+      bySex[sex] = (bySex[sex] || 0) + Number(r.total);
+    });
+
+    const total = Object.values(bySex).reduce((s, v) => s + v, 0);
+    let offset = 0;
+
+    return Object.entries(bySex)
+      .sort(([, a], [, b]) => b - a)
+      .map(([sex, count]) => {
+        const pct = Math.round((count / total) * 100);
+        const seg = {
+          color: sex === 'Male' ? COLORS.blue : COLORS.cyan,
+          pct,
+          offset,
+          w: 10,
+          label: sex,
+        };
+        offset += pct;
+        return seg;
+      });
+  }, [demographicsData]);
+
+  // Process alerts for display
+  const displayAlerts = useMemo(() => {
+    return alertsData.slice(0, 3).map(a => ({
+      type: a.severity === 'High' ? 'danger' : 'warning',
+      icon: a.severity === 'High' ? 'ri-alarm-warning-line' : 'ri-error-warning-line',
+      title: `${a.barangay_name} — ${a.alert_type}`,
+      desc: a.message,
+      time: a.created_at ? new Date(a.created_at).toLocaleString() : 'N/A',
+    }));
+  }, [alertsData]);
+
+  // Process forecasts for table
+  const forecastTable = useMemo(() => {
+    if (!forecastsData.length) return [];
+
+    // Get the latest period's forecasts, aggregate by barangay
+    const latestPeriod = forecastsData.reduce((max, r) =>
+      r.period > max ? r.period : max, '');
+
+    if (!latestPeriod) return [];
+
+    return forecastsData
+      .filter(r => r.period === latestPeriod)
+      .sort((a, b) => b.forecasted_count - a.forecasted_count)
+      .slice(0, 5)
+      .map(r => ({
+        period: r.barangay_name,
+        val: Math.round(r.forecasted_count),
+        pct: r.incidence_per_100k ? `${Number(r.incidence_per_100k).toFixed(1)}/100k` : 'N/A',
+      }));
+  }, [forecastsData]);
+
+  // Compute active cases (ON TREATMENT outcome)
+  const activeCases = useMemo(() => {
+    return outcomesData
+      .filter(r => r.outcome_status === 'ON TREATMENT')
+      .reduce((s, r) => s + Number(r.total), 0);
+  }, [outcomesData]);
+
+  // Compute high-risk count (barangays with >200 cases)
+  const highRiskCount = useMemo(() => {
+    const byBarangay = {};
+    monthlyData.forEach(r => {
+      if (!byBarangay[r.barangay_name]) byBarangay[r.barangay_name] = 0;
+      byBarangay[r.barangay_name] += r.case_count;
+    });
+    return Object.values(byBarangay).filter(c => c > 200).length;
+  }, [monthlyData]);
+
+  // Compute success rate (CURED + TREATMENT COMPLETED / total)
+  const successRate = useMemo(() => {
+    const byStatus = {};
+    outcomesData.forEach(r => {
+      const status = r.outcome_status || 'Unknown';
+      byStatus[status] = (byStatus[status] || 0) + Number(r.total);
+    });
+    const total = Object.values(byStatus).reduce((s, v) => s + v, 0);
+    if (total === 0) return '0%';
+    const success = (byStatus['CURED'] || 0) + (byStatus['TREATMENT COMPLETED'] || 0);
+    return `${Math.round((success / total) * 100)}%`;
+  }, [outcomesData]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <i className="ri-loader-4-line animate-spin text-3xl" style={{ color: '#2E6FAF' }} />
+          <p className="mt-2 text-sm" style={{ color: '#64748b' }}>Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center glass-card p-8">
+          <i className="ri-error-warning-line text-3xl" style={{ color: '#EF4444' }} />
+          <p className="mt-2 text-sm" style={{ color: '#EF4444' }}>{error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative space-y-5">
@@ -175,15 +404,15 @@ export default function DashboardPage() {
 
         <MetricItem
           title="Total TB Cases"
-          value="320"
+          value={summary?.total_cases || 0}
           icon="ri-bar-chart-fill"
           color="#2E6FAF"
-          trend="+12%"
+          trend={`${summary?.months_covered || 0} months`}
         />
 
         <MetricItem
           title="Active Cases"
-          value="103"
+          value={activeCases}
           icon="ri-time-line"
           color="#F59E0B"
           trend="Ongoing"
@@ -191,34 +420,34 @@ export default function DashboardPage() {
 
         <MetricItem
           title="High-Risk Areas"
-          value="14"
+          value={highRiskCount}
           icon="ri-alarm-warning-line"
           color="#EF4444"
-          trend="Critical"
+          trend={highRiskCount > 5 ? 'Critical' : 'Moderate'}
         />
 
         <MetricItem
           title="Success Rate"
-          value="32%"
+          value={successRate}
           icon="ri-checkbox-circle-line"
           color="#10B981"
-          trend="Below WHO"
+          trend={parseInt(successRate) >= 85 ? 'Good' : 'Below WHO'}
         />
 
         <MetricItem
           title="Forecast"
-          value="74"
+          value={forecastTable[0]?.val || 'N/A'}
           icon="ri-brain-line"
           color="#8B5CF6"
-          trend="+8.8%"
+          trend={forecastTable[0]?.pct || ''}
         />
 
         <MetricItem
-          title="Last Sync"
-          value="08:42"
-          icon="ri-refresh-line"
+          title="Barangays"
+          value={summary?.barangays_with_cases || 0}
+          icon="ri-map-pin-line"
           color="#4FD1C5"
-          trend="Updated"
+          trend="Active"
           isLast={true}
         />
 
@@ -226,10 +455,10 @@ export default function DashboardPage() {
 
       {/* ── Row 1: Line Chart + Bar Chart + Treatment Outcomes ── */}
       <section className="grid gap-5" style={{ gridTemplateColumns: '2fr 1fr 1fr' }}>
-        <VizCard title="Monthly TB Case Trends — 2023–2025 with Forecast" icon="ri-line-chart-line">
+        <VizCard title="Monthly TB Case Trends" icon="ri-line-chart-line">
           <div className="flex-1" style={{ minHeight: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={trendData}>
+              <AreaChart data={trendChartData}>
 
                 <defs>
                   <linearGradient
@@ -264,27 +493,18 @@ export default function DashboardPage() {
                   strokeWidth={3}
                 />
 
-                <Line
-                  type="monotone"
-                  dataKey="forecast"
-                  stroke="#4FD1C5"
-                  strokeWidth={3}
-                  strokeDasharray="5 5"
-                />
-
               </AreaChart>
             </ResponsiveContainer>
           </div>
           <div className="flex gap-5 text-xs mt-1 pl-2 font-semibold" style={{ color: '#64748b' }}>
             <span className="flex items-center"><span className="w-3 h-0.5 bg-[#0066FF] inline-block mr-1.5" />Actual Cases</span>
-            <span className="flex items-center"><span className="w-3 h-0.5 border-t-2 border-dashed border-[#00D8F6] inline-block mr-1.5" />Forecast</span>
           </div>
         </VizCard>
 
         <VizCard title="Cases by Barangay (Top 10)" icon="ri-bar-chart-2-line">
           <div className="flex-1" style={{ minHeight: 260 }}>
             <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={barangayData} layout="vertical" margin={{ top: 0, right: 12, left: 0, bottom: 0 }}>
+              <BarChart data={barangayChartData} layout="vertical" margin={{ top: 0, right: 12, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                 <XAxis type="number" tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} />
                 <YAxis dataKey="name" type="category" tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} width={72} />
@@ -328,7 +548,7 @@ export default function DashboardPage() {
 
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <div className="text-2xl font-bold">
-                  320
+                  {summary?.total_cases || 0}
                 </div>
                 <div className="text-xs text-slate-500">
                   Cases
@@ -336,17 +556,10 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-4 w-full px-1">
-              {[
-                { color: '#0066FF', label: 'Completed' },
-                { color: '#EF4444', label: 'Died' },
-                { color: '#94A3B8', label: 'Not Evaluated' },
-                { color: '#7c3aed', label: 'Lost / Defaulted' },
-                { color: '#10B981', label: 'Cured' },
-                { color: '#ff0055', label: 'Failed' },
-              ].map(l => (
-                <div key={l.label} className="flex items-center gap-1.5 text-[10px] font-bold" style={{ color: '#475569' }}>
-                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: l.color }} />
-                  {l.label}
+              {outcomeSegments.map(s => (
+                <div key={s.label} className="flex items-center gap-1.5 text-[10px] font-bold" style={{ color: '#475569' }}>
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: s.color }} />
+                  {s.label}
                 </div>
               ))}
             </div>
@@ -394,7 +607,6 @@ export default function DashboardPage() {
             >
               <rect width="100%" height="100%" fill="transparent" />
 
-              {/* Severe */}
               <path
                 d="M 250 80 L 410 60 L 490 140 L 380 220 L 220 160 Z"
                 fill="#EF4444"
@@ -403,7 +615,6 @@ export default function DashboardPage() {
                 strokeWidth="2"
               />
 
-              {/* Moderate */}
               <path
                 d="M 410 60 L 600 90 L 680 230 L 490 280 L 490 140 Z"
                 fill="#2E6FAF"
@@ -412,7 +623,6 @@ export default function DashboardPage() {
                 strokeWidth="2"
               />
 
-              {/* Low */}
               <path
                 d="M 110 180 L 220 160 L 380 220 L 320 340 L 150 290 Z"
                 fill="#6EE7B7"
@@ -421,7 +631,6 @@ export default function DashboardPage() {
                 strokeWidth="2"
               />
 
-              {/* Severe Hotspot */}
               <g transform="translate(350,140)">
                 <circle cx="0" cy="0" r="20" fill="#EF4444" opacity="0.15" />
                 <circle
@@ -437,7 +646,6 @@ export default function DashboardPage() {
                 <circle cx="0" cy="0" r="4" fill="#ffffff" />
               </g>
 
-              {/* Moderate Hotspot */}
               <g transform="translate(580,200)">
                 <circle cx="0" cy="0" r="18" fill="#4FD1C5" opacity="0.15" />
                 <circle
@@ -453,7 +661,6 @@ export default function DashboardPage() {
                 <circle cx="0" cy="0" r="4" fill="#ffffff" />
               </g>
 
-              {/* Low Hotspot */}
               <g transform="translate(240,240)">
                 <circle cx="0" cy="0" r="18" fill="#6EE7B7" opacity="0.15" />
                 <circle
@@ -510,7 +717,6 @@ export default function DashboardPage() {
               </text>
             </svg>
 
-            {/* Risk Matrix Legend — toggles on button click */}
             {showRiskMatrix && (
               <div
                 className="glass-card absolute bottom-4 left-4 z-10 p-4"
@@ -556,29 +762,15 @@ export default function DashboardPage() {
               className="flex justify-around w-full text-xs font-bold"
               style={{ color: '#475569' }}
             >
-              <span>
-                <i
-                  className="ri-circle-fill mr-1"
-                  style={{ color: '#4FD1C5' }}
-                />
-                0–14
-              </span>
-
-              <span>
-                <i
-                  className="ri-circle-fill mr-1"
-                  style={{ color: '#EF4444' }}
-                />
-                15–64
-              </span>
-
-              <span>
-                <i
-                  className="ri-circle-fill mr-1"
-                  style={{ color: '#2E6FAF' }}
-                />
-                65+
-              </span>
+              {ageSegments.map(s => (
+                <span key={s.label}>
+                  <i
+                    className="ri-circle-fill mr-1"
+                    style={{ color: s.color }}
+                  />
+                  {s.label}
+                </span>
+              ))}
             </div>
           </div>
         </VizCard>
@@ -599,21 +791,15 @@ export default function DashboardPage() {
               className="flex justify-around w-full text-xs font-bold"
               style={{ color: '#475569' }}
             >
-              <span>
-                <i
-                  className="ri-men-line mr-1"
-                  style={{ color: '#2E6FAF' }}
-                />
-                Male (58%)
-              </span>
-
-              <span>
-                <i
-                  className="ri-women-line mr-1"
-                  style={{ color: '#4FD1C5' }}
-                />
-                Female (42%)
-              </span>
+              {genderSegments.map(s => (
+                <span key={s.label}>
+                  <i
+                    className={s.label === 'Male' ? 'ri-men-line mr-1' : 'ri-women-line mr-1'}
+                    style={{ color: s.color }}
+                  />
+                  {s.label} ({s.pct}%)
+                </span>
+              ))}
             </div>
           </div>
         </VizCard>
@@ -649,97 +835,81 @@ export default function DashboardPage() {
 
           <div className="space-y-3">
 
-            {[
-              {
-                type: 'danger',
-                icon: 'ri-alarm-warning-line',
-                title: 'Manggahan — Critical Case Surge',
-                desc: 'Cases increased 34% in the past 30 days. Immediate intervention required.',
-                time: '2 hours ago'
-              },
-              {
-                type: 'warning',
-                icon: 'ri-error-warning-line',
-                title: 'Dela Paz — Low Success Rate',
-                desc: 'Treatment success rate dropped to 58%. Below WHO threshold.',
-                time: '6 hours ago'
-              },
-              {
-                type: 'warning',
-                icon: 'ri-error-warning-line',
-                title: 'Dela Paz — Supply Critical',
-                desc: 'Medicine stock below 15%. Immediate resupply needed.',
-                time: '10 hours ago'
-              }
-            ].map((a) => {
+            {displayAlerts.length === 0 ? (
+              <div className="text-center py-8 text-sm" style={{ color: '#94A3B8' }}>
+                No alerts at this time
+              </div>
+            ) : (
+              displayAlerts.map((a) => {
 
-              const isDanger = a.type === 'danger';
+                const isDanger = a.type === 'danger';
 
-              return (
-                <div
-                  key={a.title}
-                  className="rounded-2xl p-4 transition-all hover:-translate-y-1"
-                  style={{
-                    background: isDanger
-                      ? 'rgba(239,68,68,0.08)'
-                      : 'rgba(245,158,11,0.08)',
+                return (
+                  <div
+                    key={a.title}
+                    className="rounded-2xl p-4 transition-all hover:-translate-y-1"
+                    style={{
+                      background: isDanger
+                        ? 'rgba(239,68,68,0.08)'
+                        : 'rgba(245,158,11,0.08)',
 
-                    border: isDanger
-                      ? '1px solid rgba(239,68,68,0.20)'
-                      : '1px solid rgba(245,158,11,0.20)'
-                  }}
-                >
+                      border: isDanger
+                        ? '1px solid rgba(239,68,68,0.20)'
+                        : '1px solid rgba(245,158,11,0.20)'
+                    }}
+                  >
 
-                  <div className="flex gap-3">
+                    <div className="flex gap-3">
 
-                    <div
-                      className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                      style={{
-                        background: isDanger
-                          ? 'rgba(239,68,68,.15)'
-                          : 'rgba(245,158,11,.15)'
-                      }}
-                    >
-                      <i
-                        className={`${a.icon} text-lg`}
+                      <div
+                        className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
                         style={{
-                          color: isDanger
-                            ? '#EF4444'
-                            : '#F59E0B'
+                          background: isDanger
+                            ? 'rgba(239,68,68,.15)'
+                            : 'rgba(245,158,11,.15)'
                         }}
-                      />
-                    </div>
-
-                    <div>
-
-                      <div
-                        className="text-sm font-bold"
-                        style={{ color: '#0F172A' }}
                       >
-                        {a.title}
+                        <i
+                          className={`${a.icon} text-lg`}
+                          style={{
+                            color: isDanger
+                              ? '#EF4444'
+                              : '#F59E0B'
+                          }}
+                        />
                       </div>
 
-                      <div
-                        className="text-xs mt-1"
-                        style={{ color: '#64748B' }}
-                      >
-                        {a.desc}
-                      </div>
+                      <div>
 
-                      <div
-                        className="text-[11px] font-semibold mt-2"
-                        style={{ color: '#94A3B8' }}
-                      >
-                        {a.time}
+                        <div
+                          className="text-sm font-bold"
+                          style={{ color: '#0F172A' }}
+                        >
+                          {a.title}
+                        </div>
+
+                        <div
+                          className="text-xs mt-1"
+                          style={{ color: '#64748B' }}
+                        >
+                          {a.desc}
+                        </div>
+
+                        <div
+                          className="text-[11px] font-semibold mt-2"
+                          style={{ color: '#94A3B8' }}
+                        >
+                          {a.time}
+                        </div>
+
                       </div>
 
                     </div>
 
                   </div>
-
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
 
@@ -772,7 +942,7 @@ export default function DashboardPage() {
 
             <thead>
               <tr>
-                {['Period', 'Forecast', 'Trend'].map((h) => (
+                {['Barangay', 'Forecast', 'Rate'].map((h) => (
                   <th
                     key={h}
                     className="pb-3 text-left text-[10px] uppercase tracking-[2px]"
@@ -789,58 +959,50 @@ export default function DashboardPage() {
 
             <tbody>
 
-              {[
-                {
-                  period: 'Next Month',
-                  val: '74',
-                  pct: '+8.8%'
-                },
-                {
-                  period: '3 Months',
-                  val: '223',
-                  pct: '+10.2%'
-                },
-                {
-                  period: '6 Months',
-                  val: '461',
-                  pct: '+12.1%'
-                }
-              ].map((row) => (
-
-                <tr key={row.period}>
-
-                  <td
-                    className="py-4 text-xs font-semibold"
-                    style={{ color: '#475569' }}
-                  >
-                    {row.period}
+              {forecastTable.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="py-8 text-center text-sm" style={{ color: '#94A3B8' }}>
+                    No forecast data available
                   </td>
-
-                  <td
-                    className="py-4 text-lg font-bold"
-                    style={{ color: '#0F172A' }}
-                  >
-                    {row.val}
-                  </td>
-
-                  <td className="py-4">
-
-                    <span
-                      className="px-2 py-1 rounded-full text-xs font-bold"
-                      style={{
-                        background:
-                          'rgba(239,68,68,.12)',
-                        color: '#EF4444'
-                      }}
-                    >
-                      ↑ {row.pct}
-                    </span>
-
-                  </td>
-
                 </tr>
+              ) : (
+                forecastTable.map((row) => (
 
-              ))}
+                  <tr key={row.period}>
+
+                    <td
+                      className="py-4 text-xs font-semibold"
+                      style={{ color: '#475569' }}
+                    >
+                      {row.period}
+                    </td>
+
+                    <td
+                      className="py-4 text-lg font-bold"
+                      style={{ color: '#0F172A' }}
+                    >
+                      {row.val}
+                    </td>
+
+                    <td className="py-4">
+
+                      <span
+                        className="px-2 py-1 rounded-full text-xs font-bold"
+                        style={{
+                          background:
+                            'rgba(239,68,68,.12)',
+                          color: '#EF4444'
+                        }}
+                      >
+                        {row.pct}
+                      </span>
+
+                    </td>
+
+                  </tr>
+
+                ))
+              )}
 
             </tbody>
 
@@ -857,7 +1019,7 @@ export default function DashboardPage() {
               className="text-xs"
               style={{ color: '#64748B' }}
             >
-              Predicted trend indicates continued growth in TB incidence across high-risk barangays.
+              Forecast data based on historical case trends across Pasig City barangays.
             </div>
           </div>
 

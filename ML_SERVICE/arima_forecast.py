@@ -1,0 +1,304 @@
+"""
+TBInsight ML Service — ARIMA Forecasting
+
+Per-barangay time-series forecasting using pmdarima (auto_arima).
+Fallback to seasonal-naive or exponential smoothing for sparse/short series.
+
+Design spec:
+  - ARIMA per barangay with seasonal=True, m=12 (monthly, annual seasonality)
+  - Fallback for series < 24 months or > 50% zeros
+  - Returns forecasted_count + confidence intervals
+"""
+
+import logging
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+from pmdarima import auto_arima
+
+from config import (
+    ARIMA_MIN_HISTORY,
+    ARIMA_SEASONAL_PERIOD,
+    ARIMA_SPARSE_THRESHOLD,
+    MODEL_VERSION,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _needs_fallback(series: pd.Series) -> bool:
+    """Determine if a series should use fallback instead of ARIMA."""
+    # Too short for ARIMA
+    if len(series) < ARIMA_MIN_HISTORY:
+        logger.info(f"Series too short ({len(series)} < {ARIMA_MIN_HISTORY}), using fallback")
+        return True
+
+    # Too sparse (many zeros)
+    zero_ratio = (series == 0).sum() / len(series)
+    if zero_ratio > ARIMA_SPARSE_THRESHOLD:
+        logger.info(f"Series too sparse ({zero_ratio:.1%} zeros), using fallback")
+        return True
+
+    return False
+
+
+def _seasonal_naive_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
+    """
+    Seasonal-naive fallback: repeat last season's values.
+    For monthly data with annual seasonality: value[t] = value[t-12]
+    """
+    n = len(series)
+    if n < ARIMA_SEASONAL_PERIOD:
+        # Not even one full season — use last value
+        last_value = float(series.iloc[-1])
+        return {
+            "forecasted_count": max(0, last_value),
+            "confidence_lower": max(0, last_value * 0.7),
+            "confidence_upper": last_value * 1.3,
+            "method": "seasonal_naive",
+        }
+
+    # Use value from same month last year
+    last_season_value = float(series.iloc[-ARIMA_SEASONAL_PERIOD])
+    return {
+        "forecasted_count": max(0, last_season_value),
+        "confidence_lower": max(0, last_season_value * 0.7),
+        "confidence_upper": last_season_value * 1.3,
+        "method": "seasonal_naive",
+    }
+
+
+def _exponential_smoothing_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
+    """
+    Exponential smoothing fallback for sparse/short series.
+    Uses SimpleExpSmoothing with optimized alpha.
+    """
+    try:
+        from statsmodels.tsa.holtwinters import SimpleExpSmoothing
+
+        model = SimpleExpSmoothing(series.values.astype(float))
+        fit = model.fit(optimized=True, use_brute=False)
+        forecast = fit.forecast(forecast_horizon)
+        forecast_val = float(forecast[0])
+
+        # Approximate confidence interval from residual std
+        residuals = fit.resid
+        std = float(np.std(residuals))
+        return {
+            "forecasted_count": max(0, forecast_val),
+            "confidence_lower": max(0, forecast_val - 1.96 * std),
+            "confidence_upper": forecast_val + 1.96 * std,
+            "method": "exponential_smoothing",
+        }
+    except Exception as e:
+        logger.warning(f"Exponential smoothing failed, falling back to seasonal_naive: {e}")
+        return _seasonal_naive_forecast(series, forecast_horizon)
+
+
+def _arima_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
+    """Run ARIMA forecast using pmdarima auto_arima."""
+    try:
+        model = auto_arima(
+            series.values.astype(float),
+            seasonal=True,
+            m=ARIMA_SEASONAL_PERIOD,
+            stepwise=True,
+            suppress_warnings=True,
+            error_action="ignore",
+            max_order=8,
+            trace=False,
+        )
+
+        forecast, conf_int = model.predict(
+            n_periods=forecast_horizon,
+            return_conf_int=True,
+            alpha=0.05,  # 95% confidence interval
+        )
+
+        forecast_val = float(forecast[0])
+        lower = float(conf_int[0][0])
+        upper = float(conf_int[0][1])
+
+        return {
+            "forecasted_count": max(0, forecast_val),
+            "confidence_lower": max(0, lower),
+            "confidence_upper": upper,
+            "method": "arima",
+        }
+    except Exception as e:
+        logger.warning(f"ARIMA failed, falling back to exponential_smoothing: {e}")
+        return _exponential_smoothing_forecast(series, forecast_horizon)
+
+
+def forecast_barangay(
+    barangay_name: str,
+    series: pd.Series,
+    forecast_horizon: int = 1,
+) -> dict:
+    """
+    Forecast a single barangay's TB cases.
+
+    Args:
+        barangay_name: Name of the barangay
+        series: Monthly case counts (index = month, values = case_count)
+        forecast_horizon: Number of months to forecast
+
+    Returns:
+        Dict with forecasted_count, confidence_lower, confidence_upper, method
+    """
+    if series.empty:
+        return {
+            "barangay_name": barangay_name,
+            "period": "",
+            "forecasted_count": 0,
+            "confidence_lower": 0,
+            "confidence_upper": 0,
+            "method": "zero_fallback",
+        }
+
+    # Choose method based on series characteristics
+    if _needs_fallback(series):
+        result = _seasonal_naive_forecast(series, forecast_horizon)
+    else:
+        result = _arima_forecast(series, forecast_horizon)
+
+    # Determine next period
+    last_month = series.index[-1]
+    next_period = pd.Timestamp(last_month) + pd.DateOffset(months=forecast_horizon)
+    period_str = next_period.strftime("%Y-%m-%d")
+
+    return {
+        "barangay_name": barangay_name,
+        "period": period_str,
+        "forecasted_count": result["forecasted_count"],
+        "confidence_lower": result["confidence_lower"],
+        "confidence_upper": result["confidence_upper"],
+        "method": result["method"],
+    }
+
+
+def forecast_all(
+    series_data: list[dict],
+    forecast_horizon: int = 1,
+) -> list[dict]:
+    """
+    Forecast all barangays from time series data.
+
+    Args:
+        series_data: List of dicts with barangay_name, month, case_count
+        forecast_horizon: Number of months to forecast
+
+    Returns:
+        List of forecast results per barangay
+    """
+    # Convert to DataFrame
+    df = pd.DataFrame(series_data)
+    if df.empty:
+        return []
+
+    # Parse month column
+    df["month"] = pd.to_datetime(df["month"])
+
+    results = []
+    grouped = df.groupby("barangay_name")
+
+    for barangay_name, group in grouped:
+        # Sort by month and set as index
+        group_sorted = group.sort_values("month").set_index("month")
+        ts = group_sorted["case_count"]
+
+        # Resample to monthly frequency (fill missing months with 0)
+        ts = ts.resample("MS").sum().fillna(0)
+
+        result = forecast_barangay(barangay_name, ts, forecast_horizon)
+        results.append(result)
+        logger.info(
+            f"Forecast for {barangay_name}: {result['forecasted_count']:.1f} "
+            f"({result['method']})"
+        )
+
+    return results
+
+
+def compute_trend(series: pd.Series, window: int = 12) -> float:
+    """
+    Compute recent trend (slope) from last N months.
+
+    Returns:
+        Slope per month (positive = increasing trend)
+    """
+    if len(series) < 2:
+        return 0.0
+
+    recent = series.tail(min(window, len(series))).values.astype(float)
+    x = np.arange(len(recent))
+
+    if len(x) < 2:
+        return 0.0
+
+    # Simple linear regression slope
+    slope = np.polyfit(x, recent, 1)[0]
+    return float(slope)
+
+
+def detect_seasonality(series: pd.Series, period: int = 12) -> bool:
+    """
+    Detect if a series has seasonal pattern.
+    Simple check: if autocorrelation at lag = period is > 0.3
+    """
+    if len(series) < period * 2:
+        return False
+
+    try:
+        autocorr = series.autocorr(lag=period)
+        return bool(autocorr > 0.3)
+    except Exception:
+        return False
+
+
+def backtest_mae(
+    counts: list[int],
+    horizon: int = 6,
+    seasonal_m: int = 12,
+) -> Optional[float]:
+    """
+    Time-based backtest: fit on months 1..T-h, predict T+1..T+h, compare.
+
+    NEVER shuffles months — temporal ordering only.
+
+    Args:
+        counts: Monthly case counts
+        horizon: Number of months to hold out for testing
+        seasonal_m: Seasonal period (12 for monthly)
+
+    Returns:
+        MAE (float) if series is long enough, None otherwise
+    """
+    if len(counts) <= horizon + seasonal_m:
+        return None
+
+    train = counts[:-horizon]
+    actual = np.asarray(counts[-horizon:], dtype=float)
+
+    try:
+        model = auto_arima(
+            train,
+            seasonal=True,
+            m=seasonal_m,
+            stepwise=True,
+            suppress_warnings=True,
+            error_action="ignore",
+            max_order=8,
+            trace=False,
+        )
+        forecast = model.predict(n_periods=horizon)
+        forecast = np.asarray(forecast, dtype=float)
+        return float(np.mean(np.abs(actual - forecast)))
+    except Exception:
+        # If ARIMA fails on train set, try seasonal naive
+        if len(train) >= seasonal_m:
+            season = np.asarray(train[-seasonal_m:], dtype=float)
+            forecast = np.array([season[i % seasonal_m] for i in range(horizon)])
+            return float(np.mean(np.abs(actual - forecast)))
+        return None

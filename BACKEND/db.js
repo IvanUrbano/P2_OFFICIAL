@@ -31,6 +31,16 @@ const initDb = async () => {
     } else {
       console.log('⚠️ init.sql file not found, skipping database auto-initialization.');
     }
+
+    // TBInsight: auto-run full schema migration (idempotent: CREATE TABLE IF NOT EXISTS)
+    const tbInsightMigPath = path.join(__dirname, 'db', 'migrations', '002_tbinsight_full_schema.sql');
+    if (fs.existsSync(tbInsightMigPath)) {
+      const tbSql = fs.readFileSync(tbInsightMigPath, 'utf8');
+      await pool.query(tbSql);
+      console.log('✅ TBInsight schema migration completed successfully.');
+    } else {
+      console.log('⚠️ TBInsight migration not found, skipping.');
+    }
   } catch (err) {
     console.error('❌ Database initialization error:', err.message);
   }

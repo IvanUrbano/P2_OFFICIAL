@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const fileUpload = require('express-fileupload');
 require('dotenv').config();
 
 // Import database connection
@@ -8,6 +9,7 @@ const pool = require('./db');
 
 // Import routes
 const authRoutes = require('./routes/auth');
+const tbInsightRoutes = require('./tbinsight/routes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -45,9 +47,15 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+app.use(fileUpload({
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max
+  abortOnLimit: true,
+  responseOnLimit: 'File size exceeds 50MB limit.',
+}));
 
 // ==================== ROUTES ====================
 app.use('/api/auth', authRoutes);
+app.use('/api/tb', tbInsightRoutes);
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
@@ -78,6 +86,17 @@ app.get('/', (req, res) => {
       login: 'POST /api/auth/login',
       logout: 'POST /api/auth/logout',
       profile: 'GET /api/auth/profile',
+      tbInsight: {
+        barangays: 'GET /api/tb/barangays',
+        facilities: 'GET /api/tb/facilities',
+        import: 'POST /api/tb/import',
+        importHistory: 'GET /api/tb/import-history',
+        dashboard: 'GET /api/tb/dashboard/summary',
+        monthly: 'GET /api/tb/dashboard/monthly',
+        choropleth: 'GET /api/tb/gis/choropleth',
+        forecasts: 'GET /api/tb/forecasts',
+        alerts: 'GET /api/tb/alerts',
+      },
     },
   });
 });
