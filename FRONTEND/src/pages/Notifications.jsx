@@ -1,3 +1,6 @@
+import { useState, useEffect } from 'react';
+import API from '../api/axios';
+
 /* ─── Helper: relative time from offset minutes ─── */
 function relativeTime(minutesAgo) {
   const d = new Date(Date.now() - minutesAgo * 60 * 1000);
@@ -10,16 +13,6 @@ function relativeTime(minutesAgo) {
   const diffDays = Math.floor(diffHrs / 24);
   return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
 }
-
-export default function Notifications() {
-  const alerts = [
-    { type: 'danger', icon: 'ri-alarm-warning-line', title: 'Manggahan — Critical Case Surge', desc: 'Cases increased 34% in the past 30 days. Immediate intervention required.', offsetMin: 120 },
-    { type: 'warning', icon: 'ri-error-warning-line', title: 'Dela Paz — Low Success Rate', desc: 'Treatment success rate dropped to 58%. Below WHO threshold.', offsetMin: 360 },
-    { type: 'warning', icon: 'ri-error-warning-line', title: 'Dela Paz — Supply Critical', desc: 'Medicine stock below 15%. Immediate resupply needed.', offsetMin: 600 },
-    { type: 'info', icon: 'ri-refresh-line', title: 'System Sync Completed', desc: 'Data from 47 barangay health centers successfully synchronized.', offsetMin: 5 },
-  ].map(a => ({ ...a, time: relativeTime(a.offsetMin) }));
-import { useState, useEffect } from 'react';
-import API from '../api/axios';
 
 export default function Notifications() {
   const [alerts, setAlerts] = useState([]);
@@ -88,16 +81,16 @@ export default function Notifications() {
                 style={{ background: bgMap[type], border: `1px solid ${borderMap[type]}` }}>
                 <i className={`${iconMap[type]} text-2xl mt-0.5 shrink-0`} style={{ color: colorMap[type] }} />
                 <div className="flex-1">
-                  <div className="text-sm font-bold mb-1" style={{ color: '#eaf8ff' }}>
+                  <div className="text-sm font-bold mb-1" style={{ color: '#0f172a' }}>
                     {a.barangay_name} — {a.alert_type}
                   </div>
-                  <div className="text-xs" style={{ color: '#6f8a99' }}>{a.message}</div>
+                  <div className="text-xs" style={{ color: '#64748b' }}>{a.message}</div>
                   {a.recommendation && (
-                    <div className="text-xs mt-1" style={{ color: '#6f8a99' }}>
+                    <div className="text-xs mt-1" style={{ color: '#64748b' }}>
                       <strong>Recommendation:</strong> {a.recommendation}
                     </div>
                   )}
-                  <div className="text-[11px] mt-1.5" style={{ color: '#6f8a99' }}>
+                  <div className="text-[11px] mt-1.5" style={{ color: '#94A3B8' }}>
                     {a.created_at ? new Date(a.created_at).toLocaleString() : 'N/A'}
                   </div>
                 </div>
