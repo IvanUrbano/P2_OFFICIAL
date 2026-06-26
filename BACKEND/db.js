@@ -8,17 +8,16 @@ const isProduction = process.env.NODE_ENV === 'production' || process.env.DATABA
 
 const poolConfig = process.env.DATABASE_URL
   ? {
-      connectionString: process.env.DATABASE_URL,
-      ssl: isProduction ? { rejectUnauthorized: false } : false,
-    }
+    connectionString: process.env.DATABASE_URL,
+    ssl: isProduction ? { rejectUnauthorized: false } : false,
+  }
   : {
-      user: process.env.DB_USER,
-      host: process.env.DB_HOST,
-      database: process.env.DB_NAME,
-      password: process.env.DB_PASSWORD,
-      port: process.env.DB_PORT,
-    };
-
+    user: process.env.DB_USER,
+    host: process.env.DB_HOST,
+    database: process.env.DB_NAME,
+    password: process.env.DB_PASSWORD,
+    port: process.env.DB_PORT,
+  };
 const pool = new Pool(poolConfig);
 
 // Helper function to auto-initialize tables if they don't exist
@@ -31,6 +30,16 @@ const initDb = async () => {
       console.log('✅ Database tables checked/initialized successfully.');
     } else {
       console.log('⚠️ init.sql file not found, skipping database auto-initialization.');
+    }
+
+    // TBInsight: auto-run full schema migration (idempotent: CREATE TABLE IF NOT EXISTS)
+    const tbInsightMigPath = path.join(__dirname, 'db', 'migrations', '002_tbinsight_full_schema.sql');
+    if (fs.existsSync(tbInsightMigPath)) {
+      const tbSql = fs.readFileSync(tbInsightMigPath, 'utf8');
+      await pool.query(tbSql);
+      console.log('✅ TBInsight schema migration completed successfully.');
+    } else {
+      console.log('⚠️ TBInsight migration not found, skipping.');
     }
   } catch (err) {
     console.error('❌ Database initialization error:', err.message);

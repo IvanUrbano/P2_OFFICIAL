@@ -1,17 +1,17 @@
 import { useState } from "react";
 import { useTBData } from "../context/TBDataContext";
 import { downloadFile, toCSV } from "../utils/exportUtils";
+import { useState, useEffect } from "react";
+import API from "../api/axios";
 
 /* ─── Status → accent color, drawn from the same palette used on the dashboard ─── */
 const statusColors = {
-  Active: "#2E6FAF",
-  Cured: "#10B981",
-  Treatment: "#F59E0B",
-  Completed: "#0066FF",
-  "Not Evaluated": "#94A3B8",
-  Defaulted: "#7c3aed",
-  Failed: "#ff0055",
-  Died: "#EF4444",
+  "ON TREATMENT": "#F59E0B",
+  "TREATMENT COMPLETED": "#0066FF",
+  "CURED": "#10B981",
+  "DIED": "#EF4444",
+  "LOST TO FOLLOW-UP": "#7c3aed",
+  "EXCLUDED": "#94A3B8",
 };
 
 function StatusBadge({ status }) {
@@ -29,6 +29,12 @@ function StatusBadge({ status }) {
 
 export default function TBRecords() {
   const { records } = useTBData();
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [barangays, setBarangays] = useState([]);
+  const [outcomeStatuses, setOutcomeStatuses] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 0 });
+
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedYear, setSelectedYear] = useState("");
@@ -38,28 +44,56 @@ export default function TBRecords() {
   const [selectedRecord, setSelectedRecord] = useState(null);
   const recordsPerPage = 10;
 
-  const barangays = ["Bagong Ilog", "Bagong Katipunan", "Bambang", "Buting", "Caniogan", "Kapasigan", "Kapitolyo", "Malinao", "Oranbo", "Palatiw", "Pineda", "Sagad", "San Antonio", "San Joaquin", "San Jose", "Dela Paz", "Kalawaan", "Manggahan", "Maybunga", "Pinagbuhatan", "Rosario", "San Miguel", "San Nicolas", "Santa Cruz", "Santa Lucia", "Santa Rosa", "Santo Tomas", "Santolan", "Sumilang", "Ugong"];
+  // Fetch barangays for filter dropdown
+  useEffect(() => {
+    const fetchBarangays = async () => {
+      try {
+        const res = await API.get("/api/tb/barangays");
+        setBarangays(res.data.barangays.map(b => b.name).sort());
+      } catch (err) {
+        console.error("Failed to fetch barangays:", err);
+      }
+    };
+    fetchBarangays();
+  }, []);
 
-  const outcomeStatuses = [...new Set(records.map((record) => record.status).filter(Boolean))].sort();
+  // Fetch cases with filters
+  useEffect(() => {
+    const fetchCases = async () => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams();
+        params.append("page", currentPage);
+        params.append("limit", recordsPerPage);
+        if (searchTerm) params.append("search", searchTerm);
+        if (selectedBarangay) params.append("barangay", selectedBarangay);
+        if (selectedYear) params.append("year", selectedYear);
+        if (selectedMonth) {
+          const monthNum = getMonthNumber(selectedMonth);
+          if (monthNum) params.append("month", monthNum);
+        }
+        if (selectedOutcomeStatus) params.append("outcome", selectedOutcomeStatus);
+
+        const res = await API.get(`/api/tb/cases?${params.toString()}`);
+        setRecords(res.data.cases || []);
+        setPagination(res.data.pagination || { page: 1, limit: 10, total: 0, totalPages: 0 });
+
+        // Extract unique outcome statuses from current page
+        const statuses = [...new Set((res.data.cases || []).map(r => r.outcome_status).filter(Boolean))].sort();
+        setOutcomeStatuses(statuses);
+      } catch (err) {
+        console.error("Failed to fetch cases:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchCases();
+  }, [currentPage, searchTerm, selectedYear, selectedMonth, selectedBarangay, selectedOutcomeStatus]);
 
   const getMonthNumber = (month) => {
-    const months = { January: "01", February: "02", March: "03", April: "04", May: "05", June: "06", July: "07", August: "08", September: "09", October: "10", November: "11", December: "12" };
+    const months = { January: "1", February: "2", March: "3", April: "4", May: "5", June: "6", July: "7", August: "8", September: "9", October: "10", November: "11", December: "12" };
     return months[month] || "";
   };
-
-  const filteredRecords = records.filter((record) => {
-    const matchesSearch = searchTerm === "" ||
-      record.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      record.barangay.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      record.facility.toLowerCase().includes(searchTerm.toLowerCase());
-
-    const matchesYear = selectedYear === "" || record.diagnosisDate.startsWith(selectedYear);
-    const matchesMonth = selectedMonth === "" || record.diagnosisDate.includes("-" + getMonthNumber(selectedMonth).padStart(2, "0") + "-");
-    const matchesBarangay = selectedBarangay === "" || record.barangay === selectedBarangay;
-    const matchesOutcomeStatus = selectedOutcomeStatus === "" || record.status === selectedOutcomeStatus;
-
-    return matchesSearch && matchesYear && matchesMonth && matchesBarangay && matchesOutcomeStatus;
-  });
 
   const handleClearFilters = () => {
     setSearchTerm("");
@@ -110,7 +144,7 @@ export default function TBRecords() {
   };
 
   const handleNext = () => {
-    if (currentPage < totalPages) setCurrentPage(currentPage + 1);
+    if (currentPage < pagination.totalPages) setCurrentPage(currentPage + 1);
   };
 
   /* Reusable field row for the record detail modal */
@@ -124,6 +158,16 @@ export default function TBRecords() {
       )}
     </div>
   );
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return "N/A";
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+    } catch {
+      return dateStr;
+    }
+  };
 
   return (
     <div className="relative space-y-5">
@@ -247,7 +291,7 @@ export default function TBRecords() {
             <span>Case Records</span>
           </div>
           <span className="text-xs font-bold" style={{ color: "#64748b" }}>
-            {filteredRecords.length} total
+            {pagination.total} total
           </span>
         </div>
 
@@ -309,35 +353,101 @@ export default function TBRecords() {
             </tbody>
           </table>
         </div>
-
-        <div
-          className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
-          style={{ borderTop: "1px solid rgba(148,163,184,.15)" }}
-        >
-          <p className="text-xs font-semibold" style={{ color: "#64748b" }}>
-            Showing {filteredRecords.length === 0 ? 0 : startIndex + 1}–{Math.min(endIndex, filteredRecords.length)} of {filteredRecords.length} records
-          </p>
-          <div className="flex gap-2">
-            <button
-              aria-label="Previous page"
-              onClick={handlePrevious}
-              disabled={currentPage === 1}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
-              style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#475569" }}
-            >
-              <i className="ri-arrow-left-s-line text-base" />
-            </button>
-            <button
-              aria-label="Next page"
-              onClick={handleNext}
-              disabled={currentPage === totalPages || totalPages === 0}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
-              style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#475569" }}
-            >
-              <i className="ri-arrow-right-s-line text-base" />
-            </button>
+        {loading ? (
+          <div className="flex items-center justify-center h-64">
+            <div className="text-center">
+              <i className="ri-loader-4-line animate-spin text-3xl" style={{ color: "#2E6FAF" }} />
+              <p className="mt-2 text-sm" style={{ color: "#64748b" }}>Loading records...</p>
+            </div>
           </div>
-        </div>
+        ) : (
+          <>
+            <div className="mt-4 min-h-[480px] overflow-x-auto">
+              <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
+                <thead>
+                  <tr>
+                    {["Case ID", "Barangay", "Age", "Sex", "Diagnosis", "Facility", "Treatment Outcome", "Action"].map((h) => (
+                      <th
+                        key={h}
+                        className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
+                        style={{ color: "#64748b", borderBottom: "1px solid rgba(148,163,184,.15)" }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {records.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="px-5 py-12 text-center text-sm" style={{ color: "#94A3B8" }}>
+                        No records found matching your filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    records.map((record) => (
+                      <tr
+                        key={record.id}
+                        style={{ borderTop: "1px solid rgba(148,163,184,.1)" }}
+                      >
+                        <td className="px-5 py-3 font-bold" style={{ color: "#0f172a" }}>
+                          {String(record.id).padStart(4, "0")}
+                        </td>
+                        <td className="px-5 py-3" style={{ color: "#475569" }}>{record.barangay_name}</td>
+                        <td className="px-5 py-3" style={{ color: "#475569" }}>{record.age}</td>
+                        <td className="px-5 py-3" style={{ color: "#475569" }}>{record.sex}</td>
+                        <td className="px-5 py-3" style={{ color: "#475569" }}>{formatDate(record.date_of_diagnosis)}</td>
+                        <td className="px-5 py-3" style={{ color: "#475569" }}>{record.screening_facility}</td>
+                        <td className="px-5 py-3">
+                          <StatusBadge status={record.outcome_status} />
+                        </td>
+                        <td className="px-5 py-3">
+                          <button
+                            aria-label="View record"
+                            onClick={() => setSelectedRecord(record)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition hover:opacity-80"
+                            style={{ background: "rgba(46,111,175,0.1)", border: "1px solid rgba(46,111,175,0.25)", color: "#2E6FAF" }}
+                          >
+                            <i className="ri-eye-line text-sm" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div
+              className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+              style={{ borderTop: "1px solid rgba(148,163,184,.15)" }}
+            >
+              <p className="text-xs font-semibold" style={{ color: "#64748b" }}>
+                Showing {pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} records
+              </p>
+              <div className="flex gap-2">
+                <button
+                  aria-label="Previous page"
+                  onClick={handlePrevious}
+                  disabled={currentPage === 1}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#475569" }}
+                >
+                  <i className="ri-arrow-left-s-line text-base" />
+                </button>
+                <button
+                  aria-label="Next page"
+                  onClick={handleNext}
+                  disabled={currentPage === pagination.totalPages || pagination.totalPages === 0}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#475569" }}
+                >
+                  <i className="ri-arrow-right-s-line text-base" />
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* ── Record detail modal ── */}
@@ -386,6 +496,9 @@ export default function TBRecords() {
                     <Field label="Imported From" value={selectedRecord.importedFrom} />
                     <Field label="Created" value={selectedRecord.createdAt} />
                     <Field label="Treatment Data Overview" value={selectedRecord.status} badge />
+                    <Field label="Case ID" value={String(selectedRecord.id).padStart(4, "0")} />
+                    <Field label="Batch ID" value={selectedRecord.batch_id?.substring(0, 8)} />
+                    <Field label="Treatment Outcome" value={selectedRecord.outcome_status} badge />
                   </div>
                 </div>
 
@@ -397,9 +510,8 @@ export default function TBRecords() {
                   <div className="mt-4 space-y-3 text-sm">
                     <Field label="Age" value={selectedRecord.age} />
                     <Field label="Sex" value={selectedRecord.sex} />
-                    <Field label="Barangay" value={selectedRecord.barangay} />
-                    <Field label="City" value={selectedRecord.city || "Pasig City"} />
-                    <Field label="Source" value={selectedRecord.sourcePatient} />
+                    <Field label="Barangay" value={selectedRecord.barangay_name} />
+                    <Field label="Source" value={selectedRecord.source_of_patient} />
                   </div>
                 </div>
               </div>
@@ -411,10 +523,10 @@ export default function TBRecords() {
                     Screening & diagnosis
                   </p>
                   <div className="mt-4 space-y-3 text-sm">
-                    <Field label="Screening Date" value={selectedRecord.screeningDate} />
-                    <Field label="Diagnosis Date" value={selectedRecord.diagnosisDate} />
-                    <Field label="Notification Date" value={selectedRecord.notificationDate} />
-                    <Field label="Facility" value={selectedRecord.facility} />
+                    <Field label="Screening Date" value={formatDate(selectedRecord.date_of_screening)} />
+                    <Field label="Diagnosis Date" value={formatDate(selectedRecord.date_of_diagnosis)} />
+                    <Field label="Notification Date" value={formatDate(selectedRecord.date_of_notification)} />
+                    <Field label="Facility" value={selectedRecord.screening_facility} />
                   </div>
                 </div>
 
@@ -424,12 +536,12 @@ export default function TBRecords() {
                     Clinical & treatment
                   </p>
                   <div className="mt-4 space-y-3 text-sm">
-                    <Field label="Anatomical Site" value={selectedRecord.anatomicalSite} />
-                    <Field label="Registration Group" value={selectedRecord.registrationGroup} />
-                    <Field label="Bacteriological Status" value={selectedRecord.bacteriologicalStatus} />
-                    <Field label="Treatment Facility" value={selectedRecord.treatmentFacility || selectedRecord.facility} />
-                    <Field label="Started Treatment" value={selectedRecord.treatmentStartDate} />
-                    <Field label="Outcome Date" value={selectedRecord.outcomeDate} />
+                    <Field label="Anatomical Site" value={selectedRecord.anatomical_site} />
+                    <Field label="Registration Group" value={selectedRecord.registration_group} />
+                    <Field label="Bacteriological Status" value={selectedRecord.bacteriological_status} />
+                    <Field label="Treatment Facility" value={selectedRecord.treatment_facility} />
+                    <Field label="Started Treatment" value={formatDate(selectedRecord.date_started_treatment)} />
+                    <Field label="Outcome Date" value={formatDate(selectedRecord.date_of_outcome)} />
                   </div>
                 </div>
               </div>
