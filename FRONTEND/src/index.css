@@ -224,3 +224,12 @@ body {
   opacity: 0.12;
   pointer-events: none;
 }
+
+/* Hide scrollbar for WebKit browsers (Chrome, Safari, Edge) */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}

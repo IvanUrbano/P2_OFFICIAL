@@ -1,10 +1,23 @@
+/* ─── Helper: relative time from offset minutes ─── */
+function relativeTime(minutesAgo) {
+  const d = new Date(Date.now() - minutesAgo * 60 * 1000);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  if (isToday) return `Today ${time}`;
+  const diffHrs = Math.floor(minutesAgo / 60);
+  if (diffHrs < 24) return `${diffHrs} hours ago`;
+  const diffDays = Math.floor(diffHrs / 24);
+  return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+}
+
 export default function Notifications() {
   const alerts = [
-    { type: 'danger', icon: 'ri-alarm-warning-line', title: 'Manggahan — Critical Case Surge', desc: 'Cases increased 34% in the past 30 days. Immediate intervention required.', time: '2 hours ago' },
-    { type: 'warning', icon: 'ri-error-warning-line', title: 'Dela Paz — Low Success Rate', desc: 'Treatment success rate dropped to 58%. Below WHO threshold.', time: '6 hours ago' },
-    { type: 'warning', icon: 'ri-error-warning-line', title: 'Dela Paz — Supply Critical', desc: 'Medicine stock below 15%. Immediate resupply needed.', time: '10 hours ago' },
-    { type: 'info', icon: 'ri-refresh-line', title: 'System Sync Completed', desc: 'Data from 47 barangay health centers successfully synchronized.', time: 'Today 08:42 AM' },
-  ];
+    { type: 'danger', icon: 'ri-alarm-warning-line', title: 'Manggahan — Critical Case Surge', desc: 'Cases increased 34% in the past 30 days. Immediate intervention required.', offsetMin: 120 },
+    { type: 'warning', icon: 'ri-error-warning-line', title: 'Dela Paz — Low Success Rate', desc: 'Treatment success rate dropped to 58%. Below WHO threshold.', offsetMin: 360 },
+    { type: 'warning', icon: 'ri-error-warning-line', title: 'Dela Paz — Supply Critical', desc: 'Medicine stock below 15%. Immediate resupply needed.', offsetMin: 600 },
+    { type: 'info', icon: 'ri-refresh-line', title: 'System Sync Completed', desc: 'Data from 47 barangay health centers successfully synchronized.', offsetMin: 5 },
+  ].map(a => ({ ...a, time: relativeTime(a.offsetMin) }));
 
   const colorMap = { danger: '#ff4d4d', warning: '#ffd166', info: '#00bfff' };
   const bgMap = { danger: 'rgba(255,77,77,0.07)', warning: 'rgba(255,209,102,0.06)', info: 'rgba(0,191,255,0.05)' };

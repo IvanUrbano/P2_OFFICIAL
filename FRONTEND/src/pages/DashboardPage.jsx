@@ -1,38 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip as RTooltip, Tooltip, ResponsiveContainer,
   BarChart, Bar, AreaChart, Area,
 } from 'recharts';
-
-/* ─── Mock data ─── */
-const trendData = [
-  { label: 'Jan 22', actual: 68 }, { label: 'Mar 22', actual: 54 },
-  { label: 'May 22', actual: 72 }, { label: 'Jul 22', actual: 60 },
-  { label: 'Sep 22', actual: 80 }, { label: 'Nov 22', actual: 70 },
-  { label: 'Jan 23', actual: 85 }, { label: 'Mar 23', actual: 64 },
-  { label: 'May 23', actual: 90 }, { label: 'Jul 23', actual: 74 },
-  { label: 'Sep 23', actual: 88 }, { label: 'Nov 23', actual: 78 },
-  { label: 'Jan 24', actual: 95 }, { label: 'Mar 24', actual: 82 },
-  { label: 'May 24', actual: 86 }, { label: 'Jul 24', actual: 79 },
-  { label: 'Sep 24', actual: 92 }, { label: 'Nov 24', actual: 84 },
-  { label: 'Jan 25', actual: 88 }, { label: 'Mar 25', actual: 91 },
-  { label: 'May 25', actual: 88 },
-  { label: 'Jul 25', forecast: 95 }, { label: 'Aug 25', forecast: 100 },
-];
-
-const barangayData = [
-  { name: 'Rosario', cases: 89 },
-  { name: 'Dela Paz', cases: 82 },
-  { name: 'Santol', cases: 75 },
-  { name: 'San Joaquin', cases: 74 },
-  { name: 'Caniogan', cases: 70 },
-  { name: 'Kapasigan', cases: 65 },
-  { name: 'Bambang', cases: 62 },
-  { name: 'Bagong Ilog', cases: 58 },
-  { name: 'Manggahan', cases: 54 },
-  { name: 'Pinagbuhatan', cases: 48 },
-];
+import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import { useTBData } from '../context/TBDataContext';
 
 const chartTooltipStyle = {
   backgroundColor: '#ffffff',
@@ -42,6 +17,52 @@ const chartTooltipStyle = {
   fontSize: '12px',
   boxShadow: '0 4px 12px rgba(0, 102, 255, 0.08)',
 };
+
+/* ─── Color maps for donut segments ─── */
+const OUTCOME_COLORS = {
+  Cured: '#10B981',
+  Completed: '#0066FF',
+  Active: '#F59E0B',
+  Treatment: '#2E6FAF',
+  Defaulted: '#7c3aed',
+  Failed: '#ff0055',
+  Died: '#EF4444',
+  'Not Evaluated': '#94A3B8',
+};
+
+const AGE_COLORS = {
+  '0-14': '#4FD1C5',
+  '15-64': '#EF4444',
+  '65+': '#2E6FAF',
+};
+
+const AGE_LABELS = {
+  '0-14': '0–14 yrs',
+  '15-64': '15–64 yrs',
+  '65+': '65+ yrs',
+};
+
+const GENDER_COLORS = {
+  Male: '#2E6FAF',
+  Female: '#4FD1C5',
+};
+
+/* ─── Helper: build donut segments from a frequency map ─── */
+function buildSegments(data, colorMap, { strokeWidth } = {}) {
+  const total = Object.values(data).reduce((a, b) => a + b, 0);
+  if (total === 0) return [];
+  let cumulative = 0;
+  return Object.entries(data)
+    .filter(([, v]) => v > 0)
+    .map(([key, val]) => {
+      const pct = Math.round((val / total) * 100);
+      const offset = cumulative;
+      cumulative += pct;
+      const seg = { color: colorMap[key] || '#94A3B8', pct, offset, label: key };
+      if (strokeWidth != null) seg.w = strokeWidth;
+      return seg;
+    });
+}
 
 /* ─── Local sub-components ─── */
 function MetricItem({ title, value, icon, color, trend, isLast }) {
@@ -140,28 +161,75 @@ function DonutChart({ segments, size = 160 }) {
 
 /* ─── Page Component ─── */
 export default function DashboardPage() {
-  // Balanced neon digital healthcare pops overlaying white surfaces
-  const outcomeSegments = [
-    { color: '#0066FF', pct: 35, offset: 0, label: 'Completed' },   // Neon Dark Blue
-    { color: '#EF4444', pct: 12, offset: 35, label: 'Died' },  // Neon Cyan
-    { color: '#94A3B8', pct: 18, offset: 47, label: 'Not Evaluated' },  // Medical Alert Magenta
-    { color: '#7c3aed', pct: 15, offset: 65, label: 'Lost / Defaulted' },  // Tech Purple
-    { color: '#10B981', pct: 13, offset: 80, label: 'Cured' },  // Safety Amber
-    { color: '#ff0055', pct: 7, offset: 93, label: 'Failed' },   // Muted Gray
-  ];
-
-  const ageSegments = [
-    { color: '#4FD1C5', pct: 25, offset: 0, w: 6, label: '0–14 yrs' },
-    { color: '#EF4444', pct: 55, offset: -25, w: 6, label: '15–64 yrs' },
-    { color: '#2E6FAF', pct: 20, offset: -80, w: 6, label: '65+ yrs' },
-  ];
-
-  const genderSegments = [
-    { color: '#2E6FAF', pct: 58, offset: 0, w: 10, label: 'Male' },
-    { color: '#4FD1C5', pct: 42, offset: -58, w: 10, label: 'Female' },
-  ];
+  const navigate = useNavigate();
+  const { analytics, alerts, forecastData, records, gisData } = useTBData();
 
   const [showRiskMatrix, setShowRiskMatrix] = useState(false);
+
+  /* ── Derive chart / segment data from analytics ── */
+
+  // Line/Area chart data: merge actual monthlyTrend + forecastTrend
+  const trendData = useMemo(() => {
+    const actuals = (analytics.monthlyTrend || []).map(d => ({ label: d.month, actual: d.actual }));
+    const forecasts = (analytics.forecastTrend || []).map(d => ({ label: d.month, forecast: d.forecast }));
+    return [...actuals, ...forecasts];
+  }, [analytics.monthlyTrend, analytics.forecastTrend]);
+
+  // Top 10 barangay bar chart
+  const barangayData = useMemo(
+    () => (analytics.barangayCases || []).slice(0, 10),
+    [analytics.barangayCases],
+  );
+
+  // Treatment outcome donut segments
+  const outcomeSegments = useMemo(
+    () => buildSegments(analytics.treatmentOutcomes || {}, OUTCOME_COLORS),
+    [analytics.treatmentOutcomes],
+  );
+
+  // Age donut segments
+  const ageSegments = useMemo(
+    () => buildSegments(analytics.ageDistribution || {}, AGE_COLORS, { strokeWidth: 6 }),
+    [analytics.ageDistribution],
+  );
+
+  // Gender donut segments
+  const genderSegments = useMemo(
+    () => buildSegments(analytics.genderDistribution || {}, GENDER_COLORS, { strokeWidth: 10 }),
+    [analytics.genderDistribution],
+  );
+
+  // Compute age label percentages for the legend
+  const ageTotal = useMemo(
+    () => Object.values(analytics.ageDistribution || {}).reduce((a, b) => a + b, 0),
+    [analytics.ageDistribution],
+  );
+  const genderTotal = useMemo(
+    () => Object.values(analytics.genderDistribution || {}).reduce((a, b) => a + b, 0),
+    [analytics.genderDistribution],
+  );
+
+  // Forecast summary table rows derived from forecastData
+  const forecastRows = useMemo(() => {
+    const base = analytics.forecastNextMonth || 0;
+    const avgGrowth = forecastData.length > 0
+      ? forecastData.reduce((s, d) => s + (d.growthRate || 0), 0) / forecastData.length
+      : 0;
+    // normalise: if growthRate is already a percentage (e.g. 8.8) keep it; if decimal (0.088) scale up
+    const growthPct = avgGrowth > 1 ? avgGrowth : avgGrowth * 100;
+    const g = growthPct / 100;
+    return [
+      { period: 'Next Month', val: String(Math.round(base)), pct: `+${growthPct.toFixed(1)}%` },
+      { period: '3 Months', val: String(Math.round(base * (1 + g * 2))), pct: `+${(growthPct * 2).toFixed(1)}%` },
+      { period: '6 Months', val: String(Math.round(base * (1 + g * 5))), pct: `+${(growthPct * 5).toFixed(1)}%` },
+    ];
+  }, [analytics.forecastNextMonth, forecastData]);
+
+  // Alert helper: map context type to visual variant
+  const alertVariant = (type) => {
+    if (type === 'High') return 'danger';
+    return 'warning';
+  };
 
   return (
     <div className="relative space-y-5">
@@ -175,7 +243,7 @@ export default function DashboardPage() {
 
         <MetricItem
           title="Total TB Cases"
-          value="320"
+          value={analytics.totalCases ?? '—'}
           icon="ri-bar-chart-fill"
           color="#2E6FAF"
           trend="+12%"
@@ -183,7 +251,7 @@ export default function DashboardPage() {
 
         <MetricItem
           title="Active Cases"
-          value="103"
+          value={analytics.activeCases ?? '—'}
           icon="ri-time-line"
           color="#F59E0B"
           trend="Ongoing"
@@ -191,7 +259,7 @@ export default function DashboardPage() {
 
         <MetricItem
           title="High-Risk Areas"
-          value="14"
+          value={analytics.highRiskAreas ?? '—'}
           icon="ri-alarm-warning-line"
           color="#EF4444"
           trend="Critical"
@@ -199,7 +267,7 @@ export default function DashboardPage() {
 
         <MetricItem
           title="Success Rate"
-          value="32%"
+          value={analytics.successRate != null ? `${Math.round(analytics.successRate)}%` : '—'}
           icon="ri-checkbox-circle-line"
           color="#10B981"
           trend="Below WHO"
@@ -207,7 +275,7 @@ export default function DashboardPage() {
 
         <MetricItem
           title="Forecast"
-          value="74"
+          value={analytics.forecastNextMonth ?? '—'}
           icon="ri-brain-line"
           color="#8B5CF6"
           trend="+8.8%"
@@ -215,7 +283,7 @@ export default function DashboardPage() {
 
         <MetricItem
           title="Last Sync"
-          value="08:42"
+          value={analytics.lastSync ?? '—'}
           icon="ri-refresh-line"
           color="#4FD1C5"
           trend="Updated"
@@ -318,7 +386,7 @@ export default function DashboardPage() {
           </div>
         </VizCard>
 
-        <VizCard title="Treatment Outcome" icon="ri-pie-chart-2-line">
+        <VizCard title="Treatment Data Overview" icon="ri-pie-chart-2-line">
           <div className="flex-1 flex flex-col items-center justify-center">
             <div className="relative">
               <DonutChart
@@ -328,7 +396,7 @@ export default function DashboardPage() {
 
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <div className="text-2xl font-bold">
-                  320
+                  {analytics.totalCases ?? '—'}
                 </div>
                 <div className="text-xs text-slate-500">
                   Cases
@@ -336,17 +404,10 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-4 w-full px-1">
-              {[
-                { color: '#0066FF', label: 'Completed' },
-                { color: '#EF4444', label: 'Died' },
-                { color: '#94A3B8', label: 'Not Evaluated' },
-                { color: '#7c3aed', label: 'Lost / Defaulted' },
-                { color: '#10B981', label: 'Cured' },
-                { color: '#ff0055', label: 'Failed' },
-              ].map(l => (
-                <div key={l.label} className="flex items-center gap-1.5 text-[10px] font-bold" style={{ color: '#475569' }}>
-                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: l.color }} />
-                  {l.label}
+              {outcomeSegments.map(s => (
+                <div key={s.label} className="flex items-center gap-1.5 text-[10px] font-bold" style={{ color: '#475569' }}>
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: s.color }} />
+                  {s.label}
                 </div>
               ))}
             </div>
@@ -380,159 +441,69 @@ export default function DashboardPage() {
         >
           <div
             className="flex-1 rounded-2xl relative overflow-hidden"
-            style={{
-              minHeight: 260,
-              border: '1px solid rgba(255,255,255,0.15)',
-              background:
-                'linear-gradient(135deg, #0F2D52 0%, #174A7E 100%)'
-            }}
+            style={{ minHeight: 260, border: '1px solid rgba(148,163,184,0.15)' }}
           >
-            <svg
-              className="w-full h-full absolute inset-0"
-              viewBox="0 0 1000 380"
-              preserveAspectRatio="xMidYMid meet"
+            <MapContainer
+              center={[14.5570, 121.0850]}
+              zoom={13}
+              style={{ height: '100%', width: '100%', minHeight: 260 }}
+              zoomControl={false}
+              attributionControl={false}
             >
-              <rect width="100%" height="100%" fill="transparent" />
+              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+              {gisData.map((g) => {
+                const bRecords = records.filter(r => r.barangay === g.barangay);
+                const male = bRecords.filter(r => r.sex === 'Male').length;
+                const female = bRecords.filter(r => r.sex === 'Female').length;
+                const riskColor = g.risk === 'High' ? '#EF4444' : g.risk === 'Moderate' ? '#F59E0B' : '#10B981';
+                const radius = g.risk === 'High' ? 14 : g.risk === 'Moderate' ? 11 : 8;
+                return (
+                  <CircleMarker
+                    key={g.barangay}
+                    center={[g.lat, g.lng]}
+                    radius={radius}
+                    fillColor={riskColor}
+                    fillOpacity={0.75}
+                    color="#ffffff"
+                    weight={2}
+                  >
+                    <Popup>
+                      <div style={{ fontFamily: 'Inter, sans-serif', minWidth: 170 }}>
+                        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, color: '#0f172a' }}>{g.barangay}</div>
+                        <div style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 12, display: 'inline-block', marginBottom: 6, background: `${riskColor}1A`, color: riskColor }}>
+                          {g.risk} Risk
+                        </div>
+                        <div style={{ fontSize: 11, lineHeight: 1.8, color: '#475569' }}>
+                          <div><strong>Cases:</strong> {g.cases}</div>
+                          <div><strong>Active:</strong> {g.activeCases}</div>
+                          <div><strong>Forecast:</strong> {g.forecast}</div>
+                          <div><strong>Success Rate:</strong> {Math.round(g.successRate)}%</div>
+                          <div><strong>Male:</strong> {male} · <strong>Female:</strong> {female}</div>
+                        </div>
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                );
+              })}
+            </MapContainer>
 
-              {/* Severe */}
-              <path
-                d="M 250 80 L 410 60 L 490 140 L 380 220 L 220 160 Z"
-                fill="#EF4444"
-                fillOpacity="0.15"
-                stroke="#EF4444"
-                strokeWidth="2"
-              />
-
-              {/* Moderate */}
-              <path
-                d="M 410 60 L 600 90 L 680 230 L 490 280 L 490 140 Z"
-                fill="#2E6FAF"
-                fillOpacity="0.15"
-                stroke="#4FD1C5"
-                strokeWidth="2"
-              />
-
-              {/* Low */}
-              <path
-                d="M 110 180 L 220 160 L 380 220 L 320 340 L 150 290 Z"
-                fill="#6EE7B7"
-                fillOpacity="0.15"
-                stroke="#6EE7B7"
-                strokeWidth="2"
-              />
-
-              {/* Severe Hotspot */}
-              <g transform="translate(350,140)">
-                <circle cx="0" cy="0" r="20" fill="#EF4444" opacity="0.15" />
-                <circle
-                  cx="0"
-                  cy="0"
-                  r="10"
-                  fill="#EF4444"
-                  style={{
-                    filter:
-                      'drop-shadow(0 0 12px rgba(239,68,68,.8))'
-                  }}
-                />
-                <circle cx="0" cy="0" r="4" fill="#ffffff" />
-              </g>
-
-              {/* Moderate Hotspot */}
-              <g transform="translate(580,200)">
-                <circle cx="0" cy="0" r="18" fill="#4FD1C5" opacity="0.15" />
-                <circle
-                  cx="0"
-                  cy="0"
-                  r="10"
-                  fill="#4FD1C5"
-                  style={{
-                    filter:
-                      'drop-shadow(0 0 10px rgba(79,209,197,.8))'
-                  }}
-                />
-                <circle cx="0" cy="0" r="4" fill="#ffffff" />
-              </g>
-
-              {/* Low Hotspot */}
-              <g transform="translate(240,240)">
-                <circle cx="0" cy="0" r="18" fill="#6EE7B7" opacity="0.15" />
-                <circle
-                  cx="0"
-                  cy="0"
-                  r="10"
-                  fill="#6EE7B7"
-                  style={{
-                    filter:
-                      'drop-shadow(0 0 10px rgba(110,231,183,.8))'
-                  }}
-                />
-                <circle cx="0" cy="0" r="4" fill="#ffffff" />
-              </g>
-
-              <text
-                x="275"
-                y="106"
-                fill="#ffffff"
-                fontSize="12"
-                fontWeight="700"
-              >
-                SAN JOAQUIN
-              </text>
-
-              <text
-                x="275"
-                y="122"
-                fill="#FCA5A5"
-                fontSize="10"
-                fontWeight="700"
-              >
-                142 Cases (High Cluster)
-              </text>
-
-              <text
-                x="500"
-                y="120"
-                fill="#E2E8F0"
-                fontSize="12"
-                fontWeight="700"
-              >
-                PINAGBUHATAN
-              </text>
-
-              <text
-                x="160"
-                y="218"
-                fill="#E2E8F0"
-                fontSize="12"
-                fontWeight="700"
-              >
-                KAPASIGAN
-              </text>
-            </svg>
-
-            {/* Risk Matrix Legend — toggles on button click */}
+            {/* Risk Matrix Legend */}
             {showRiskMatrix && (
               <div
-                className="glass-card absolute bottom-4 left-4 z-10 p-4"
+                className="glass-card absolute bottom-4 left-4 z-[1000] p-4"
                 style={{ width: 230 }}
               >
-                <div
-                  className="font-bold uppercase tracking-wider mb-3"
-                  style={{ color: '#64748B', fontSize: 10 }}
-                >
+                <div className="font-bold uppercase tracking-wider mb-3" style={{ color: '#64748B', fontSize: 10 }}>
                   Risk Matrix
                 </div>
-
                 {[
                   { color: '#EF4444', label: 'Severe Hotspot (>100 cases)' },
-                  { color: '#2E6FAF', label: 'Moderate Risk (50–100)' },
-                  { color: '#6EE7B7', label: 'Low Risk Alert (<50)' }
+                  { color: '#F59E0B', label: 'Moderate Risk (50–100)' },
+                  { color: '#10B981', label: 'Low Risk Alert (<50)' }
                 ].map((m) => (
                   <div key={m.label} className="flex items-center gap-2 mb-2 last:mb-0">
                     <span className="w-3 h-3 rounded-full" style={{ background: m.color }} />
-                    <span className="text-xs font-medium" style={{ color: '#475569' }}>
-                      {m.label}
-                    </span>
+                    <span className="text-xs font-medium" style={{ color: '#475569' }}>{m.label}</span>
                   </div>
                 ))}
               </div>
@@ -556,29 +527,16 @@ export default function DashboardPage() {
               className="flex justify-around w-full text-xs font-bold"
               style={{ color: '#475569' }}
             >
-              <span>
-                <i
-                  className="ri-circle-fill mr-1"
-                  style={{ color: '#4FD1C5' }}
-                />
-                0–14
-              </span>
-
-              <span>
-                <i
-                  className="ri-circle-fill mr-1"
-                  style={{ color: '#EF4444' }}
-                />
-                15–64
-              </span>
-
-              <span>
-                <i
-                  className="ri-circle-fill mr-1"
-                  style={{ color: '#2E6FAF' }}
-                />
-                65+
-              </span>
+              {Object.entries(analytics.ageDistribution || {}).map(([key, val]) => (
+                <span key={key}>
+                  <i
+                    className="ri-circle-fill mr-1"
+                    style={{ color: AGE_COLORS[key] || '#94A3B8' }}
+                  />
+                  {AGE_LABELS[key] || key}
+                  {ageTotal > 0 && ` (${Math.round((val / ageTotal) * 100)}%)`}
+                </span>
+              ))}
             </div>
           </div>
         </VizCard>
@@ -599,21 +557,15 @@ export default function DashboardPage() {
               className="flex justify-around w-full text-xs font-bold"
               style={{ color: '#475569' }}
             >
-              <span>
-                <i
-                  className="ri-men-line mr-1"
-                  style={{ color: '#2E6FAF' }}
-                />
-                Male (58%)
-              </span>
-
-              <span>
-                <i
-                  className="ri-women-line mr-1"
-                  style={{ color: '#4FD1C5' }}
-                />
-                Female (42%)
-              </span>
+              {Object.entries(analytics.genderDistribution || {}).map(([key, val]) => (
+                <span key={key}>
+                  <i
+                    className={`${key === 'Male' ? 'ri-men-line' : 'ri-women-line'} mr-1`}
+                    style={{ color: GENDER_COLORS[key] || '#94A3B8' }}
+                  />
+                  {key} ({genderTotal > 0 ? Math.round((val / genderTotal) * 100) : 0}%)
+                </span>
+              ))}
             </div>
           </div>
         </VizCard>
@@ -640,8 +592,8 @@ export default function DashboardPage() {
             </div>
 
             <button
-              className="text-xs font-bold hover:underline transition"
-              style={{ color: '#2E6FAF' }}
+              onClick={() => navigate('/alert')}
+              className="rounded-md border border-slate-200 px-3 py-1 text-xs font-semibold text-[#0A2540] transition duration-200 ease-in-out hover:border-[#2E6FAF]/40 hover:bg-[#2E6FAF]/15 hover:text-[#2E6FAF] active:scale-95"
             >
               View All
             </button>
@@ -649,35 +601,14 @@ export default function DashboardPage() {
 
           <div className="space-y-3">
 
-            {[
-              {
-                type: 'danger',
-                icon: 'ri-alarm-warning-line',
-                title: 'Manggahan — Critical Case Surge',
-                desc: 'Cases increased 34% in the past 30 days. Immediate intervention required.',
-                time: '2 hours ago'
-              },
-              {
-                type: 'warning',
-                icon: 'ri-error-warning-line',
-                title: 'Dela Paz — Low Success Rate',
-                desc: 'Treatment success rate dropped to 58%. Below WHO threshold.',
-                time: '6 hours ago'
-              },
-              {
-                type: 'warning',
-                icon: 'ri-error-warning-line',
-                title: 'Dela Paz — Supply Critical',
-                desc: 'Medicine stock below 15%. Immediate resupply needed.',
-                time: '10 hours ago'
-              }
-            ].map((a) => {
+            {alerts.slice(0, 3).map((a) => {
 
-              const isDanger = a.type === 'danger';
+              const variant = alertVariant(a.type);
+              const isDanger = variant === 'danger';
 
               return (
                 <div
-                  key={a.title}
+                  key={a.id}
                   className="rounded-2xl p-4 transition-all hover:-translate-y-1"
                   style={{
                     background: isDanger
@@ -701,7 +632,7 @@ export default function DashboardPage() {
                       }}
                     >
                       <i
-                        className={`${a.icon} text-lg`}
+                        className={`${a.icon || (isDanger ? 'ri-alarm-warning-line' : 'ri-error-warning-line')} text-lg`}
                         style={{
                           color: isDanger
                             ? '#EF4444'
@@ -730,7 +661,7 @@ export default function DashboardPage() {
                         className="text-[11px] font-semibold mt-2"
                         style={{ color: '#94A3B8' }}
                       >
-                        {a.time}
+                        {a.timestamp}
                       </div>
 
                     </div>
@@ -760,8 +691,8 @@ export default function DashboardPage() {
             </div>
 
             <button
-              className="text-xs font-bold hover:underline"
-              style={{ color: '#2E6FAF' }}
+              onClick={() => navigate('/analytics')}
+              className="rounded-md border border-slate-200 px-3 py-1 text-xs font-semibold text-[#0A2540] transition duration-200 ease-in-out hover:border-[#2E6FAF]/40 hover:bg-[#2E6FAF]/15 hover:text-[#2E6FAF] active:scale-95"
             >
               View Details
             </button>
@@ -789,23 +720,7 @@ export default function DashboardPage() {
 
             <tbody>
 
-              {[
-                {
-                  period: 'Next Month',
-                  val: '74',
-                  pct: '+8.8%'
-                },
-                {
-                  period: '3 Months',
-                  val: '223',
-                  pct: '+10.2%'
-                },
-                {
-                  period: '6 Months',
-                  val: '461',
-                  pct: '+12.1%'
-                }
-              ].map((row) => (
+              {forecastRows.map((row) => (
 
                 <tr key={row.period}>
 

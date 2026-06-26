@@ -30,11 +30,11 @@ export default function Layout() {
   if (!user) return null;
 
   return (
-    <div 
-      className="flex h-screen relative overflow-hidden" 
-      style={{ 
-        background: 'linear-gradient(135deg, #F8FAFC 0%, #EEF4FB 50%, #F5F8FC 100%)', 
-        color: '#0f172a' 
+    <div
+      className="flex h-screen relative overflow-hidden"
+      style={{
+        background: 'linear-gradient(135deg, #F8FAFC 0%, #EEF4FB 50%, #F5F8FC 100%)',
+        color: '#0f172a'
       }}
     >
       {/* Decorative Background Blobs */}
@@ -51,7 +51,7 @@ export default function Layout() {
       <Sidebar />
 
       {/* Scrollable page area */}
-      <div className="ml-20 flex-1 flex flex-col h-screen">
+      <div className="ml-[72px] flex-1 flex flex-col h-screen">
         {/* Sticky topbar */}
         <Topbar user={user} />
 
