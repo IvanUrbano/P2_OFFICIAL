@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip as RTooltip, Tooltip, ResponsiveContainer,
   BarChart, Bar, AreaChart, Area,
 } from 'recharts';
 import API from '../api/axios';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 /* ─── Helpers ─── */
 const COLORS = {
@@ -139,8 +142,101 @@ function DonutChart({ segments, size = 160 }) {
   );
 }
 
+/* ─── Mini GIS Map ─── */
+const RISK_COLORS = {
+  High: '#EF4444',
+  Medium: '#F59E0B',
+  Low: '#10B981',
+  'No Data': '#6B7280',
+};
+
+const PASIG_BOUNDS = L.latLngBounds([14.48, 121.02], [14.64, 121.13]);
+
+function riskStyle(feature) {
+  const risk = feature.properties?.risk_class || 'No Data';
+  return {
+    fillColor: RISK_COLORS[risk] || RISK_COLORS['No Data'],
+    weight: 1,
+    opacity: 0.9,
+    color: 'rgba(255,255,255,0.4)',
+    fillOpacity: 0.55,
+  };
+}
+
+function MiniGisMap() {
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return;
+
+    const map = L.map(containerRef.current, {
+      center: [14.555, 121.075],
+      zoom: 14.5,
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      touchZoom: false,
+      keyboard: false,
+      boxZoom: false,
+      maxBoundsViscosity: 1,
+    });
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      subdomains: 'abcd',
+    }).addTo(map);
+
+    mapRef.current = map;
+
+    // Fetch GeoJSON and render
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await API.get('/api/tb/gis/geojson');
+        if (cancelled || !res.data?.features) return;
+
+        L.geoJSON(res.data, {
+          style: riskStyle,
+          interactive: false,
+        }).addTo(map);
+
+        if (res.data.outline) {
+          L.geoJSON(
+            { type: 'Feature', properties: {}, geometry: res.data.outline },
+            { style: { fillColor: 'transparent', fillOpacity: 0, weight: 0, opacity: 0 }, interactive: false }
+          ).addTo(map);
+        }
+
+        map.fitBounds(PASIG_BOUNDS, { padding: [20, 20] });
+      } catch {
+        // Silently fail — minimap is decorative
+      }
+    })();
+
+    requestAnimationFrame(() => { map.invalidateSize(); });
+
+    return () => {
+      cancelled = true;
+      map.remove();
+      mapRef.current = null;
+    };
+  }, []);
+
+  return (
+    <div
+      ref={containerRef}
+      className="w-full rounded-xl overflow-hidden"
+      style={{ height: '260px', background: '#0a1128' }}
+    />
+  );
+}
+
 /* ─── Page Component ─── */
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -151,8 +247,6 @@ export default function DashboardPage() {
   const [demographicsData, setDemographicsData] = useState([]);
   const [alertsData, setAlertsData] = useState([]);
   const [forecastsData, setForecastsData] = useState([]);
-
-  const [showRiskMatrix, setShowRiskMatrix] = useState(false);
 
   // Fetch all dashboard data
   useEffect(() => {
@@ -570,178 +664,59 @@ export default function DashboardPage() {
         className="grid gap-5"
         style={{ gridTemplateColumns: '2fr 1fr 1fr' }}
       >
-        {/* GIS MAP */}
+        {/* GIS MAP — Live Mini Map */}
         <VizCard
-          title="GIS Hotspot Monitoring"
+          title="GIS Risk Map"
           icon="ri-map-pin-line"
           headerAction={
             <button
-              onMouseEnter={() => setShowRiskMatrix(true)}
-              onMouseLeave={() => setShowRiskMatrix(false)}
+              onClick={() => navigate('/gis-map')}
               className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-all"
               style={{
-                background: showRiskMatrix ? 'rgba(46,111,175,0.15)' : 'rgba(148,163,184,0.08)',
-                border: showRiskMatrix ? '1px solid rgba(46,111,175,0.4)' : '1px solid rgba(148,163,184,0.2)',
-                color: showRiskMatrix ? '#2E6FAF' : '#64748B'
+                background: 'rgba(46,111,175,0.1)',
+                border: '1px solid rgba(46,111,175,0.25)',
+                color: '#2E6FAF',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = 'rgba(46,111,175,0.18)';
+                e.currentTarget.style.borderColor = 'rgba(46,111,175,0.5)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'rgba(46,111,175,0.1)';
+                e.currentTarget.style.borderColor = 'rgba(46,111,175,0.25)';
               }}
             >
-              <i className="ri-map-2-line" />
-              Risk Matrix
+              Open Full Map
+              <i className="ri-arrow-right-up-line" />
             </button>
           }
         >
           <div
-            className="flex-1 rounded-2xl relative overflow-hidden"
-            style={{
-              minHeight: 260,
-              border: '1px solid rgba(255,255,255,0.15)',
-              background:
-                'linear-gradient(135deg, #0F2D52 0%, #174A7E 100%)'
-            }}
+            className="flex-1 rounded-xl relative overflow-hidden cursor-pointer group"
+            style={{ minHeight: 260 }}
+            onClick={() => navigate('/gis-map')}
           >
-            <svg
-              className="w-full h-full absolute inset-0"
-              viewBox="0 0 1000 380"
-              preserveAspectRatio="xMidYMid meet"
+            <MiniGisMap />
+
+            {/* Hover overlay */}
+            <div
+              className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none"
+              style={{
+                background: 'rgba(10,17,32,0.55)',
+                backdropFilter: 'blur(2px)',
+              }}
             >
-              <rect width="100%" height="100%" fill="transparent" />
-
-              <path
-                d="M 250 80 L 410 60 L 490 140 L 380 220 L 220 160 Z"
-                fill="#EF4444"
-                fillOpacity="0.15"
-                stroke="#EF4444"
-                strokeWidth="2"
-              />
-
-              <path
-                d="M 410 60 L 600 90 L 680 230 L 490 280 L 490 140 Z"
-                fill="#2E6FAF"
-                fillOpacity="0.15"
-                stroke="#4FD1C5"
-                strokeWidth="2"
-              />
-
-              <path
-                d="M 110 180 L 220 160 L 380 220 L 320 340 L 150 290 Z"
-                fill="#6EE7B7"
-                fillOpacity="0.15"
-                stroke="#6EE7B7"
-                strokeWidth="2"
-              />
-
-              <g transform="translate(350,140)">
-                <circle cx="0" cy="0" r="20" fill="#EF4444" opacity="0.15" />
-                <circle
-                  cx="0"
-                  cy="0"
-                  r="10"
-                  fill="#EF4444"
-                  style={{
-                    filter:
-                      'drop-shadow(0 0 12px rgba(239,68,68,.8))'
-                  }}
-                />
-                <circle cx="0" cy="0" r="4" fill="#ffffff" />
-              </g>
-
-              <g transform="translate(580,200)">
-                <circle cx="0" cy="0" r="18" fill="#4FD1C5" opacity="0.15" />
-                <circle
-                  cx="0"
-                  cy="0"
-                  r="10"
-                  fill="#4FD1C5"
-                  style={{
-                    filter:
-                      'drop-shadow(0 0 10px rgba(79,209,197,.8))'
-                  }}
-                />
-                <circle cx="0" cy="0" r="4" fill="#ffffff" />
-              </g>
-
-              <g transform="translate(240,240)">
-                <circle cx="0" cy="0" r="18" fill="#6EE7B7" opacity="0.15" />
-                <circle
-                  cx="0"
-                  cy="0"
-                  r="10"
-                  fill="#6EE7B7"
-                  style={{
-                    filter:
-                      'drop-shadow(0 0 10px rgba(110,231,183,.8))'
-                  }}
-                />
-                <circle cx="0" cy="0" r="4" fill="#ffffff" />
-              </g>
-
-              <text
-                x="275"
-                y="106"
-                fill="#ffffff"
-                fontSize="12"
-                fontWeight="700"
-              >
-                SAN JOAQUIN
-              </text>
-
-              <text
-                x="275"
-                y="122"
-                fill="#FCA5A5"
-                fontSize="10"
-                fontWeight="700"
-              >
-                142 Cases (High Cluster)
-              </text>
-
-              <text
-                x="500"
-                y="120"
-                fill="#E2E8F0"
-                fontSize="12"
-                fontWeight="700"
-              >
-                PINAGBUHATAN
-              </text>
-
-              <text
-                x="160"
-                y="218"
-                fill="#E2E8F0"
-                fontSize="12"
-                fontWeight="700"
-              >
-                KAPASIGAN
-              </text>
-            </svg>
-
-            {showRiskMatrix && (
-              <div
-                className="glass-card absolute bottom-4 left-4 z-10 p-4"
-                style={{ width: 230 }}
-              >
-                <div
-                  className="font-bold uppercase tracking-wider mb-3"
-                  style={{ color: '#64748B', fontSize: 10 }}
-                >
-                  Risk Matrix
-                </div>
-
-                {[
-                  { color: '#EF4444', label: 'Severe Hotspot (>100 cases)' },
-                  { color: '#2E6FAF', label: 'Moderate Risk (50–100)' },
-                  { color: '#6EE7B7', label: 'Low Risk Alert (<50)' }
-                ].map((m) => (
-                  <div key={m.label} className="flex items-center gap-2 mb-2 last:mb-0">
-                    <span className="w-3 h-3 rounded-full" style={{ background: m.color }} />
-                    <span className="text-xs font-medium" style={{ color: '#475569' }}>
-                      {m.label}
-                    </span>
-                  </div>
-                ))}
+              <div className="flex items-center gap-2 px-5 py-2.5 rounded-xl" style={{
+                background: 'rgba(255,255,255,0.1)',
+                border: '1px solid rgba(255,255,255,0.2)',
+              }}>
+                <i className="ri-map-2-line text-lg" style={{ color: '#fff' }} />
+                <span className="text-sm font-bold" style={{ color: '#fff' }}>
+                  Open GIS Map
+                </span>
+                <i className="ri-arrow-right-up-line" style={{ color: 'rgba(255,255,255,0.7)' }} />
               </div>
-            )}
+            </div>
           </div>
         </VizCard>
 

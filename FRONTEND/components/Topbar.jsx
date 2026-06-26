@@ -26,13 +26,13 @@ export default function Topbar({ user }) {
   return (
     <header
       className="sticky top-0 z-40 relative overflow-hidden"
-      style={{ height: '64px', borderBottom: '1px solid rgba(0,180,255,0.1)' }}
+      style={{ height: '64px', borderBottom: '1px solid rgba(255,255,255,0.03)' }}
     >
-      {/* Solid navy left half */}
+      {/* Solid navy left half — white at diagonal, fades to dark blue leftward */}
       <div
         className="absolute inset-0"
         style={{
-          background: 'linear-gradient(135deg, #070c1e 0%, #0a1628 50%, #0d1f3c 100%)',
+          background: 'linear-gradient(to left, #ffffff 0%, rgba(200,215,235,0.8) 15%, rgba(15,25,50,0.95) 50%, #070c1e 100%)',
         }}
       />
 
@@ -44,7 +44,7 @@ export default function Topbar({ user }) {
           backgroundSize: 'cover',
           backgroundPosition: '65% 45%',
           backgroundRepeat: 'no-repeat',
-          clipPath: 'polygon(50% 0%, 100% 0%, 100% 100%, 30% 100%)',
+          clipPath: 'polygon(37% 0%, 100% 0%, 100% 100%, 17% 100%)',
         }}
       />
 
@@ -53,16 +53,16 @@ export default function Topbar({ user }) {
         className="absolute inset-0"
         style={{
           background: 'rgba(0,20,60,0.15)',
-          clipPath: 'polygon(50% 0%, 100% 0%, 100% 100%, 30% 100%)',
+          clipPath: 'polygon(37% 0%, 100% 0%, 100% 100%, 17% 100%)',
         }}
       />
 
-      {/* Diagonal divider strip — traces the exact polygon edge (50% 0% → 30% 100%) */}
+      {/* Diagonal divider strip — white, brightest at top, fades going down */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
-          background: 'rgba(255,255,255,0.45)',
-          clipPath: 'polygon(49.8% 0%, 50.2% 0%, 30.2% 100%, 29.8% 100%)',
+          background: 'linear-gradient(to top, rgba(255,255,255,1) 0%, rgba(255,255,255,0.0) 100%)',
+          clipPath: 'polygon(36.8% 0%, 37.2% 0%, 17.2% 100%, 16.8% 100%)',
         }}
       />
 
@@ -70,15 +70,15 @@ export default function Topbar({ user }) {
       <div
         className="absolute inset-0"
         style={{
-          background: 'linear-gradient(100deg, #070c1e 0%, #070c1e 28%, rgba(7,12,30,0.5) 42%, transparent 55%)',
+          background: 'linear-gradient(100deg, #070c1e 0%, rgba(7,12,30,0.7) 22%, rgba(7,12,30,0.3) 32%, transparent 42%)',
         }}
       />
 
       {/* Bottom accent line */}
       <div
-        className="absolute bottom-0 left-0 right-0 h-[2px]"
+        className="absolute bottom-0 left-0 right-0 h-[1px]"
         style={{
-          background: 'linear-gradient(90deg, #0066FF 0%, #00b4ff 40%, #00D8F6 70%, transparent 100%)',
+          background: 'linear-gradient(90deg, rgba(0,102,255,0.08) 0%, rgba(0,180,255,0.04) 40%, transparent 70%)',
         }}
       />
 
@@ -98,49 +98,51 @@ export default function Topbar({ user }) {
         </div>
 
         {/* Right — Actions */}
-        <div className="flex items-center gap-2 shrink-0">
-
+        <div
+          className="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-lg"
+          style={{
+            background: 'rgba(255,255,255,0.06)',
+            backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(255,255,255,0.08)',
+          }}
+        >
           {/* Last sync */}
           <div
-            className="hidden md:flex items-center gap-1.5 h-8 px-2.5 rounded-md text-[11px] font-medium whitespace-nowrap"
-            style={{ color: 'rgba(200,220,240,0.6)' }}
+            className="hidden md:flex items-center gap-1.5 h-7 px-2 rounded-md text-[11px] font-medium whitespace-nowrap"
+            style={{ color: 'rgba(120,180,255,0.8)' }}
           >
-            <i className="ri-refresh-line text-xs" style={{ color: '#00D8F6' }} />
-            <span>Sync: <span style={{ color: '#00D8F6' }}>Today</span></span>
+            <i className="ri-refresh-line text-xs" style={{ color: '#4D9EFF' }} />
+            <span>Sync: <span style={{ color: 'rgba(255,255,255,0.8)' }}>Today</span></span>
           </div>
 
           {/* Notification bell */}
           <button
-            className="relative w-8 h-8 flex items-center justify-center rounded-md cursor-pointer transition-all hover:bg-white/10"
-            style={{ color: '#00D8F6' }}
+            className="relative w-7 h-7 flex items-center justify-center rounded-md cursor-pointer transition-all hover:bg-white/10"
+            style={{ color: '#4D9EFF' }}
             onClick={() => navigate('/notifications')}
             title="Notifications"
           >
-            <i className="ri-notification-3-line text-sm" />
+            <i className="ri-notification-3-line text-xs" />
             <span
-              className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full"
-              style={{ background: '#00D8F6' }}
+              className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full"
+              style={{ background: '#4D9EFF' }}
             />
           </button>
 
           {/* User pill */}
           <div
-            className="flex items-center gap-2 pl-1 pr-2.5 py-0.5 rounded-full"
+            className="flex items-center gap-1.5 pl-1 pr-2.5 py-0.5 rounded-md"
           >
             <div
-              className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
-              style={{
-                background: 'linear-gradient(135deg, #0066FF 0%, #00b4ff 100%)',
-                color: '#ffffff',
-              }}
+              className="w-6 h-6 rounded-md flex items-center justify-center shrink-0 overflow-hidden"
+              style={{ background: 'rgba(77,158,255,0.15)' }}
             >
-              {initials}
+              <i className="ri-user-3-fill text-xs" style={{ color: '#4D9EFF' }} />
             </div>
-            <span className="text-[11px] font-medium hidden sm:block" style={{ color: 'rgba(255,255,255,0.7)' }}>
+            <span className="text-[11px] font-semibold hidden sm:block" style={{ color: 'rgba(255,255,255,0.8)' }}>
               {user?.username ?? 'Admin'}
             </span>
           </div>
-
         </div>
 
       </div>
