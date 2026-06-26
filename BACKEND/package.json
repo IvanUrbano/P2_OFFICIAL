@@ -17,6 +17,7 @@
     "dev": "nodemon server.js"
   },
   "devDependencies": {
+    "d3-delaunay": "^6.0.4",
     "nodemon": "^3.1.14"
   }
 }

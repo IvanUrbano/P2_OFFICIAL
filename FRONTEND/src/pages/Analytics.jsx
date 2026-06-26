@@ -1,11 +1,11 @@
 export default function Analytics() {
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-center h-64 rounded-xl" style={{ background: '#081018', border: '1px solid rgba(0,191,255,0.08)' }}>
+      <div className="flex items-center justify-center h-64 rounded-xl" style={{ background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.04)' }}>
         <div className="text-center">
-          <i className="ri-bar-chart-box-line text-5xl mb-3 block" style={{ color: '#00bfff' }} />
-          <p className="text-lg font-semibold" style={{ color: '#eaf8ff' }}>Analytics</p>
-          <p className="text-sm mt-1" style={{ color: '#6f8a99' }}>In-depth trend analysis and treatment outcome reports — coming soon.</p>
+          <i className="ri-bar-chart-box-line text-5xl mb-3 block" style={{ color: '#2E6FAF' }} />
+          <p className="text-lg font-semibold" style={{ color: '#1e293b' }}>Analytics</p>
+          <p className="text-sm mt-1" style={{ color: '#64748b' }}>In-depth trend analysis and treatment outcome reports — coming soon.</p>
         </div>
       </div>
     </div>

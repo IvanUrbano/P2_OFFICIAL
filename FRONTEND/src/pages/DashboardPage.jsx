@@ -53,10 +53,9 @@ function MetricItem({ title, value, icon, color, trend, isLast }) {
     <div className="p-4 flex flex-col justify-center relative">
       {!isLast && (
         <div
-          className="absolute right-0 top-1/2 -translate-y-1/2 w-[2px] h-12"
+          className="absolute right-0 top-1/2 -translate-y-1/2 w-[2px] h-20"
           style={{
-            background: 'rgba(3, 33, 62, 0.3)',
-            boxShadow: '0 0 8px rgba(79, 209, 197, 0.4)'
+            background: 'rgba(0,0,0,0.4)',
           }}
         />
       )}
@@ -396,7 +395,7 @@ export default function DashboardPage() {
     <div className="relative space-y-5">
 
       <section
-        className="glass-card grid gap-0 overflow-hidden"
+        className="grid gap-0"
         style={{
           gridTemplateColumns: 'repeat(6, 1fr)'
         }}

@@ -41,6 +41,16 @@ const initDb = async () => {
     } else {
       console.log('⚠️ TBInsight migration not found, skipping.');
     }
+
+    // PostGIS: enable extension + create barangays_geom table (idempotent)
+    const postgisMigPath = path.join(__dirname, 'db', 'migrations', '003_postgis.sql');
+    if (fs.existsSync(postgisMigPath)) {
+      const postgisSql = fs.readFileSync(postgisMigPath, 'utf8');
+      await pool.query(postgisSql);
+      console.log('✅ PostGIS migration completed successfully.');
+    } else {
+      console.log('⚠️ PostGIS migration not found, skipping.');
+    }
   } catch (err) {
     console.error('❌ Database initialization error:', err.message);
   }

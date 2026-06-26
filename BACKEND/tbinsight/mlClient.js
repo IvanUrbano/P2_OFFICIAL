@@ -24,7 +24,7 @@ const ML_TIMEOUT_MS = 60_000;
  * @throws {Error} On network or HTTP errors
  */
 async function mlPost(path, body) {
-  const url = `${ML_BASE}${path}`;
+  const url = `${ML_BASE}/api/ml${path}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ML_TIMEOUT_MS);
 
@@ -58,7 +58,7 @@ async function mlPost(path, body) {
  */
 async function healthCheck() {
   try {
-    const res = await fetch(`${ML_BASE}/health`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${ML_BASE}/api/ml/health`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return false;
     const data = await res.json();
     return data.status === 'ok';

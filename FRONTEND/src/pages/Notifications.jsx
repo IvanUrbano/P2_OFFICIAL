@@ -35,9 +35,9 @@ export default function Notifications() {
     return 'info';
   };
 
-  const colorMap = { danger: '#ff4d4d', warning: '#ffd166', info: '#00bfff' };
-  const bgMap = { danger: 'rgba(255,77,77,0.07)', warning: 'rgba(255,209,102,0.06)', info: 'rgba(0,191,255,0.05)' };
-  const borderMap = { danger: 'rgba(255,77,77,0.2)', warning: 'rgba(255,209,102,0.2)', info: 'rgba(0,191,255,0.12)' };
+  const colorMap = { danger: '#EF4444', warning: '#D97706', info: '#2E6FAF' };
+  const bgMap = { danger: 'rgba(239,68,68,0.06)', warning: 'rgba(217,119,6,0.05)', info: 'rgba(46,111,175,0.05)' };
+  const borderMap = { danger: 'rgba(239,68,68,0.15)', warning: 'rgba(217,119,6,0.15)', info: 'rgba(46,111,175,0.12)' };
   const iconMap = { danger: 'ri-alarm-warning-line', warning: 'ri-error-warning-line', info: 'ri-refresh-line' };
 
   if (loading) {
@@ -68,16 +68,16 @@ export default function Notifications() {
                 style={{ background: bgMap[type], border: `1px solid ${borderMap[type]}` }}>
                 <i className={`${iconMap[type]} text-2xl mt-0.5 shrink-0`} style={{ color: colorMap[type] }} />
                 <div className="flex-1">
-                  <div className="text-sm font-bold mb-1" style={{ color: '#eaf8ff' }}>
+                  <div className="text-sm font-bold mb-1" style={{ color: '#1e293b' }}>
                     {a.barangay_name} — {a.alert_type}
                   </div>
-                  <div className="text-xs" style={{ color: '#6f8a99' }}>{a.message}</div>
+                  <div className="text-xs" style={{ color: '#475569' }}>{a.message}</div>
                   {a.recommendation && (
-                    <div className="text-xs mt-1" style={{ color: '#6f8a99' }}>
+                    <div className="text-xs mt-1" style={{ color: '#475569' }}>
                       <strong>Recommendation:</strong> {a.recommendation}
                     </div>
                   )}
-                  <div className="text-[11px] mt-1.5" style={{ color: '#6f8a99' }}>
+                  <div className="text-[11px] mt-1.5" style={{ color: '#94a3b8' }}>
                     {a.created_at ? new Date(a.created_at).toLocaleString() : 'N/A'}
                   </div>
                 </div>

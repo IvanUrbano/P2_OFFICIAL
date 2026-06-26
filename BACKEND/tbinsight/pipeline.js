@@ -265,9 +265,12 @@ async function runPipeline({ period, thresholds: thresholdsOverride } = {}) {
         maxError,
       });
 
-      // Override risk_class from RF classification if available
+      // Use RF classification if it has meaningful diversity (not all same class)
+      // On first run, RF trains on all-same labels → unreliable → use score-based
       const rfResult = classifyResults.find(c => c.barangay_name === name);
-      const finalClass = rfResult?.risk_class || riskClass;
+      const uniqueRfClasses = new Set(classifyResults.map(c => c.risk_class));
+      const rfIsDiverse = uniqueRfClasses.size > 1;
+      const finalClass = (rfIsDiverse && rfResult?.risk_class) ? rfResult.risk_class : riskClass;
 
       return {
         barangay_name: name,

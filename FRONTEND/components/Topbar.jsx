@@ -2,20 +2,19 @@ import { useNavigate, useLocation } from 'react-router-dom';
 
 /* Map path → readable page title shown in the topbar */
 const PAGE_TITLES = {
-  '/dashboard': { title: 'Pasig City Tuberculosis Monitoring Dashboard', subtitle: 'Monitor tuberculosis trends and support resource prioritization across Pasig City.' },
-  '/records': { title: 'TB Records', subtitle: 'View and manage individual tuberculosis case records.' },
-  '/analytics': { title: 'Analytics', subtitle: 'In-depth analysis of TB case trends and treatment outcomes.' },
-  '/data-integration': { title: 'Data Integration', subtitle: 'Sync and manage data from external health systems.' },
-  '/gis-map': { title: 'GIS Map', subtitle: 'Geographic heatmap of TB hotspot barangays in Pasig City.' },
-  '/resources': { title: 'Resource Prioritization', subtitle: 'Allocate medicine, staff, and supplies to high-risk areas.' },
-  '/notifications': { title: 'Notifications', subtitle: 'Active alerts and system-generated warnings.' },
-  '/users': { title: 'Users', subtitle: 'Manage health worker accounts and access levels.' },
-  '/settings': { title: 'Settings', subtitle: 'System preferences and configuration.' },
+  '/dashboard': { title: 'TBInsight Dashboard', subtitle: 'Monitor tuberculosis trends across Pasig City.' },
+  '/records': { title: 'TB Records', subtitle: 'Individual tuberculosis case records.' },
+  '/analytics': { title: 'Analytics', subtitle: 'In-depth TB case trend analysis.' },
+  '/data-integration': { title: 'Data Integration', subtitle: 'Sync and manage health system data.' },
+  '/gis-map': { title: 'GIS Risk Map', subtitle: 'TB hotspot geographic distribution.' },
+  '/resources': { title: 'Resource Prioritization', subtitle: 'Allocate supplies to high-risk areas.' },
+  '/notifications': { title: 'Notifications', subtitle: 'Active alerts and system warnings.' },
+  '/users': { title: 'Users', subtitle: 'Manage health worker accounts.' },
+  '/settings': { title: 'Settings', subtitle: 'System preferences.' },
 };
 
 /**
- * Shared topbar — used by Layout.jsx.
- * Bridges the Dark Sidebar and the White Dashboard seamlessly.
+ * Shared topbar — diagonal split: solid navy left, healthcare image right.
  */
 export default function Topbar({ user }) {
   const navigate = useNavigate();
@@ -26,82 +25,125 @@ export default function Topbar({ user }) {
 
   return (
     <header
-      className="sticky top-0 z-40"
-      style={{
-        background: '#ffffff',
-        borderBottom: '1px solid #e2e8f0'
-      }}
+      className="sticky top-0 z-40 relative overflow-hidden"
+      style={{ height: '64px', borderBottom: '1px solid rgba(0,180,255,0.1)' }}
     >
-      <div className="flex items-center justify-between gap-4 px-6 py-4">
+      {/* Solid navy left half */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background: 'linear-gradient(135deg, #070c1e 0%, #0a1628 50%, #0d1f3c 100%)',
+        }}
+      />
 
-        {/* Left — Clinical Slate Page Titles */}
+      {/* NASA Earth at Night — city lights on dark globe */}
+      <div
+        className="absolute inset-0"
+        style={{
+          backgroundImage: 'url(https://eoimages.gsfc.nasa.gov/images/imagerecords/79000/79765/dnb_land_ocean_ice.2012.3600x1800.jpg)',
+          backgroundSize: 'cover',
+          backgroundPosition: '65% 45%',
+          backgroundRepeat: 'no-repeat',
+          clipPath: 'polygon(50% 0%, 100% 0%, 100% 100%, 30% 100%)',
+        }}
+      />
+
+      {/* Subtle blue tint for theme */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background: 'rgba(0,20,60,0.15)',
+          clipPath: 'polygon(50% 0%, 100% 0%, 100% 100%, 30% 100%)',
+        }}
+      />
+
+      {/* Diagonal divider strip — traces the exact polygon edge (50% 0% → 30% 100%) */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: 'rgba(255,255,255,0.45)',
+          clipPath: 'polygon(49.8% 0%, 50.2% 0%, 30.2% 100%, 29.8% 100%)',
+        }}
+      />
+
+      {/* Gradient seam — smooth transition from navy to image */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background: 'linear-gradient(100deg, #070c1e 0%, #070c1e 28%, rgba(7,12,30,0.5) 42%, transparent 55%)',
+        }}
+      />
+
+      {/* Bottom accent line */}
+      <div
+        className="absolute bottom-0 left-0 right-0 h-[2px]"
+        style={{
+          background: 'linear-gradient(90deg, #0066FF 0%, #00b4ff 40%, #00D8F6 70%, transparent 100%)',
+        }}
+      />
+
+      {/* Content */}
+      <div className="relative flex items-center justify-between gap-4 px-8 h-full">
+
+        {/* Left — Page Titles */}
         <div className="min-w-0">
-          <h1 className="text-lg font-bold tracking-tight leading-tight truncate" style={{ color: '#0f172a' }}>
+          <h1 className="text-base font-bold tracking-tight leading-tight truncate" style={{ color: '#ffffff' }}>
             {page.title}
           </h1>
           {page.subtitle && (
-            <p className="text-xs mt-0.5 leading-relaxed truncate font-medium" style={{ color: '#64748b' }}>
+            <p className="text-[11px] mt-0.5 leading-relaxed truncate" style={{ color: 'rgba(148,180,220,0.6)' }}>
               {page.subtitle}
             </p>
           )}
         </div>
 
-        {/* Right — Actions with Electric/Neon Blue Accents */}
-        <div className="flex items-center gap-2.5 shrink-0">
+        {/* Right — Actions */}
+        <div className="flex items-center gap-2 shrink-0">
 
-          {/* Last sync pill — Minimal white with subtle neon text pop */}
+          {/* Last sync */}
           <div
-            className="hidden md:flex items-center gap-2 h-9 px-3 rounded-lg text-xs font-semibold whitespace-nowrap"
-            style={{ background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569' }}
+            className="hidden md:flex items-center gap-1.5 h-8 px-2.5 rounded-md text-[11px] font-medium whitespace-nowrap"
+            style={{ color: 'rgba(200,220,240,0.6)' }}
           >
-            <i className="ri-refresh-line" style={{ color: '#0066FF' }} />
-            <span>Last sync: <span style={{ color: '#0066FF' }}>Today 08:42 AM</span></span>
+            <i className="ri-refresh-line text-xs" style={{ color: '#00D8F6' }} />
+            <span>Sync: <span style={{ color: '#00D8F6' }}>Today</span></span>
           </div>
 
-          {/* Notification bell — Vibrant interactive accent */}
+          {/* Notification bell */}
           <button
-            className="relative w-9 h-9 flex items-center justify-center rounded-lg cursor-pointer transition-colors hover:bg-slate-50"
-            style={{ background: '#e6f0ff', border: '1px solid rgba(0, 102, 255, 0.2)', color: '#0066FF' }}
+            className="relative w-8 h-8 flex items-center justify-center rounded-md cursor-pointer transition-all hover:bg-white/10"
+            style={{ color: '#00D8F6' }}
             onClick={() => navigate('/notifications')}
             title="Notifications"
           >
-            <i className="ri-notification-3-line text-base" />
-            {/* Pulse badge */}
+            <i className="ri-notification-3-line text-sm" />
             <span
-              className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full"
-              style={{ background: '#ff0055', boxShadow: '0 0 6px #ff0055' }}
+              className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full"
+              style={{ background: '#00D8F6' }}
             />
           </button>
 
-          {/* User pill — Ties directly into the Sidebar's unique Dark Navy color */}
+          {/* User pill */}
           <div
-            className="flex items-center gap-2 pl-1 pr-3 py-1 rounded-full"
-            style={{ background: '#f1f5f9', border: '1px solid #e2e8f0' }}
+            className="flex items-center gap-2 pl-1 pr-2.5 py-0.5 rounded-full"
           >
             <div
-              className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+              className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
               style={{
-                background: '#091124', /* Matches the unique dark blue sidebar */
+                background: 'linear-gradient(135deg, #0066FF 0%, #00b4ff 100%)',
                 color: '#ffffff',
-                border: '1px solid #0066FF' /* Neon blue ring contrast */
               }}
             >
               {initials}
             </div>
-            <span className="text-xs font-bold hidden sm:block" style={{ color: '#334155' }}>
-              {user?.username ?? 'System Admin'}
+            <span className="text-[11px] font-medium hidden sm:block" style={{ color: 'rgba(255,255,255,0.7)' }}>
+              {user?.username ?? 'Admin'}
             </span>
           </div>
 
         </div>
 
       </div>
-
-      {/* Decorative Neon Progress Strip (Optional styling accent) */}
-      <div
-        className="h-[2px] w-full"
-        style={{ background: 'linear-gradient(90deg, #0066FF 0%, #00D8F6 50%, transparent 100%)' }}
-      />
     </header>
   );
 }

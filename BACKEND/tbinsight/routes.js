@@ -273,9 +273,9 @@ router.get('/dashboard/summary', async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT
-        COUNT(*) as total_cases,
-        COUNT(DISTINCT barangay_name) as barangays_with_cases,
-        COUNT(DISTINCT DATE_TRUNC('month', date_of_diagnosis)) as months_covered,
+        COUNT(*)::INTEGER as total_cases,
+        COUNT(DISTINCT barangay_name)::INTEGER as barangays_with_cases,
+        COUNT(DISTINCT DATE_TRUNC('month', date_of_diagnosis))::INTEGER as months_covered,
         MIN(date_of_diagnosis) as earliest_date,
         MAX(date_of_diagnosis) as latest_date
       FROM tb_cases
@@ -328,7 +328,7 @@ router.get('/dashboard/barangay/:name', async (req, res) => {
 
     // Get demographics
     const demographics = await pool.query(
-      `SELECT sex, age_group, SUM(case_count) as total
+      `SELECT sex, age_group, SUM(case_count)::INTEGER as total
        FROM demographic_summary
        WHERE barangay_name = $1
        GROUP BY sex, age_group
@@ -338,7 +338,7 @@ router.get('/dashboard/barangay/:name', async (req, res) => {
 
     // Get outcomes
     const outcomes = await pool.query(
-      `SELECT outcome_status, SUM(case_count) as total
+      `SELECT outcome_status, SUM(case_count)::INTEGER as total
        FROM outcome_summary
        WHERE barangay_name = $1
        GROUP BY outcome_status
@@ -365,7 +365,7 @@ router.get('/dashboard/barangay/:name', async (req, res) => {
 router.get('/dashboard/demographics', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT barangay_name, sex, age_group, SUM(case_count) as total
+      SELECT barangay_name, sex, age_group, SUM(case_count)::INTEGER as total
       FROM demographic_summary
       GROUP BY barangay_name, sex, age_group
       ORDER BY barangay_name, sex, age_group
@@ -384,7 +384,7 @@ router.get('/dashboard/demographics', async (req, res) => {
 router.get('/dashboard/outcomes', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT barangay_name, outcome_status, SUM(case_count) as total
+      SELECT barangay_name, outcome_status, SUM(case_count)::INTEGER as total
       FROM outcome_summary
       GROUP BY barangay_name, outcome_status
       ORDER BY barangay_name, total DESC
@@ -403,7 +403,7 @@ router.get('/dashboard/outcomes', async (req, res) => {
 router.get('/dashboard/facilities', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT facility_name, barangay_name, SUM(case_count) as total
+      SELECT facility_name, barangay_name, SUM(case_count)::INTEGER as total
       FROM facility_summary
       GROUP BY facility_name, barangay_name
       ORDER BY total DESC
@@ -422,7 +422,7 @@ router.get('/dashboard/facilities', async (req, res) => {
 router.get('/dashboard/bacteriological', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT barangay_name, bacteriological_status, SUM(case_count) as total
+      SELECT barangay_name, bacteriological_status, SUM(case_count)::INTEGER as total
       FROM bacteriological_summary
       GROUP BY barangay_name, bacteriological_status
       ORDER BY barangay_name, total DESC
@@ -435,6 +435,179 @@ router.get('/dashboard/bacteriological', async (req, res) => {
 });
 
 // ==================== GIS & PREDICTIONS ====================
+
+/**
+ * GET /api/tb/gis/geojson
+ * Full GeoJSON with polygon boundaries + risk data merged into properties.
+ * Now served from PostGIS (barangays_geom table).
+ */
+router.get('/gis/geojson', async (req, res) => {
+  try {
+    // Fetch barangays with geometry from PostGIS
+    const geoResult = await pool.query(`
+      SELECT
+        id,
+        name,
+        population,
+        ST_AsGeoJSON(geom)::json AS geometry,
+        ST_X(ST_Centroid(geom)) AS centroid_lon,
+        ST_Y(ST_Centroid(geom)) AS centroid_lat
+      FROM barangays_geom
+      ORDER BY name
+    `);
+
+    // Fetch latest risk scores
+    const riskResult = await pool.query(`
+      SELECT
+        barangay_name,
+        COALESCE(risk_score, 0) as risk_score,
+        COALESCE(risk_class, 'No Data') as risk_class,
+        COALESCE(incidence_per_100k, 0) as incidence_per_100k,
+        COALESCE(trend_direction, 'Stable') as trend_direction
+      FROM barangay_risk_scores
+      WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)
+    `);
+
+    // Fetch forecast data
+    const forecastResult = await pool.query(`
+      SELECT
+        barangay_name,
+        COALESCE(forecasted_count, 0) as forecasted_count,
+        COALESCE(confidence_lower, 0) as confidence_lower,
+        COALESCE(confidence_upper, 0) as confidence_upper
+      FROM model_predictions
+      WHERE period = (SELECT MAX(period) FROM model_predictions)
+    `);
+
+    // Fetch case counts
+    const caseResult = await pool.query(`
+      SELECT barangay_name, SUM(case_count)::INTEGER as total_cases
+      FROM monthly_case_summary
+      GROUP BY barangay_name
+    `);
+
+    // Build lookup maps
+    const riskMap = {};
+    for (const row of riskResult.rows) riskMap[row.barangay_name] = row;
+    const forecastMap = {};
+    for (const row of forecastResult.rows) forecastMap[row.barangay_name] = row;
+    const caseMap = {};
+    for (const row of caseResult.rows) caseMap[row.barangay_name] = row;
+
+    // Build GeoJSON features with merged risk data
+    const features = geoResult.rows.map(row => {
+      const risk = riskMap[row.name] || {};
+      const forecast = forecastMap[row.name] || {};
+      const cases = caseMap[row.name] || {};
+
+      return {
+        type: 'Feature',
+        properties: {
+          name: row.name,
+          population: row.population,
+          centroid: [row.centroid_lon, row.centroid_lat],
+          risk_score: risk.risk_score || 0,
+          risk_class: risk.risk_class || 'No Data',
+          incidence_per_100k: risk.incidence_per_100k || 0,
+          trend_direction: risk.trend_direction || 'Stable',
+          forecasted_count: forecast.forecasted_count || 0,
+          confidence_lower: forecast.confidence_lower || 0,
+          confidence_upper: forecast.confidence_upper || 0,
+          total_cases: cases.total_cases || 0,
+        },
+        geometry: row.geometry,
+      };
+    });
+
+    // Build merged outline from all outer rings — used to fill gaps between barangays
+    const outlineCoords = [];
+    for (const feature of features) {
+      if (feature.geometry.type === 'Polygon') {
+        outlineCoords.push(feature.geometry.coordinates[0]);
+      } else if (feature.geometry.type === 'MultiPolygon') {
+        for (const poly of feature.geometry.coordinates) {
+          outlineCoords.push(poly[0]);
+        }
+      }
+    }
+
+    res.json({
+      type: 'FeatureCollection',
+      name: 'pasig_barangays',
+      features,
+      outline: {
+        type: 'MultiPolygon',
+        coordinates: outlineCoords.map(c => [c])
+      }
+    });
+  } catch (err) {
+    console.error('GeoJSON error:', err.message);
+    res.status(500).json({ error: 'Server error generating GeoJSON.' });
+  }
+});
+
+/**
+ * GET /api/tb/gis/barangay-at?lon=X&lat=Y
+ * Find which barangay contains a given point (spatial query).
+ */
+router.get('/gis/barangay-at', async (req, res) => {
+  try {
+    const { lon, lat } = req.query;
+    if (!lon || !lat) {
+      return res.status(400).json({ error: 'Missing lon or lat query parameters.' });
+    }
+    const lonF = parseFloat(lon);
+    const latF = parseFloat(lat);
+    if (isNaN(lonF) || isNaN(latF)) {
+      return res.status(400).json({ error: 'lon and lat must be valid numbers.' });
+    }
+
+    const result = await pool.query(`
+      SELECT
+        name,
+        population,
+        ST_Area(geom::geography)::INTEGER AS area_m2,
+        ST_X(ST_Centroid(geom)) AS centroid_lon,
+        ST_Y(ST_Centroid(geom)) AS centroid_lat
+      FROM barangays_geom
+      WHERE ST_Contains(geom, ST_SetSRID(ST_MakePoint($1, $2), 4326))
+      LIMIT 1
+    `, [lonF, latF]);
+
+    if (result.rows.length === 0) {
+      return res.json({ found: false, message: 'Point is outside all Pasig barangays.' });
+    }
+
+    res.json({ found: true, barangay: result.rows[0] });
+  } catch (err) {
+    console.error('barangay-at error:', err.message);
+    res.status(500).json({ error: 'Server error in spatial query.' });
+  }
+});
+
+/**
+ * GET /api/tb/gis/areas
+ * Return barangay areas in km² using PostGIS geography (accurate on WGS84).
+ */
+router.get('/gis/areas', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        name,
+        population,
+        ST_Area(geom::geography)::INTEGER AS area_m2,
+        ROUND((ST_Area(geom::geography) / 1000000.0)::numeric, 3) AS area_km2,
+        ROUND((population::numeric / (ST_Area(geom::geography) / 1000000.0))::numeric, 1) AS pop_density_per_km2
+      FROM barangays_geom
+      ORDER BY area_km2 DESC
+    `);
+
+    res.json({ areas: result.rows });
+  } catch (err) {
+    console.error('areas error:', err.message);
+    res.status(500).json({ error: 'Server error computing areas.' });
+  }
+});
 
 /**
  * GET /api/tb/gis/choropleth
