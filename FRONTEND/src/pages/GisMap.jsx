@@ -195,6 +195,20 @@ export default function GisMap() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedBarangay, setSelectedBarangay] = useState(null);
+  const [panelClosing, setPanelClosing] = useState(false);
+
+  const handleSelectBarangay = (brgy) => {
+    setPanelClosing(false);
+    setSelectedBarangay(brgy);
+  };
+
+  const handleClosePanel = () => {
+    setPanelClosing(true);
+    setTimeout(() => {
+      setSelectedBarangay(null);
+      setPanelClosing(false);
+    }, 220);
+  };
 
   /* Fetch GeoJSON once */
   useEffect(() => {
@@ -308,7 +322,7 @@ export default function GisMap() {
         `;
 
         layer.bindPopup(popupContent, { className: 'tb-popup', maxWidth: 300, closeButton: true });
-        layer.on('click', () => setSelectedBarangay(p));
+        layer.on('click', () => handleSelectBarangay(p));
         layer.on('mouseover', highlightFeature);
         layer.on('mouseout', (e) => resetHighlight(e, geojsonLayer));
       },
@@ -496,7 +510,13 @@ export default function GisMap() {
 
         {/* ── Selected Barangay ── */}
         {selectedBarangay && (
-          <>
+          <div
+            style={{
+              animation: panelClosing
+                ? 'slide-out-right 0.22s ease-in forwards'
+                : 'slide-in-right 0.28s ease-out both',
+            }}
+          >
             <BarangayDetailPanel
               data={selectedBarangay}
               historicalCases={
@@ -504,10 +524,10 @@ export default function GisMap() {
                   ? monthlyByBarangay[selectedBarangay.name].reduce((s, r) => s + (r.case_count || 0), 0)
                   : null
               }
-              onClose={() => setSelectedBarangay(null)}
+              onClose={handleClosePanel}
             />
             <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)' }} />
-          </>
+          </div>
         )}
 
         {/* ── Risk Distribution ── */}
