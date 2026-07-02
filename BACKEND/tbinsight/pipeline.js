@@ -4,8 +4,8 @@
  * Runs the full prediction pipeline:
  *   1. Query L3 (monthly_case_summary) + L0 (barangays) for population
  *   2. Build series for Python /forecast → ARIMA predictions
- *   3. Compute RF features per barangay (recent_trend, seasonality_flag,
- *      population_density, neighbor_risk, historical_bias)
+ *   3. Compute RF features per barangay (forecasted_incidence, recent_trend,
+ *      seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk, historical_bias)
  *   4. Build classify request → Python /classify → risk classes + proba
  *   5. Compute weighted risk scores → L5 (barangay_risk_scores)
  *   6. Store forecasts + classifications → L4 (model_predictions)
@@ -16,10 +16,11 @@
  *   - Thresholds computed once, frozen, passed to /classify each run
  *   - All L4/L5/L6 writes in a single transaction (idempotent re-runs)
  *   - Historical bias = AVG(past forecast errors) → feedback loop (Approach B)
+ *   - Walk-forward evaluation available via POST /api/tb/evaluate (admin only)
  */
 
 const pool = require('../db');
-const { forecast, classify, thresholds: callThresholds, healthCheck } = require('./mlClient');
+const { forecast, classify, thresholds: callThresholds, healthCheck, evaluate } = require('./mlClient');
 const {
   computeRiskScore,
   computeNeighborRisks,
@@ -29,10 +30,8 @@ const {
   storeResults,
 } = require('./scoring');
 
-// Frozen thresholds — computed once, then hardcoded or loaded from config
-// These are the default PLACEHOLDER values.
-// On first real pipeline run, Express computes tertiles from D3 and overrides.
-const FROZEN_THRESHOLDS = {
+// Default thresholds — overridden by auto-calibration from real data on each run
+const DEFAULT_THRESHOLDS = {
   low_max: 150.0,
   med_max: 350.0,
 };
@@ -200,28 +199,54 @@ async function runPipeline({ period, thresholds: thresholdsOverride } = {}) {
       const slope = trendByBarangay[name]?.slope || 0;
       const seasonalityFlag = _detectSeasonality(seriesByBarangay[name] || []);
 
+      // Lag features: case counts from 1-3 months ago
+      const series = seriesByBarangay[name] || [];
+      const sorted = series.sort((a, c) => a.month.localeCompare(c.month));
+      const lag1m = sorted.length >= 1 ? sorted[sorted.length - 1].case_count : 0;
+      const lag2m = sorted.length >= 2 ? sorted[sorted.length - 2].case_count : 0;
+      const lag3m = sorted.length >= 3 ? sorted[sorted.length - 3].case_count : 0;
+
       return {
         barangay_name: name,
         features: {
           forecasted_incidence: forecastedIncidence,
           recent_trend: slope,
           seasonality_flag: seasonalityFlag ? 1 : 0,
-          population_density: forecastedIncidence, // incidence per 100k
+          lag_1m: lag1m,
+          lag_2m: lag2m,
+          lag_3m: lag3m,
           neighbor_risk: neighborRisks[name] || 0,
           historical_bias: historicalBias[name] || 0,
         },
       };
     });
 
-    // ── Step 6: Call Python /classify ──
+    // ── Step 6: Auto-calibrate thresholds and call Python /classify ──
     let classifyResults = [];
     if (results.mlServiceHealthy && predictRows.length > 0) {
       try {
-        const thresholds = thresholdsOverride || FROZEN_THRESHOLDS;
+        // Auto-calibrate thresholds from current data (tertile method)
+        let thresholds = thresholdsOverride;
+        if (!thresholds) {
+          try {
+            const allIncs = barangayIncidences.map(b => b.incidence_per_100k);
+            if (allIncs.length > 0) {
+              const thresholdResult = await callThresholds(allIncs, 'tertile');
+              thresholds = { low_max: thresholdResult.low_max, med_max: thresholdResult.med_max };
+              console.log(`📐 Auto-calibrated thresholds: Low≤${thresholds.low_max.toFixed(1)}, High≥${thresholds.med_max.toFixed(1)}`);
+            } else {
+              thresholds = DEFAULT_THRESHOLDS;
+            }
+          } catch {
+            thresholds = DEFAULT_THRESHOLDS;
+            console.log('📐 Using default thresholds (calibration failed)');
+          }
+        }
         results.thresholds = thresholds;
 
-        // Build training rows from historical data (use L3 + thresholds for labels)
+        // Build monthly snapshot training rows from historical data
         const trainRows = await _buildTrainingRows(client, populationMap, thresholds);
+        console.log(`📋 Training rows: ${trainRows.length} monthly snapshots`);
 
         const classifyResponse = await classify(thresholds, trainRows, predictRows);
         classifyResults = classifyResponse.predictions || [];
@@ -235,7 +260,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride } = {}) {
 
     // Rule-based fallback if ML service is down or classify failed
     if (classifyResults.length === 0 && predictRows.length > 0) {
-      classifyResults = _ruleBasedClassify(predictRows, thresholdsOverride || FROZEN_THRESHOLDS);
+      classifyResults = _ruleBasedClassify(predictRows, results.thresholds || DEFAULT_THRESHOLDS);
       results.classificationsCount = classifyResults.length;
       console.log(`🏷️  Rule-based fallback: ${classifyResults.length} barangays classified`);
     }
@@ -429,55 +454,157 @@ function _nextMonth(dateStr) {
 }
 
 /**
- * Build training rows for RF from historical data.
- * Each row: { features: {6 features}, incidence: float }
- * Labels derived from incidence via tertile thresholds.
+ * Build monthly snapshot training rows for RF from historical data.
  *
- * Uses the latest 12 months of data per barangay as training observations.
+ * Instead of 1 row per barangay (30 total), produces 1 row per barangay per month
+ * using rolling 12-month windows. With 30 barangays × 24+ valid months = 720+ rows.
+ *
+ * Each row: { features: {6 features}, incidence: float }
+ * Labels derived from incidence via tertile thresholds in Python.
+ *
+ * Features are computed with rolling windows to prevent data leakage:
+ *   - forecasted_incidence: annualized cases from the 12-month lookback window
+ *   - recent_trend: slope over the 12-month window
+ *   - seasonality_flag: 1 if ≥24 months available and sign-pattern match > 60%
+ *   - population_density: same as forecasted_incidence (per design spec)
+ *   - neighbor_risk: average incidence of OTHER barangays in the same month, normalized
+ *   - historical_bias: AVG(|actual - forecasted|) from past predictions (0 if no history)
  */
 async function _buildTrainingRows(client, populationMap, thresholds) {
+  // Fetch all monthly data sorted by month
   const result = await client.query(
     `SELECT barangay_name, month, case_count
      FROM monthly_case_summary
-     ORDER BY month DESC`
+     ORDER BY month ASC`
   );
 
-  // Group by barangay, take latest 12 months
+  if (result.rows.length === 0) return [];
+
+  // Group by barangay, sorted by month ascending
   const byBarangay = {};
   for (const row of result.rows) {
     const name = row.barangay_name;
     if (!byBarangay[name]) byBarangay[name] = [];
-    if (byBarangay[name].length < 12) {
-      byBarangay[name].push(row);
+    byBarangay[name].push({
+      month: row.month.toISOString().slice(0, 10),
+      case_count: row.case_count,
+    });
+  }
+
+  // Get all unique months sorted
+  const allMonths = [...new Set(result.rows.map(r => r.month.toISOString().slice(0, 10)))].sort();
+
+  // Fetch past predictions with actual_count for historical_bias computation
+  let pastPredictions = [];
+  try {
+    const pastResult = await client.query(
+      `SELECT barangay_name, period, actual_count, forecasted_count
+       FROM model_predictions
+       WHERE actual_count IS NOT NULL
+       ORDER BY period ASC`
+    );
+    pastPredictions = pastResult.rows;
+  } catch {
+    // table might be empty on first run
+  }
+
+  // Build historical bias map: { barangay_name -> [absolute_errors] }
+  const biasByName = {};
+  for (const row of pastPredictions) {
+    const name = row.barangay_name;
+    if (!biasByName[name]) biasByName[name] = [];
+    const absErr = Math.abs(row.actual_count - row.forecasted_count);
+    biasByName[name].push(absErr);
+  }
+  // Convert to averages
+  const historicalBiasAvg = {};
+  for (const [name, errs] of Object.entries(biasByName)) {
+    historicalBiasAvg[name] = errs.reduce((a, b) => a + b, 0) / errs.length;
+  }
+
+  const ROLLING_WINDOW = 12;
+  const trainRows = [];
+
+  for (const name of Object.keys(byBarangay)) {
+    const months = byBarangay[name];
+    const pop = populationMap[name] || 1000;
+
+    // Need at least ROLLING_WINDOW + 1 months to create one training row
+    if (months.length < ROLLING_WINDOW + 1) continue;
+
+    // For each valid target month (index ROLLING_WINDOW onwards)
+    for (let i = ROLLING_WINDOW; i < months.length; i++) {
+      const targetMonth = months[i];
+
+      // Rolling window: the 12 months before the target month
+      const window = months.slice(i - ROLLING_WINDOW, i);
+      const windowCounts = window.map(w => w.case_count);
+
+      // 1. forecasted_incidence: annualized from window
+      const totalCount = windowCounts.reduce((a, b) => a + b, 0);
+      const annualized = (totalCount / windowCounts.length) * 12;
+      const forecastedIncidence = _computeIncidence(annualized, pop);
+
+      // 2. recent_trend: slope over the window
+      const slope = _linearSlope(windowCounts);
+
+      // 3. seasonality_flag: need ≥24 months of history up to this point
+      const historyUpToTarget = months.slice(0, i + 1);
+      const seasonalityFlag = _detectSeasonality(historyUpToTarget) ? 1 : 0;
+
+      // 4. lag features: case counts from 1-3 months ago
+      const lag1m = i >= 1 ? months[i - 1].case_count : 0;
+      const lag2m = i >= 2 ? months[i - 2].case_count : 0;
+      const lag3m = i >= 3 ? months[i - 3].case_count : 0;
+
+      // 5. neighbor_risk: average incidence of OTHER barangays in the target month
+      let neighborRisk = 0;
+      const otherIncidences = [];
+      for (const [otherName, otherMonths] of Object.entries(byBarangay)) {
+        if (otherName === name) continue;
+        const otherMonthData = otherMonths.find(m => m.month === targetMonth.month);
+        if (otherMonthData) {
+          const otherPop = populationMap[otherName] || 1000;
+          otherIncidences.push(_computeIncidence(otherMonthData.case_count, otherPop));
+        }
+      }
+      if (otherIncidences.length > 0) {
+        neighborRisk = otherIncidences.reduce((a, b) => a + b, 0) / otherIncidences.length;
+      }
+
+      // 6. historical_bias: average past forecast errors for this barangay
+      const histBias = historicalBiasAvg[name] || 0;
+
+      // Incidence for the target month (this becomes the label via tertile thresholds)
+      const incidence = _computeIncidence(targetMonth.case_count, pop);
+
+      trainRows.push({
+        features: {
+          forecasted_incidence: forecastedIncidence,
+          recent_trend: slope,
+          seasonality_flag: seasonalityFlag,
+          lag_1m: lag1m,
+          lag_2m: lag2m,
+          lag_3m: lag3m,
+          neighbor_risk: neighborRisk,
+          historical_bias: histBias,
+        },
+        incidence,
+      });
     }
   }
 
-  const trainRows = [];
-  for (const [name, rows] of Object.entries(byBarangay)) {
-    const pop = populationMap[name] || 1000;
-    // Sum cases in the window
-    const totalCount = rows.reduce((s, r) => s + r.case_count, 0);
-    // Annualize: (total / months_in_window) × 12
-    const annualized = (totalCount / Math.max(rows.length, 1)) * 12;
-    const incidence = _computeIncidence(annualized, pop);
-
-    // Compute trend from this window
-    const counts = rows.sort((a, b) => a.month.toISOString().localeCompare(b.month.toISOString()))
-                       .map(r => r.case_count);
-    const slope = _linearSlope(counts);
-    const seasonalityFlag = _detectSeasonality(rows);
-
-    trainRows.push({
-      features: {
-        forecasted_incidence: incidence,
-        recent_trend: slope,
-        seasonality_flag: seasonalityFlag ? 1 : 0,
-        population_density: incidence,
-        neighbor_risk: 0, // will be overridden in predict phase
-        historical_bias: 0,
-      },
-      incidence,
-    });
+  // Normalize neighbor_risk to [0, 1] across all training rows
+  if (trainRows.length > 0) {
+    const nrValues = trainRows.map(r => r.features.neighbor_risk);
+    const nrMin = Math.min(...nrValues);
+    const nrMax = Math.max(...nrValues);
+    const nrRange = nrMax - nrMin;
+    for (const row of trainRows) {
+      row.features.neighbor_risk = nrRange > 0
+        ? (row.features.neighbor_risk - nrMin) / nrRange
+        : 0;
+    }
   }
 
   return trainRows;
@@ -490,7 +617,7 @@ async function _buildTrainingRows(client, populationMap, thresholds) {
 function _ruleBasedClassify(predictRows, thresholds) {
   const { low_max, med_max } = thresholds;
   return predictRows.map(row => {
-    const inc = row.features.forecasted_incidence || row.features.population_density || 0;
+    const inc = row.features.forecasted_incidence || row.features.lag_1m || 0;
     let riskClass;
     if (inc <= low_max) riskClass = 'Low';
     else if (inc > med_max) riskClass = 'High';
@@ -506,5 +633,5 @@ function _ruleBasedClassify(predictRows, thresholds) {
 
 module.exports = {
   runPipeline,
-  FROZEN_THRESHOLDS,
+  DEFAULT_THRESHOLDS,
 };

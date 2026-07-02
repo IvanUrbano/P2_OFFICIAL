@@ -302,3 +302,92 @@ def backtest_mae(
             forecast = np.array([season[i % seasonal_m] for i in range(horizon)])
             return float(np.mean(np.abs(actual - forecast)))
         return None
+
+
+def walk_forward_arima(
+    counts: list[int],
+    min_train: int = 24,
+    seasonal_m: int = 12,
+) -> dict:
+    """
+    Walk-forward evaluation for ARIMA forecasting.
+
+    Trains on months 1..T, predicts month T+1, slides forward.
+    Starting from min_train (default 24), produces one prediction per step.
+
+    Args:
+        counts: Monthly case counts (full historical series)
+        min_train: Minimum months of training before testing starts (default 24)
+        seasonal_m: Seasonal period (12 for monthly)
+
+    Returns:
+        {
+            "steps": [{"train_size": int, "test_month": int, "actual": float, "predicted": float, "error": float}],
+            "mae": float,
+            "mape": float,
+            "n_steps": int,
+        }
+    """
+    if len(counts) <= min_train:
+        return {
+            "steps": [],
+            "mae": None,
+            "mape": None,
+            "n_steps": 0,
+        }
+
+    steps = []
+    errors = []
+    pct_errors = []
+
+    for i in range(min_train, len(counts)):
+        train = counts[:i]
+        actual = float(counts[i])
+
+        try:
+            model = auto_arima(
+                train,
+                seasonal=True,
+                m=seasonal_m,
+                stepwise=True,
+                suppress_warnings=True,
+                error_action="ignore",
+                max_order=8,
+                trace=False,
+            )
+            predicted = float(model.predict(n_periods=1)[0])
+        except Exception:
+            # Fallback: seasonal naive (repeat last year's value for this month)
+            if len(train) >= seasonal_m:
+                predicted = float(train[-seasonal_m])
+            else:
+                predicted = float(train[-1]) if train else 0.0
+
+        error = abs(actual - predicted)
+        errors.append(error)
+
+        # MAPE: avoid division by zero
+        if actual > 0:
+            pct_errors.append(error / actual)
+
+        steps.append({
+            "train_size": len(train),
+            "test_month": i + 1,
+            "actual": actual,
+            "predicted": round(predicted, 2),
+            "error": round(error, 2),
+        })
+
+    mae = round(float(np.mean(errors)), 4) if errors else None
+    mape = round(float(np.mean(pct_errors) * 100), 2) if pct_errors else None
+
+    logger.info(
+        f"ARIMA walk-forward: {len(steps)} steps, MAE={mae}, MAPE={mape}%"
+    )
+
+    return {
+        "steps": steps,
+        "mae": mae,
+        "mape": mape,
+        "n_steps": len(steps),
+    }

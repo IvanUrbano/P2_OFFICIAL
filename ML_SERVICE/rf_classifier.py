@@ -2,7 +2,7 @@
 TBInsight ML Service — Random Forest Classifier
 
 Predicts Low/Medium/High risk classes on ARIMA-forecasted incidences.
-Uses 6 features including historical_bias from Approach B feedback loop.
+Uses 8 features including lag features and historical_bias from Approach B feedback loop.
 
 Design spec:
   - Labels derived from incidence tertiles on 3-year training window
@@ -17,15 +17,32 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    confusion_matrix,
+)
+
+from config import (
+    RF_MAX_DEPTH,
+    RF_N_ESTIMATORS,
+    RF_RANDOM_STATE,
+    RF_MIN_SAMPLES_SPLIT,
+    RF_MIN_SAMPLES_LEAF,
+)
 
 logger = logging.getLogger(__name__)
 
-# Fixed feature order (6 features with Approach B historical_bias)
+# Fixed feature order (8 features — lag features replace duplicate population_density)
 FEATURES = [
     "forecasted_incidence",
     "recent_trend",
     "seasonality_flag",
-    "population_density",
+    "lag_1m",
+    "lag_2m",
+    "lag_3m",
     "neighbor_risk",
     "historical_bias",
 ]
@@ -86,7 +103,6 @@ def train_and_predict(
     predict_rows: list[dict],
     low_max: float,
     med_max: float,
-    random_state: int = 42,
 ) -> list[dict]:
     """
     Train RF on labeled training data and predict risk classes.
@@ -99,7 +115,6 @@ def train_and_predict(
         predict_rows: Prediction rows with barangay_name + features
         low_max: Low/Medium threshold
         med_max: Medium/High threshold
-        random_state: RF random state for reproducibility
 
     Returns:
         List of {barangay_name, risk_class, proba: {Low, Medium, High}}
@@ -114,11 +129,13 @@ def train_and_predict(
         for r in train
     ]
 
-    # Train RF (shallow: max_depth=4, 200 trees — small data, avoid overfit)
+    # Train RF (tuned for ~700+ monthly snapshot samples)
     clf = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=4,
-        random_state=random_state,
+        n_estimators=RF_N_ESTIMATORS,
+        max_depth=RF_MAX_DEPTH,
+        min_samples_split=RF_MIN_SAMPLES_SPLIT,
+        min_samples_leaf=RF_MIN_SAMPLES_LEAF,
+        random_state=RF_RANDOM_STATE,
         class_weight="balanced",
     )
     clf.fit(X_train, y_train)
@@ -164,7 +181,7 @@ def classify_risk_simple(
     results = []
     for feat in features:
         name = feat.get("barangay_name", "")
-        incidence = feat.get("population_density", 0)
+        incidence = feat.get("forecasted_incidence", 0)
         risk_class = classify_incidence_tertile(incidence, thresholds)
 
         # Rule-based: 100% probability for the assigned class
@@ -178,3 +195,181 @@ def classify_risk_simple(
         })
 
     return results
+
+
+def walk_forward_rf(
+    train_rows: list[dict],
+    min_train: int = 24,
+    low_max: float = 150.0,
+    med_max: float = 350.0,
+    n_barangays: Optional[int] = None,
+) -> dict:
+    """
+    Walk-forward evaluation for RF classification (Option C: group by month).
+
+    At each step, trains on ALL barangay-months before month T,
+    then predicts ALL barangay-months at month T.
+
+    Args:
+        train_rows: List of {features: {...}, incidence: float} sorted by time.
+                    Each row is one barangay at one month.
+        min_train: Minimum number of training samples before testing starts.
+                   With 30 barangays and starting at month 25, this = 30 * 24 = 720.
+        low_max: Low/Medium threshold for label derivation
+        med_max: Medium/High threshold for label derivation
+        n_barangays: Number of barangays (if known). Auto-detected from barangay_name if not provided.
+
+    Returns:
+        {
+            "steps": [{"train_size": int, "test_month": int, "actual": [...], "predicted": [...], "correct": int, "total": int}],
+            "accuracy": float,
+            "f1_macro": float,
+            "precision": dict,
+            "recall": dict,
+            "confusion_matrix": dict,
+            "n_steps": int,
+        }
+    """
+    if len(train_rows) < min_train + 1:
+        return {
+            "steps": [],
+            "accuracy": None,
+            "f1_macro": None,
+            "precision": None,
+            "recall": None,
+            "confusion_matrix": None,
+            "n_steps": 0,
+        }
+
+    steps = []
+    all_actuals = []
+    all_predicted = []
+
+    # Reorder rows from barangay-first to time-first grouping
+    # _buildTrainingRows produces: [B1-M1, B1-M2, ..., B1-M36, B2-M1, B2-M2, ...]
+    # We need: [B1-M1, B2-M1, ..., B30-M1, B1-M2, B2-M2, ..., B30-M2, ...]
+    # Detect by checking if consecutive rows have the same barangay_name
+    needs_reorder = False
+    for i in range(1, min(30, len(train_rows))):
+        if train_rows[i].get("barangay_name") == train_rows[0].get("barangay_name"):
+            needs_reorder = True
+            break
+
+    if needs_reorder:
+        # Group by position within each barangay's time series
+        from collections import defaultdict
+        by_name = defaultdict(list)
+        for r in train_rows:
+            by_name[r.get("barangay_name", "")].append(r)
+
+        # Interleave: take one row from each barangay in round-robin
+        reordered = []
+        max_len = max(len(rows) for rows in by_name.values())
+        name_list = sorted(by_name.keys())
+        for t in range(max_len):
+            for name in name_list:
+                if t < len(by_name[name]):
+                    reordered.append(by_name[name][t])
+        train_rows = reordered
+
+    # Group rows by time position (each group = one month across all barangays)
+    # Assuming rows are now sorted by time, group every n_barangays together
+    if n_barangays is None:
+        detected = set(r.get("barangay_name") for r in train_rows if r.get("barangay_name"))
+        n_barangays = len(detected) if detected else 30
+
+    # Calculate steps: from min_train to end, one step per barangay-count of rows
+    step_size = n_barangays
+    n_steps = (len(train_rows) - min_train) // step_size
+
+    for step_idx in range(n_steps):
+        test_start = min_train + step_idx * step_size
+        test_end = min(test_start + step_size, len(train_rows))
+
+        if test_end > len(train_rows):
+            break
+
+        train_data = train_rows[:test_start]
+        test_data = train_rows[test_start:test_end]
+
+        # Build training set
+        X_train = [_vec(r["features"]) for r in train_data]
+        y_train = [
+            classify_incidence_tertile(r["incidence"], {"low_max": low_max, "med_max": med_max})
+            for r in train_data
+        ]
+
+        # Skip if only one class in training set
+        if len(set(y_train)) < 2:
+            continue
+
+        # Build test set
+        X_test = [_vec(r["features"]) for r in test_data]
+        y_test_actual = [
+            classify_incidence_tertile(r["incidence"], {"low_max": low_max, "med_max": med_max})
+            for r in test_data
+        ]
+
+        # Train and predict
+        clf = RandomForestClassifier(
+            n_estimators=RF_N_ESTIMATORS,
+            max_depth=RF_MAX_DEPTH,
+            min_samples_split=RF_MIN_SAMPLES_SPLIT,
+            min_samples_leaf=RF_MIN_SAMPLES_LEAF,
+            random_state=RF_RANDOM_STATE,
+            class_weight="balanced",
+        )
+        clf.fit(X_train, y_train)
+        y_test_pred = clf.predict(X_test)
+
+        # Record step results
+        correct = sum(1 for a, p in zip(y_test_actual, y_test_pred) if a == p)
+        steps.append({
+            "train_size": len(train_data),
+            "test_month": step_idx + 1,
+            "actual": y_test_actual,
+            "predicted": list(y_test_pred),
+            "correct": correct,
+            "total": len(y_test_actual),
+        })
+
+        all_actuals.extend(y_test_actual)
+        all_predicted.extend(y_test_pred)
+
+    # Aggregate metrics
+    if not all_actuals:
+        return {
+            "steps": steps,
+            "accuracy": None,
+            "f1_macro": None,
+            "precision": None,
+            "recall": None,
+            "confusion_matrix": None,
+            "n_steps": 0,
+        }
+
+    all_classes = ["Low", "Medium", "High"]
+    accuracy = accuracy_score(all_actuals, all_predicted)
+    f1 = f1_score(all_actuals, all_predicted, average="macro", zero_division=0)
+    prec = precision_score(all_actuals, all_predicted, average=None, labels=all_classes, zero_division=0)
+    rec = recall_score(all_actuals, all_predicted, average=None, labels=all_classes, zero_division=0)
+    cm = confusion_matrix(all_actuals, all_predicted, labels=all_classes)
+
+    result = {
+        "steps": steps,
+        "accuracy": round(float(accuracy), 4),
+        "f1_macro": round(float(f1), 4),
+        "precision": {cls: round(float(p), 4) for cls, p in zip(all_classes, prec)},
+        "recall": {cls: round(float(r), 4) for cls, r in zip(all_classes, rec)},
+        "confusion_matrix": {
+            cls: {pred_cls: int(cm[i][j]) for j, pred_cls in enumerate(all_classes)}
+            for i, cls in enumerate(all_classes)
+        },
+        "n_steps": len(steps),
+    }
+
+    logger.info(
+        f"RF walk-forward: {len(steps)} steps, accuracy={result['accuracy']}, "
+        f"f1_macro={result['f1_macro']}"
+    )
+    return result

@@ -1,5 +1,18 @@
 node_modules/
+
+# Environment files (never commit secrets)
 .env
+.env.*
+!.env.example
+!.env.production.example
+BACKEND/.env
+BACKEND/.env.*
+!BACKEND/.env.example
+
+# Python
+__pycache__/
+*.pyc
+
 .DS_Store
 dist/
 build/

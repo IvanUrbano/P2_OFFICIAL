@@ -13,16 +13,19 @@ from rf_classifier import (
     classify_incidence_tertile,
     train_and_predict,
     classify_risk_simple,
+    walk_forward_rf,
 )
 
 
-def test_features_are_the_fixed_six():
-    """FEATURES should contain the 6 fixed features (Approach B)."""
+def test_features_are_the_fixed_eight():
+    """FEATURES should contain the 8 fixed features (lag features replace population_density)."""
     assert FEATURES == [
         "forecasted_incidence",
         "recent_trend",
         "seasonality_flag",
-        "population_density",
+        "lag_1m",
+        "lag_2m",
+        "lag_3m",
         "neighbor_risk",
         "historical_bias",
     ]
@@ -92,29 +95,29 @@ def test_rf_predicts_high_for_clearly_high_forecast():
     train = []
     for inc in [5, 10, 15, 20, 25]:        # Low
         train.append({"features": {"forecasted_incidence": inc, "recent_trend": -0.1,
-                      "seasonality_flag": 0, "population_density": 10000, "neighbor_risk": 0.2,
-                      "historical_bias": 0.0},
+                      "seasonality_flag": 0, "lag_1m": inc - 2, "lag_2m": inc - 3,
+                      "lag_3m": inc - 1, "neighbor_risk": 0.2, "historical_bias": 0.0},
                       "incidence": inc})
     for inc in [60, 70, 80, 90, 100]:      # Medium
         train.append({"features": {"forecasted_incidence": inc, "recent_trend": 0.0,
-                      "seasonality_flag": 1, "population_density": 20000, "neighbor_risk": 1.0,
-                      "historical_bias": 0.0},
+                      "seasonality_flag": 1, "lag_1m": inc - 5, "lag_2m": inc - 8,
+                      "lag_3m": inc - 3, "neighbor_risk": 1.0, "historical_bias": 0.0},
                       "incidence": inc})
     for inc in [160, 180, 200, 220, 240]:  # High
         train.append({"features": {"forecasted_incidence": inc, "recent_trend": 0.4,
-                      "seasonality_flag": 1, "population_density": 35000, "neighbor_risk": 2.5,
-                      "historical_bias": 0.0},
+                      "seasonality_flag": 1, "lag_1m": inc - 10, "lag_2m": inc - 15,
+                      "lag_3m": inc - 8, "neighbor_risk": 2.5, "historical_bias": 0.0},
                       "incidence": inc})
 
     predict = [
         {"barangay_name": "Hot",
          "features": {"forecasted_incidence": 230, "recent_trend": 0.5,
-                      "seasonality_flag": 1, "population_density": 36000,
-                      "neighbor_risk": 2.6, "historical_bias": 0.0}},
+                      "seasonality_flag": 1, "lag_1m": 220, "lag_2m": 210,
+                      "lag_3m": 200, "neighbor_risk": 2.6, "historical_bias": 0.0}},
         {"barangay_name": "Cool",
          "features": {"forecasted_incidence": 8, "recent_trend": -0.2,
-                      "seasonality_flag": 0, "population_density": 9000,
-                      "neighbor_risk": 0.1, "historical_bias": 0.0}},
+                      "seasonality_flag": 0, "lag_1m": 10, "lag_2m": 12,
+                      "lag_3m": 11, "neighbor_risk": 0.1, "historical_bias": 0.0}},
     ]
 
     out = train_and_predict(train, predict, low_max, med_max)
@@ -137,8 +140,8 @@ def test_train_and_predict_empty():
 def test_classify_risk_simple():
     """Rule-based classification should work without training data."""
     features = [
-        {"barangay_name": "Low", "population_density": 50.0},
-        {"barangay_name": "High", "population_density": 400.0},
+        {"barangay_name": "Low", "forecasted_incidence": 50.0},
+        {"barangay_name": "High", "forecasted_incidence": 400.0},
     ]
     results = classify_risk_simple(features, {"low_max": 150.0, "med_max": 350.0})
     assert len(results) == 2
@@ -154,9 +157,46 @@ def test_classify_risk_simple_empty():
     assert classify_risk_simple([]) == []
 
 
+def test_walk_forward_rf_insufficient_data():
+    """Walk-forward with too few samples should return empty results."""
+    result = walk_forward_rf([], min_train=24)
+    assert result["n_steps"] == 0
+    assert result["accuracy"] is None
+
+
+def test_walk_forward_rf_enough_data():
+    """Walk-forward with enough data should produce evaluation results."""
+    # Create 30 barangays x 25 months = 750 rows (min_train=720 for 30 barangays)
+    train_rows = []
+    for month_idx in range(25):
+        for b in range(30):
+            # Simulate varying incidence
+            base = 50 + (month_idx * 2) + (b * 3)
+            train_rows.append({
+                "features": {
+                    "forecasted_incidence": base,
+                    "recent_trend": 0.1,
+                    "seasonality_flag": 0,
+                    "lag_1m": base - 5,
+                    "lag_2m": base - 10,
+                    "lag_3m": base - 15,
+                    "neighbor_risk": 0.3,
+                    "historical_bias": 0.0,
+                },
+                "incidence": base,
+            })
+
+    result = walk_forward_rf(train_rows, min_train=30, low_max=80.0, med_max=200.0)
+    assert result["n_steps"] > 0
+    assert result["accuracy"] is not None
+    assert 0 <= result["accuracy"] <= 1
+    assert result["f1_macro"] is not None
+    assert len(result["steps"]) > 0
+
+
 if __name__ == "__main__":
     tests = [
-        test_features_are_the_fixed_six,
+        test_features_are_the_fixed_eight,
         test_compute_incidence_normal,
         test_compute_incidence_zero_population,
         test_compute_incidence_zero_cases,
@@ -170,6 +210,8 @@ if __name__ == "__main__":
         test_train_and_predict_empty,
         test_classify_risk_simple,
         test_classify_risk_simple_empty,
+        test_walk_forward_rf_insufficient_data,
+        test_walk_forward_rf_enough_data,
     ]
 
     passed = 0

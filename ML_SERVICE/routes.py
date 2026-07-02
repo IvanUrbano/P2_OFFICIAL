@@ -31,12 +31,19 @@ from models import (
     PipelineClassification,
     ThresholdRequest,
     ThresholdResponse,
+    EvaluateRequest,
+    EvaluateResponse,
+    ArimaEvaluation,
+    ArimaStep,
+    RfEvaluation,
+    RfStep,
 )
-from arima_forecast import forecast_all, compute_trend, detect_seasonality, backtest_mae
+from arima_forecast import forecast_all, compute_trend, detect_seasonality, backtest_mae, walk_forward_arima
 from rf_classifier import (
     train_and_predict,
     classify_risk_simple,
     compute_incidence,
+    walk_forward_rf,
     FEATURES,
 )
 from thresholds import compute_thresholds
@@ -196,8 +203,11 @@ async def run_classify(req: ClassifyRequest):
 @router.post("/pipeline", response_model=PipelineResponse)
 async def run_pipeline(req: PipelineRequest):
     """
-    Full pipeline: ARIMA forecast → RF classification.
+    Full pipeline: ARIMA forecast → classification.
     Processes one barangay at a time.
+
+    If `train` data is provided, uses RF classification.
+    Otherwise, falls back to rule-based threshold classification.
     """
     try:
         if not req.series:
@@ -213,7 +223,7 @@ async def run_pipeline(req: PipelineRequest):
 
         forecast = forecasts[0]
 
-        # Step 2: Build features for RF
+        # Step 2: Build features for classification
         pop = req.population.get(barangay_name, 1000)
 
         df = pd.DataFrame(series_data)
@@ -229,7 +239,6 @@ async def run_pipeline(req: PipelineRequest):
         hist_bias = req.historical_bias.get(barangay_name, 0.0)
         neighbor_risk = req.neighbor_risk.get(barangay_name, 0.0)
 
-        # Use forecasted_incidence (incidence per 100k) for the feature
         feature = {
             "barangay_name": barangay_name,
             "forecasted_incidence": pop_density,
@@ -240,14 +249,27 @@ async def run_pipeline(req: PipelineRequest):
             "historical_bias": hist_bias,
         }
 
-        # Step 3: RF classification (rule-based in pipeline mode — no training data)
-        # Pipeline doesn't carry training data; use rule-based fallback
-        from config import TERTILE_THRESHOLDS
-        risk_class = classify_risk_simple(
-            [feature],
-            {"low_max": TERTILE_THRESHOLDS["tertile_low_max"],
-             "med_max": TERTILE_THRESHOLDS["tertile_high_min"]}
-        )[0]
+        # Step 3: Classification
+        # Use thresholds from request, or PLACEHOLDER defaults
+        if req.thresholds:
+            low_max = req.thresholds.low_max
+            med_max = req.thresholds.med_max
+        else:
+            from config import TERTILE_THRESHOLDS
+            low_max = TERTILE_THRESHOLDS["tertile_low_max"]
+            med_max = TERTILE_THRESHOLDS["tertile_high_min"]
+
+        thresholds_dict = {"low_max": low_max, "med_max": med_max}
+
+        if req.train:
+            # RF classification with training data
+            train = [{"features": r.features, "incidence": r.incidence} for r in req.train]
+            predict = [{"barangay_name": barangay_name, "features": feature}]
+            preds = train_and_predict(train, predict, low_max, med_max)
+            risk_class = preds[0] if preds else classify_risk_simple([feature], thresholds_dict)[0]
+        else:
+            # Rule-based fallback (no training data)
+            risk_class = classify_risk_simple([feature], thresholds_dict)[0]
 
         return PipelineResponse(
             forecast=PipelineForecast(
@@ -270,3 +292,82 @@ async def run_pipeline(req: PipelineRequest):
     except Exception as e:
         logger.error(f"Pipeline error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Pipeline failed: {str(e)}")
+
+
+# ==================== POST /evaluate ====================
+
+@router.post("/evaluate", response_model=EvaluateResponse)
+async def evaluate_models(req: EvaluateRequest):
+    """
+    Walk-forward evaluation for both ARIMA and RF models.
+
+    - ARIMA: trains on months 1..T, predicts T+1, slides forward from month 25
+    - RF: trains on all barangay-months before T, predicts month T (Option C)
+
+    Returns aggregated metrics (MAE/MAPE for ARIMA, accuracy/F1 for RF)
+    plus per-step details.
+    """
+    try:
+        if not req.series:
+            raise HTTPException(status_code=400, detail="No series data provided")
+
+        # ── ARIMA walk-forward per barangay ──
+        df = pd.DataFrame([pt.model_dump() for pt in req.series])
+        df["month"] = pd.to_datetime(df["month"])
+
+        # Use the longest barangay series for ARIMA walk-forward
+        # (or we could average across barangays — using longest for now)
+        arima_results = []
+        for name in df["barangay_name"].unique():
+            barangay_df = df[df["barangay_name"] == name].sort_values("month")
+            counts = barangay_df["case_count"].tolist()
+            if len(counts) > req.min_train:
+                result = walk_forward_arima(counts, min_train=req.min_train)
+                arima_results.append(result)
+
+        # Aggregate ARIMA results: use the mean across barangays
+        if arima_results:
+            all_mae = [r["mae"] for r in arima_results if r["mae"] is not None]
+            all_mape = [r["mape"] for r in arima_results if r["mape"] is not None]
+            # Use the first (longest) barangay's steps for detailed output
+            longest = max(arima_results, key=lambda r: r["n_steps"])
+            arima_eval = ArimaEvaluation(
+                mae=round(float(np.mean(all_mae)), 4) if all_mae else None,
+                mape=round(float(np.mean(all_mape)), 2) if all_mape else None,
+                n_steps=longest["n_steps"],
+                steps=[ArimaStep(**s) for s in longest["steps"]],
+            )
+        else:
+            arima_eval = ArimaEvaluation()
+
+        # ── RF walk-forward ──
+        n_barangays = len(df["barangay_name"].unique())
+        train = [{"features": r.features, "incidence": r.incidence} for r in req.train]
+        rf_result = walk_forward_rf(
+            train,
+            min_train=req.min_train,
+            low_max=req.thresholds.low_max,
+            med_max=req.thresholds.med_max,
+            n_barangays=n_barangays,
+        )
+
+        rf_eval = RfEvaluation(
+            accuracy=rf_result["accuracy"],
+            f1_macro=rf_result["f1_macro"],
+            precision=rf_result["precision"],
+            recall=rf_result["recall"],
+            confusion_matrix=rf_result["confusion_matrix"],
+            n_steps=rf_result["n_steps"],
+            steps=[RfStep(**s) for s in rf_result["steps"]],
+        )
+
+        return EvaluateResponse(
+            arima=arima_eval,
+            rf=rf_eval,
+            model_version=MODEL_VERSION,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Evaluation error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")

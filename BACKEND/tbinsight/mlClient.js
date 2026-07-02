@@ -7,6 +7,7 @@
  * Endpoints consumed:
  *   POST /forecast   — ARIMA forecasting
  *   POST /classify   — RF risk classification
+ *   POST /evaluate   — Walk-forward evaluation (ARIMA + RF)
  *   POST /thresholds — Risk band cut points
  *   GET  /health     — Service liveness check
  */
@@ -98,11 +99,24 @@ async function thresholds(incidences, method = 'tertile') {
   return mlPost('/thresholds', { incidences, method });
 }
 
+/**
+ * POST /evaluate — Walk-forward evaluation for ARIMA + RF
+ * @param {Array} series - [{barangay_name, month, case_count}] per barangay
+ * @param {Array} train - [{features: {...}, incidence: float}] training rows
+ * @param {object} thresholds - {low_max, med_max}
+ * @param {number} minTrain - Minimum training size (default 24)
+ * @returns {object} {arima: {mae, mape, n_steps, steps}, rf: {accuracy, f1_macro, ...}}
+ */
+async function evaluate(series, train, thresholds, minTrain = 24) {
+  return mlPost('/evaluate', { series, train, thresholds, min_train: minTrain });
+}
+
 module.exports = {
   mlPost,
   healthCheck,
   forecast,
   classify,
   thresholds,
+  evaluate,
   ML_BASE,
 };

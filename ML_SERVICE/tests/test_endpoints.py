@@ -75,7 +75,7 @@ def test_forecast_normal():
     assert len(data["forecasts"]) == 1
     f = data["forecasts"][0]
     assert f["barangay_name"] == "Manggahan"
-    assert f["method"] in ("arima", "exp_smoothing", "seasonal_naive")
+    assert f["method"] in ("arima", "exponential_smoothing", "seasonal_naive")
     assert len(f["predictions"]) == 1
     assert f["predictions"][0]["yhat"] >= 0
     assert f["predictions"][0]["yhat_lower"] <= f["predictions"][0]["yhat"]
@@ -116,7 +116,7 @@ def test_forecast_short_series():
     r = client.post("/api/ml/forecast", json={"series": series})
     assert r.status_code == 200
     f = r.json()["forecasts"][0]
-    assert f["method"] in ("seasonal_naive", "exp_smoothing")
+    assert f["method"] in ("seasonal_naive", "exponential_smoothing")
     print(f"  PASS: test_forecast_short_series (method={f['method']})")
 
 
@@ -153,18 +153,18 @@ def _make_train_rows():
     rows = []
     for inc in [5, 10, 15, 20, 25]:        # Low
         rows.append({"features": {"forecasted_incidence": inc, "recent_trend": -0.1,
-                      "seasonality_flag": 0, "population_density": 10000,
-                      "neighbor_risk": 0.2, "historical_bias": 0.0},
+                      "seasonality_flag": 0, "lag_1m": inc - 2, "lag_2m": inc - 3,
+                      "lag_3m": inc - 1, "neighbor_risk": 0.2, "historical_bias": 0.0},
                       "incidence": inc})
     for inc in [60, 70, 80, 90, 100]:      # Medium
         rows.append({"features": {"forecasted_incidence": inc, "recent_trend": 0.0,
-                      "seasonality_flag": 1, "population_density": 20000,
-                      "neighbor_risk": 1.0, "historical_bias": 0.0},
+                      "seasonality_flag": 1, "lag_1m": inc - 5, "lag_2m": inc - 8,
+                      "lag_3m": inc - 3, "neighbor_risk": 1.0, "historical_bias": 0.0},
                       "incidence": inc})
     for inc in [160, 180, 200, 220, 240]:  # High
         rows.append({"features": {"forecasted_incidence": inc, "recent_trend": 0.4,
-                      "seasonality_flag": 1, "population_density": 35000,
-                      "neighbor_risk": 2.5, "historical_bias": 0.0},
+                      "seasonality_flag": 1, "lag_1m": inc - 10, "lag_2m": inc - 15,
+                      "lag_3m": inc - 8, "neighbor_risk": 2.5, "historical_bias": 0.0},
                       "incidence": inc})
     return rows
 
@@ -177,12 +177,12 @@ def test_classify_with_training():
         "predict": [
             {"barangay_name": "Hot",
              "features": {"forecasted_incidence": 230, "recent_trend": 0.5,
-                          "seasonality_flag": 1, "population_density": 36000,
-                          "neighbor_risk": 2.6, "historical_bias": 0.0}},
+                          "seasonality_flag": 1, "lag_1m": 220, "lag_2m": 210,
+                          "lag_3m": 200, "neighbor_risk": 2.6, "historical_bias": 0.0}},
             {"barangay_name": "Cool",
              "features": {"forecasted_incidence": 8, "recent_trend": -0.2,
-                          "seasonality_flag": 0, "population_density": 9000,
-                          "neighbor_risk": 0.1, "historical_bias": 0.0}},
+                          "seasonality_flag": 0, "lag_1m": 10, "lag_2m": 12,
+                          "lag_3m": 11, "neighbor_risk": 0.1, "historical_bias": 0.0}},
         ],
     }
     r = client.post("/api/ml/classify", json=payload)
@@ -209,8 +209,8 @@ def test_classify_without_training():
         "predict": [
             {"barangay_name": "Low",
              "features": {"forecasted_incidence": 50, "recent_trend": -0.1,
-                          "seasonality_flag": 0, "population_density": 50000,
-                          "neighbor_risk": 0.2, "historical_bias": 0.0}},
+                          "seasonality_flag": 0, "lag_1m": 45, "lag_2m": 40,
+                          "lag_3m": 55, "neighbor_risk": 0.2, "historical_bias": 0.0}},
         ],
     }
     r = client.post("/api/ml/classify", json=payload)
@@ -231,6 +231,66 @@ def test_classify_empty_predict():
     r = client.post("/api/ml/classify", json=payload)
     assert r.status_code == 400
     print("  PASS: test_classify_empty_predict")
+
+
+# ==================== Evaluate ====================
+
+def test_evaluate_walk_forward():
+    """Walk-forward evaluation should return ARIMA + RF metrics."""
+    import datetime
+    # Build 36 months of data for one barangay — varying counts to span Low/Medium/High
+    series = []
+    base_date = datetime.date(2022, 1, 1)
+    # Vary counts widely: low (5-10), medium (30-50), high (80-120)
+    counts = [5, 8, 6, 10, 7, 12, 9, 11, 8, 13, 7, 10,   # months 1-12: low
+              35, 40, 38, 45, 42, 50, 37, 48, 43, 55, 39, 47,  # months 13-24: medium
+              90, 95, 88, 100, 92, 110, 85, 105, 98, 115, 87, 102]  # months 25-36: high
+
+    for i, c in enumerate(counts):
+        dt = datetime.date(2022 + (i // 12), (i % 12) + 1, 1)
+        series.append({
+            "barangay_name": "Manggahan",
+            "month": dt.strftime("%Y-%m-%d"),
+            "case_count": c,
+        })
+
+    # Build training rows (simplified: just incidence-based)
+    train = []
+    for i, c in enumerate(counts):
+        pop = 30000
+        inc = (c / pop) * 100_000
+        train.append({
+            "features": {
+                "forecasted_incidence": inc,
+                "recent_trend": 0.1,
+                "seasonality_flag": 0,
+                "lag_1m": counts[i - 1] if i > 0 else 0,
+                "lag_2m": counts[i - 2] if i > 1 else 0,
+                "lag_3m": counts[i - 3] if i > 2 else 0,
+                "neighbor_risk": 0.3,
+                "historical_bias": 0.0,
+            },
+            "incidence": inc,
+        })
+
+    # Thresholds that split the data into Low/Medium/High
+    # Incidences: low ~16-43, medium ~117-167, high ~283-383
+    payload = {
+        "series": series,
+        "train": train,
+        "thresholds": {"low_max": 150.0, "med_max": 280.0},
+        "min_train": 12,  # Lower min_train for test speed
+    }
+    r = client.post("/api/ml/evaluate", json=payload)
+    assert r.status_code == 200
+    data = r.json()
+    assert "arima" in data
+    assert "rf" in data
+    assert data["arima"]["n_steps"] > 0
+    assert data["rf"]["n_steps"] > 0
+    assert data["arima"]["mae"] is not None
+    assert data["rf"]["accuracy"] is not None
+    print(f"  PASS: test_evaluate_walk_forward (ARIMA MAE={data['arima']['mae']:.2f}, RF acc={data['rf']['accuracy']:.2f})")
 
 
 # ==================== Pipeline ====================
@@ -296,6 +356,7 @@ if __name__ == "__main__":
         test_classify_with_training,
         test_classify_without_training,
         test_classify_empty_predict,
+        test_evaluate_walk_forward,
         test_pipeline,
         test_pipeline_short_series,
         test_404,

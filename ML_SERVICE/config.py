@@ -17,11 +17,12 @@ ARIMA_SEASONAL_PERIOD = 12  # Monthly data, annual seasonality
 ARIMA_MIN_HISTORY = 24      # Minimum months for ARIMA (fallback if shorter)
 ARIMA_SPARSE_THRESHOLD = 0.5  # If >50% zeros in series, use fallback
 
-# Random Forest settings
-RF_MAX_DEPTH = 10
-RF_N_ESTIMATORS = 100
+# Random Forest settings (tuned for ~700+ monthly snapshot training samples)
+RF_MAX_DEPTH = 8
+RF_N_ESTIMATORS = 300
 RF_RANDOM_STATE = 42
-RF_MAX_FEATURES = 6  # Maximum features for the classifier
+RF_MIN_SAMPLES_SPLIT = 10
+RF_MIN_SAMPLES_LEAF = 5
 
 # Fallback settings
 FALLBACK_METHOD = "seasonal_naive"  # Options: "seasonal_naive", "exponential_smoothing"
@@ -38,22 +39,26 @@ TERTILE_THRESHOLDS = {
 
 # ==================== FEATURE CONFIG ====================
 
-# RF features (≤6 per design spec)
+# RF features (8 features — replaced duplicate population_density with lag features)
 FEATURE_NAMES = [
-    "forecasted_count",      # ARIMA forecast output
-    "recent_trend",          # Slope of last 12 months
+    "forecasted_incidence",  # Annualized incidence per 100k from 12-month window
+    "recent_trend",          # Linear regression slope of case counts over 12-month window
     "seasonality_flag",      # 1 if seasonal pattern detected, 0 otherwise
-    "population_density",    # Cases per 100k population
-    "neighbor_risk",         # Average risk of neighboring barangays
-    "historical_bias",       # Feedback loop: AVG of past ARIMA forecast errors
+    "lag_1m",                # Case count 1 month ago (momentum)
+    "lag_2m",                # Case count 2 months ago (momentum)
+    "lag_3m",                # Case count 3 months ago (momentum)
+    "neighbor_risk",         # Average incidence of neighboring barangays, normalized [0,1]
+    "historical_bias",       # AVG(|actual - forecasted|) from past predictions (Approach B feedback)
 ]
 
 # Feature scaling ranges (for normalization if needed)
 FEATURE_RANGES = {
-    "forecasted_count": (0, 50),
+    "forecasted_incidence": (0, 1000),
     "recent_trend": (-10, 10),
     "seasonality_flag": (0, 1),
-    "population_density": (0, 1000),
+    "lag_1m": (0, 50),
+    "lag_2m": (0, 50),
+    "lag_3m": (0, 50),
     "neighbor_risk": (0, 1),
     "historical_bias": (-50, 50),
 }
