@@ -239,12 +239,25 @@ async def run_pipeline(req: PipelineRequest):
         hist_bias = req.historical_bias.get(barangay_name, 0.0)
         neighbor_risk = req.neighbor_risk.get(barangay_name, 0.0)
 
+        # Build features matching the 8-feature RF schema
+        # Express pipeline sends lag_1m/2m/3m in predict rows,
+        # but we compute them here as fallback from the time series
+        lag_1m, lag_2m, lag_3m = 0.0, 0.0, 0.0
+        if len(ts) >= 3:
+            lag_1m = float(ts.iloc[-1])
+            lag_2m = float(ts.iloc[-2])
+            lag_3m = float(ts.iloc[-3])
+        elif len(ts) >= 1:
+            lag_1m = float(ts.iloc[-1])
+
         feature = {
             "barangay_name": barangay_name,
             "forecasted_incidence": pop_density,
             "recent_trend": recent_trend,
             "seasonality_flag": seasonality_flag,
-            "population_density": pop_density,
+            "lag_1m": lag_1m,
+            "lag_2m": lag_2m,
+            "lag_3m": lag_3m,
             "neighbor_risk": neighbor_risk,
             "historical_bias": hist_bias,
         }
