@@ -20,13 +20,32 @@ const poolConfig = process.env.DATABASE_URL
   };
 const pool = new Pool(poolConfig);
 
+// Execute multi-statement SQL by splitting on semicolons and running each individually.
+// pg's extended query protocol doesn't support multiple statements in one call.
+const execSql = async (sqlContent) => {
+  const client = await pool.connect();
+  try {
+    // Split on ";\n" or ";" at end of line — avoids splitting on semicolons inside strings/comments
+    const statements = sqlContent
+      .split(/;\s*\n/)
+      .map(s => s.trim())
+      .filter(s => s.length > 0 && !s.startsWith('--'));
+
+    for (const stmt of statements) {
+      await client.query(stmt);
+    }
+  } finally {
+    client.release();
+  }
+};
+
 // Helper function to auto-initialize tables if they don't exist
 const initDb = async () => {
   try {
     const initSqlPath = path.join(__dirname, 'init.sql');
     if (fs.existsSync(initSqlPath)) {
       const sql = fs.readFileSync(initSqlPath, 'utf8');
-      await pool.query(sql);
+      await execSql(sql);
       console.log('✅ Database tables checked/initialized successfully.');
     } else {
       console.log('⚠️ init.sql file not found, skipping database auto-initialization.');
@@ -36,7 +55,7 @@ const initDb = async () => {
     const tbInsightMigPath = path.join(__dirname, 'db', 'migrations', '002_tbinsight_full_schema.sql');
     if (fs.existsSync(tbInsightMigPath)) {
       const tbSql = fs.readFileSync(tbInsightMigPath, 'utf8');
-      await pool.query(tbSql);
+      await execSql(tbSql);
       console.log('✅ TBInsight schema migration completed successfully.');
     } else {
       console.log('⚠️ TBInsight migration not found, skipping.');
@@ -46,7 +65,7 @@ const initDb = async () => {
     const postgisMigPath = path.join(__dirname, 'db', 'migrations', '003_postgis.sql');
     if (fs.existsSync(postgisMigPath)) {
       const postgisSql = fs.readFileSync(postgisMigPath, 'utf8');
-      await pool.query(postgisSql);
+      await execSql(postgisSql);
       console.log('✅ PostGIS migration completed successfully.');
     } else {
       console.log('⚠️ PostGIS migration not found, skipping.');
