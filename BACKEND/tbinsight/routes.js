@@ -359,6 +359,73 @@ router.get('/dashboard/barangay/:name', async (req, res) => {
 });
 
 /**
+ * GET /api/tb/barangays/watchlist
+ * One row per barangay: current cases (latest month), previous month,
+ * all-time total, next-month forecast, and risk classification.
+ * Powers the Barangay Watchlist table page.
+ */
+router.get('/barangays/watchlist', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        g.name,
+        g.population,
+        COALESCE(cur.current_cases, 0)::INTEGER AS current_cases,
+        COALESCE(prev.prev_cases, 0)::INTEGER AS prev_cases,
+        COALESCE(total.total_cases, 0)::INTEGER AS total_cases,
+        COALESCE(f.forecasted_count, 0)::NUMERIC AS forecasted_count,
+        COALESCE(f.confidence_lower, 0)::NUMERIC AS confidence_lower,
+        COALESCE(f.confidence_upper, 0)::NUMERIC AS confidence_upper,
+        COALESCE(r.risk_score, 0)::NUMERIC AS risk_score,
+        COALESCE(r.risk_class, 'No Data') AS risk_class,
+        COALESCE(r.incidence_per_100k, 0)::NUMERIC AS incidence_per_100k,
+        COALESCE(r.trend_direction, 'Stable') AS trend_direction
+      FROM barangays_geom g
+      LEFT JOIN LATERAL (
+        SELECT SUM(case_count)::INTEGER AS current_cases
+        FROM monthly_case_summary
+        WHERE barangay_name = g.name
+          AND month = (SELECT MAX(month) FROM monthly_case_summary)
+      ) cur ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT SUM(case_count)::INTEGER AS prev_cases
+        FROM monthly_case_summary
+        WHERE barangay_name = g.name
+          AND month = ((SELECT MAX(month) FROM monthly_case_summary) - INTERVAL '1 month')::DATE
+      ) prev ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT SUM(case_count)::INTEGER AS total_cases
+        FROM monthly_case_summary
+        WHERE barangay_name = g.name
+      ) total ON TRUE
+      LEFT JOIN model_predictions f
+        ON f.barangay_name = g.name
+       AND f.period = (SELECT MAX(period) FROM model_predictions)
+      LEFT JOIN barangay_risk_scores r
+        ON r.barangay_name = g.name
+       AND r.period = (SELECT MAX(period) FROM barangay_risk_scores)
+      ORDER BY g.name
+    `);
+
+    const metaResult = await pool.query(`
+      SELECT
+        (SELECT MAX(month)::TEXT FROM monthly_case_summary) AS latest_month,
+        ((SELECT MAX(month) FROM monthly_case_summary) - INTERVAL '1 month')::DATE::TEXT AS prev_month,
+        (SELECT MAX(period)::TEXT FROM model_predictions) AS forecast_period,
+        (SELECT MAX(period)::TEXT FROM barangay_risk_scores) AS risk_period
+    `);
+
+    res.json({
+      watchlist: result.rows,
+      periods: metaResult.rows[0] || {},
+    });
+  } catch (err) {
+    console.error('Watchlist error:', err.message);
+    res.status(500).json({ error: 'Server error fetching barangay watchlist.' });
+  }
+});
+
+/**
  * GET /api/tb/dashboard/demographics
  * Age/sex distributions across all barangays
  */

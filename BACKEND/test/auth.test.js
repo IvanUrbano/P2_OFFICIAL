@@ -412,3 +412,128 @@ describe('DELETE /api/auth/users/:id', () => {
     assert.strictEqual(res.status, 500);
   });
 });
+
+/* ═══════════════════════════════════════════════════════ */
+/*                    PUT /api/auth/profile                */
+/* ═══════════════════════════════════════════════════════ */
+
+describe('PUT /api/auth/profile', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(buildApp()).put('/api/auth/profile').send({ username: 'x', email: 'x@y.com' });
+    assert.strictEqual(res.status, 401);
+  });
+
+  it('returns 400 when fields are missing', async () => {
+    const token = makeToken(STAFF_USER);
+    const res = await request(buildApp())
+      .put('/api/auth/profile')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ username: 'staff1' }); // no email
+    assert.strictEqual(res.status, 400);
+  });
+
+  it('returns 409 when username/email is taken by another account', async () => {
+    mockQueryFn = async () => ({ rows: [{ id: 2 }] }); // conflict found
+    const token = makeToken(STAFF_USER);
+    const res = await request(buildApp())
+      .put('/api/auth/profile')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ username: 'taken', email: 'taken@test.com' });
+    assert.strictEqual(res.status, 409);
+    assert.ok(res.body.error.includes('already in use'));
+  });
+
+  it('updates profile successfully', async () => {
+    mockQueryFn = async (sql) => {
+      if (String(sql).includes('UPDATE')) {
+        return { rows: [{ id: 1, username: 'staff-new', email: 'staff-new@test.com', role: 'staff', created_at: '2025-01-01' }] };
+      }
+      return { rows: [] }; // conflict check passes
+    };
+    const token = makeToken(STAFF_USER);
+    const res = await request(buildApp())
+      .put('/api/auth/profile')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ username: 'staff-new', email: 'staff-new@test.com' });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.user.username, 'staff-new');
+    assert.ok(res.body.message.includes('updated'));
+  });
+
+  it('returns 500 on database error', async () => {
+    mockQueryFn = async () => { throw new Error('DB fail'); };
+    const token = makeToken(STAFF_USER);
+    const res = await request(buildApp())
+      .put('/api/auth/profile')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ username: 'a', email: 'a@b.com' });
+    assert.strictEqual(res.status, 500);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════ */
+/*                    PUT /api/auth/password               */
+/* ═══════════════════════════════════════════════════════ */
+
+describe('PUT /api/auth/password', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(buildApp()).put('/api/auth/password').send({ currentPassword: 'x', newPassword: 'y' });
+    assert.strictEqual(res.status, 401);
+  });
+
+  it('returns 400 when fields are missing', async () => {
+    const token = makeToken(STAFF_USER);
+    const res = await request(buildApp())
+      .put('/api/auth/password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ currentPassword: 'staffpass123' }); // no newPassword
+    assert.strictEqual(res.status, 400);
+  });
+
+  it('returns 400 when new password is too short', async () => {
+    const token = makeToken(STAFF_USER);
+    const res = await request(buildApp())
+      .put('/api/auth/password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ currentPassword: 'staffpass123', newPassword: '123' });
+    assert.strictEqual(res.status, 400);
+    assert.ok(res.body.error.includes('at least 6'));
+  });
+
+  it('returns 401 when current password is incorrect', async () => {
+    mockQueryFn = async () => ({ rows: [{ id: 1, password: STAFF_HASH }] });
+    const token = makeToken(STAFF_USER);
+    const res = await request(buildApp())
+      .put('/api/auth/password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ currentPassword: 'wrongpass', newPassword: 'newpass123' });
+    assert.strictEqual(res.status, 401);
+    assert.ok(res.body.error.includes('incorrect'));
+  });
+
+  it('changes password successfully', async () => {
+    mockQueryFn = async (sql) => {
+      if (String(sql).includes('SELECT')) {
+        return { rows: [{ id: 1, password: STAFF_HASH }] };
+      }
+      return { rows: [] }; // UPDATE
+    };
+    const token = makeToken(STAFF_USER);
+    const res = await request(buildApp())
+      .put('/api/auth/password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ currentPassword: 'staffpass123', newPassword: 'newpass123' });
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.message.includes('changed'));
+  });
+
+  it('returns 500 on database error', async () => {
+    mockQueryFn = async () => { throw new Error('DB fail'); };
+    const token = makeToken(STAFF_USER);
+    const res = await request(buildApp())
+      .put('/api/auth/password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ currentPassword: 'x', newPassword: 'abcdef' });
+    assert.strictEqual(res.status, 500);
+  });
+});

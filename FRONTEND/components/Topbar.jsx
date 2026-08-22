@@ -1,4 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useTheme } from '../src/theme';
 
 /* Map path → readable page title shown in the topbar */
 const PAGE_TITLES = {
@@ -7,7 +8,7 @@ const PAGE_TITLES = {
   '/analytics': { title: 'Analytics', subtitle: 'In-depth TB case trend analysis.' },
   '/data-integration': { title: 'Data Integration', subtitle: 'Sync and manage health system data.' },
   '/gis-map': { title: 'GIS Risk Map', subtitle: 'TB hotspot geographic distribution.' },
-  '/resources': { title: 'Resource Prioritization', subtitle: 'Allocate supplies to high-risk areas.' },
+  '/barangays': { title: 'Barangay Watchlist', subtitle: 'Per-barangay cases, forecast, and risk.' },
   '/notifications': { title: 'Notifications', subtitle: 'Active alerts and system warnings.' },
   '/users': { title: 'Users', subtitle: 'Manage health worker accounts.' },
   '/settings': { title: 'Settings', subtitle: 'System preferences.' },
@@ -19,24 +20,24 @@ const PAGE_TITLES = {
 export default function Topbar({ user }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const { mode, toggle } = useTheme();
 
   const page = PAGE_TITLES[location.pathname] ?? { title: 'TBInsight', subtitle: '' };
-  const initials = user?.username ? user.username.slice(0, 2).toUpperCase() : 'AD';
 
   return (
     <header
       className="sticky top-0 z-40 relative overflow-hidden"
       style={{ height: '64px', borderBottom: '1px solid rgba(255,255,255,0.03)' }}
     >
-      {/* Solid navy left half — white at diagonal, fades to dark blue leftward */}
+      {/* Base navy — deep at left edge, softer toward the image */}
       <div
         className="absolute inset-0"
         style={{
-          background: 'linear-gradient(to left, #ffffff 0%, rgba(200,215,235,0.8) 15%, rgba(15,25,50,0.95) 50%, #070c1e 100%)',
+          background: 'linear-gradient(90deg, #070c1e 0%, #0a1128 55%, #0d1730 100%)',
         }}
       />
 
-      {/* NASA Earth at Night — city lights on dark globe */}
+      {/* NASA Earth at Night — city lights on dark globe (right side, diagonal cut) */}
       <div
         className="absolute inset-0"
         style={{
@@ -44,33 +45,23 @@ export default function Topbar({ user }) {
           backgroundSize: 'cover',
           backgroundPosition: '65% 45%',
           backgroundRepeat: 'no-repeat',
-          clipPath: 'polygon(37% 0%, 100% 0%, 100% 100%, 17% 100%)',
+          clipPath: 'polygon(45% 0%, 100% 0%, 100% 100%, 25% 100%)',
         }}
       />
 
-      {/* Subtle blue tint for theme */}
-      <div
-        className="absolute inset-0"
-        style={{
-          background: 'rgba(0,20,60,0.15)',
-          clipPath: 'polygon(37% 0%, 100% 0%, 100% 100%, 17% 100%)',
-        }}
-      />
-
-      {/* Diagonal divider strip — white, brightest at top, fades going down */}
+      {/* Soft blend — the image melts into the navy instead of a hard seam */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
-          background: 'linear-gradient(to top, rgba(255,255,255,1) 0%, rgba(255,255,255,0.0) 100%)',
-          clipPath: 'polygon(36.8% 0%, 37.2% 0%, 17.2% 100%, 16.8% 100%)',
+          background: 'linear-gradient(100deg, #070c1e 0%, rgba(7,12,30,0.88) 32%, rgba(7,12,30,0.4) 46%, transparent 60%)',
         }}
       />
 
-      {/* Gradient seam — smooth transition from navy to image */}
+      {/* Subtle blue tint over the image for theme cohesion */}
       <div
-        className="absolute inset-0"
+        className="absolute inset-0 pointer-events-none"
         style={{
-          background: 'linear-gradient(100deg, #070c1e 0%, rgba(7,12,30,0.7) 22%, rgba(7,12,30,0.3) 32%, transparent 42%)',
+          background: 'linear-gradient(90deg, transparent 55%, rgba(0,25,70,0.32) 100%)',
         }}
       />
 
@@ -101,7 +92,7 @@ export default function Topbar({ user }) {
         <div
           className="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-lg"
           style={{
-            background: 'rgba(255,255,255,0.06)',
+            background: 'rgba(7,12,30,0.55)',
             backdropFilter: 'blur(12px)',
             border: '1px solid rgba(255,255,255,0.08)',
           }}
@@ -114,6 +105,16 @@ export default function Topbar({ user }) {
             <i className="ri-refresh-line text-xs" style={{ color: '#4D9EFF' }} />
             <span>Sync: <span style={{ color: 'rgba(255,255,255,0.8)' }}>Today</span></span>
           </div>
+
+          {/* Theme toggle */}
+          <button
+            className="relative w-7 h-7 flex items-center justify-center rounded-md cursor-pointer transition-all hover:bg-white/10"
+            style={{ color: '#4D9EFF' }}
+            onClick={toggle}
+            title={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            <i className={mode === 'dark' ? 'ri-sun-line text-xs' : 'ri-moon-line text-xs'} />
+          </button>
 
           {/* Notification bell */}
           <button

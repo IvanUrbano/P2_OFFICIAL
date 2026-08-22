@@ -1,24 +1,25 @@
 import { useState, useEffect } from 'react';
 import API from '../api/axios';
+import { useTheme } from '../theme';
 
 export default function Notifications() {
+  const { t } = useTheme();
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const fetchAlerts = async () => {
+      try {
+        const res = await API.get('/api/tb/alerts');
+        setAlerts(res.data.alerts || []);
+      } catch (err) {
+        console.error('Failed to fetch alerts:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
     fetchAlerts();
   }, []);
-
-  const fetchAlerts = async () => {
-    try {
-      const res = await API.get('/api/tb/alerts');
-      setAlerts(res.data.alerts || []);
-    } catch (err) {
-      console.error('Failed to fetch alerts:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleDismiss = async (id) => {
     try {
@@ -45,7 +46,7 @@ export default function Notifications() {
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
           <i className="ri-loader-4-line animate-spin text-3xl" style={{ color: '#2E6FAF' }} />
-          <p className="mt-2 text-sm" style={{ color: '#64748b' }}>Loading alerts...</p>
+          <p className="mt-2 text-sm" style={{ color: t.textSecondary }}>Loading alerts...</p>
         </div>
       </div>
     );
@@ -57,8 +58,8 @@ export default function Notifications() {
         {alerts.length === 0 ? (
           <div className="text-center py-12 glass-card">
             <i className="ri-check-double-line text-4xl" style={{ color: '#10B981' }} />
-            <p className="mt-3 text-sm font-bold" style={{ color: '#64748b' }}>All caught up!</p>
-            <p className="text-xs" style={{ color: '#94A3B8' }}>No active alerts at this time.</p>
+            <p className="mt-3 text-sm font-bold" style={{ color: t.textSecondary }}>All caught up!</p>
+            <p className="text-xs" style={{ color: t.textMuted }}>No active alerts at this time.</p>
           </div>
         ) : (
           alerts.map(a => {
@@ -68,16 +69,16 @@ export default function Notifications() {
                 style={{ background: bgMap[type], border: `1px solid ${borderMap[type]}` }}>
                 <i className={`${iconMap[type]} text-2xl mt-0.5 shrink-0`} style={{ color: colorMap[type] }} />
                 <div className="flex-1">
-                  <div className="text-sm font-bold mb-1" style={{ color: '#1e293b' }}>
+                  <div className="text-sm font-bold mb-1" style={{ color: t.text }}>
                     {a.barangay_name} — {a.alert_type}
                   </div>
-                  <div className="text-xs" style={{ color: '#475569' }}>{a.message}</div>
+                  <div className="text-xs" style={{ color: t.textSecondary }}>{a.message}</div>
                   {a.recommendation && (
-                    <div className="text-xs mt-1" style={{ color: '#475569' }}>
+                    <div className="text-xs mt-1" style={{ color: t.textSecondary }}>
                       <strong>Recommendation:</strong> {a.recommendation}
                     </div>
                   )}
-                  <div className="text-[11px] mt-1.5" style={{ color: '#94a3b8' }}>
+                  <div className="text-[11px] mt-1.5" style={{ color: t.textMuted }}>
                     {a.created_at ? new Date(a.created_at).toLocaleString() : 'N/A'}
                   </div>
                 </div>

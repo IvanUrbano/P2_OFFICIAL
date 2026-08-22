@@ -2,9 +2,11 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import Logo from '../../components/Logo';
+import { useTheme } from '../theme';
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const { t } = useTheme();
   const [formData, setFormData] = useState({ email: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -127,19 +129,18 @@ export default function LoginPage() {
     'Real-time TB Monitoring',
     'ARIMA Forecasting',
     'GIS Hotspot Mapping',
-    'Resource Prioritization',
     'Analytics & Reports',
   ];
 
   return (
-    <div className="h-screen w-full flex flex-col overflow-hidden" style={{ background: '#f5f7fa' }}>
+    <div className="h-screen w-full flex flex-col overflow-hidden" style={{ background: t.pageBg }}>
 
       {/* ═══════ Main Content ═══════ */}
       <div className="flex-1 flex min-h-0">
 
         {/* ─── LEFT — Form Panel ─── */}
         <div className="w-full lg:w-[480px] xl:w-[520px] flex flex-col justify-center px-8 sm:px-12 lg:px-16 relative z-20 flex-shrink-0 overflow-hidden"
-          style={{ background: 'white' }}>
+          style={{ background: t.cardSolid }}>
 
           <div className="w-full max-w-sm mx-auto py-8">
 
@@ -150,16 +151,16 @@ export default function LoginPage() {
                 <Logo size={26} />
               </div>
               <div>
-                <span className="text-xl font-extrabold tracking-tight block" style={{ color: '#0F2D52' }}>TBInsight</span>
-                <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#94A3B8' }}>Pasig City Health Office</span>
+                <span className="text-xl font-extrabold tracking-tight block" style={{ color: t.text }}>TBInsight</span>
+                <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: t.textMuted }}>Pasig City Health Office</span>
               </div>
             </div>
 
-            <div className="h-px w-full my-6" style={{ background: 'linear-gradient(90deg, #0066FF, #e2e8f0)' }} />
+            <div className="h-px w-full my-6" style={{ background: `linear-gradient(90deg, #0066FF, ${t.borderStrong})` }} />
 
-            <h1 className="text-[28px] font-extrabold tracking-tight mb-1.5" style={{ color: '#0F2D52' }}>Welcome Back!</h1>
-            <p className="text-[15px] font-semibold mb-1" style={{ color: '#334155' }}>Log in to your account</p>
-            <p className="text-[13px] leading-relaxed mb-8" style={{ color: '#94A3B8' }}>
+            <h1 className="text-[28px] font-extrabold tracking-tight mb-1.5" style={{ color: t.text }}>Welcome Back!</h1>
+            <p className="text-[15px] font-semibold mb-1" style={{ color: t.textSecondary }}>Log in to your account</p>
+            <p className="text-[13px] leading-relaxed mb-8" style={{ color: t.textMuted }}>
               Access the TBInsight platform to monitor, analyze, and manage tuberculosis surveillance data, forecasting, hotspot mapping, and resource prioritization across Pasig City.
             </p>
 
@@ -174,7 +175,7 @@ export default function LoginPage() {
 
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
-                <label className="block text-[11px] font-bold mb-2 uppercase tracking-widest" style={{ color: '#94A3B8' }}>Email</label>
+                <label className="block text-[11px] font-bold mb-2 uppercase tracking-widest" style={{ color: t.textMuted }}>Email</label>
                 <div className="relative group">
                   <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-0 rounded-full transition-all duration-300 group-focus-within:h-5"
                     style={{ background: activeField === 'email' ? '#0066FF' : 'transparent' }} />
@@ -182,12 +183,12 @@ export default function LoginPage() {
                     disabled={lockoutSeconds > 0 || loading} placeholder="you@example.com"
                     onFocus={() => setActiveField('email')} onBlur={() => setActiveField(null)}
                     className="w-full pl-5 pr-4 py-3.5 rounded-xl text-sm font-medium outline-none transition-all duration-300 disabled:opacity-40"
-                    style={{ background: activeField === 'email' ? '#f0f7ff' : '#f8fafc', border: `1.5px solid ${activeField === 'email' ? '#0066FF' : '#e2e8f0'}`, color: '#0f172a' }} />
+                    style={{ background: activeField === 'email' ? t.inputBg : t.inputBg, border: `1.5px solid ${activeField === 'email' ? '#0066FF' : t.inputBorder}`, color: t.text }} />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold mb-2 uppercase tracking-widest" style={{ color: '#94A3B8' }}>Password</label>
+                <label className="block text-[11px] font-bold mb-2 uppercase tracking-widest" style={{ color: t.textMuted }}>Password</label>
                 <div className="relative group">
                   <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-0 rounded-full transition-all duration-300 group-focus-within:h-5"
                     style={{ background: activeField === 'password' ? '#0066FF' : 'transparent' }} />
@@ -195,7 +196,7 @@ export default function LoginPage() {
                     disabled={lockoutSeconds > 0 || loading} placeholder="Enter your password"
                     onFocus={() => setActiveField('password')} onBlur={() => setActiveField(null)}
                     className="w-full pl-5 pr-12 py-3.5 rounded-xl text-sm font-medium outline-none transition-all duration-300 disabled:opacity-40"
-                    style={{ background: activeField === 'password' ? '#f0f7ff' : '#f8fafc', border: `1.5px solid ${activeField === 'password' ? '#0066FF' : '#e2e8f0'}`, color: '#0f172a' }} />
+                    style={{ background: activeField === 'password' ? t.inputBg : t.inputBg, border: `1.5px solid ${activeField === 'password' ? '#0066FF' : t.inputBorder}`, color: t.text }} />
                   <button type="button" onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-4 top-1/2 -translate-y-1/2 transition-colors duration-200"
                     style={{ color: '#cbd5e1' }}
@@ -247,13 +248,13 @@ export default function LoginPage() {
             </p>
             <div className="flex items-center justify-center gap-4 mt-3">
               <div className="flex items-center gap-1.5">
-                <i className="ri-mail-line text-[11px]" style={{ color: '#94A3B8' }} />
-                <span className="text-[11px]" style={{ color: '#94A3B8' }}>admin@pasigcity.gov.ph</span>
+                <i className="ri-mail-line text-[11px]" style={{ color: t.textMuted }} />
+                <span className="text-[11px]" style={{ color: t.textMuted }}>admin@pasigcity.gov.ph</span>
               </div>
-              <div className="w-px h-3" style={{ background: '#e2e8f0' }} />
+              <div className="w-px h-3" style={{ background: t.borderStrong }} />
               <div className="flex items-center gap-1.5">
-                <i className="ri-phone-line text-[11px]" style={{ color: '#94A3B8' }} />
-                <span className="text-[11px]" style={{ color: '#94A3B8' }}>(02) 8XXX-XXXX</span>
+                <i className="ri-phone-line text-[11px]" style={{ color: t.textMuted }} />
+                <span className="text-[11px]" style={{ color: t.textMuted }}>(02) 8XXX-XXXX</span>
               </div>
             </div>
 
@@ -318,27 +319,27 @@ export default function LoginPage() {
           style={{ background: 'rgba(10,22,40,0.6)', backdropFilter: 'blur(4px)' }}
           onClick={closeForgotModal}>
           <div className="w-full max-w-[560px] max-h-[90vh] overflow-y-auto no-scrollbar relative"
-            style={{ background: 'white', borderRadius: '20px', boxShadow: '0 25px 60px rgba(0,0,0,0.25)' }}
+            style={{ background: t.cardSolid, borderRadius: '20px', boxShadow: '0 25px 60px rgba(0,0,0,0.25)' }}
             onClick={(e) => e.stopPropagation()}>
 
             {/* Close */}
             <button onClick={closeForgotModal}
               className="absolute top-4 right-4 z-10 w-8 h-8 rounded-xl flex items-center justify-center transition-colors"
-              style={{ background: '#f1f5f9', color: '#94A3B8' }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = '#e2e8f0'; e.currentTarget.style.color = '#475569'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.color = '#94A3B8'; }}>
+              style={{ background: t.panel, color: t.textMuted }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = t.borderStrong; e.currentTarget.style.color = t.textSecondary; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = t.panel; e.currentTarget.style.color = t.textMuted; }}>
               <i className="ri-close-line text-base" />
             </button>
 
             {/* Header */}
             <div className="px-8 pt-8 pb-4">
-              <h2 className="text-xl font-extrabold mb-1" style={{ color: '#0F2D52' }}>Forgot Password?</h2>
-              <p className="text-[13px]" style={{ color: '#94A3B8' }}>Select your account role to see the appropriate reset process.</p>
+              <h2 className="text-xl font-extrabold mb-1" style={{ color: t.text }}>Forgot Password?</h2>
+              <p className="text-[13px]" style={{ color: t.textMuted }}>Select your account role to see the appropriate reset process.</p>
             </div>
 
             {/* Role Tabs */}
             <div className="px-8">
-              <div className="flex gap-2 p-1 rounded-xl" style={{ background: '#f1f5f9' }}>
+              <div className="flex gap-2 p-1 rounded-xl" style={{ background: t.panel }}>
                 {[
                   { id: 'staff', label: 'Staff', icon: 'ri-user-line' },
                   { id: 'admin', label: 'Administrator', icon: 'ri-shield-keyhole-line' },
@@ -365,12 +366,12 @@ export default function LoginPage() {
                   <div key={i} className="flex items-center gap-1.5 flex-1">
                     <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 transition-all duration-300"
                       style={{
-                        background: resetStep > i + 1 ? '#10B981' : resetStep === i + 1 ? '#0066FF' : '#e2e8f0',
-                        color: resetStep >= i + 1 ? 'white' : '#94A3B8',
+                        background: resetStep > i + 1 ? '#10B981' : resetStep === i + 1 ? '#0066FF' : t.borderStrong,
+                        color: resetStep >= i + 1 ? 'white' : t.textMuted,
                       }}>
                       {resetStep > i + 1 ? <i className="ri-check-line" /> : i + 1}
                     </div>
-                    {i < 3 && <div className="flex-1 h-[2px] rounded-full" style={{ background: resetStep > i + 1 ? '#10B981' : '#e2e8f0' }} />}
+                    {i < 3 && <div className="flex-1 h-[2px] rounded-full" style={{ background: resetStep > i + 1 ? '#10B981' : t.borderStrong }} />}
                   </div>
                 ))}
               </div>
@@ -379,13 +380,13 @@ export default function LoginPage() {
               {resetStep === 1 && (
                 <form onSubmit={handleResetRequest} className="space-y-4">
                   <div>
-                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: '#94A3B8' }}>Registered email address</label>
+                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>Registered email address</label>
                     <input type="email" required value={resetEmail} onChange={(e) => setResetEmail(e.target.value)}
                       placeholder="you@pasigcity.gov.ph"
                       className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all"
-                      style={{ background: '#f8fafc', border: '1.5px solid #e2e8f0', color: '#0f172a' }}
+                      style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text }}
                       onFocus={(e) => { e.target.style.borderColor = '#0066FF'; }}
-                      onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; }} />
+                      onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
                   </div>
                   <button type="submit"
                     className="w-full py-3 rounded-xl font-bold text-[13px] text-white transition-all duration-200 flex items-center justify-center gap-2"
@@ -404,9 +405,9 @@ export default function LoginPage() {
                     <div className="w-12 h-12 rounded-2xl mx-auto mb-3 flex items-center justify-center" style={{ background: 'rgba(0,102,255,0.08)' }}>
                       <i className="ri-mail-check-line text-xl" style={{ color: '#0066FF' }} />
                     </div>
-                    <p className="text-[13px]" style={{ color: '#64748B' }}>A 6-digit code has been sent to</p>
-                    <p className="text-[13px] font-bold" style={{ color: '#0F2D52' }}>{resetEmail}</p>
-                    <p className="text-[11px] mt-1" style={{ color: '#94A3B8' }}>Check your console for the OTP code</p>
+                    <p className="text-[13px]" style={{ color: t.textSecondary }}>A 6-digit code has been sent to</p>
+                    <p className="text-[13px] font-bold" style={{ color: t.text }}>{resetEmail}</p>
+                    <p className="text-[11px] mt-1" style={{ color: t.textMuted }}>Check your console for the OTP code</p>
                   </div>
                   {otpError && (
                     <div className="px-3 py-2 rounded-xl text-[12px] flex items-center gap-2 border bg-red-50 border-red-200 text-red-600">
@@ -415,19 +416,19 @@ export default function LoginPage() {
                     </div>
                   )}
                   <div>
-                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: '#94A3B8' }}>Enter OTP code</label>
+                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>Enter OTP code</label>
                     <input type="text" required maxLength={6} placeholder="000000" value={otpCode} onChange={(e) => { setOtpCode(e.target.value.replace(/\D/g, '')); setOtpError(''); }}
                       className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all text-center tracking-[0.3em]"
-                      style={{ background: '#f8fafc', border: '1.5px solid #e2e8f0', color: '#0f172a', fontSize: '18px' }}
+                      style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text, fontSize: '18px' }}
                       onFocus={(e) => { e.target.style.borderColor = '#0066FF'; }}
-                      onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; }} />
+                      onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
                   </div>
                   <button type="submit"
                     className="w-full py-3 rounded-xl font-bold text-[13px] text-white transition-all duration-200"
                     style={{ background: 'linear-gradient(135deg, #0F2D52, #2E6FAF)' }}>
                     Verify Code
                   </button>
-                  <p className="text-center text-[12px]" style={{ color: '#94A3B8' }}>
+                  <p className="text-center text-[12px]" style={{ color: t.textMuted }}>
                     {otpTimer > 0 ? (
                       <>Resend code in <span className="font-bold" style={{ color: '#0066FF' }}>{otpTimer}s</span></>
                     ) : (
@@ -444,24 +445,24 @@ export default function LoginPage() {
                     <div className="w-12 h-12 rounded-2xl mx-auto mb-3 flex items-center justify-center" style={{ background: 'rgba(16,185,129,0.08)' }}>
                       <i className="ri-lock-password-line text-xl" style={{ color: '#10B981' }} />
                     </div>
-                    <p className="text-[13px] font-bold" style={{ color: '#0F2D52' }}>Create New Password</p>
+                    <p className="text-[13px] font-bold" style={{ color: t.text }}>Create New Password</p>
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: '#94A3B8' }}>New password</label>
+                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>New password</label>
                     <input type="password" required minLength={6} value={resetNewPassword} onChange={(e) => setResetNewPassword(e.target.value)}
                       placeholder="Min. 6 characters"
                       className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all"
-                      style={{ background: '#f8fafc', border: '1.5px solid #e2e8f0', color: '#0f172a' }}
+                      style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text }}
                       onFocus={(e) => { e.target.style.borderColor = '#10B981'; }}
-                      onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; }} />
+                      onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: '#94A3B8' }}>Confirm password</label>
+                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>Confirm password</label>
                     <input type="password" required minLength={6} placeholder="Re-enter password"
                       className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all"
-                      style={{ background: '#f8fafc', border: '1.5px solid #e2e8f0', color: '#0f172a' }}
+                      style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text }}
                       onFocus={(e) => { e.target.style.borderColor = '#10B981'; }}
-                      onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; }} />
+                      onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
                   </div>
                   <button type="submit"
                     className="w-full py-3 rounded-xl font-bold text-[13px] text-white transition-all duration-200"

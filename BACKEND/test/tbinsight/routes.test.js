@@ -240,6 +240,73 @@ describe('GET /api/tb/dashboard/barangay/:name', () => {
   });
 });
 
+describe('GET /api/tb/barangays/watchlist', () => {
+  it('returns one row per barangay with cases, forecast and risk', async () => {
+    let callCount = 0;
+    mockQueryFn = async () => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          rows: [{
+            name: 'Dela Paz', population: 50000,
+            current_cases: 12, prev_cases: 9, total_cases: 600,
+            forecasted_count: 15, confidence_lower: 10, confidence_upper: 21,
+            risk_score: 74.8, risk_class: 'High',
+            incidence_per_100k: 500, trend_direction: 'Increasing',
+          }],
+        };
+      }
+      return {
+        rows: [{
+          latest_month: '2026-07-01', prev_month: '2026-06-01',
+          forecast_period: '2026-08-01', risk_period: '2026-07-01',
+        }],
+      };
+    };
+    const res = await request(buildApp()).get('/api/tb/barangays/watchlist');
+    assert.strictEqual(res.status, 200);
+    assert.ok(Array.isArray(res.body.watchlist));
+    assert.strictEqual(res.body.watchlist[0].name, 'Dela Paz');
+    assert.strictEqual(res.body.watchlist[0].current_cases, 12);
+    assert.strictEqual(res.body.watchlist[0].prev_cases, 9);
+    assert.strictEqual(res.body.watchlist[0].forecasted_count, 15);
+    assert.strictEqual(res.body.watchlist[0].risk_class, 'High');
+    assert.strictEqual(res.body.watchlist[0].trend_direction, 'Increasing');
+    assert.strictEqual(res.body.periods.forecast_period, '2026-08-01');
+    assert.strictEqual(res.body.periods.latest_month, '2026-07-01');
+  });
+
+  it('handles barangays with no data', async () => {
+    let callCount = 0;
+    mockQueryFn = async () => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          rows: [{
+            name: 'Palatiw', population: 40000,
+            current_cases: 0, prev_cases: 0, total_cases: 0,
+            forecasted_count: 0, confidence_lower: 0, confidence_upper: 0,
+            risk_score: 0, risk_class: 'No Data',
+            incidence_per_100k: 0, trend_direction: 'Stable',
+          }],
+        };
+      }
+      return { rows: [{ latest_month: null, prev_month: null, forecast_period: null, risk_period: null }] };
+    };
+    const res = await request(buildApp()).get('/api/tb/barangays/watchlist');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.watchlist[0].risk_class, 'No Data');
+    assert.strictEqual(res.body.watchlist[0].current_cases, 0);
+  });
+
+  it('returns 500 on db error', async () => {
+    mockQueryFn = async () => { throw new Error('DB fail'); };
+    const res = await request(buildApp()).get('/api/tb/barangays/watchlist');
+    assert.strictEqual(res.status, 500);
+    assert.ok(res.body.error.includes('Server error'));
+  });
+});
+
 describe('GET /api/tb/alerts', () => {
   it('returns alerts list', async () => {
     mockQueryFn = async () => ({

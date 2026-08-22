@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
+import { useTheme } from '../src/theme';
 
 /**
  * Layout wraps every protected page.
@@ -16,16 +17,18 @@ import Topbar from './Topbar';
  */
 export default function Layout() {
   const navigate = useNavigate();
-  const [user, setUser] = useState(null);
+  const { t } = useTheme();
+  const [user] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('user') || 'null');
+    } catch {
+      return null;
+    }
+  });
 
   useEffect(() => {
-    const stored = localStorage.getItem('user');
-    if (!stored) {
-      navigate('/login');
-      return;
-    }
-    setUser(JSON.parse(stored));
-  }, [navigate]);
+    if (!user) navigate('/login');
+  }, [navigate, user]);
 
   if (!user) return null;
 
@@ -33,18 +36,18 @@ export default function Layout() {
     <div 
       className="flex h-screen relative overflow-hidden" 
       style={{ 
-        background: 'linear-gradient(135deg, #F8FAFC 0%, #EEF4FB 50%, #F5F8FC 100%)', 
-        color: '#0f172a' 
+        background: t.pageBg, 
+        color: t.text 
       }}
     >
       {/* Decorative Background Blobs */}
       <div
         className="absolute top-10 left-20 w-96 h-96 rounded-full blur-[120px] opacity-20 pointer-events-none"
-        style={{ background: '#2E6FAF' }}
+        style={{ background: t.blob1 }}
       />
       <div
         className="absolute bottom-10 right-10 w-80 h-80 rounded-full blur-[120px] opacity-20 pointer-events-none"
-        style={{ background: '#4FD1C5' }}
+        style={{ background: t.blob2 }}
       />
 
       {/* Fixed sidebar */}

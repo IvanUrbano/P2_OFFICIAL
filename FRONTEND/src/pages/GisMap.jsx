@@ -3,19 +3,12 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import API from '../api/axios';
 
-/* ─── Risk class colors ─── */
+/* ─── Risk class colors (warm heat ramp: amber → orange → red) ─── */
 const RISK_COLORS = {
   High: '#EF4444',
-  Medium: '#F59E0B',
-  Low: '#10B981',
-  'No Data': '#6B7280',
-};
-
-const RISK_BG = {
-  High: 'rgba(239, 68, 68, 0.08)',
-  Medium: 'rgba(245, 158, 11, 0.08)',
-  Low: 'rgba(16, 185, 129, 0.08)',
-  'No Data': 'rgba(107, 114, 128, 0.08)',
+  Medium: '#F97316',
+  Low: '#FBBF24',
+  'No Data': '#64748B',
 };
 
 /* Pasig City approximate bounds (SW, NE) */
@@ -48,7 +41,7 @@ function formatNum(n) {
 }
 
 function buildLabels(map, features, layerRef) {
-  layerRef.current.forEach(l => { try { map.removeLayer(l); } catch { } });
+  layerRef.current.forEach(l => { try { map.removeLayer(l); } catch { /* already removed */ } });
   layerRef.current = [];
 
   const zoom = map.getZoom();
@@ -286,7 +279,7 @@ export default function GisMap() {
 
     if (geojsonLayerRef.current) map.removeLayer(geojsonLayerRef.current);
     if (outlineLayerRef.current) map.removeLayer(outlineLayerRef.current);
-    labelsRef.current.forEach(l => { try { map.removeLayer(l); } catch { } });
+    labelsRef.current.forEach(l => { try { map.removeLayer(l); } catch { /* already removed */ } });
     labelsRef.current = [];
 
     if (data.outline) {
@@ -434,8 +427,8 @@ export default function GisMap() {
           </div>
           {[
             { label: 'High', color: '#EF4444' },
-            { label: 'Medium', color: '#F59E0B' },
-            { label: 'Low', color: '#10B981' },
+            { label: 'Medium', color: '#F97316' },
+            { label: 'Low', color: '#FBBF24' },
           ].map(({ label, color }) => (
             <div key={label} className="flex items-center gap-2 mb-1 last:mb-0">
               <div className="w-3 h-2 rounded-sm" style={{ background: color }} />

@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip as RTooltip, Tooltip, ResponsiveContainer,
+  XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer,
   BarChart, Bar, AreaChart, Area,
 } from 'recharts';
 import API from '../api/axios';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { useTheme } from '../theme';
 
 /* ─── Helpers ─── */
 const COLORS = {
@@ -41,17 +42,18 @@ const AGE_COLORS = {
   '65+': COLORS.gray,
 };
 
-const chartTooltipStyle = {
-  backgroundColor: '#ffffff',
-  border: '1px solid #e2e8f0',
+const chartTooltipStyle = (t) => ({
+  backgroundColor: t.cardSolid,
+  border: `1px solid ${t.borderStrong}`,
   borderRadius: '8px',
-  color: '#0f172a',
+  color: t.text,
   fontSize: '12px',
   boxShadow: '0 4px 12px rgba(0, 102, 255, 0.08)',
-};
+});
 
 /* ─── Local sub-components ─── */
 function MetricItem({ title, value, icon, color, trend, isLast }) {
+  const { t } = useTheme();
   return (
     <div className="p-4 flex flex-col justify-center relative">
       {!isLast && (
@@ -64,23 +66,24 @@ function MetricItem({ title, value, icon, color, trend, isLast }) {
       )}
       <div className="flex items-center gap-2 mb-2">
         <i className={`${icon} text-lg`} style={{ color }} />
-        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: '#64748b' }}>
+        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: t.textSecondary }}>
           {title}
         </span>
       </div>
       <div className="flex items-end justify-between">
-        <div className="text-2xl font-bold" style={{ color: '#0f172a' }}>{value}</div>
+        <div className="text-2xl font-bold" style={{ color: t.text }}>{value}</div>
         <div className="text-xs font-semibold" style={{ color }}>{trend}</div>
       </div>
     </div>
   );
 }
 
-function VizCard({ title, icon, iconColor, children, style = {}, className = '', headerAction }) {
+function VizCard({ title, icon, iconColor, children, headerAction }) {
+  const { t } = useTheme();
   return (
     <div className="glass-card flex flex-col p-5">
       <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2 text-sm font-bold" style={{ color: '#0f172a' }}>
+        <div className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
           <i className={icon} style={{ color: iconColor || '#2E6FAF' }} />
           <span>{title}</span>
         </div>
@@ -127,9 +130,9 @@ function DonutChart({ segments, size = 160 }) {
           style={{
             left: tooltip.x + 8,
             top: tooltip.y - 36,
-            background: '#ffffff',
+            background: t.cardSolid,
             border: `1px solid ${tooltip.color}`,
-            color: '#0f172a',
+            color: t.text,
             boxShadow: `0 4px 12px rgba(0,0,0,0.1), 0 0 0 1px ${tooltip.color}22`,
             whiteSpace: 'nowrap'
           }}
@@ -142,12 +145,12 @@ function DonutChart({ segments, size = 160 }) {
   );
 }
 
-/* ─── Mini GIS Map ─── */
+/* ─── Mini GIS Map (warm heat ramp: amber → orange → red) ─── */
 const RISK_COLORS = {
   High: '#EF4444',
-  Medium: '#F59E0B',
-  Low: '#10B981',
-  'No Data': '#6B7280',
+  Medium: '#F97316',
+  Low: '#FBBF24',
+  'No Data': '#64748B',
 };
 
 const PASIG_BOUNDS = L.latLngBounds([14.48, 121.02], [14.64, 121.13]);
@@ -236,6 +239,7 @@ function MiniGisMap() {
 
 /* ─── Page Component ─── */
 export default function DashboardPage() {
+  const { t } = useTheme();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -468,7 +472,7 @@ export default function DashboardPage() {
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
           <i className="ri-loader-4-line animate-spin text-3xl" style={{ color: '#2E6FAF' }} />
-          <p className="mt-2 text-sm" style={{ color: '#64748b' }}>Loading dashboard...</p>
+          <p className="mt-2 text-sm" style={{ color: t.textSecondary }}>Loading dashboard...</p>
         </div>
       </div>
     );
@@ -568,12 +572,12 @@ export default function DashboardPage() {
 
                 <CartesianGrid strokeDasharray="3 3" />
 
-                <XAxis dataKey="label" tick={{ fill: '#64748b', fontSize: 10 }} />
-                <YAxis tick={{ fill: '#64748b', fontSize: 10 }} />
+                <XAxis dataKey="label" tick={{ fill: t.textSecondary, fontSize: 10 }} />
+                <YAxis tick={{ fill: t.textSecondary, fontSize: 10 }} />
 
                 <Tooltip
-                  contentStyle={chartTooltipStyle}
-                  itemStyle={{ color: '#0f172a' }}
+                  contentStyle={chartTooltipStyle(t)}
+                  itemStyle={{ color: t.text }}
                   cursor={{ stroke: '#2E6FAF', strokeWidth: 1 }}
                 />
 
@@ -589,7 +593,7 @@ export default function DashboardPage() {
               </AreaChart>
             </ResponsiveContainer>
           </div>
-          <div className="flex gap-5 text-xs mt-1 pl-2 font-semibold" style={{ color: '#64748b' }}>
+          <div className="flex gap-5 text-xs mt-1 pl-2 font-semibold" style={{ color: t.textSecondary }}>
             <span className="flex items-center"><span className="w-3 h-0.5 bg-[#0066FF] inline-block mr-1.5" />Actual Cases</span>
           </div>
         </VizCard>
@@ -598,9 +602,9 @@ export default function DashboardPage() {
           <div className="flex-1" style={{ minHeight: 260 }}>
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={barangayChartData} layout="vertical" margin={{ top: 0, right: 12, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
-                <XAxis type="number" tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} />
-                <YAxis dataKey="name" type="category" tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} width={72} />
+                <CartesianGrid strokeDasharray="3 3" stroke={t.chartGrid} horizontal={false} />
+                <XAxis type="number" tick={{ fill: t.textSecondary, fontSize: 10 }} tickLine={false} axisLine={false} />
+                <YAxis dataKey="name" type="category" tick={{ fill: t.textSecondary, fontSize: 10 }} tickLine={false} axisLine={false} width={72} />
                 <defs>
                   <linearGradient
                     id="barGradient"
@@ -615,8 +619,8 @@ export default function DashboardPage() {
                 </defs>
 
                 <Tooltip
-                  contentStyle={chartTooltipStyle}
-                  itemStyle={{ color: '#0f172a' }}
+                  contentStyle={chartTooltipStyle(t)}
+                  itemStyle={{ color: t.text }}
                   cursor={{ fill: 'rgba(46,111,175,0.06)' }}
                   formatter={(val) => [`${val} cases`, 'Cases']}
                 />
@@ -650,7 +654,7 @@ export default function DashboardPage() {
             </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-4 w-full px-1">
               {outcomeSegments.map(s => (
-                <div key={s.label} className="flex items-center gap-1.5 text-[10px] font-bold" style={{ color: '#475569' }}>
+                <div key={s.label} className="flex items-center gap-1.5 text-[10px] font-bold" style={{ color: t.textSecondary }}>
                   <span className="w-2 h-2 rounded-full shrink-0" style={{ background: s.color }} />
                   {s.label}
                 </div>
@@ -724,7 +728,6 @@ export default function DashboardPage() {
         <VizCard
           title="Age Distribution"
           icon="ri-user-line"
-          className="items-center justify-center text-center"
         >
           <div className="flex-1 flex flex-col items-center justify-center gap-4">
             <DonutChart
@@ -734,7 +737,7 @@ export default function DashboardPage() {
 
             <div
               className="flex justify-around w-full text-xs font-bold"
-              style={{ color: '#475569' }}
+              style={{ color: t.textSecondary }}
             >
               {ageSegments.map(s => (
                 <span key={s.label}>
@@ -753,7 +756,6 @@ export default function DashboardPage() {
         <VizCard
           title="Gender Balance"
           icon="ri-group-line"
-          className="items-center justify-center text-center"
         >
           <div className="flex-1 flex flex-col items-center justify-center gap-4">
             <DonutChart
@@ -763,7 +765,7 @@ export default function DashboardPage() {
 
             <div
               className="flex justify-around w-full text-xs font-bold"
-              style={{ color: '#475569' }}
+              style={{ color: t.textSecondary }}
             >
               {genderSegments.map(s => (
                 <span key={s.label}>
@@ -790,7 +792,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-4">
             <div
               className="flex items-center gap-2 text-sm font-bold"
-              style={{ color: '#0F172A' }}
+              style={{ color: t.text }}
             >
               <i
                 className="ri-alarm-warning-line text-lg"
@@ -857,7 +859,7 @@ export default function DashboardPage() {
 
                         <div
                           className="text-sm font-bold"
-                          style={{ color: '#0F172A' }}
+                          style={{ color: t.text }}
                         >
                           {a.title}
                         </div>
@@ -894,7 +896,7 @@ export default function DashboardPage() {
 
             <div
               className="flex items-center gap-2 text-sm font-bold"
-              style={{ color: '#0F172A' }}
+              style={{ color: t.text }}
             >
               <i
                 className="ri-brain-line text-lg"
@@ -946,14 +948,14 @@ export default function DashboardPage() {
 
                     <td
                       className="py-4 text-xs font-semibold"
-                      style={{ color: '#475569' }}
+                      style={{ color: t.textSecondary }}
                     >
                       {row.period}
                     </td>
 
                     <td
                       className="py-4 text-lg font-bold"
-                      style={{ color: '#0F172A' }}
+                      style={{ color: t.text }}
                     >
                       {row.val}
                     </td>

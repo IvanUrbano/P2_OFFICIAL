@@ -146,6 +146,77 @@ router.get('/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// ==================== UPDATE PROFILE (Protected) ====================
+router.put('/profile', authenticateToken, async (req, res) => {
+  try {
+    const { username, email } = req.body;
+
+    if (!username || !email) {
+      return res.status(400).json({ error: 'Username and email are required.' });
+    }
+
+    // Ensure the new username/email is not taken by another account
+    const conflict = await pool.query(
+      'SELECT id FROM users WHERE (email = $1 OR username = $2) AND id <> $3',
+      [email, username, req.user.id]
+    );
+    if (conflict.rows.length > 0) {
+      return res.status(409).json({ error: 'Username or email is already in use by another account.' });
+    }
+
+    const result = await pool.query(
+      'UPDATE users SET username = $1, email = $2 WHERE id = $3 RETURNING id, username, email, role, created_at',
+      [username, email, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    res.json({ message: 'Profile updated successfully.', user: result.rows[0] });
+  } catch (err) {
+    console.error('Update profile error:', err.message);
+    res.status(500).json({ error: 'Server error updating profile.' });
+  }
+});
+
+// ==================== CHANGE PASSWORD (Protected) ====================
+router.put('/password', authenticateToken, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required.' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters long.' });
+    }
+
+    const result = await pool.query(
+      'SELECT id, password FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const user = result.rows[0];
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Current password is incorrect.' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, req.user.id]);
+
+    res.json({ message: 'Password changed successfully.' });
+  } catch (err) {
+    console.error('Change password error:', err.message);
+    res.status(500).json({ error: 'Server error changing password.' });
+  }
+});
+
 // ==================== GET ALL USERS (Admin Only) ====================
 router.get('/users', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {

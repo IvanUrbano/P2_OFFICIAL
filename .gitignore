@@ -20,5 +20,19 @@ build/
 # Database dumps
 *.dump
 
+# Large geometry backup files
+BACKEND/data/geometry-backup-*.geojson
+BACKEND/data/*-backup-*.geojson
+
+# Env backup files with real credentials
+*.env.prod-backup
+*.env.backup
+
 # Session notes (may contain sensitive info)
 SESSION_NOTES.md
+
+# Scratch/debug utilities
+scratch_*.js
+
+# Terminal artifacts
+cls

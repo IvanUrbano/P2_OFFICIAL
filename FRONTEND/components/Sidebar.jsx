@@ -1,4 +1,3 @@
-import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const NAV_ITEMS = [
@@ -7,7 +6,7 @@ const NAV_ITEMS = [
   { icon: 'ri-bar-chart-box-line', label: 'Analytics', path: '/analytics' },
   { icon: 'ri-database-2-line', label: 'Data Integration', path: '/data-integration' },
   { icon: 'ri-map-2-line', label: 'GIS Map', path: '/gis-map' },
-  { icon: 'ri-truck-line', label: 'Resource Prioritization', path: '/resources' },
+  { icon: 'ri-community-line', label: 'Barangays', path: '/barangays' },
   { icon: 'ri-notification-3-line', label: 'Notifications', path: '/notifications' },
   { icon: 'ri-team-line', label: 'Users', path: '/users' },
   { icon: 'ri-settings-3-line', label: 'Settings', path: '/settings' },

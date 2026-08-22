@@ -6,7 +6,7 @@ import TBRecords from './pages/TBRecords';
 import Analytics from './pages/Analytics';
 import DataIntegration from './pages/DataIntegration';
 import GisMap from './pages/GisMap';
-import ResourcePrioritization from './pages/ResourcePrioritization';
+import BarangayWatchlist from './pages/BarangayWatchlist';
 import Notifications from './pages/Notifications';
 import Users from './pages/Users';
 import Settings from './pages/Settings';
@@ -24,7 +24,7 @@ function App() {
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/data-integration" element={<DataIntegration />} />
           <Route path="/gis-map" element={<GisMap />} />
-          <Route path="/resources" element={<ResourcePrioritization />} />
+          <Route path="/barangays" element={<BarangayWatchlist />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/users" element={<Users />} />
           <Route path="/settings" element={<Settings />} />

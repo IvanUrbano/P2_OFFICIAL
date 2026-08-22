@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import API from "../api/axios";
+import { useTheme } from "../theme";
 
 /* ─── Status → accent color, drawn from the same palette used on the dashboard ─── */
 const statusColors = {
@@ -24,7 +25,38 @@ function StatusBadge({ status }) {
   );
 }
 
+const getMonthNumber = (month) => {
+  const months = { January: "1", February: "2", March: "3", April: "4", May: "5", June: "6", July: "7", August: "8", September: "9", October: "10", November: "11", December: "12" };
+  return months[month] || "";
+};
+
+const formatDate = (dateStr) => {
+  if (!dateStr) return "N/A";
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  } catch {
+    return dateStr;
+  }
+};
+
+/* Reusable field row for the record detail modal */
+const Field = ({ label, value, badge }) => {
+  const { t } = useTheme();
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span style={{ color: t.textSecondary }}>{label}</span>
+      {badge ? (
+        <StatusBadge status={value} />
+      ) : (
+        <span className="font-semibold" style={{ color: t.text }}>{value || "N/A"}</span>
+      )}
+    </div>
+  );
+};
+
 export default function TBRecords() {
+  const { t } = useTheme();
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [barangays, setBarangays] = useState([]);
@@ -86,11 +118,6 @@ export default function TBRecords() {
     fetchCases();
   }, [currentPage, searchTerm, selectedYear, selectedMonth, selectedBarangay, selectedOutcomeStatus]);
 
-  const getMonthNumber = (month) => {
-    const months = { January: "1", February: "2", March: "3", April: "4", May: "5", June: "6", July: "7", August: "8", September: "9", October: "10", November: "11", December: "12" };
-    return months[month] || "";
-  };
-
   const handleClearFilters = () => {
     setSearchTerm("");
     setSelectedYear("");
@@ -108,35 +135,13 @@ export default function TBRecords() {
     if (currentPage < pagination.totalPages) setCurrentPage(currentPage + 1);
   };
 
-  /* Reusable field row for the record detail modal */
-  const Field = ({ label, value, badge }) => (
-    <div className="flex items-center justify-between gap-4">
-      <span style={{ color: "#64748b" }}>{label}</span>
-      {badge ? (
-        <StatusBadge status={value} />
-      ) : (
-        <span className="font-semibold" style={{ color: "#0f172a" }}>{value || "N/A"}</span>
-      )}
-    </div>
-  );
-
-  const formatDate = (dateStr) => {
-    if (!dateStr) return "N/A";
-    try {
-      const d = new Date(dateStr);
-      return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
-    } catch {
-      return dateStr;
-    }
-  };
-
   return (
     <div className="relative space-y-5">
 
       {/* ── Toolbar: actions + filters ── */}
       <div className="glass-card p-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: "#0f172a" }}>
+          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
             <i className="ri-folder-chart-2-line text-lg" style={{ color: "#2E6FAF" }} />
             <span>TB Case Records</span>
           </div>
@@ -144,7 +149,7 @@ export default function TBRecords() {
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <button
               className="inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-xs font-bold transition hover:opacity-80"
-              style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#475569" }}
+              style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.textSecondary }}
             >
               <i className="ri-upload-2-line text-sm" />
               Import
@@ -164,7 +169,7 @@ export default function TBRecords() {
             <span className="sr-only">Search records</span>
             <i
               className="ri-search-line pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm"
-              style={{ color: "#94a3b8" }}
+              style={{ color: t.textMuted }}
             />
             <input
               type="search"
@@ -172,7 +177,7 @@ export default function TBRecords() {
               value={searchTerm}
               onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
               className="w-full rounded-lg py-2 pl-9 pr-3 text-xs font-medium outline-none transition focus:ring-2"
-              style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#0f172a" }}
+              style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}
             />
           </label>
 
@@ -180,7 +185,7 @@ export default function TBRecords() {
             value={selectedYear}
             onChange={(e) => { setSelectedYear(e.target.value); setCurrentPage(1); }}
             className="w-full rounded-lg px-3 py-2 pr-8 text-xs font-medium outline-none transition"
-            style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#0f172a" }}
+            style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}
           >
             <option value="">All Years</option>
             <option value="2025">2025</option>
@@ -192,7 +197,7 @@ export default function TBRecords() {
             value={selectedMonth}
             onChange={(e) => { setSelectedMonth(e.target.value); setCurrentPage(1); }}
             className="w-full rounded-lg px-3 py-2 pr-8 text-xs font-medium outline-none transition"
-            style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#0f172a" }}
+            style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}
           >
             <option value="">All Months</option>
             <option value="January">January</option>
@@ -213,7 +218,7 @@ export default function TBRecords() {
             value={selectedBarangay}
             onChange={(e) => { setSelectedBarangay(e.target.value); setCurrentPage(1); }}
             className="w-full rounded-lg px-3 py-2 pr-8 text-xs font-medium outline-none transition"
-            style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#0f172a" }}
+            style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}
           >
             <option value="">All Barangays</option>
             {barangays.map((barangay) => (
@@ -225,7 +230,7 @@ export default function TBRecords() {
             value={selectedOutcomeStatus}
             onChange={(e) => { setSelectedOutcomeStatus(e.target.value); setCurrentPage(1); }}
             className="w-full rounded-lg px-3 py-2 pr-8 text-xs font-medium outline-none transition"
-            style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#0f172a" }}
+            style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}
           >
             <option value="">All Outcomes</option>
             {outcomeStatuses.map((status) => (
@@ -236,7 +241,7 @@ export default function TBRecords() {
           <button
             onClick={handleClearFilters}
             className="w-full rounded-lg px-3 py-2 text-xs font-bold transition hover:opacity-80"
-            style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#475569" }}
+            style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.textSecondary }}
           >
             Clear Filters
           </button>
@@ -246,11 +251,11 @@ export default function TBRecords() {
       {/* ── Records table ── */}
       <div className="glass-card overflow-hidden">
         <div className="flex items-center justify-between p-5 pb-0">
-          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: "#0f172a" }}>
+          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
             <i className="ri-table-line text-lg" style={{ color: "#2E6FAF" }} />
             <span>Case Records</span>
           </div>
-          <span className="text-xs font-bold" style={{ color: "#64748b" }}>
+          <span className="text-xs font-bold" style={{ color: t.textSecondary }}>
             {pagination.total} total
           </span>
         </div>
@@ -259,7 +264,7 @@ export default function TBRecords() {
           <div className="flex items-center justify-center h-64">
             <div className="text-center">
               <i className="ri-loader-4-line animate-spin text-3xl" style={{ color: "#2E6FAF" }} />
-              <p className="mt-2 text-sm" style={{ color: "#64748b" }}>Loading records...</p>
+              <p className="mt-2 text-sm" style={{ color: t.textSecondary }}>Loading records...</p>
             </div>
           </div>
         ) : (
@@ -272,7 +277,7 @@ export default function TBRecords() {
                       <th
                         key={h}
                         className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
-                        style={{ color: "#64748b", borderBottom: "1px solid rgba(148,163,184,.15)" }}
+                        style={{ color: t.textSecondary, borderBottom: "1px solid rgba(148,163,184,.15)" }}
                       >
                         {h}
                       </th>
@@ -292,14 +297,14 @@ export default function TBRecords() {
                         key={record.id}
                         style={{ borderTop: "1px solid rgba(148,163,184,.1)" }}
                       >
-                        <td className="px-5 py-3 font-bold" style={{ color: "#0f172a" }}>
+                        <td className="px-5 py-3 font-bold" style={{ color: t.text }}>
                           {String(record.id).padStart(4, "0")}
                         </td>
-                        <td className="px-5 py-3" style={{ color: "#475569" }}>{record.barangay_name}</td>
-                        <td className="px-5 py-3" style={{ color: "#475569" }}>{record.age}</td>
-                        <td className="px-5 py-3" style={{ color: "#475569" }}>{record.sex}</td>
-                        <td className="px-5 py-3" style={{ color: "#475569" }}>{formatDate(record.date_of_diagnosis)}</td>
-                        <td className="px-5 py-3" style={{ color: "#475569" }}>{record.screening_facility}</td>
+                        <td className="px-5 py-3" style={{ color: t.textSecondary }}>{record.barangay_name}</td>
+                        <td className="px-5 py-3" style={{ color: t.textSecondary }}>{record.age}</td>
+                        <td className="px-5 py-3" style={{ color: t.textSecondary }}>{record.sex}</td>
+                        <td className="px-5 py-3" style={{ color: t.textSecondary }}>{formatDate(record.date_of_diagnosis)}</td>
+                        <td className="px-5 py-3" style={{ color: t.textSecondary }}>{record.screening_facility}</td>
                         <td className="px-5 py-3">
                           <StatusBadge status={record.outcome_status} />
                         </td>
@@ -324,7 +329,7 @@ export default function TBRecords() {
               className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
               style={{ borderTop: "1px solid rgba(148,163,184,.15)" }}
             >
-              <p className="text-xs font-semibold" style={{ color: "#64748b" }}>
+              <p className="text-xs font-semibold" style={{ color: t.textSecondary }}>
                 Showing {pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} records
               </p>
               <div className="flex gap-2">
@@ -333,7 +338,7 @@ export default function TBRecords() {
                   onClick={handlePrevious}
                   disabled={currentPage === 1}
                   className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
-                  style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#475569" }}
+                  style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.textSecondary }}
                 >
                   <i className="ri-arrow-left-s-line text-base" />
                 </button>
@@ -342,7 +347,7 @@ export default function TBRecords() {
                   onClick={handleNext}
                   disabled={currentPage === pagination.totalPages || pagination.totalPages === 0}
                   className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
-                  style={{ background: "#f8fafc", border: "1px solid #e2e8f0", color: "#475569" }}
+                  style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.textSecondary }}
                 >
                   <i className="ri-arrow-right-s-line text-base" />
                 </button>
@@ -357,20 +362,20 @@ export default function TBRecords() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
           <div
             className="glass-card w-full max-w-3xl max-h-[90vh] overflow-hidden"
-            style={{ background: "rgba(255,255,255,0.97)" }}
+            style={{ background: t.cardSolid }}
           >
             <div
               className="flex flex-col gap-4 px-6 py-5 sm:flex-row sm:items-center sm:justify-between"
               style={{ borderBottom: "1px solid rgba(148,163,184,.15)" }}
             >
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.3em]" style={{ color: "#64748b" }}>
+                <p className="text-[10px] font-bold uppercase tracking-[0.3em]" style={{ color: t.textSecondary }}>
                   TB Record
                 </p>
-                <h2 className="mt-2 text-xl font-bold tracking-tight" style={{ color: "#0f172a" }}>
+                <h2 className="mt-2 text-xl font-bold tracking-tight" style={{ color: t.text }}>
                   Record details
                 </h2>
-                <p className="mt-1.5 max-w-xl text-sm leading-6" style={{ color: "#64748b" }}>
+                <p className="mt-1.5 max-w-xl text-sm leading-6" style={{ color: t.textSecondary }}>
                   Detailed TB case information, including patient, screening, and treatment data.
                 </p>
               </div>
@@ -378,7 +383,7 @@ export default function TBRecords() {
                 onClick={() => setSelectedRecord(null)}
                 aria-label="Close modal"
                 className="inline-flex h-9 w-9 items-center justify-center rounded-full transition hover:opacity-80"
-                style={{ background: "#f1f5f9", color: "#475569" }}
+                style={{ background: t.panel, color: t.textSecondary }}
               >
                 <i className="ri-close-line text-base" />
               </button>
@@ -386,8 +391,8 @@ export default function TBRecords() {
 
             <div className="space-y-4 overflow-y-auto px-6 py-6" style={{ maxHeight: "70vh" }}>
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="rounded-2xl p-5" style={{ background: "#f8fafc" }}>
-                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: "#0f172a" }}>
+                <div className="rounded-2xl p-5" style={{ background: t.inputBg }}>
+                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
                     <i className="ri-file-list-3-line" style={{ color: "#2E6FAF" }} />
                     Case summary
                   </p>
@@ -398,8 +403,8 @@ export default function TBRecords() {
                   </div>
                 </div>
 
-                <div className="rounded-2xl p-5" style={{ background: "#f8fafc" }}>
-                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: "#0f172a" }}>
+                <div className="rounded-2xl p-5" style={{ background: t.inputBg }}>
+                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
                     <i className="ri-user-line" style={{ color: "#2E6FAF" }} />
                     Patient information
                   </p>
@@ -413,8 +418,8 @@ export default function TBRecords() {
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="rounded-2xl p-5" style={{ background: "#f8fafc" }}>
-                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: "#0f172a" }}>
+                <div className="rounded-2xl p-5" style={{ background: t.inputBg }}>
+                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
                     <i className="ri-stethoscope-line" style={{ color: "#2E6FAF" }} />
                     Screening & diagnosis
                   </p>
@@ -426,8 +431,8 @@ export default function TBRecords() {
                   </div>
                 </div>
 
-                <div className="rounded-2xl p-5" style={{ background: "#f8fafc" }}>
-                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: "#0f172a" }}>
+                <div className="rounded-2xl p-5" style={{ background: t.inputBg }}>
+                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
                     <i className="ri-capsule-line" style={{ color: "#2E6FAF" }} />
                     Clinical & treatment
                   </p>
