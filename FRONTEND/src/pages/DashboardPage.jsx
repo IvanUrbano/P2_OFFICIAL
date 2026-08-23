@@ -241,7 +241,6 @@ function MiniGisMap() {
 export default function DashboardPage() {
   const { t } = useTheme();
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   // Data states
@@ -274,8 +273,6 @@ export default function DashboardPage() {
       } catch (err) {
         console.error('Dashboard fetch error:', err);
         setError('Failed to load dashboard data. Make sure the backend is running.');
-      } finally {
-        setLoading(false);
       }
     };
     fetchAll();
@@ -466,17 +463,6 @@ export default function DashboardPage() {
     const success = (byStatus['CURED'] || 0) + (byStatus['TREATMENT COMPLETED'] || 0);
     return `${Math.round((success / total) * 100)}%`;
   }, [outcomesData]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <i className="ri-loader-4-line animate-spin text-3xl" style={{ color: '#2E6FAF' }} />
-          <p className="mt-2 text-sm" style={{ color: t.textSecondary }}>Loading dashboard...</p>
-        </div>
-      </div>
-    );
-  }
 
   if (error) {
     return (

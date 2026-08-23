@@ -258,7 +258,7 @@ export default function DataIntegration() {
                   Row {w.row}: {w.warnings.join('; ')}
                 </div>
               ))}
-            </div>
+          </div>
           )}
         </div>
       )}
@@ -346,15 +346,7 @@ export default function DataIntegration() {
           </div>
         )}
 
-        {historyLoading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <i className="ri-loader-4-line animate-spin text-3xl" style={{ color: '#2E6FAF' }} />
-              <p className="mt-2 text-sm" style={{ color: t.textSecondary }}>Loading import history...</p>
-            </div>
-          </div>
-        ) : (
-          <div className="mt-4 overflow-x-auto">
+        <div className="mt-4 overflow-x-auto">
             <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
               <thead>
                 <tr>
@@ -404,7 +396,6 @@ export default function DataIntegration() {
               </tbody>
             </table>
           </div>
-        )}
       </div>
 
     </div>

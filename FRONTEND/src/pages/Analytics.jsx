@@ -142,7 +142,6 @@ function DonutChart({ segments, size = 160 }) {
 
 export default function Analytics() {
   const { t } = useTheme();
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [monthlyData, setMonthlyData] = useState([]);
   const [demographicsData, setDemographicsData] = useState([]);
@@ -168,8 +167,6 @@ export default function Analytics() {
       } catch (err) {
         console.error('Analytics fetch error:', err);
         setError('Failed to load analytics data. Make sure the backend is running.');
-      } finally {
-        setLoading(false);
       }
     };
     fetchAll();
@@ -324,17 +321,6 @@ export default function Analytics() {
     });
     return Object.values(byBarangay).filter(c => c > 200).length;
   }, [monthlyData]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <i className="ri-loader-4-line animate-spin text-3xl" style={{ color: '#2E6FAF' }} />
-          <p className="mt-2 text-sm" style={{ color: t.textSecondary }}>Loading analytics...</p>
-        </div>
-      </div>
-    );
-  }
 
   if (error) {
     return (

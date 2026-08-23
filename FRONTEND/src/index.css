@@ -155,6 +155,15 @@ body {
   }
 }
 
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
 .animate-slide-up {
   animation: slide-up 0.4s ease-out both;
 }
@@ -305,12 +314,14 @@ body {
 }
 
 .leaflet-popup-close-button {
-  color: #64748b !important;
-  font-size: 18px !important;
+  color: rgba(255,255,255,0.4) !important;
+  font-size: 20px !important;
+  top: 8px !important;
+  right: 8px !important;
 }
 
 .leaflet-popup-close-button:hover {
-  color: #eaf8ff !important;
+  color: #ffffff !important;
 }
 
 /* ==================== Leaflet Tooltip / Barangay Labels ==================== */
@@ -349,4 +360,53 @@ body {
     0 2px 0 #0f172a,
     0 3px 6px rgba(0, 0, 0, 0.6);
   user-select: none;
+}
+
+/* Light-themed barangay labels for GIS map */
+.barangay-label-light {
+  background: rgba(255, 255, 255, 0.85) !important;
+  border: 1px solid #DBEAFE !important;
+  border-radius: 3px !important;
+  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.12) !important;
+  font-family: var(--font-sans) !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  color: #0F2D52 !important;
+  letter-spacing: 0.3px;
+  pointer-events: none !important;
+  white-space: nowrap;
+  padding: 1px 4px !important;
+}
+
+/* Dark-themed leaflet popup */
+.tb-popup .leaflet-popup-content-wrapper {
+  background: #0c1222 !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5) !important;
+  color: #ffffff !important;
+  padding: 0 !important;
+}
+.tb-popup .leaflet-popup-content {
+  margin: 14px 16px !important;
+  line-height: 1.5 !important;
+}
+.tb-popup .leaflet-popup-tip {
+  background: #0c1222 !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  box-shadow: none !important;
+}
+
+/* Light-themed leaflet popup */
+.tb-popup-light .leaflet-popup-content-wrapper {
+  background: #ffffff !important;
+  border: 1px solid #DBEAFE !important;
+  border-radius: 12px !important;
+  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.12) !important;
+  color: #0F2D52 !important;
+}
+.tb-popup-light .leaflet-popup-tip {
+  background: #ffffff !important;
+  border: 1px solid #DBEAFE !important;
+  box-shadow: none !important;
 }

@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import API from '../api/axios';
 
-/* ─── Risk class colors (warm heat ramp: amber → orange → red) ─── */
 const RISK_COLORS = {
   High: '#EF4444',
   Medium: '#F97316',
@@ -11,7 +10,6 @@ const RISK_COLORS = {
   'No Data': '#64748B',
 };
 
-/* Pasig City approximate bounds (SW, NE) */
 const PASIG_BOUNDS = L.latLngBounds([14.48, 121.02], [14.64, 121.13]);
 const MAX_BOUNDS = L.latLngBounds([14.3, 120.85], [14.85, 121.25]);
 
@@ -37,16 +35,14 @@ function resetHighlight(e, layer) {
 }
 
 function formatNum(n) {
-  return n != null ? Number(n).toLocaleString() : '—';
+  return n != null ? Number(n).toLocaleString() : '\u2014';
 }
 
 function buildLabels(map, features, layerRef) {
-  layerRef.current.forEach(l => { try { map.removeLayer(l); } catch { /* already removed */ } });
+  layerRef.current.forEach(l => { try { map.removeLayer(l); } catch {} });
   layerRef.current = [];
-
   const zoom = map.getZoom();
   const layer = L.layerGroup();
-
   if (zoom < 14.5) {
     const center = [14.565, 121.075];
     const pasigLabel = L.marker(center, {
@@ -60,11 +56,9 @@ function buildLabels(map, features, layerRef) {
     });
     layer.addLayer(pasigLabel);
   }
-
   for (const f of features) {
     const c = f.properties?.centroid;
     if (!c) continue;
-
     const showNames = zoom >= 14.5;
     const marker = L.circleMarker([c[1], c[0]], {
       radius: showNames ? 2 : 3,
@@ -74,7 +68,6 @@ function buildLabels(map, features, layerRef) {
       weight: 1,
       interactive: false,
     });
-
     if (showNames) {
       marker.bindTooltip(f.properties.name, {
         permanent: true,
@@ -83,26 +76,20 @@ function buildLabels(map, features, layerRef) {
         interactive: false,
       });
     }
-
     layer.addLayer(marker);
   }
   layer.addTo(map);
   layerRef.current = [layer];
 }
 
-/* ─── Sub-components ─── */
-
 function SectionHeader({ icon, iconColor, title, right }) {
   return (
     <div className="flex items-center justify-between mb-3">
       <div className="flex items-center gap-2">
-        <div
-          className="w-6 h-6 rounded flex items-center justify-center"
-          style={{ background: `${iconColor}15` }}
-        >
+        <div className="w-6 h-6 rounded flex items-center justify-center" style={{ background: `${iconColor}15` }}>
           <i className={`${icon} text-xs`} style={{ color: iconColor }} />
         </div>
-        <span className="text-xs font-bold uppercase tracking-wider" style={{ color: 'rgba(255,255,255,0.5)' }}>
+        <span className="text-xs font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>
           {title}
         </span>
       </div>
@@ -111,72 +98,6 @@ function SectionHeader({ icon, iconColor, title, right }) {
   );
 }
 
-function BarangayDetailPanel({ data, historicalCases, onClose }) {
-  const riskColor = RISK_COLORS[data.risk_class] || RISK_COLORS['No Data'];
-  const arrow = data.trend_direction === 'Increasing' ? '↑' : data.trend_direction === 'Decreasing' ? '↓' : '→';
-
-  const rows = [
-    { label: 'Current Cases', value: formatNum(data.total_cases) },
-    { label: 'Predicted Cases', value: formatNum(data.forecasted_count) },
-    { divider: true },
-    { label: 'Trend', value: `${arrow} ${data.trend_direction || 'Stable'}` },
-    { divider: true },
-    { label: 'Incidence', value: data.incidence_per_100k != null ? `${Number(data.incidence_per_100k).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} /100,000` : '—' },
-    { label: 'Population', value: formatNum(data.population) },
-    { label: 'Historical Cases', value: historicalCases != null ? historicalCases.toLocaleString() : '—' },
-  ];
-
-  return (
-    <div>
-      {/* Header */}
-      <div className="px-5 pt-4 pb-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span
-              className="w-2.5 h-2.5 rounded-full shrink-0"
-              style={{ background: riskColor, boxShadow: `0 0 8px ${riskColor}55` }}
-            />
-            <span className="text-sm font-bold" style={{ color: 'rgba(255,255,255,0.9)' }}>
-              {data.name}
-            </span>
-            <span
-              className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider"
-              style={{ background: `${riskColor}20`, color: riskColor }}
-            >
-              {data.risk_class}
-            </span>
-          </div>
-          <button
-            onClick={onClose}
-            className="w-5 h-5 rounded flex items-center justify-center transition-colors"
-            style={{ color: 'rgba(255,255,255,0.25)' }}
-            onMouseEnter={e => e.currentTarget.style.color = 'rgba(255,255,255,0.7)'}
-            onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.25)'}
-          >
-            <i className="ri-close-line text-xs" />
-          </button>
-        </div>
-      </div>
-
-      {/* Data rows */}
-      <div className="px-5 py-3" style={{ fontFamily: 'monospace', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        {rows.map((row, i) => {
-          if (row.divider) {
-            return <div key={`d-${i}`} className="my-1" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }} />;
-          }
-          return (
-            <div key={row.label} className="flex items-center justify-between py-1.5">
-              <span className="text-[11px]" style={{ color: 'rgba(255,255,255,0.35)' }}>{row.label}</span>
-              <span className="text-[12px] font-bold tabular-nums" style={{ color: 'rgba(255,255,255,0.85)' }}>{row.value}</span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/* ─── Page Component ─── */
 export default function GisMap() {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
@@ -185,25 +106,12 @@ export default function GisMap() {
   const labelsRef = useRef([]);
   const [data, setData] = useState(null);
   const [monthlyByBarangay, setMonthlyByBarangay] = useState({});
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [selectedBarangay, setSelectedBarangay] = useState(null);
-  const [panelClosing, setPanelClosing] = useState(false);
+  const [filterYear, setFilterYear] = useState('');
+  const [filterMonth, setFilterMonth] = useState('');
+  const [filterBarangay, setFilterBarangay] = useState('');
+  const [filterRiskLevel, setFilterRiskLevel] = useState('');
 
-  const handleSelectBarangay = (brgy) => {
-    setPanelClosing(false);
-    setSelectedBarangay(brgy);
-  };
-
-  const handleClosePanel = () => {
-    setPanelClosing(true);
-    setTimeout(() => {
-      setSelectedBarangay(null);
-      setPanelClosing(false);
-    }, 220);
-  };
-
-  /* Fetch GeoJSON once */
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -212,14 +120,11 @@ export default function GisMap() {
         if (!cancelled) setData(res.data);
       } catch (err) {
         if (!cancelled) setError(err.message || 'Failed to load map data');
-      } finally {
-        if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
   }, []);
 
-  /* Pre-fetch all monthly data once, grouped by barangay name */
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -232,20 +137,15 @@ export default function GisMap() {
           if (!grouped[name]) grouped[name] = [];
           grouped[name].push({ month: r.month, case_count: r.case_count });
         });
-        // Sort each barangay's months chronologically
         Object.values(grouped).forEach(arr => arr.sort((a, b) => a.month.localeCompare(b.month)));
         if (!cancelled) setMonthlyByBarangay(grouped);
-      } catch {
-        // Non-critical — detail panel will show "—" for historical cases
-      }
+      } catch {}
     })();
     return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (loading) return;
     if (!mapRef.current || mapInstance.current) return;
-
     const map = L.map(mapRef.current, {
       center: [14.555, 121.075],
       zoom: 15.5,
@@ -258,79 +158,99 @@ export default function GisMap() {
       zoomSnap: 0.5,
       zoomDelta: 0.5,
     });
-
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
       maxZoom: 19,
       subdomains: 'abcd',
     }).addTo(map);
-
     mapInstance.current = map;
     L.control.zoom({ position: 'bottomleft' }).addTo(map);
     requestAnimationFrame(() => { map.invalidateSize(); });
-
     return () => { map.remove(); mapInstance.current = null; };
-  }, [loading]);
+  }, []);
 
   useEffect(() => {
     if (!mapInstance.current || !data) return;
-
     const map = mapInstance.current;
-
     if (geojsonLayerRef.current) map.removeLayer(geojsonLayerRef.current);
     if (outlineLayerRef.current) map.removeLayer(outlineLayerRef.current);
-    labelsRef.current.forEach(l => { try { map.removeLayer(l); } catch { /* already removed */ } });
+    labelsRef.current.forEach(l => { try { map.removeLayer(l); } catch {} });
     labelsRef.current = [];
-
     if (data.outline) {
       const outlineLayer = L.geoJSON(
         { type: 'Feature', properties: {}, geometry: data.outline },
-        {
-          style: { fillColor: '#1a1a2e', fillOpacity: 0.85, weight: 0, opacity: 0 },
-          interactive: false,
-        }
+        { style: { fillColor: '#1a1a2e', fillOpacity: 0.85, weight: 0, opacity: 0 }, interactive: false }
       ).addTo(map);
       outlineLayerRef.current = outlineLayer;
     }
-
     const geojsonLayer = L.geoJSON(data, {
       style: riskStyle,
       onEachFeature: (feature, layer) => {
         const p = feature.properties || {};
+        const riskColor = RISK_COLORS[p.risk_class] || '#6B7280';
+        const trendArrow = p.trend_direction === 'Increasing' ? '\u2191' : p.trend_direction === 'Decreasing' ? '\u2193' : '\u2192';
         const popupContent = `
-          <div style="font-family: Inter, sans-serif; min-width: 220px;">
-            <div style="font-size: 15px; font-weight: 700; margin-bottom: 8px; color: #0f172a;">
-              ${p.name || 'Unknown'}
+          <div style="font-family: Inter, sans-serif; min-width: 230px;">
+            <!-- Header -->
+            <div style="margin-bottom: 10px;">
+              <div style="font-size: 15px; font-weight: 700; color: #ffffff;">${p.name || 'Unknown'}</div>
+              <span style="display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; background: ${riskColor}22; color: ${riskColor}; text-transform: uppercase; letter-spacing: 0.5px;">${p.risk_class || 'No Data'} Risk</span>
             </div>
-            <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
-              <tr><td style="padding: 3px 8px 3px 0; color: #64748b;">Risk Class</td><td style="padding: 3px 0; font-weight: 600; color: ${RISK_COLORS[p.risk_class] || '#6B7280'};">${p.risk_class || 'No Data'}</td></tr>
-              <tr><td style="padding: 3px 8px 3px 0; color: #64748b;">Risk Score</td><td style="padding: 3px 0; font-weight: 600;">${formatNum(p.risk_score)}</td></tr>
-              <tr><td style="padding: 3px 8px 3px 0; color: #64748b;">Incidence / 100k</td><td style="padding: 3px 0; font-weight: 600;">${formatNum(p.incidence_per_100k)}</td></tr>
-              <tr><td style="padding: 3px 8px 3px 0; color: #64748b;">Trend</td><td style="padding: 3px 0; font-weight: 600;">${p.trend_direction === 'Increasing' ? '↑' : p.trend_direction === 'Decreasing' ? '↓' : '→'} ${p.trend_direction || 'Stable'}</td></tr>
-              <tr><td style="padding: 3px 8px 3px 0; color: #64748b;">Forecasted Cases</td><td style="padding: 3px 0; font-weight: 600;">${formatNum(p.forecasted_count)}</td></tr>
-              <tr><td style="padding: 3px 8px 3px 0; color: #64748b;">Total Cases</td><td style="padding: 3px 0; font-weight: 600;">${formatNum(p.total_cases)}</td></tr>
-              <tr><td style="padding: 3px 8px 3px 0; color: #64748b;">Population</td><td style="padding: 3px 0; font-weight: 600;">${formatNum(p.population)}</td></tr>
-            </table>
+            <!-- Divider -->
+            <div style="height: 1px; background: rgba(255,255,255,0.08); margin-bottom: 10px;"></div>
+            <!-- Stats -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; color: #94a3b8;">Risk Score</span>
+                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${formatNum(p.risk_score)}</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; color: #94a3b8;">Incidence / 100k</span>
+                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${formatNum(p.incidence_per_100k)}</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; color: #94a3b8;">Trend</span>
+                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${trendArrow} ${p.trend_direction || 'Stable'}</span>
+              </div>
+            </div>
+            <!-- Divider -->
+            <div style="height: 1px; background: rgba(255,255,255,0.08); margin: 10px 0;"></div>
+            <!-- Forecasted & Cases -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; color: #94a3b8;">Forecasted Cases</span>
+                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${formatNum(p.forecasted_count)}</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; color: #94a3b8;">Total Cases</span>
+                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${formatNum(p.total_cases)}</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; color: #94a3b8;">Population</span>
+                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${formatNum(p.population)}</span>
+              </div>
+            </div>
+            <!-- Divider -->
+            <div style="height: 1px; background: rgba(255,255,255,0.08); margin: 10px 0;"></div>
+            <!-- Action Buttons -->
+            <div style="display: flex; gap: 8px;">
+              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 700; border: none; border-radius: 10px; cursor: pointer; background: #0F2D52; color: #ffffff; transition: opacity 0.15s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">View Analytics</button>
+              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewDetails', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; cursor: pointer; background: transparent; color: #ffffff; transition: background 0.15s;" onmouseenter="this.style.background='rgba(255,255,255,0.08)'" onmouseleave="this.style.background='transparent'">Details</button>
+            </div>
           </div>
         `;
-
         layer.bindPopup(popupContent, { className: 'tb-popup', maxWidth: 300, closeButton: true });
-        layer.on('click', () => handleSelectBarangay(p));
         layer.on('mouseover', highlightFeature);
         layer.on('mouseout', (e) => resetHighlight(e, geojsonLayer));
       },
     }).addTo(map);
-
     geojsonLayerRef.current = geojsonLayer;
     buildLabels(map, data.features, labelsRef);
-
     const onZoom = () => buildLabels(map, data.features, labelsRef);
     map.on('zoomend', onZoom);
     map.fitBounds(PASIG_BOUNDS, { padding: [40, 40] });
-
     return () => { map.off('zoomend', onZoom); };
-  }, [data, loading]);
-
+  }, [data]);
   const stats = React.useMemo(() => {
     if (!data?.features) return null;
     const features = data.features.map(f => f.properties);
@@ -368,228 +288,234 @@ export default function GisMap() {
       }));
   }, [data]);
 
-  if (loading) {
-    return (
-      <div
-        className="flex items-center justify-center"
-        style={{ background: '#0a1128', height: 'calc(100vh - 72px)', margin: '-24px', width: 'calc(100% + 48px)' }}
-      >
-        <div className="text-center">
-          <div className="animate-spin w-10 h-10 border-3 border-t-transparent rounded-full mx-auto mb-3" style={{ borderColor: '#2E6FAF', borderTopColor: 'transparent' }} />
-          <p style={{ color: 'rgba(255,255,255,0.4)' }}>Initializing map systems...</p>
-        </div>
-      </div>
-    );
-  }
+  const barangayNames = React.useMemo(() => {
+    if (!data?.features) return [];
+    return data.features
+      .map(f => f.properties?.name)
+      .filter(Boolean)
+      .sort();
+  }, [data]);
 
   if (error) {
     return (
-      <div
-        className="flex items-center justify-center"
-        style={{ background: '#0a1128', height: 'calc(100vh - 72px)', margin: '-24px', width: 'calc(100% + 48px)' }}
-      >
+      <div className="flex items-center justify-center" style={{ background: '#F8FAFC', height: 'calc(100vh - 72px)', margin: '-24px', width: 'calc(100% + 48px)' }}>
         <div className="text-center">
           <i className="ri-error-warning-line text-4xl mb-2 block" style={{ color: '#EF4444' }} />
           <p style={{ color: '#EF4444' }}>Failed to load map</p>
-          <p className="text-sm mt-1" style={{ color: 'rgba(255,255,255,0.3)' }}>{error}</p>
+          <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>{error}</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div
-      className="flex overflow-hidden"
-      style={{
-        height: 'calc(100vh - 72px)',
-        margin: '-24px',
-        width: 'calc(100% + 48px)',
-        background: '#0a1128',
-      }}
-    >
+    <div className="flex flex-col gap-5">
 
-      {/* ═══ LEFT: MAP ═══ */}
-      <div className="relative flex-1 min-w-0">
-        <div ref={mapRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', background: '#0a1128' }} />
-
-        {/* Legend overlay */}
-        <div
-          className="absolute top-4 left-4 z-[1000] rounded-xl p-3"
-          style={{
-            background: 'rgba(10,17,32,0.85)',
-            backdropFilter: 'blur(12px)',
-            border: '1px solid rgba(255,255,255,0.06)',
-          }}
-        >
-          <div className="text-[10px] font-bold mb-2 uppercase tracking-wider" style={{ color: 'rgba(255,255,255,0.35)' }}>
-            <i className="ri-palette-line mr-1" style={{ color: '#2E6FAF' }} />
-            Risk Level
-          </div>
-          {[
-            { label: 'High', color: '#EF4444' },
-            { label: 'Medium', color: '#F97316' },
-            { label: 'Low', color: '#FBBF24' },
-          ].map(({ label, color }) => (
-            <div key={label} className="flex items-center gap-2 mb-1 last:mb-0">
-              <div className="w-3 h-2 rounded-sm" style={{ background: color }} />
-              <span className="text-[11px]" style={{ color: 'rgba(255,255,255,0.5)' }}>{label}</span>
-              <span className="text-[11px] ml-auto font-bold tabular-nums" style={{ color }}>{stats?.classes?.[label] || 0}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ═══ RIGHT: SIDEBAR ═══ */}
+      {/* ── Header + Map (connected) ── */}
       <div
-        className="flex flex-col overflow-y-auto"
+        className="rounded-2xl overflow-hidden"
         style={{
-          width: '340px',
-          flexShrink: 0,
-          background: '#0c1223',
+          background: 'rgba(255,255,255,0.8)',
+          border: '1px solid #DBEAFE',
+          boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)',
         }}
       >
-        {/* ── Sidebar Header ── */}
-        <div className="px-5 pt-5 pb-4">
-          <div className="flex items-center gap-2.5 mb-1">
-            <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center"
-              style={{ background: 'linear-gradient(135deg, #2E6FAF 0%, #174A7E 100%)' }}
+        {/* Header Toolbar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
+          {/* Left — Title */}
+          <div className="shrink-0">
+            <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>GIS Hotspot Mapping</h1>
+            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Visualize TB cases across Pasig City and identify barangays with higher TB risk.</p>
+          </div>
+
+          {/* Right — Filters + Actions */}
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={filterYear}
+              onChange={(e) => setFilterYear(e.target.value)}
+              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
+              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
             >
-              <i className="ri-map-pin-2-fill text-sm" style={{ color: '#fff' }} />
-            </div>
-            <div>
-              <h1 className="text-base font-bold leading-tight" style={{ color: 'rgba(255,255,255,0.92)' }}>
-                GIS Risk Map
-              </h1>
-              <p className="text-[10px] leading-tight" style={{ color: 'rgba(255,255,255,0.3)' }}>
-                Geographic distribution of TB risk
-              </p>
-            </div>
+              <option value="">All Years</option>
+              <option value="2025">2025</option>
+              <option value="2024">2024</option>
+              <option value="2023">2023</option>
+            </select>
+
+            <select
+              value={filterMonth}
+              onChange={(e) => setFilterMonth(e.target.value)}
+              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
+              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
+            >
+              <option value="">All Months</option>
+              {["January","February","March","April","May","June","July","August","September","October","November","December"].map(m => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+
+            <select
+              value={filterBarangay}
+              onChange={(e) => setFilterBarangay(e.target.value)}
+              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
+              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
+            >
+              <option value="">All Barangays</option>
+              {barangayNames.map((b) => (
+                <option key={b} value={b}>{b}</option>
+              ))}
+            </select>
+
+            <select
+              value={filterRiskLevel}
+              onChange={(e) => setFilterRiskLevel(e.target.value)}
+              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
+              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
+            >
+              <option value="">All Risk Levels</option>
+              <option value="High">High Risk</option>
+              <option value="Medium">Moderate</option>
+              <option value="Low">Low Risk</option>
+            </select>
+
+            <button
+              className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold transition hover:opacity-80"
+              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#0F2D52' }}
+            >
+              <i className="ri-download-2-line text-sm" style={{ color: '#2563EB' }} />
+              Export Map
+            </button>
+
+            <button
+              className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold transition hover:opacity-80"
+              style={{ background: '#0F2D52', color: '#ffffff' }}
+            >
+              <i className="ri-fullscreen-line text-sm" />
+              Fullscreen
+            </button>
           </div>
         </div>
 
-        <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)' }} />
+        {/* Map */}
+        <div
+          className="relative"
+          style={{ height: 'calc(100vh - 260px)', minHeight: '500px' }}
+        >
+        {/* Map */}
+        <div ref={mapRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', background: '#0a1128' }} />
 
-        {/* ── Stats Grid (2x2) ── */}
-        {stats && (
-          <div className="grid grid-cols-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-            {[
-              { label: 'Barangays', value: stats.total, icon: 'ri-building-line', color: '#2E6FAF' },
-              { label: 'Cases', value: stats.totalCases.toLocaleString(), icon: 'ri-heart-pulse-line', color: '#4FD1C5' },
-              { label: 'Population', value: stats.totalPop.toLocaleString(), icon: 'ri-group-line', color: '#10B981' },
-              { label: 'Area', value: '31.3 km²', icon: 'ri-map-2-line', color: '#8B5CF6' },
-            ].map((m, i) => (
-              <div
-                key={m.label}
-                className="flex items-center gap-2.5 px-5 py-3.5"
-                style={{
-                  borderRight: i % 2 === 0 ? '1px solid rgba(255,255,255,0.06)' : 'none',
-                  borderBottom: i < 2 ? '1px solid rgba(255,255,255,0.06)' : 'none',
-                }}
-              >
-                <i className={`${m.icon} text-sm`} style={{ color: m.color }} />
-                <div>
-                  <div className="text-[9px] font-semibold uppercase tracking-wider" style={{ color: 'rgba(255,255,255,0.3)' }}>
-                    {m.label}
-                  </div>
-                  <div className="text-sm font-bold tabular-nums" style={{ color: 'rgba(255,255,255,0.88)' }}>
-                    {m.value}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* ── Floating: Year Badge (top-left) ── */}
+        <div
+          className="absolute top-4 left-4 z-[1000] flex items-center gap-1.5 rounded-lg px-3 py-1.5"
+          style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)' }}
+        >
+          <i className="ri-calendar-line text-xs" style={{ color: '#2563EB' }} />
+          <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>2025</span>
+        </div>
 
-        {/* ── Selected Barangay ── */}
-        {selectedBarangay && (
-          <div
-            style={{
-              animation: panelClosing
-                ? 'slide-out-right 0.22s ease-in forwards'
-                : 'slide-in-right 0.28s ease-out both',
-            }}
-          >
-            <BarangayDetailPanel
-              data={selectedBarangay}
-              historicalCases={
-                monthlyByBarangay[selectedBarangay.name]
-                  ? monthlyByBarangay[selectedBarangay.name].reduce((s, r) => s + (r.case_count || 0), 0)
-                  : null
-              }
-              onClose={handleClosePanel}
-            />
-            <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)' }} />
-          </div>
-        )}
+        {/* ── Floating: Barangay Count Badge (top-right) ── */}
+        <div
+          className="absolute top-4 right-4 z-[1000] rounded-lg px-3 py-1.5"
+          style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)' }}
+        >
+          <span className="text-xs font-semibold" style={{ color: '#64748B' }}>
+            {stats?.total || 0} barangays shown
+          </span>
+        </div>
 
-        {/* ── Risk Distribution ── */}
-        <div className="px-5 py-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <SectionHeader icon="ri-bar-chart-grouped-line" iconColor="#2E6FAF" title="Risk Distribution" />
+        {/* ── Floating: Legend (bottom-left) ── */}
+        <div
+          className="absolute bottom-4 right-4 z-[1000] rounded-xl p-3.5"
+          style={{ background: '#ffffff', border: '1px solid #DBEAFE', minWidth: '160px' }}
+        >
+          <p className="text-[10px] font-bold uppercase tracking-wider mb-2.5" style={{ color: '#64748B' }}>
+            Risk Level
+          </p>
           <div className="flex flex-col gap-2">
-            {riskDist.map((b, i) => (
-              <div key={i} className="flex items-center gap-2.5">
-                <span className="text-[11px] truncate" style={{ color: 'rgba(255,255,255,0.4)', width: '88px' }}>
-                  {b.name}
-                </span>
-                <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
-                  <div className="h-full rounded-full transition-all duration-500" style={{
-                    width: `${b.pct}%`,
-                    background: `linear-gradient(90deg, ${RISK_COLORS[b.risk_class]}80, ${RISK_COLORS[b.risk_class]})`,
-                  }} />
-                </div>
-                <span className="text-[10px] font-mono tabular-nums" style={{ color: 'rgba(255,255,255,0.3)', width: '32px', textAlign: 'right' }}>
-                  {b.score.toFixed(1)}
-                </span>
+            {[
+              { label: 'High Risk (>80 cases)', color: '#EF4444' },
+              { label: 'Moderate (50-80)', color: '#F97316' },
+              { label: 'Low Risk (<50)', color: '#10B981' },
+            ].map(({ label, color }) => (
+              <div key={label} className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
+                <span className="text-[11px] font-medium" style={{ color: '#475569' }}>{label}</span>
               </div>
             ))}
           </div>
         </div>
 
-        {/* ── Top Risk ── */}
-        <div className="px-5 py-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <SectionHeader icon="ri-shield-star-line" iconColor="#EF4444" title="Highest Risk" />
-          <div className="flex flex-col gap-1">
-            {topRisk.slice(0, 5).map((b, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-3 p-2 rounded-lg transition-colors"
-                style={{ background: 'transparent' }}
-                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
-                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-              >
-                <span
-                  className="w-5 h-5 rounded flex items-center justify-center text-[10px] font-black shrink-0"
-                  style={{
-                    background: i < 2 ? 'rgba(239,68,68,0.12)' : 'rgba(255,255,255,0.05)',
-                    color: i < 2 ? '#EF4444' : 'rgba(255,255,255,0.3)',
-                  }}
-                >
-                  {i + 1}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[11px] font-semibold truncate" style={{ color: 'rgba(255,255,255,0.8)' }}>{b.name}</div>
-                  <div className="text-[10px]" style={{ color: 'rgba(255,255,255,0.2)' }}>
-                    {formatNum(b.total_cases)} cases · {formatNum(b.population)} pop
-                  </div>
-                </div>
-                <span className="text-[11px] font-mono font-bold tabular-nums" style={{ color: RISK_COLORS[b.risk_class] }}>
-                  {b.risk_score?.toFixed(1)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* ── Data Source ── */}
-        <div className="px-5 py-3 mt-auto">
-          <div className="text-[10px]" style={{ color: 'rgba(255,255,255,0.15)' }}>
-            <i className="ri-database-2-line mr-1" />
-            NAMRIA/PSGC 2023 · ARIMA + Random Forest
-          </div>
         </div>
       </div>
 
+      {/* ── Metric Cards ── */}
+      {stats && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Barangays */}
+          <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)' }}>
+            <div className="p-5 pb-3 flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold" style={{ color: '#64748B' }}>Barangays</p>
+                <p className="text-3xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{stats.total}</p>
+              </div>
+              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: '#DBEAFE' }}>
+                <i className="ri-building-line text-base" style={{ color: '#2563EB' }} />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-5 py-2.5" style={{ borderTop: '1px solid #1E40AF', background: '#0F2D52' }}>
+              <span className="text-[11px] font-semibold" style={{ color: '#93C5FD' }}>Total Coverage Area</span>
+            </div>
+          </div>
+
+          {/* TB Cases */}
+          <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)' }}>
+            <div className="p-5 pb-3 flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold" style={{ color: '#64748B' }}>TB Cases</p>
+                <p className="text-3xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{stats.totalCases.toLocaleString()}</p>
+              </div>
+              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: '#DBEAFE' }}>
+                <i className="ri-heart-pulse-line text-base" style={{ color: '#2563EB' }} />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-5 py-2.5" style={{ borderTop: '1px solid #1E40AF', background: '#0F2D52' }}>
+              <span className="text-[11px] font-semibold" style={{ color: '#93C5FD' }}>All Recorded Cases</span>
+            </div>
+          </div>
+
+          {/* High-Risk Barangays */}
+          <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)' }}>
+            <div className="p-5 pb-3 flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold" style={{ color: '#64748B' }}>High-Risk Barangays</p>
+                <p className="text-3xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{stats.classes?.High || 0}</p>
+              </div>
+              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: '#FEE2E2' }}>
+                <i className="ri-shield-star-line text-base" style={{ color: '#EF4444' }} />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-5 py-2.5" style={{ borderTop: '1px solid #1E40AF', background: '#0F2D52' }}>
+              <span className="text-[11px] font-semibold" style={{ color: '#93C5FD' }}>Barangays at High Risk</span>
+            </div>
+          </div>
+
+          {/* Case Density */}
+          <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)' }}>
+            <div className="p-5 pb-3 flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold" style={{ color: '#64748B' }}>Case Density</p>
+                <p className="text-3xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{(stats.totalCases / 31.3).toFixed(1)}</p>
+              </div>
+              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: '#DBEAFE' }}>
+                <i className="ri-map-2-line text-base" style={{ color: '#2563EB' }} />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-5 py-2.5" style={{ borderTop: '1px solid #1E40AF', background: '#0F2D52' }}>
+              <span className="text-[11px] font-semibold" style={{ color: '#93C5FD' }}>Cases per km² (31.3 km²)</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

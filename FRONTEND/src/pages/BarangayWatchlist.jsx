@@ -107,7 +107,6 @@ function MetricStrip({ list }) {
 export default function BarangayWatchlist() {
   const { t } = useTheme();
   const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const [search, setSearch] = useState('');
@@ -119,8 +118,7 @@ export default function BarangayWatchlist() {
     let alive = true;
     API.get('/api/tb/barangays/watchlist')
       .then((res) => { if (alive) setData(res.data); })
-      .catch(() => { if (alive) setError('Failed to load barangay watchlist.'); })
-      .finally(() => { if (alive) setLoading(false); });
+      .catch(() => { if (alive) setError('Failed to load barangay watchlist.'); });
     return () => { alive = false; };
   }, []);
 
@@ -258,12 +256,7 @@ export default function BarangayWatchlist() {
 
       {/* ── Table ── */}
       <div className="glass-card overflow-hidden">
-        {loading ? (
-          <div className="flex items-center justify-center gap-3 py-24" style={{ color: t.textMuted }}>
-            <i className="ri-loader-4-line animate-spin text-lg" />
-            <span className="text-sm">Loading watchlist…</span>
-          </div>
-        ) : error ? (
+        {error ? (
           <div className="flex flex-col items-center gap-2 py-24">
             <i className="ri-cloud-off-line text-2xl" style={{ color: '#EF4444' }} />
             <p className="text-sm font-semibold" style={{ color: t.text }}>{error}</p>
@@ -336,7 +329,7 @@ export default function BarangayWatchlist() {
         )}
       </div>
 
-      {!loading && !error && (
+      {!error && (
         <p className="text-[11px]" style={{ color: t.textMuted }}>
           {rows.length} of {data?.watchlist?.length || 0} barangays · Click a column header to sort · Δ Next = forecasted − current cases
         </p>
