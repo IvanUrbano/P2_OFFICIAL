@@ -40,6 +40,10 @@ class SeriesPoint(BaseModel):
 class ForecastRequest(BaseModel):
     """Request body for ARIMA forecasting."""
     seasonal_m: int = Field(default=12, description="Seasonal period (12 for monthly)")
+    forecast_horizon: int = Field(
+        default=1, ge=1, le=24,
+        description="Number of months to forecast ahead (1-24)"
+    )
     series: list[SeriesPoint] = Field(
         ..., description="Monthly case counts per barangay"
     )
@@ -142,6 +146,10 @@ class PipelineRequest(BaseModel):
     Express passes all pre-computed data; Python never reads the DB.
     Optional `train` enables RF classification; without it, rule-based fallback is used.
     """
+    forecast_horizon: int = Field(
+        default=1, ge=1, le=24,
+        description="Number of months to forecast ahead (1-24)"
+    )
     series: list[PipelineSeriesPoint] = Field(
         ..., description="Historical monthly case counts"
     )

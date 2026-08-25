@@ -725,21 +725,92 @@ router.get('/gis/choropleth', async (req, res) => {
 /**
  * GET /api/tb/forecasts
  * ARIMA predictions per barangay
+ * Optional query: ?barangay=Name (filter by barangay)
  */
 router.get('/forecasts', async (req, res) => {
   try {
-    const result = await pool.query(`
+    const { barangay } = req.query;
+    let query = `
       SELECT
         barangay_name, period, forecasted_count,
         confidence_lower, confidence_upper,
-        incidence_per_100k, model_version
+        incidence_per_100k, model_version,
+        actual_count, forecast_error
       FROM model_predictions
       ORDER BY period DESC, barangay_name
-    `);
+    `;
+    const params = [];
+    if (barangay) {
+      query = `
+        SELECT
+          barangay_name, period, forecasted_count,
+          confidence_lower, confidence_upper,
+          incidence_per_100k, model_version,
+          actual_count, forecast_error
+        FROM model_predictions
+        WHERE barangay_name = $1
+        ORDER BY period DESC, barangay_name
+      `;
+      params.push(barangay);
+    }
+    const result = await pool.query(query, params);
     res.json({ forecasts: result.rows });
   } catch (err) {
     console.error('Forecasts error:', err.message);
     res.status(500).json({ error: 'Server error fetching forecasts.' });
+  }
+});
+
+/**
+ * GET /api/tb/forecast/actual-vs-predicted
+ * Joins model_predictions with monthly_case_summary for actual vs predicted chart.
+ * Optional query: ?barangay=Name (filter by single barangay)
+ */
+router.get('/forecast/actual-vs-predicted', async (req, res) => {
+  try {
+    const { barangay } = req.query;
+    let query = `
+      SELECT
+        mp.barangay_name,
+        mp.period,
+        mp.forecasted_count,
+        mp.confidence_lower,
+        mp.confidence_upper,
+        COALESCE(mc.case_count, 0) AS actual_count,
+        mp.risk_class,
+        mp.incidence_per_100k
+      FROM model_predictions mp
+      LEFT JOIN monthly_case_summary mc
+        ON mp.barangay_name = mc.barangay_name
+        AND mp.period = mc.month
+      ORDER BY mp.period, mp.barangay_name
+    `;
+    const params = [];
+    if (barangay) {
+      query = `
+        SELECT
+          mp.barangay_name,
+          mp.period,
+          mp.forecasted_count,
+          mp.confidence_lower,
+          mp.confidence_upper,
+          COALESCE(mc.case_count, 0) AS actual_count,
+          mp.risk_class,
+          mp.incidence_per_100k
+        FROM model_predictions mp
+        LEFT JOIN monthly_case_summary mc
+          ON mp.barangay_name = mc.barangay_name
+          AND mp.period = mc.month
+        WHERE mp.barangay_name = $1
+        ORDER BY mp.period, mp.barangay_name
+      `;
+      params.push(barangay);
+    }
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows });
+  } catch (err) {
+    console.error('Actual vs predicted error:', err.message);
+    res.status(500).json({ error: 'Server error fetching actual vs predicted data.' });
   }
 });
 
@@ -884,12 +955,12 @@ router.get('/ml/health', async (req, res) => {
  *   6. Store all results in L4/L5/L6 tables
  *   7. Generate alerts for High-risk transitions
  *
- * Body: { period?: "YYYY-MM-DD", thresholds?: { low_max, med_max } }
+ * Body: { period?: "YYYY-MM-DD", thresholds?: { low_max, med_max }, forecastHorizon?: number, barangays?: string[] }
  */
 router.post('/pipeline', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {
-    const { period, thresholds } = req.body || {};
-    const result = await runPipeline({ period, thresholds });
+    const { period, thresholds, forecastHorizon, barangays } = req.body || {};
+    const result = await runPipeline({ period, thresholds, forecastHorizon, barangays });
     res.json({ message: 'Pipeline completed.', result });
   } catch (err) {
     console.error('Pipeline error:', err.message);

@@ -43,13 +43,16 @@ const DEFAULT_THRESHOLDS = {
  * @param {string} options.period - Forecast period in YYYY-MM-DD format
  *   (defaults to next month from latest in monthly_case_summary)
  * @param {object} options.thresholds - Override frozen thresholds {low_max, med_max}
+ * @param {number} options.forecastHorizon - Number of months to forecast ahead (default 1)
+ * @param {string[]} options.barangays - Optional array of barangay names to filter (if empty, all)
  * @returns {object} Pipeline run summary
  */
-async function runPipeline({ period, thresholds: thresholdsOverride } = {}) {
+async function runPipeline({ period, thresholds: thresholdsOverride, forecastHorizon = 1, barangays: barangayFilter } = {}) {
   const client = await pool.connect();
   const results = {
     status: 'started',
     period: null,
+    forecastHorizon,
     barangaysProcessed: 0,
     forecastsCount: 0,
     classificationsCount: 0,
@@ -80,6 +83,13 @@ async function runPipeline({ period, thresholds: thresholdsOverride } = {}) {
       results.status = 'no_data';
       results.errors.push('No barangays found. Run POST /api/tb/barangays/seed first.');
       return results;
+    }
+
+    // Apply barangay filter if provided
+    if (barangayFilter && barangayFilter.length > 0) {
+      const filterSet = new Set(barangayFilter);
+      barangays = barangays.filter(b => filterSet.has(b.name));
+      console.log(`🔍 Filtered to ${barangays.length} barangays: ${barangayFilter.join(', ')}`);
     }
 
     const populationMap = {};
@@ -137,7 +147,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride } = {}) {
     let forecastResults = [];
     if (results.mlServiceHealthy && forecastSeries.length > 0) {
       try {
-        const forecastResponse = await forecast(forecastSeries, 12);
+        const forecastResponse = await forecast(forecastSeries, 12, forecastHorizon);
         forecastResults = forecastResponse.forecasts || [];
         results.forecastsCount = forecastResults.length;
         console.log(`🔮 Forecast: ${forecastResults.length} barangays processed`);

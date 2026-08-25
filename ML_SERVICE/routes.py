@@ -103,7 +103,8 @@ async def run_forecast(req: ForecastRequest):
         if not series_data:
             raise HTTPException(status_code=400, detail="No series data provided")
 
-        forecasts_raw = forecast_all(series_data, forecast_horizon=1)
+        horizon = req.forecast_horizon
+        forecasts_raw = forecast_all(series_data, forecast_horizon=horizon)
 
         # Compute backtest MAE per barangay
         # Group counts by barangay

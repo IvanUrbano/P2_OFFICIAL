@@ -72,10 +72,11 @@ async function healthCheck() {
  * POST /forecast — ARIMA forecasting
  * @param {Array} series - [{barangay_name, month, case_count}] per barangay
  * @param {number} seasonalM - Seasonal period (default 12)
+ * @param {number} forecastHorizon - Number of months to forecast ahead (default 1)
  * @returns {object} {forecasts: [{barangay_name, method, backtest_mae, predictions: [{month, yhat, yhat_lower, yhat_upper}]}]}
  */
-async function forecast(series, seasonalM = 12) {
-  return mlPost('/forecast', { seasonal_m: seasonalM, series });
+async function forecast(series, seasonalM = 12, forecastHorizon = 1) {
+  return mlPost('/forecast', { seasonal_m: seasonalM, forecast_horizon: forecastHorizon, series });
 }
 
 /**
