@@ -1,23 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Outlet } from 'react-router-dom';
-import Sidebar from './Sidebar';
 import Topbar from './Topbar';
-import { useTheme } from '../src/theme';
 
 /**
  * Layout wraps every protected page.
  * - Guards auth (redirects to /login if no user in localStorage)
- * - Renders Sidebar + Topbar + page content via <Outlet />
- *
- * Usage in App.jsx:
- *   <Route element={<Layout />}>
- *     <Route path="/dashboard" element={<Dashboard />} />
- *     ...
- *   </Route>
+ * - Renders Topbar (with nav) + page content via <Outlet />
  */
 export default function Layout() {
   const navigate = useNavigate();
-  const { t } = useTheme();
   const [user] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('user') || 'null');
@@ -33,36 +24,11 @@ export default function Layout() {
   if (!user) return null;
 
   return (
-    <div 
-      className="flex h-screen relative overflow-hidden" 
-      style={{ 
-        background: t.pageBg, 
-        color: t.text 
-      }}
-    >
-      {/* Decorative Background Blobs */}
-      <div
-        className="absolute top-10 left-20 w-96 h-96 rounded-full blur-[120px] opacity-20 pointer-events-none"
-        style={{ background: t.blob1 }}
-      />
-      <div
-        className="absolute bottom-10 right-10 w-80 h-80 rounded-full blur-[120px] opacity-20 pointer-events-none"
-        style={{ background: t.blob2 }}
-      />
-
-      {/* Fixed sidebar */}
-      <Sidebar />
-
-      {/* Scrollable page area */}
-      <div className="ml-20 flex-1 flex flex-col h-screen">
-        {/* Sticky topbar */}
-        <Topbar user={user} />
-
-        {/* Page content */}
-        <main className="flex-1 px-6 py-6 overflow-y-auto">
-          <Outlet />
-        </main>
-      </div>
+    <div className="h-screen relative overflow-hidden flex flex-col" style={{ background: 'linear-gradient(180deg, #B8D4FF 0%, #D6E8FF 10%, #EEF4FF 30%, #F4F6FA 55%)' }}>
+      <Topbar user={user} />
+      <main className="flex-1 px-10 py-6 overflow-y-auto">
+        <Outlet />
+      </main>
     </div>
   );
 }

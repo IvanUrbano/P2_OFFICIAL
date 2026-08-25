@@ -1,26 +1,37 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import API from "../api/axios";
-import { useTheme } from "../theme";
 
-/* ─── Status → accent color, drawn from the same palette used on the dashboard ─── */
+/* ─── Debounce hook ─── */
+function useDebounce(value, delay = 400) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return debounced;
+}
+
+/* ─── Status → accent color ─── */
 const statusColors = {
-  "ON TREATMENT": "#F59E0B",
-  "TREATMENT COMPLETED": "#0066FF",
-  "CURED": "#10B981",
-  "DIED": "#EF4444",
-  "LOST TO FOLLOW-UP": "#7c3aed",
-  "EXCLUDED": "#94A3B8",
+  "ON TREATMENT": { bg: '#FEF3C7', text: '#D97706', dot: '#F59E0B' },
+  "TREATMENT COMPLETED": { bg: '#DBEAFE', text: '#2563EB', dot: '#3B82F6' },
+  "CURED": { bg: '#D1FAE5', text: '#059669', dot: '#10B981' },
+  "DIED": { bg: '#FEE2E2', text: '#DC2626', dot: '#EF4444' },
+  "LOST TO FOLLOW-UP": { bg: '#EDE9FE', text: '#7C3AED', dot: '#8B5CF6' },
+  "EXCLUDED": { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' },
+  "PENDING": { bg: '#FEF3C7', text: '#D97706', dot: '#F59E0B' },
 };
 
 function StatusBadge({ status }) {
-  const color = statusColors[status] || "#94A3B8";
+  const value = status || "PENDING";
+  const colors = statusColors[value] || { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' };
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap"
-      style={{ background: `${color}1A`, color }}
+      style={{ background: colors.bg, color: colors.text }}
     >
-      <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: color }} />
-      {status}
+      <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: colors.dot }} />
+      {value.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
     </span>
   );
 }
@@ -40,37 +51,47 @@ const formatDate = (dateStr) => {
   }
 };
 
-/* Reusable field row for the record detail modal */
-const Field = ({ label, value, badge }) => {
-  const { t } = useTheme();
+/* Reusable detail row for the record detail panel */
+const DetailRow = ({ label, value }) => {
+  const displayValue = value && typeof value === 'string'
+    ? value.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
+    : value;
   return (
     <div className="flex items-center justify-between gap-4">
-      <span style={{ color: t.textSecondary }}>{label}</span>
-      {badge ? (
-        <StatusBadge status={value} />
-      ) : (
-        <span className="font-semibold" style={{ color: t.text }}>{value || "N/A"}</span>
-      )}
+      <span className="text-xs" style={{ color: '#94A3B8' }}>{label}</span>
+      <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{displayValue || "—"}</span>
     </div>
   );
 };
 
 export default function TBRecords() {
-  const { t } = useTheme();
   const [records, setRecords] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [barangays, setBarangays] = useState([]);
+  const ALL_OUTCOME_STATUSES = [
+    "ON TREATMENT",
+    "CURED",
+    "TREATMENT COMPLETED",
+    "DIED",
+    "LOST TO FOLLOW-UP",
+    "EXCLUDED",
+  ];
+
   const [outcomeStatuses, setOutcomeStatuses] = useState([]);
-  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 0 });
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  const [summary, setSummary] = useState({ total: 0, onTreatment: 0, completedCured: 0 });
 
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
+  const debouncedSearch = useDebounce(searchTerm, 400);
   const [selectedYear, setSelectedYear] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("");
   const [selectedBarangay, setSelectedBarangay] = useState("");
   const [selectedOutcomeStatus, setSelectedOutcomeStatus] = useState("");
+  const [selectedFacility, setSelectedFacility] = useState("");
+  const [facilities, setFacilities] = useState([]);
   const [selectedRecord, setSelectedRecord] = useState(null);
-  const recordsPerPage = 10;
+  const [loading, setLoading] = useState(true);
+  const recordsPerPage = 20;
 
   // Fetch barangays for filter dropdown
   useEffect(() => {
@@ -85,15 +106,30 @@ export default function TBRecords() {
     fetchBarangays();
   }, []);
 
-  // Fetch cases with filters
+  // Fetch facilities from actual case data for the filter dropdown
   useEffect(() => {
+    const fetchFacilities = async () => {
+      try {
+        const res = await API.get("/api/tb/facilities");
+        const names = (res.data.facilities || []).map(f => (f.name || f.facility_name || '').trim()).filter(Boolean).sort();
+        setFacilities([...new Set(names)]);
+      } catch (err) {
+        console.error("Failed to fetch facilities:", err);
+      }
+    };
+    fetchFacilities();
+  }, []);
+
+  // Fetch cases with filters (uses debounced search)
+  useEffect(() => {
+    let cancelled = false;
     const fetchCases = async () => {
       setLoading(true);
       try {
         const params = new URLSearchParams();
         params.append("page", currentPage);
         params.append("limit", recordsPerPage);
-        if (searchTerm) params.append("search", searchTerm);
+        if (debouncedSearch) params.append("search", debouncedSearch);
         if (selectedBarangay) params.append("barangay", selectedBarangay);
         if (selectedYear) params.append("year", selectedYear);
         if (selectedMonth) {
@@ -101,22 +137,34 @@ export default function TBRecords() {
           if (monthNum) params.append("month", monthNum);
         }
         if (selectedOutcomeStatus) params.append("outcome", selectedOutcomeStatus);
+        if (selectedFacility) params.append("facility", selectedFacility);
 
         const res = await API.get(`/api/tb/cases?${params.toString()}`);
-        setRecords(res.data.cases || []);
-        setPagination(res.data.pagination || { page: 1, limit: 10, total: 0, totalPages: 0 });
+        if (cancelled) return;
 
-        // Extract unique outcome statuses from current page
-        const statuses = [...new Set((res.data.cases || []).map(r => r.outcome_status).filter(Boolean))].sort();
+        const cases = res.data.cases || [];
+        setRecords(cases);
+        setPagination(res.data.pagination || { page: 1, limit: 10, total: 0, totalPages: 1 });
+
+        // Compute summary from all records (use total from pagination)
+        const totalRecords = res.data.pagination?.total || 0;
+        const onTreatment = cases.filter(r => r.outcome_status === "ON TREATMENT").length;
+        const completedCured = cases.filter(r => r.outcome_status === "CURED" || r.outcome_status === "TREATMENT COMPLETED").length;
+        setSummary({ total: totalRecords, onTreatment, completedCured });
+
+        const statuses = [...new Set(cases.map(r => r.outcome_status).filter(Boolean))].sort();
         setOutcomeStatuses(statuses);
       } catch (err) {
-        console.error("Failed to fetch cases:", err);
+        if (!cancelled) console.error("Failed to fetch cases:", err);
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
     fetchCases();
-  }, [currentPage, searchTerm, selectedYear, selectedMonth, selectedBarangay, selectedOutcomeStatus]);
+    return () => { cancelled = true; };
+  }, [currentPage, debouncedSearch, selectedYear, selectedMonth, selectedBarangay, selectedOutcomeStatus, selectedFacility]);
 
   const handleClearFilters = () => {
     setSearchTerm("");
@@ -124,68 +172,105 @@ export default function TBRecords() {
     setSelectedMonth("");
     setSelectedBarangay("");
     setSelectedOutcomeStatus("");
+    setSelectedFacility("");
     setCurrentPage(1);
   };
 
-  const handlePrevious = () => {
-    if (currentPage > 1) setCurrentPage(currentPage - 1);
-  };
-
-  const handleNext = () => {
-    if (currentPage < pagination.totalPages) setCurrentPage(currentPage + 1);
-  };
-
   return (
-    <div className="relative space-y-5">
+    <div className="flex flex-col gap-5">
 
-      {/* ── Toolbar: actions + filters ── */}
-      <div className="glass-card p-5">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
-            <i className="ri-folder-chart-2-line text-lg" style={{ color: "#2E6FAF" }} />
-            <span>TB Case Records</span>
-          </div>
-
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <button
-              className="inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-xs font-bold transition hover:opacity-80"
-              style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.textSecondary }}
-            >
-              <i className="ri-upload-2-line text-sm" />
-              Import
-            </button>
-            <button
-              className="inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-xs font-bold text-white transition hover:opacity-90"
-              style={{ background: "linear-gradient(135deg, #0066FF 0%, #00D8F6 100%)" }}
-            >
-              <i className="ri-download-2-line text-sm" />
-              Export
-            </button>
-          </div>
+      {/* ── Page Header + Metric Cards ── */}
+      <div className="flex flex-col lg:flex-row lg:items-center gap-6">
+        {/* Left — Title */}
+        <div className="shrink-0 pl-2">
+          <h1 className="text-2xl font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>TB Records</h1>
+          <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>
+            Manage, search, filter, and verify TB records for monitoring and analysis.
+          </p>
         </div>
 
-        <div className="mt-5 grid w-full grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
-          <label className="relative block w-full">
-            <span className="sr-only">Search records</span>
-            <i
-              className="ri-search-line pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm"
-              style={{ color: t.textMuted }}
-            />
+        {/* Right — Metric Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 flex-1">
+          {/* Total TB Records */}
+          <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)' }}>
+            <div className="p-5 pb-3 flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold" style={{ color: '#64748B' }}>TB Records</p>
+                <p className="text-3xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{summary.total.toLocaleString()}</p>
+              </div>
+              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: '#DBEAFE' }}>
+                <i className="ri-folder-chart-2-line text-base" style={{ color: '#2563EB' }} />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-5 py-2.5" style={{ borderTop: '1px solid #1E40AF', background: '#0F2D52' }}>
+              <span className="text-[11px] font-semibold" style={{ color: '#93C5FD' }}>All Registered Records</span>
+            </div>
+          </div>
+
+          {/* On Treatment */}
+          <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)' }}>
+            <div className="p-5 pb-3 flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold" style={{ color: '#64748B' }}>On Treatment</p>
+                <p className="text-3xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{summary.onTreatment.toLocaleString()}</p>
+              </div>
+              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: '#DBEAFE' }}>
+                <i className="ri-capsule-line text-base" style={{ color: '#2563EB' }} />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-5 py-2.5" style={{ borderTop: '1px solid #1E40AF', background: '#0F2D52' }}>
+              <span className="text-[11px] font-semibold" style={{ color: '#93C5FD' }}>Currently Under Treatment</span>
+            </div>
+          </div>
+
+          {/* Pending Verification */}
+          <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)' }}>
+            <div className="p-5 pb-3 flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold" style={{ color: '#64748B' }}>Completed / Cured</p>
+                <p className="text-3xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{summary.completedCured.toLocaleString()}</p>
+              </div>
+              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: '#DBEAFE' }}>
+                <i className="ri-error-warning-line text-base" style={{ color: '#2563EB' }} />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-5 py-2.5" style={{ borderTop: '1px solid #1E40AF', background: '#0F2D52' }}>
+              <span className="text-[11px] font-semibold" style={{ color: '#93C5FD' }}>Completed/Cured Records</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      {/* ── Records Table ── */}
+      <div
+        className="rounded-2xl overflow-hidden"
+        style={{
+          background: 'rgba(255,255,255,0.8)',
+          border: '1px solid #DBEAFE',
+          boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)',
+        }}
+      >
+                {/* Filter Toolbar */}
+        <div className="flex flex-wrap items-center gap-3 px-5 py-4" style={{ borderBottom: '1px solid #E2E8F0' }}>
+          <div className="relative flex-1 max-w-xs">
+            <i className="ri-search-line pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm" style={{ color: '#94A3B8' }} />
             <input
-              type="search"
-              placeholder="Search records"
+              type="text"
+              placeholder="Search by case ID, barangay, facility..."
               value={searchTerm}
               onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
-              className="w-full rounded-lg py-2 pl-9 pr-3 text-xs font-medium outline-none transition focus:ring-2"
-              style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}
+              className="w-full rounded-lg py-2 pl-9 pr-3 text-xs font-medium outline-none transition"
+              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#0F2D52' }}
             />
-          </label>
+            {searchTerm && searchTerm !== debouncedSearch && (
+              <i className="ri-loader-4-line absolute right-3 top-1/2 -translate-y-1/2 text-xs animate-spin" style={{ color: '#94A3B8' }} />
+            )}
+          </div>
 
           <select
             value={selectedYear}
             onChange={(e) => { setSelectedYear(e.target.value); setCurrentPage(1); }}
-            className="w-full rounded-lg px-3 py-2 pr-8 text-xs font-medium outline-none transition"
-            style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}
+            className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
+            style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
           >
             <option value="">All Years</option>
             <option value="2025">2025</option>
@@ -196,88 +281,73 @@ export default function TBRecords() {
           <select
             value={selectedMonth}
             onChange={(e) => { setSelectedMonth(e.target.value); setCurrentPage(1); }}
-            className="w-full rounded-lg px-3 py-2 pr-8 text-xs font-medium outline-none transition"
-            style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}
+            className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
+            style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
           >
             <option value="">All Months</option>
-            <option value="January">January</option>
-            <option value="February">February</option>
-            <option value="March">March</option>
-            <option value="April">April</option>
-            <option value="May">May</option>
-            <option value="June">June</option>
-            <option value="July">July</option>
-            <option value="August">August</option>
-            <option value="September">September</option>
-            <option value="October">October</option>
-            <option value="November">November</option>
-            <option value="December">December</option>
+            {["January","February","March","April","May","June","July","August","September","October","November","December"].map(m => (
+              <option key={m} value={m}>{m}</option>
+            ))}
           </select>
 
           <select
             value={selectedBarangay}
             onChange={(e) => { setSelectedBarangay(e.target.value); setCurrentPage(1); }}
-            className="w-full rounded-lg px-3 py-2 pr-8 text-xs font-medium outline-none transition"
-            style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}
+            className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
+            style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
           >
             <option value="">All Barangays</option>
-            {barangays.map((barangay) => (
-              <option key={barangay} value={barangay}>{barangay}</option>
+            {barangays.map((b) => (
+              <option key={b} value={b}>{b}</option>
             ))}
           </select>
 
           <select
             value={selectedOutcomeStatus}
             onChange={(e) => { setSelectedOutcomeStatus(e.target.value); setCurrentPage(1); }}
-            className="w-full rounded-lg px-3 py-2 pr-8 text-xs font-medium outline-none transition"
-            style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}
+            className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
+            style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
           >
-            <option value="">All Outcomes</option>
-            {outcomeStatuses.map((status) => (
-              <option key={status} value={status}>{status}</option>
+            <option value="">All Status</option>
+            {ALL_OUTCOME_STATUSES.map((status) => (
+              <option key={status} value={status}>{status.charAt(0) + status.slice(1).toLowerCase()}</option>
+            ))}
+          </select>
+
+          <select
+            value={selectedFacility}
+            onChange={(e) => { setSelectedFacility(e.target.value); setCurrentPage(1); }}
+            className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
+            style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
+          >
+            <option value="">All Facilities</option>
+            {facilities.map((f) => (
+              <option key={f} value={f}>{f}</option>
             ))}
           </select>
 
           <button
             onClick={handleClearFilters}
-            className="w-full rounded-lg px-3 py-2 text-xs font-bold transition hover:opacity-80"
-            style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.textSecondary }}
+            className="ml-auto text-xs font-bold transition hover:underline"
+            style={{ color: '#0066FF' }}
           >
             Clear Filters
           </button>
         </div>
-      </div>
 
-      {/* ── Records table ── */}
-      <div className="glass-card overflow-hidden">
-        <div className="flex items-center justify-between p-5 pb-0">
-          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
-            <i className="ri-table-line text-lg" style={{ color: "#2E6FAF" }} />
-            <span>Case Records</span>
-          </div>
-          <span className="text-xs font-bold" style={{ color: t.textSecondary }}>
-            {pagination.total} total
-          </span>
-        </div>
-
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <i className="ri-loader-4-line animate-spin text-3xl" style={{ color: "#2E6FAF" }} />
-              <p className="mt-2 text-sm" style={{ color: t.textSecondary }}>Loading records...</p>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="mt-4 min-h-[480px] overflow-x-auto">
-              <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
+        {/* Table */}
+            <div className="min-h-[480px] overflow-x-auto">
+              <table
+                className="w-full text-left text-sm"
+                style={{ borderCollapse: 'collapse' }}
+              >
                 <thead>
-                  <tr>
-                    {["Case ID", "Barangay", "Age", "Sex", "Diagnosis", "Facility", "Treatment Outcome", "Action"].map((h) => (
+                  <tr style={{ background: '#0F2D52' }}>
+                    {["Case ID", "Barangay", "Age", "Sex", "Diagnosis Date", "Facility", "Bacteriologic Status", "Status", "Action"].map((h, idx) => (
                       <th
                         key={h}
-                        className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
-                        style={{ color: t.textSecondary, borderBottom: "1px solid rgba(148,163,184,.15)" }}
+                        className={`${idx === 0 ? 'pl-6' : 'px-3'} pr-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${idx === 5 ? 'max-w-[200px]' : ''}`}
+                        style={{ color: '#ffffff', borderBottom: '1px solid #1E40AF', borderRight: idx < 8 ? '1px solid #1E40AF' : 'none' }}
                       >
                         {h}
                       </th>
@@ -285,38 +355,61 @@ export default function TBRecords() {
                   </tr>
                 </thead>
                 <tbody>
-                  {records.length === 0 ? (
+                  {loading ? (
+                    // Skeleton rows while loading
+                    Array.from({ length: 8 }).map((_, i) => (
+                      <tr key={`skeleton-${i}`} style={{ borderBottom: '1px solid #E2E8F0', background: i % 2 === 0 ? '#ffffff' : '#F8FAFC' }}>
+                        {Array.from({ length: 9 }).map((_, j) => (
+                          <td key={j} className={`${j === 0 ? 'pl-6' : 'px-3'} pr-3 py-3.5`} style={{ borderRight: j < 8 ? '1px solid #E2E8F0' : 'none' }}>
+                            <div
+                              className="h-4 rounded animate-pulse"
+                              style={{
+                                background: `linear-gradient(90deg, #EFF6FF 25%, #DBEAFE 50%, #EFF6FF 75%)`,
+                                backgroundSize: '200% 100%',
+                                animation: `shimmer 1.5s infinite`,
+                                width: j === 0 ? '60px' : j === 5 ? '140px' : j === 6 ? '120px' : j === 7 ? '90px' : j === 8 ? '32px' : '80px',
+                              }}
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    ))
+                  ) : records.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-5 py-12 text-center text-sm" style={{ color: "#94A3B8" }}>
+                      <td colSpan={9} className="px-5 py-12 text-center text-sm" style={{ color: '#94A3B8' }}>
                         No records found matching your filters.
                       </td>
                     </tr>
                   ) : (
-                    records.map((record) => (
+                    records.map((record, idx) => (
                       <tr
                         key={record.id}
-                        style={{ borderTop: "1px solid rgba(148,163,184,.1)" }}
+                        className="hover:bg-blue-50 transition-colors"
+                        style={{ borderBottom: '1px solid #E2E8F0', background: idx % 2 === 0 ? '#ffffff' : '#F8FAFC' }}
                       >
-                        <td className="px-5 py-3 font-bold" style={{ color: t.text }}>
-                          {String(record.id).padStart(4, "0")}
+                        <td className="pl-6 pr-3 py-3.5" style={{ borderRight: '1px solid #E2E8F0' }}>
+                          <span className="font-bold" style={{ color: '#0F2D52' }}>
+                            {String(record.id).padStart(4, "0")}
+                          </span>
                         </td>
-                        <td className="px-5 py-3" style={{ color: t.textSecondary }}>{record.barangay_name}</td>
-                        <td className="px-5 py-3" style={{ color: t.textSecondary }}>{record.age}</td>
-                        <td className="px-5 py-3" style={{ color: t.textSecondary }}>{record.sex}</td>
-                        <td className="px-5 py-3" style={{ color: t.textSecondary }}>{formatDate(record.date_of_diagnosis)}</td>
-                        <td className="px-5 py-3" style={{ color: t.textSecondary }}>{record.screening_facility}</td>
-                        <td className="px-5 py-3">
+                        <td className="px-3 py-3.5 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.barangay_name}</td>
+                        <td className="px-3 py-3.5 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.age}</td>
+                        <td className="px-3 py-3.5 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.sex}</td>
+                        <td className="px-3 py-3.5 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{formatDate(record.date_of_diagnosis)}</td>
+                        <td className="px-3 py-3.5 text-sm max-w-[200px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }} title={record.screening_facility}>{record.screening_facility}</td>
+                        <td className="px-3 py-3.5 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.bacteriological_status ? record.bacteriological_status.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
+                        <td className="px-3 py-3.5" style={{ borderRight: '1px solid #E2E8F0' }}>
                           <StatusBadge status={record.outcome_status} />
                         </td>
-                        <td className="px-5 py-3">
-                          <button
-                            aria-label="View record"
-                            onClick={() => setSelectedRecord(record)}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition hover:opacity-80"
-                            style={{ background: "rgba(46,111,175,0.1)", border: "1px solid rgba(46,111,175,0.25)", color: "#2E6FAF" }}
-                          >
-                            <i className="ri-eye-line text-sm" />
-                          </button>
+                        <td className="px-3 py-3.5 text-center">
+                            <button
+                              aria-label="View record"
+                              onClick={() => setSelectedRecord(record)}
+                              className="inline-flex items-center justify-center w-8 h-8 rounded-lg transition hover:opacity-80"
+                              style={{ background: '#DBEAFE', color: '#2563EB' }}
+                            >
+                              <i className="ri-eye-line text-sm" />
+                            </button>
                         </td>
                       </tr>
                     ))
@@ -325,125 +418,165 @@ export default function TBRecords() {
               </table>
             </div>
 
+            {/* Pagination */}
             <div
-              className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
-              style={{ borderTop: "1px solid rgba(148,163,184,.15)" }}
+              className="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between"
+              style={{ borderTop: '1px solid #E2E8F0' }}
             >
-              <p className="text-xs font-semibold" style={{ color: t.textSecondary }}>
-                Showing {pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} records
+              <p className="text-xs font-semibold" style={{ color: '#94A3B8' }}>
+                {loading ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <i className="ri-loader-4-line text-xs animate-spin" />
+                    Loading records...
+                  </span>
+                ) : (
+                  <>Showing {pagination.total === 0 ? 0 : (currentPage - 1) * recordsPerPage + 1}–{Math.min(currentPage * recordsPerPage, pagination.total)} of {pagination.total} records</>
+                )}
               </p>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-1.5">
                 <button
                   aria-label="Previous page"
-                  onClick={handlePrevious}
-                  disabled={currentPage === 1}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
-                  style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.textSecondary }}
+                  onClick={() => currentPage > 1 && setCurrentPage(currentPage - 1)}
+                  disabled={currentPage <= 1 || loading}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
                 >
                   <i className="ri-arrow-left-s-line text-base" />
                 </button>
+                {(() => {
+                  const totalPages = pagination.totalPages || 1;
+                  const pages = [];
+                  if (totalPages <= 7) {
+                    for (let i = 1; i <= totalPages; i++) pages.push(i);
+                  } else {
+                    pages.push(1);
+                    if (currentPage > 3) pages.push('...');
+                    const start = Math.max(2, currentPage - 1);
+                    const end = Math.min(totalPages - 1, currentPage + 1);
+                    for (let i = start; i <= end; i++) pages.push(i);
+                    if (currentPage < totalPages - 2) pages.push('...');
+                    pages.push(totalPages);
+                  }
+                  return pages.map((page, idx) =>
+                    page === '...' ? (
+                      <span key={`e-${idx}`} className="inline-flex h-8 w-8 items-center justify-center text-xs" style={{ color: '#94A3B8' }}>...</span>
+                    ) : (
+                      <button
+                        key={page}
+                        onClick={() => setCurrentPage(page)}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold transition"
+                        style={currentPage === page ? { background: '#0F2D52', color: '#ffffff' } : { color: '#64748B' }}
+                      >
+                        {page}
+                      </button>
+                    )
+                  );
+                })()}
                 <button
                   aria-label="Next page"
-                  onClick={handleNext}
-                  disabled={currentPage === pagination.totalPages || pagination.totalPages === 0}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
-                  style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.textSecondary }}
+                  onClick={() => setCurrentPage(currentPage + 1)}
+                  disabled={currentPage >= pagination.totalPages || pagination.total === 0 || loading}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
                 >
                   <i className="ri-arrow-right-s-line text-base" />
                 </button>
               </div>
             </div>
-          </>
-        )}
       </div>
 
       {/* ── Record detail modal ── */}
       {selectedRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/20 backdrop-blur-sm">
+          {/* Backdrop */}
+          <div className="absolute inset-0" onClick={() => setSelectedRecord(null)} />
+          {/* Panel */}
           <div
-            className="glass-card w-full max-w-3xl max-h-[90vh] overflow-hidden"
-            style={{ background: t.cardSolid }}
+            className="relative w-full max-w-lg h-full overflow-y-auto bg-white"
+            style={{
+              boxShadow: '-8px 0 40px rgba(15, 45, 82, 0.12)',
+              animation: 'slide-in-right 0.3s ease-out both',
+            }}
           >
-            <div
-              className="flex flex-col gap-4 px-6 py-5 sm:flex-row sm:items-center sm:justify-between"
-              style={{ borderBottom: "1px solid rgba(148,163,184,.15)" }}
-            >
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.3em]" style={{ color: t.textSecondary }}>
-                  TB Record
-                </p>
-                <h2 className="mt-2 text-xl font-bold tracking-tight" style={{ color: t.text }}>
-                  Record details
-                </h2>
-                <p className="mt-1.5 max-w-xl text-sm leading-6" style={{ color: t.textSecondary }}>
-                  Detailed TB case information, including patient, screening, and treatment data.
-                </p>
+            {/* Header */}
+            <div className="sticky top-0 z-10" style={{ background: '#0F2D52' }}>
+              <div className="flex items-center justify-between px-6 py-4">
+                <h2 className="text-base font-extrabold tracking-tight" style={{ color: '#ffffff' }}>RECORD DETAILS</h2>
+                <button
+                  onClick={() => setSelectedRecord(null)}
+                  aria-label="Close modal"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full transition hover:opacity-80"
+                  style={{ color: '#93C5FD' }}
+                >
+                  <i className="ri-close-line text-base" />
+                </button>
               </div>
-              <button
-                onClick={() => setSelectedRecord(null)}
-                aria-label="Close modal"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full transition hover:opacity-80"
-                style={{ background: t.panel, color: t.textSecondary }}
-              >
-                <i className="ri-close-line text-base" />
-              </button>
             </div>
 
-            <div className="space-y-4 overflow-y-auto px-6 py-6" style={{ maxHeight: "70vh" }}>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="rounded-2xl p-5" style={{ background: t.inputBg }}>
-                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
-                    <i className="ri-file-list-3-line" style={{ color: "#2E6FAF" }} />
-                    Case summary
-                  </p>
-                  <div className="mt-4 space-y-3 text-sm">
-                    <Field label="Case ID" value={String(selectedRecord.id).padStart(4, "0")} />
-                    <Field label="Batch ID" value={selectedRecord.batch_id?.substring(0, 8)} />
-                    <Field label="Treatment Outcome" value={selectedRecord.outcome_status} badge />
-                  </div>
-                </div>
+            {/* Content */}
+            <div className="px-6 py-5 space-y-6">
 
-                <div className="rounded-2xl p-5" style={{ background: t.inputBg }}>
-                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
-                    <i className="ri-user-line" style={{ color: "#2E6FAF" }} />
-                    Patient information
-                  </p>
-                  <div className="mt-4 space-y-3 text-sm">
-                    <Field label="Age" value={selectedRecord.age} />
-                    <Field label="Sex" value={selectedRecord.sex} />
-                    <Field label="Barangay" value={selectedRecord.barangay_name} />
-                    <Field label="Source" value={selectedRecord.source_of_patient} />
-                  </div>
+              {/* Hero: Case ID + Status */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Case ID</p>
+                <p className="text-2xl font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>
+                  {String(selectedRecord.id).padStart(4, "0")}
+                </p>
+                <div className="mt-2">
+                  <StatusBadge status={selectedRecord.outcome_status} />
                 </div>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="rounded-2xl p-5" style={{ background: t.inputBg }}>
-                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
-                    <i className="ri-stethoscope-line" style={{ color: "#2E6FAF" }} />
-                    Screening & diagnosis
-                  </p>
-                  <div className="mt-4 space-y-3 text-sm">
-                    <Field label="Screening Date" value={formatDate(selectedRecord.date_of_screening)} />
-                    <Field label="Diagnosis Date" value={formatDate(selectedRecord.date_of_diagnosis)} />
-                    <Field label="Notification Date" value={formatDate(selectedRecord.date_of_notification)} />
-                    <Field label="Facility" value={selectedRecord.screening_facility} />
-                  </div>
+              {/* Section: Case Summary */}
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Case Summary</h3>
+                <div className="space-y-2.5">
+                  <DetailRow label="Validation Status" value={selectedRecord.batch_id ? "Validated" : "Pending"} />
+                  <DetailRow label="Encoded By" value={selectedRecord.source_of_patient} />
+                  <DetailRow label="Imported From" value={selectedRecord.screening_facility} />
+                  <DetailRow label="Created" value={formatDate(selectedRecord.date_of_diagnosis)} />
                 </div>
+              </div>
 
-                <div className="rounded-2xl p-5" style={{ background: t.inputBg }}>
-                  <p className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
-                    <i className="ri-capsule-line" style={{ color: "#2E6FAF" }} />
-                    Clinical & treatment
-                  </p>
-                  <div className="mt-4 space-y-3 text-sm">
-                    <Field label="Anatomical Site" value={selectedRecord.anatomical_site} />
-                    <Field label="Registration Group" value={selectedRecord.registration_group} />
-                    <Field label="Bacteriological Status" value={selectedRecord.bacteriological_status} />
-                    <Field label="Treatment Facility" value={selectedRecord.treatment_facility} />
-                    <Field label="Started Treatment" value={formatDate(selectedRecord.date_started_treatment)} />
-                    <Field label="Outcome Date" value={formatDate(selectedRecord.date_of_outcome)} />
-                  </div>
+              <div style={{ borderTop: '1px solid #E2E8F0' }} />
+
+              {/* Section: Patient Information */}
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Patient Information</h3>
+                <div className="space-y-2.5">
+                  <DetailRow label="Age" value={selectedRecord.age} />
+                  <DetailRow label="Sex" value={selectedRecord.sex} />
+                  <DetailRow label="Barangay" value={selectedRecord.barangay_name} />
+                  <DetailRow label="City" value="Pasig City" />
+                  <DetailRow label="Source" value={selectedRecord.source_of_patient || "Walk-in"} />
+                </div>
+              </div>
+
+              <div style={{ borderTop: '1px solid #E2E8F0' }} />
+
+              {/* Section: Screening & Diagnosis */}
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Screening & Diagnosis</h3>
+                <div className="space-y-2.5">
+                  <DetailRow label="Screening Date" value={formatDate(selectedRecord.date_of_screening)} />
+                  <DetailRow label="Diagnosis Date" value={formatDate(selectedRecord.date_of_diagnosis)} />
+                  <DetailRow label="Notification Date" value={formatDate(selectedRecord.date_of_notification)} />
+                  <DetailRow label="Facility" value={selectedRecord.screening_facility} />
+                </div>
+              </div>
+
+              <div style={{ borderTop: '1px solid #E2E8F0' }} />
+
+              {/* Section: Clinical & Treatment */}
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Clinical & Treatment</h3>
+                <div className="space-y-2.5">
+                  <DetailRow label="Anatomical Site" value={selectedRecord.anatomical_site} />
+                  <DetailRow label="Registration Group" value={selectedRecord.registration_group} />
+                  <DetailRow label="Bacteriological Status" value={selectedRecord.bacteriological_status ? selectedRecord.bacteriological_status.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : null} />
+                  <DetailRow label="Treatment Facility" value={selectedRecord.treatment_facility} />
+                  <DetailRow label="Started Treatment" value={formatDate(selectedRecord.date_started_treatment)} />
+                  <DetailRow label="Outcome Date" value={formatDate(selectedRecord.date_of_outcome)} />
                 </div>
               </div>
             </div>

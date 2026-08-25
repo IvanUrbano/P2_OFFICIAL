@@ -10,6 +10,9 @@ import BarangayWatchlist from './pages/BarangayWatchlist';
 import Notifications from './pages/Notifications';
 import Users from './pages/Users';
 import Settings from './pages/Settings';
+import Reports from './pages/Reports';
+import Alert from './pages/Alert';
+import Profile from './pages/Profile';
 
 function App() {
   return (
@@ -28,6 +31,9 @@ function App() {
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/users" element={<Users />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/reports" element={<Reports />} />
+          <Route path="/alert" element={<Alert />} />
+          <Route path="/profile" element={<Profile />} />
         </Route>
       </Routes>
     </Router>

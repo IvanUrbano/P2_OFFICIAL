@@ -38,12 +38,14 @@ router.get('/barangays', async (req, res) => {
 
 /**
  * GET /api/tb/facilities
- * List all health facilities with parent barangay
+ * List distinct screening_facility names from tb_cases
  */
 router.get('/facilities', async (req, res) => {
   try {
-    const facilities = await getHealthFacilities();
-    res.json({ facilities, count: facilities.length });
+    const result = await pool.query(
+      `SELECT DISTINCT screening_facility FROM tb_cases WHERE screening_facility IS NOT NULL AND screening_facility != '' ORDER BY screening_facility`
+    );
+    res.json({ facilities: result.rows.map(r => ({ name: r.screening_facility })) });
   } catch (err) {
     console.error('Fetch facilities error:', err.message);
     res.status(500).json({ error: 'Server error fetching facilities.' });
@@ -169,6 +171,7 @@ router.get('/cases', async (req, res) => {
       year = '',
       month = '',
       outcome = '',
+      facility = '',
     } = req.query;
 
     const offset = (Math.max(1, Number(page)) - 1) * Number(limit);
@@ -177,13 +180,17 @@ router.get('/cases', async (req, res) => {
     let paramIdx = 1;
 
     if (search) {
+      const term = search.trim();
+      const paddedTerm = term.replace(/^0+/, '') || '0';
       conditions.push(`(
+        c.id::text ILIKE $${paramIdx} OR
+        c.id = $${paramIdx + 1} OR
         c.barangay_name ILIKE $${paramIdx} OR
         c.screening_facility ILIKE $${paramIdx} OR
         c.treatment_facility ILIKE $${paramIdx}
       )`);
-      params.push(`%${search}%`);
-      paramIdx++;
+      params.push(`%${term}%`, Number(paddedTerm));
+      paramIdx += 2;
     }
 
     if (barangay) {
@@ -207,6 +214,13 @@ router.get('/cases', async (req, res) => {
     if (outcome) {
       conditions.push(`c.outcome_status = $${paramIdx}`);
       params.push(outcome);
+      paramIdx++;
+    }
+
+    if (facility) {
+      const facilityTrimmed = facility.trim();
+      conditions.push(`c.screening_facility = $${paramIdx}`);
+      params.push(facilityTrimmed);
       paramIdx++;
     }
 
