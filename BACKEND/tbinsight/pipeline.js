@@ -162,7 +162,13 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     // 5a. Compute neighbor risks
     const barangayIncidences = barangays.map(b => {
       const fc = forecastResults.find(f => f.barangay_name === b.name);
-      const predictedCount = fc?.predictions?.[0]?.yhat || 0;
+      let predictedCount = fc?.predictions?.[0]?.yhat;
+      // Fallback: if ARIMA failed, use actual case count from latest month
+      if (predictedCount == null) {
+        const pts = seriesByBarangay[b.name] || [];
+        const sorted = pts.sort((a, c) => a.month.localeCompare(c.month));
+        predictedCount = sorted.length > 0 ? sorted[sorted.length - 1].case_count : 0;
+      }
       const inc = _computeIncidence(predictedCount, populationMap[b.name] || 1000);
       return { name: b.name, incidence_per_100k: inc };
     });
@@ -204,7 +210,13 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
       const name = b.name;
       const pop = populationMap[name] || 1000;
       const fc = forecastResults.find(f => f.barangay_name === name);
-      const predictedCount = fc?.predictions?.[0]?.yhat || 0;
+      let predictedCount = fc?.predictions?.[0]?.yhat;
+      // Fallback: if ARIMA failed, use actual case count from latest month
+      if (predictedCount == null) {
+        const pts = seriesByBarangay[name] || [];
+        const sorted = pts.sort((a, c) => a.month.localeCompare(c.month));
+        predictedCount = sorted.length > 0 ? sorted[sorted.length - 1].case_count : 0;
+      }
       const forecastedIncidence = _computeIncidence(predictedCount, pop);
       const slope = trendByBarangay[name]?.slope || 0;
       const seasonalityFlag = _detectSeasonality(seriesByBarangay[name] || []);

@@ -291,13 +291,75 @@ router.get('/dashboard/summary', async (req, res) => {
         COUNT(DISTINCT barangay_name)::INTEGER as barangays_with_cases,
         COUNT(DISTINCT DATE_TRUNC('month', date_of_diagnosis))::INTEGER as months_covered,
         MIN(date_of_diagnosis) as earliest_date,
-        MAX(date_of_diagnosis) as latest_date
+        MAX(date_of_diagnosis) as latest_date,
+        SUM(CASE WHEN UPPER(outcome_status) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER as on_treatment_count,
+        SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER as cured_count,
+        SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER as treatment_completed_count,
+        SUM(CASE WHEN UPPER(outcome_status) = 'DIED' THEN 1 ELSE 0 END)::INTEGER as died_count,
+        SUM(CASE WHEN UPPER(outcome_status) = 'LOST TO FOLLOW-UP' THEN 1 ELSE 0 END)::INTEGER as ltfu_count,
+        SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER as successful_count,
+        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '')::INTEGER as total_outcomes,
+        SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as current_month_cases,
+        SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
+                  AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as prev_month_cases
       FROM tb_cases
     `);
+    console.log('[metrics]', result.rows[0]);
     res.json({ summary: result.rows[0] });
   } catch (err) {
     console.error('Dashboard summary error:', err.message);
     res.status(500).json({ error: 'Server error fetching dashboard summary.' });
+  }
+});
+
+/**
+ * GET /api/tb/dashboard/metrics
+ * Single consolidated endpoint for the 6 metric cards.
+ * Returns: totalCases, activeCases, highRiskAreas, successRate,
+ *          forecastTotal, lastSync, plus trend badges.
+ */
+router.get('/dashboard/metrics', async (req, res) => {
+  try {
+    // Core query: all data from tb_cases (guaranteed to exist)
+    const result = await pool.query(`
+      SELECT
+        COUNT(*)::INTEGER AS total_cases,
+        SUM(CASE WHEN outcome_status = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS on_treatment_count,
+        SUM(CASE WHEN outcome_status = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
+        SUM(CASE WHEN outcome_status IN ('CURED', 'TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful_count,
+        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '')::INTEGER AS total_outcomes,
+        SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER AS current_month_cases,
+        SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
+                  AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER AS prev_month_cases
+      FROM tb_cases
+    `);
+    const row = result.rows[0];
+
+    const totalCases = row.total_cases || 0;
+    const onTreatmentCount = row.on_treatment_count || 0;
+    const curedCount = row.cured_count || 0;
+    const successRate = row.total_outcomes > 0
+      ? Math.round((row.successful_count / row.total_outcomes) * 100)
+      : 0;
+
+    // Trend: current month vs previous month
+    const currentMonth = row.current_month_cases || 0;
+    const prevMonth = row.prev_month_cases || 0;
+    const caseTrendPct = prevMonth > 0
+      ? Math.round(((currentMonth - prevMonth) / prevMonth) * 100)
+      : 0;
+
+    res.json({
+      totalCases,
+      onTreatmentCount,
+      curedCount,
+      successRate,
+      caseTrend: { value: caseTrendPct, direction: caseTrendPct >= 0 ? 'up' : 'down' },
+      activeStatus: onTreatmentCount > 0 ? 'Ongoing' : 'None',
+    });
+  } catch (err) {
+    console.error('Dashboard metrics error:', err.message);
+    res.status(500).json({ error: 'Server error fetching dashboard metrics.' });
   }
 });
 
@@ -599,6 +661,38 @@ router.get('/gis/geojson', async (req, res) => {
         geometry: row.geometry,
       };
     });
+
+    // Fallback: if risk data is missing OR uniform (all same class), compute from case data using tertiles
+    const riskClasses = new Set(features.map(f => f.properties.risk_class).filter(Boolean));
+    const hasMeaningfulRiskData = riskClasses.size > 1;
+    if (!hasMeaningfulRiskData) {
+      // Compute incidence per 100k for each barangay
+      const withIncidence = features.map(f => {
+        const pop = f.properties.population || 1;
+        const cases = f.properties.total_cases || 0;
+        const incidence = (cases / pop) * 100000;
+        return { ...f, _incidence: incidence };
+      });
+      // Sort by incidence to compute tertiles
+      withIncidence.sort((a, b) => a._incidence - b._incidence);
+      const n = withIncidence.length;
+      const lowMax = Math.floor(n / 3);
+      const medMax = Math.floor((2 * n) / 3);
+      withIncidence.forEach((f, i) => {
+        if (i < lowMax) {
+          f.properties.risk_class = 'Low';
+        } else if (i < medMax) {
+          f.properties.risk_class = 'Medium';
+        } else {
+          f.properties.risk_class = 'High';
+        }
+        f.properties.risk_score = Math.round((f._incidence / (withIncidence[n - 1]._incidence || 1)) * 100 * 100) / 100;
+        f.properties.incidence_per_100k = Math.round(f._incidence * 100) / 100;
+        delete f._incidence;
+      });
+      features.length = 0;
+      features.push(...withIncidence);
+    }
 
     // Build merged outline from all outer rings — used to fill gaps between barangays
     const outlineCoords = [];

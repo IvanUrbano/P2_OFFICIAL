@@ -38,6 +38,15 @@ function formatNum(n) {
   return n != null ? Number(n).toLocaleString() : '\u2014';
 }
 
+function DetailRow({ label, value }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>{label}</span>
+      <span className="text-[12px] font-bold" style={{ color: '#0F2D52' }}>{value || '\u2014'}</span>
+    </div>
+  );
+}
+
 function buildLabels(map, features, layerRef) {
   layerRef.current.forEach(l => { try { map.removeLayer(l); } catch {} });
   layerRef.current = [];
@@ -107,10 +116,12 @@ export default function GisMap() {
   const [data, setData] = useState(null);
   const [monthlyByBarangay, setMonthlyByBarangay] = useState({});
   const [error, setError] = useState(null);
-  const [filterYear, setFilterYear] = useState('');
-  const [filterMonth, setFilterMonth] = useState('');
   const [filterBarangay, setFilterBarangay] = useState('');
   const [filterRiskLevel, setFilterRiskLevel] = useState('');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [selectedBarangayName, setSelectedBarangayName] = useState(null);
+  const [barangayDetail, setBarangayDetail] = useState(null);
+  const [barangayDetailLoading, setBarangayDetailLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -169,6 +180,21 @@ export default function GisMap() {
     return () => { map.remove(); mapInstance.current = null; };
   }, []);
 
+  // Filtered features based on active filters
+  const filteredFeatures = React.useMemo(() => {
+    if (!data?.features) return [];
+    let features = data.features;
+    if (filterBarangay) {
+      features = features.filter(f => f.properties?.name === filterBarangay);
+    }
+    if (filterRiskLevel) {
+      features = features.filter(f => f.properties?.risk_class === filterRiskLevel);
+    }
+    return features;
+  }, [data, filterBarangay, filterRiskLevel]);
+
+  const hasActiveFilters = filterBarangay || filterRiskLevel;
+
   useEffect(() => {
     if (!mapInstance.current || !data) return;
     const map = mapInstance.current;
@@ -183,7 +209,9 @@ export default function GisMap() {
       ).addTo(map);
       outlineLayerRef.current = outlineLayer;
     }
-    const geojsonLayer = L.geoJSON(data, {
+    // Use filtered features for the map layer
+    const filteredData = { ...data, features: filteredFeatures };
+    const geojsonLayer = L.geoJSON(filteredData, {
       style: riskStyle,
       onEachFeature: (feature, layer) => {
         const p = feature.properties || {};
@@ -245,15 +273,15 @@ export default function GisMap() {
       },
     }).addTo(map);
     geojsonLayerRef.current = geojsonLayer;
-    buildLabels(map, data.features, labelsRef);
-    const onZoom = () => buildLabels(map, data.features, labelsRef);
+    buildLabels(map, filteredFeatures, labelsRef);
+    const onZoom = () => buildLabels(map, filteredFeatures, labelsRef);
     map.on('zoomend', onZoom);
     map.fitBounds(PASIG_BOUNDS, { padding: [40, 40] });
     return () => { map.off('zoomend', onZoom); };
-  }, [data]);
+  }, [data, filteredFeatures]);
   const stats = React.useMemo(() => {
-    if (!data?.features) return null;
-    const features = data.features.map(f => f.properties);
+    if (!filteredFeatures.length) return { classes: { High: 0, Medium: 0, Low: 0, 'No Data': 0 }, totalCases: 0, totalPop: 0, total: 0 };
+    const features = filteredFeatures.map(f => f.properties);
     const classes = { High: 0, Medium: 0, Low: 0, 'No Data': 0 };
     let totalCases = 0;
     let totalPop = 0;
@@ -263,20 +291,19 @@ export default function GisMap() {
       totalPop += f.population || 0;
     }
     return { classes, totalCases, totalPop, total: features.length };
-  }, [data]);
+  }, [filteredFeatures]);
 
   const topRisk = React.useMemo(() => {
-    if (!data?.features) return [];
-    return data.features
+    return filteredFeatures
       .map(f => f.properties)
       .sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0))
       .slice(0, 8);
-  }, [data]);
+  }, [filteredFeatures]);
 
   const riskDist = React.useMemo(() => {
-    if (!data?.features) return [];
-    const maxScore = Math.max(...data.features.map(f => f.properties?.risk_score || 0), 1);
-    return data.features
+    if (!filteredFeatures.length) return [];
+    const maxScore = Math.max(...filteredFeatures.map(f => f.properties?.risk_score || 0), 1);
+    return filteredFeatures
       .map(f => f.properties)
       .sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0))
       .slice(0, 15)
@@ -286,7 +313,7 @@ export default function GisMap() {
         pct: ((f.risk_score || 0) / maxScore) * 100,
         risk_class: f.risk_class || 'No Data',
       }));
-  }, [data]);
+  }, [filteredFeatures]);
 
   const barangayNames = React.useMemo(() => {
     if (!data?.features) return [];
@@ -295,6 +322,48 @@ export default function GisMap() {
       .filter(Boolean)
       .sort();
   }, [data]);
+
+  const toggleFullscreen = React.useCallback(() => {
+    setIsFullscreen(prev => {
+      const next = !prev;
+      // Give the DOM time to resize, then tell Leaflet to recalculate
+      setTimeout(() => { mapInstance.current?.invalidateSize(); }, 120);
+      return next;
+    });
+  }, []);
+
+  // Listen for Escape key to exit fullscreen
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (e) => { if (e.key === 'Escape') toggleFullscreen(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isFullscreen, toggleFullscreen]);
+
+  // Listen for gis:viewDetails custom events from map popups
+  useEffect(() => {
+    const onDetail = (e) => { setSelectedBarangayName(e.detail); };
+    window.addEventListener('gis:viewDetails', onDetail);
+    return () => window.removeEventListener('gis:viewDetails', onDetail);
+  }, []);
+
+  // Fetch barangay detail data when a barangay is selected
+  useEffect(() => {
+    if (!selectedBarangayName) { setBarangayDetail(null); return; }
+    let cancelled = false;
+    (async () => {
+      setBarangayDetailLoading(true);
+      try {
+        const res = await API.get(`/api/tb/dashboard/barangay/${encodeURIComponent(selectedBarangayName)}`);
+        if (!cancelled) setBarangayDetail(res.data);
+      } catch {
+        if (!cancelled) setBarangayDetail(null);
+      } finally {
+        if (!cancelled) setBarangayDetailLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedBarangayName]);
 
   if (error) {
     return (
@@ -313,14 +382,14 @@ export default function GisMap() {
 
       {/* ── Header + Map (connected) ── */}
       <div
-        className="rounded-2xl overflow-hidden"
-        style={{
-          background: 'rgba(255,255,255,0.8)',
-          border: '1px solid #DBEAFE',
-          boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)',
-        }}
+        className={isFullscreen ? '' : 'rounded-2xl overflow-hidden'}
+        style={isFullscreen
+          ? { position: 'fixed', inset: 0, zIndex: 9999, background: '#0a1128' }
+          : { background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.10), 0 1px 4px rgba(15, 45, 82, 0.06)' }
+        }
       >
-        {/* Header Toolbar */}
+        {/* Header Toolbar — hidden in fullscreen */}
+        {!isFullscreen && (
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
           {/* Left — Title */}
           <div className="shrink-0">
@@ -330,30 +399,6 @@ export default function GisMap() {
 
           {/* Right — Filters + Actions */}
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={filterYear}
-              onChange={(e) => setFilterYear(e.target.value)}
-              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
-              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
-            >
-              <option value="">All Years</option>
-              <option value="2025">2025</option>
-              <option value="2024">2024</option>
-              <option value="2023">2023</option>
-            </select>
-
-            <select
-              value={filterMonth}
-              onChange={(e) => setFilterMonth(e.target.value)}
-              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
-              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
-            >
-              <option value="">All Months</option>
-              {["January","February","March","April","May","June","July","August","September","October","November","December"].map(m => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
-
             <select
               value={filterBarangay}
               onChange={(e) => setFilterBarangay(e.target.value)}
@@ -378,6 +423,17 @@ export default function GisMap() {
               <option value="Low">Low Risk</option>
             </select>
 
+            {hasActiveFilters && (
+              <button
+                onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); }}
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition hover:opacity-80"
+                style={{ color: '#EF4444' }}
+              >
+                <i className="ri-close-circle-line text-sm" />
+                Clear Filters
+              </button>
+            )}
+
             <button
               className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold transition hover:opacity-80"
               style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#0F2D52' }}
@@ -387,31 +443,39 @@ export default function GisMap() {
             </button>
 
             <button
+              onClick={toggleFullscreen}
               className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold transition hover:opacity-80"
               style={{ background: '#0F2D52', color: '#ffffff' }}
             >
-              <i className="ri-fullscreen-line text-sm" />
-              Fullscreen
+              <i className={`ri-${isFullscreen ? 'fullscreen-exit' : 'fullscreen'}-line text-sm`} />
+              {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
             </button>
           </div>
         </div>
+        )}
 
         {/* Map */}
         <div
           className="relative"
-          style={{ height: 'calc(100vh - 260px)', minHeight: '500px' }}
+          style={isFullscreen
+            ? { width: '100%', height: '100%' }
+            : { height: '450px', minHeight: '450px' }
+          }
         >
         {/* Map */}
         <div ref={mapRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', background: '#0a1128' }} />
 
-        {/* ── Floating: Year Badge (top-left) ── */}
-        <div
-          className="absolute top-4 left-4 z-[1000] flex items-center gap-1.5 rounded-lg px-3 py-1.5"
-          style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)' }}
-        >
-          <i className="ri-calendar-line text-xs" style={{ color: '#2563EB' }} />
-          <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>2025</span>
-        </div>
+        {/* ── Floating: Exit Fullscreen button (top-left, only in fullscreen) ── */}
+        {isFullscreen && (
+          <button
+            onClick={toggleFullscreen}
+            className="absolute top-4 left-4 z-[1001] flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition hover:opacity-80"
+            style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)', color: '#0F2D52' }}
+          >
+            <i className="ri-fullscreen-exit-line text-sm" style={{ color: '#2563EB' }} />
+            Exit Fullscreen
+          </button>
+        )}
 
         {/* ── Floating: Barangay Count Badge (top-right) ── */}
         <div
@@ -419,11 +483,11 @@ export default function GisMap() {
           style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)' }}
         >
           <span className="text-xs font-semibold" style={{ color: '#64748B' }}>
-            {stats?.total || 0} barangays shown
+            {stats?.total || 0} barangay{(stats?.total || 0) !== 1 ? 's' : ''} shown
           </span>
         </div>
 
-        {/* ── Floating: Legend (bottom-left) ── */}
+        {/* ── Floating: Legend (bottom-right) ── */}
         <div
           className="absolute bottom-4 right-4 z-[1000] rounded-xl p-3.5"
           style={{ background: '#ffffff', border: '1px solid #DBEAFE', minWidth: '160px' }}
@@ -449,70 +513,470 @@ export default function GisMap() {
       </div>
 
       {/* ── Metric Cards ── */}
-      {stats && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Barangays */}
-          <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)' }}>
-            <div className="p-5 pb-3 flex items-start justify-between">
-              <div>
-                <p className="text-xs font-semibold" style={{ color: '#64748B' }}>Barangays</p>
-                <p className="text-3xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{stats.total}</p>
+      {!isFullscreen && stats && (
+        <div className="rounded-2xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.12), 0 2px 8px rgba(15, 45, 82, 0.08)' }}>
+          <div className="grid grid-cols-2 lg:grid-cols-4">
+            {/* 1. Barangays */}
+            <div className="flex flex-col px-5 py-5 relative">
+              <div className="flex items-center gap-2">
+                <i className="ri-stack-line text-base" style={{ color: '#3B82F6' }} />
+                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Barangays</span>
               </div>
-              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: '#DBEAFE' }}>
-                <i className="ri-building-line text-base" style={{ color: '#2563EB' }} />
-              </div>
+              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{stats.total}</p>
+              <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
             </div>
-            <div className="flex items-center justify-between px-5 py-2.5" style={{ borderTop: '1px solid #1E40AF', background: '#0F2D52' }}>
-              <span className="text-[11px] font-semibold" style={{ color: '#93C5FD' }}>Total Coverage Area</span>
+
+            {/* 2. TB Cases */}
+            <div className="flex flex-col px-5 py-5 relative">
+              <div className="flex items-center gap-2">
+                <i className="ri-stethoscope-line text-base" style={{ color: '#F59E0B' }} />
+                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>TB Cases</span>
+              </div>
+              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{stats.totalCases.toLocaleString()}</p>
+              <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
+            </div>
+
+            {/* 3. High-Risk Barangays */}
+            <div className="flex flex-col px-5 py-5 relative">
+              <div className="flex items-center gap-2">
+                <i className="ri-alarm-warning-line text-base" style={{ color: '#DC2626' }} />
+                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk Barangays</span>
+              </div>
+              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{stats.classes?.High || 0}</p>
+              <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
+            </div>
+
+            {/* 4. Case Density */}
+            <div className="flex flex-col px-5 py-5">
+              <div className="flex items-center gap-2">
+                <i className="ri-node-tree text-base" style={{ color: '#2563EB' }} />
+                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Density</span>
+              </div>
+              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{(stats.totalCases / 31.3).toFixed(1)}</p>
             </div>
           </div>
+        </div>
+      )}
 
-          {/* TB Cases */}
-          <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)' }}>
-            <div className="p-5 pb-3 flex items-start justify-between">
-              <div>
-                <p className="text-xs font-semibold" style={{ color: '#64748B' }}>TB Cases</p>
-                <p className="text-3xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{stats.totalCases.toLocaleString()}</p>
-              </div>
-              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: '#DBEAFE' }}>
-                <i className="ri-heart-pulse-line text-base" style={{ color: '#2563EB' }} />
-              </div>
-            </div>
-            <div className="flex items-center justify-between px-5 py-2.5" style={{ borderTop: '1px solid #1E40AF', background: '#0F2D52' }}>
-              <span className="text-[11px] font-semibold" style={{ color: '#93C5FD' }}>All Recorded Cases</span>
-            </div>
+      {/* ── Risk Distribution ── */}
+      {!isFullscreen && data?.features && (() => {
+        const grouped = { High: [], Medium: [], Low: [] };
+        data.features.forEach(f => {
+          const p = f.properties;
+          if (!p) return;
+          const cls = p.risk_class;
+          if (grouped[cls]) {
+            grouped[cls].push(p);
+          }
+        });
+        // Sort each group by risk_score descending
+        Object.keys(grouped).forEach(k => {
+          grouped[k].sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0));
+        });
+
+        const sections = [
+          {
+            key: 'High',
+            label: 'High Risk Barangays',
+            subtitle: 'Immediate Action Required',
+            icon: 'ri-temp-hot-line',
+            color: '#EF4444',
+            bgLight: '#FEF2F2',
+            border: '#FECACA',
+            barBg: '#EF4444',
+          },
+          {
+            key: 'Medium',
+            label: 'Moderate Risk Barangays',
+            subtitle: 'Close Monitoring Recommended',
+            icon: 'ri-timer-flash-line',
+            color: '#F97316',
+            bgLight: '#FFF7ED',
+            border: '#FED7AA',
+            barBg: '#F97316',
+          },
+          {
+            key: 'Low',
+            label: 'Low Risk Barangays',
+            subtitle: 'Routine Surveillance',
+            icon: 'ri-shield-check-line',
+            color: '#10B981',
+            bgLight: '#ECFDF5',
+            border: '#A7F3D0',
+            barBg: '#10B981',
+          },
+        ];
+
+        return (
+          <div className="flex flex-col gap-6">
+            {sections.map(sec => {
+              const items = grouped[sec.key];
+              if (!items || items.length === 0) return null;
+              return (
+                <div
+                  key={sec.key}
+                  className="rounded-2xl overflow-hidden"
+                  style={{
+                    background: 'rgba(255,255,255,0.8)',
+                    border: '1px solid #DBEAFE',
+                    boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)',
+                  }}
+                >
+                  {/* Section Header */}
+                  <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid #DBEAFE' }}>
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-9 h-9 rounded-xl flex items-center justify-center"
+                        style={{ background: sec.bgLight, border: `1px solid ${sec.border}` }}
+                      >
+                        <i className={`${sec.icon} text-base`} style={{ color: sec.color }} />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>
+                          {sec.label} <span className="font-normal" style={{ color: '#94A3B8' }}>— {sec.subtitle}</span>
+                        </h3>
+                        <p className="text-[11px] mt-0.5 font-medium" style={{ color: '#94A3B8' }}>
+                          {items.length} barangay{items.length !== 1 ? 's' : ''} classified as {sec.key} risk
+                        </p>
+                      </div>
+                    </div>
+                    <div
+                      className="px-3 py-1.5 rounded-full text-xs font-bold"
+                      style={{ background: sec.bgLight, color: sec.color, border: `1px solid ${sec.border}` }}
+                    >
+                      {items.length}
+                    </div>
+                  </div>
+
+                  {/* Cards Grid */}
+                  <div className="p-5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      {items.map((b, i) => (
+                        <div
+                          key={b.name || i}
+                          className="rounded-2xl overflow-hidden"
+                          style={{
+                            background: '#ffffff',
+                            boxShadow: '0 4px 20px rgba(15, 45, 82, 0.10), 0 2px 6px rgba(15, 45, 82, 0.06)',
+                          }}
+                        >
+                          <div className="p-4 pb-3">
+                            {/* Name + Badge */}
+                            <div className="flex items-center justify-between mb-3">
+                              <h4 className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>{b.name}</h4>
+                              <span
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold"
+                                style={{ background: `${sec.color}12`, color: sec.color }}
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ background: sec.color }} />
+                                {sec.key}
+                              </span>
+                            </div>
+
+                            {/* Stats */}
+                            <div className="flex flex-col gap-2.5">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs" style={{ color: '#94A3B8' }}>Cases:</span>
+                                <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>{formatNum(b.total_cases)}</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs" style={{ color: '#94A3B8' }}>Risk Score:</span>
+                                <span className="text-xs font-bold" style={{ color: sec.color }}>{formatNum(b.risk_score)}</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs" style={{ color: '#94A3B8' }}>Incidence / 100k:</span>
+                                <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>{formatNum(b.incidence_per_100k)}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Actions */}
+                          <div className="flex items-center gap-2 px-4 pb-4">
+                            <button
+                              className="flex-1 py-2.5 text-xs font-bold rounded-xl transition hover:opacity-80"
+                              style={{ background: '#0F2D52', color: '#ffffff' }}
+                              onClick={() => window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: b.name }))}
+                            >
+                              View Analytics
+                            </button>
+                            <button
+                              className="px-4 py-2.5 text-xs font-bold rounded-xl transition hover:bg-gray-50"
+                              style={{ color: '#0F2D52', border: '1px solid #E2E8F0' }}
+                              onClick={() => setSelectedBarangayName(b.name)}
+                            >
+                              Details
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
+        );
+      })()}
 
-          {/* High-Risk Barangays */}
-          <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)' }}>
-            <div className="p-5 pb-3 flex items-start justify-between">
-              <div>
-                <p className="text-xs font-semibold" style={{ color: '#64748B' }}>High-Risk Barangays</p>
-                <p className="text-3xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{stats.classes?.High || 0}</p>
-              </div>
-              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: '#FEE2E2' }}>
-                <i className="ri-shield-star-line text-base" style={{ color: '#EF4444' }} />
+      {/* ── Barangay Detail Side Modal ── */}
+      {selectedBarangayName && (
+        <div className="fixed inset-0 z-[1200] flex justify-end bg-slate-950/20 backdrop-blur-sm">
+          {/* Backdrop */}
+          <div className="absolute inset-0" onClick={() => setSelectedBarangayName(null)} />
+          {/* Panel */}
+          <div
+            className="relative w-full max-w-lg h-full overflow-y-auto bg-white"
+            style={{
+              boxShadow: '-8px 0 40px rgba(15, 45, 82, 0.12)',
+              animation: 'slide-in-right 0.3s ease-out both',
+            }}
+          >
+            {/* Header */}
+            <div className="sticky top-0 z-10" style={{ background: '#0F2D52' }}>
+              <div className="flex items-center justify-between px-6 py-4">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#93C5FD' }}>Barangay Profile</p>
+                  <h2 className="text-base font-extrabold tracking-tight" style={{ color: '#ffffff' }}>{selectedBarangayName}</h2>
+                </div>
+                <button
+                  onClick={() => setSelectedBarangayName(null)}
+                  aria-label="Close modal"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full transition hover:opacity-80"
+                  style={{ color: '#93C5FD' }}
+                >
+                  <i className="ri-close-line text-base" />
+                </button>
               </div>
             </div>
-            <div className="flex items-center justify-between px-5 py-2.5" style={{ borderTop: '1px solid #1E40AF', background: '#0F2D52' }}>
-              <span className="text-[11px] font-semibold" style={{ color: '#93C5FD' }}>Barangays at High Risk</span>
-            </div>
-          </div>
 
-          {/* Case Density */}
-          <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)' }}>
-            <div className="p-5 pb-3 flex items-start justify-between">
-              <div>
-                <p className="text-xs font-semibold" style={{ color: '#64748B' }}>Case Density</p>
-                <p className="text-3xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{(stats.totalCases / 31.3).toFixed(1)}</p>
+            {/* Loading state */}
+            {barangayDetailLoading && (
+              <div className="flex items-center justify-center py-20">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#DBEAFE', borderTopColor: '#2563EB' }} />
+                  <p className="text-xs font-medium" style={{ color: '#94A3B8' }}>Loading barangay data...</p>
+                </div>
               </div>
-              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: '#DBEAFE' }}>
-                <i className="ri-map-2-line text-base" style={{ color: '#2563EB' }} />
-              </div>
-            </div>
-            <div className="flex items-center justify-between px-5 py-2.5" style={{ borderTop: '1px solid #1E40AF', background: '#0F2D52' }}>
-              <span className="text-[11px] font-semibold" style={{ color: '#93C5FD' }}>Cases per km² (31.3 km²)</span>
-            </div>
+            )}
+
+            {/* Content */}
+            {!barangayDetailLoading && (() => {
+              // Merge GeoJSON properties with API detail
+              const geoProps = data?.features?.find(f => f.properties?.name === selectedBarangayName)?.properties || {};
+              const b = barangayDetail?.barangay || {};
+              const outcomes = barangayDetail?.outcomes || [];
+              const demographics = barangayDetail?.demographics || [];
+              const monthly = barangayDetail?.monthly || [];
+              const merged = { ...geoProps, ...b };
+
+              const riskColor = RISK_COLORS[merged.risk_class] || '#64748B';
+              const totalOutcomeCases = outcomes.reduce((s, o) => s + (o.total || 0), 0);
+
+              // Outcome colors
+              const outcomeColors = {
+                'CURED': '#10B981',
+                'TREATMENT COMPLETED': '#22C55E',
+                'ON TREATMENT': '#3B82F6',
+                'LOST TO FOLLOW-UP': '#F97316',
+                'DIED': '#EF4444',
+                'EXCLUDED': '#64748B',
+                'FAILED': '#EF4444',
+                'DEFAULTED': '#F97316',
+              };
+
+              // Demographics summary
+              const totalMale = demographics.filter(d => d.sex === 'Male').reduce((s, d) => s + (d.total || 0), 0);
+              const totalFemale = demographics.filter(d => d.sex === 'Female').reduce((s, d) => s + (d.total || 0), 0);
+
+              return (
+                <div className="px-6 py-5 space-y-6">
+                  {/* Hero: Barangay name + Risk badge */}
+                  <div>
+                    <div className="flex items-center gap-3 mb-3">
+                      <div
+                        className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
+                        style={{ background: `${riskColor}15`, border: `1px solid ${riskColor}30` }}
+                      >
+                        <i className="ri-building-2-line text-xl" style={{ color: riskColor }} />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>{merged.name || selectedBarangayName}</h3>
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold"
+                          style={{ background: `${riskColor}15`, color: riskColor }}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ background: riskColor }} />
+                          {merged.risk_class || 'No Data'} Risk
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
+
+                  {/* Section: Barangay Profile */}
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
+                      <i className="ri-information-line mr-1" style={{ color: '#2563EB' }} />
+                      Barangay Profile
+                    </h4>
+                    <div className="space-y-2.5">
+                      <DetailRow label="Population" value={formatNum(merged.population)} />
+                      <DetailRow label="Total Cases" value={formatNum(merged.total_cases)} />
+                      <DetailRow label="Incidence / 100k" value={formatNum(merged.incidence_per_100k)} />
+                      <DetailRow label="Risk Score" value={formatNum(merged.risk_score)} />
+                      <DetailRow label="Trend Direction" value={merged.trend_direction || '—'} />
+                      <DetailRow label="Forecasted Cases" value={formatNum(merged.forecasted_count)} />
+                    </div>
+                  </div>
+
+                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
+
+                  {/* Section: Demographics */}
+                  {demographics.length > 0 && (
+                    <>
+                      <div>
+                        <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
+                          <i className="ri-team-line mr-1" style={{ color: '#2563EB' }} />
+                          Demographics
+                        </h4>
+                        {/* Gender split summary */}
+                        <div className="grid grid-cols-2 gap-3 mb-4">
+                          <div className="rounded-xl p-3" style={{ background: '#EFF6FF', border: '1px solid #DBEAFE' }}>
+                            <div className="flex items-center gap-2 mb-1">
+                              <i className="ri-men-line text-sm" style={{ color: '#2563EB' }} />
+                              <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Male</span>
+                            </div>
+                            <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{totalMale}</p>
+                          </div>
+                          <div className="rounded-xl p-3" style={{ background: '#FDF2F8', border: '1px solid #FBCFE8' }}>
+                            <div className="flex items-center gap-2 mb-1">
+                              <i className="ri-women-line text-sm" style={{ color: '#EC4899' }} />
+                              <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Female</span>
+                            </div>
+                            <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{totalFemale}</p>
+                          </div>
+                        </div>
+                        {/* Age group breakdown */}
+                        <div className="space-y-2">
+                          {(() => {
+                            const ageGroups = {};
+                            demographics.forEach(d => {
+                              if (!ageGroups[d.age_group]) ageGroups[d.age_group] = { Male: 0, Female: 0 };
+                              ageGroups[d.age_group][d.sex] = (d.total || 0);
+                            });
+                            const maxAgeCount = Math.max(...Object.values(ageGroups).map(v => v.Male + v.Female), 1);
+                            return Object.entries(ageGroups).sort((a, b) => a[0].localeCompare(b[0])).map(([age, counts]) => {
+                              const total = counts.Male + counts.Female;
+                              const pct = (total / maxAgeCount) * 100;
+                              return (
+                                <div key={age}>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-[11px] font-semibold" style={{ color: '#475569' }}>{age}</span>
+                                    <span className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>{total}</span>
+                                  </div>
+                                  <div className="flex h-2 rounded-full overflow-hidden" style={{ background: '#E2E8F0' }}>
+                                    <div style={{ width: `${(counts.Male / total) * pct}%`, background: '#3B82F6' }} />
+                                    <div style={{ width: `${(counts.Female / total) * pct}%`, background: '#EC4899' }} />
+                                  </div>
+                                </div>
+                              );
+                            });
+                          })()}
+                        </div>
+                      </div>
+                      <div style={{ borderTop: '1px solid #E2E8F0' }} />
+                    </>
+                  )}
+
+                  {/* Section: Treatment Outcomes */}
+                  {outcomes.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
+                        <i className="ri-thermometer-line mr-1" style={{ color: '#2563EB' }} />
+                        Treatment Outcomes
+                      </h4>
+                      {/* Outcome summary cards */}
+                      <div className="grid grid-cols-3 gap-2 mb-4">
+                        {outcomes.slice(0, 6).map((o) => {
+                          const color = outcomeColors[o.outcome_status] || '#64748B';
+                          const pct = totalOutcomeCases > 0 ? ((o.total / totalOutcomeCases) * 100).toFixed(1) : 0;
+                          return (
+                            <div key={o.outcome_status} className="rounded-lg p-2.5 text-center" style={{ background: `${color}08`, border: `1px solid ${color}20` }}>
+                              <p className="text-lg font-extrabold" style={{ color }}>{o.total}</p>
+                              <p className="text-[9px] font-bold uppercase leading-tight mt-0.5" style={{ color: '#64748B' }}>
+                                {o.outcome_status?.length > 18 ? o.outcome_status.slice(0, 16) + '...' : o.outcome_status}
+                              </p>
+                              <p className="text-[10px] font-semibold mt-0.5" style={{ color }}>{pct}%</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {/* Outcome bars */}
+                      <div className="space-y-2.5">
+                        {outcomes.map((o) => {
+                          const color = outcomeColors[o.outcome_status] || '#64748B';
+                          const pct = totalOutcomeCases > 0 ? (o.total / totalOutcomeCases) * 100 : 0;
+                          return (
+                            <div key={o.outcome_status}>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-[11px] font-semibold" style={{ color: '#475569' }}>{o.outcome_status}</span>
+                                <span className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>{o.total} <span style={{ color: '#94A3B8' }}>({pct.toFixed(1)}%)</span></span>
+                              </div>
+                              <div className="h-2 rounded-full overflow-hidden" style={{ background: '#E2E8F0' }}>
+                                <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Section: Monthly Trend (if available) */}
+                  {monthly.length > 0 && (
+                    <>
+                      <div style={{ borderTop: '1px solid #E2E8F0' }} />
+                      <div>
+                        <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
+                          <i className="ri-bar-chart-grouped-line mr-1" style={{ color: '#2563EB' }} />
+                          Monthly Case Trend
+                        </h4>
+                        <div className="flex items-end gap-1" style={{ height: '80px' }}>
+                          {monthly.slice(-12).map((m, i) => {
+                            const maxCount = Math.max(...monthly.slice(-12).map(x => x.case_count || 0), 1);
+                            const h = ((m.case_count || 0) / maxCount) * 100;
+                            const monthLabel = m.month ? new Date(m.month).toLocaleString('default', { month: 'short' }) : '';
+                            return (
+                              <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                                <div
+                                  className="w-full rounded-t transition-all"
+                                  style={{ height: `${h}%`, background: '#3B82F6', minHeight: '2px', opacity: 0.8 }}
+                                  title={`${monthLabel}: ${m.case_count}`}
+                                />
+                                <span className="text-[8px] font-medium" style={{ color: '#94A3B8' }}>{monthLabel}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Empty state */}
+                  {!barangayDetail && !barangayDetailLoading && (
+                    <div className="text-center py-10">
+                      <i className="ri-information-line text-3xl mb-2 block" style={{ color: '#CBD5E1' }} />
+                      <p className="text-xs" style={{ color: '#94A3B8' }}>No detail data available for this barangay.</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

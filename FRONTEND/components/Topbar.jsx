@@ -3,21 +3,29 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import Logo from './Logo';
 
 const NAV_ITEMS = [
-  { icon: 'ri-dashboard-fill', label: 'Dashboard', path: '/dashboard' },
-  { icon: 'ri-lungs-line', label: 'TB Records', path: '/records' },
-  { icon: 'ri-bar-chart-box-line', label: 'Forecasting', path: '/analytics' },
-  { icon: 'ri-database-2-line', label: 'Data Integration', path: '/data-integration' },
-  { icon: 'ri-map-2-line', label: 'GIS Hotspot', path: '/gis-map' },
-  { icon: 'ri-community-line', label: 'Barangays', path: '/barangays' },
-  { icon: 'ri-file-chart-line', label: 'Reports', path: '/reports' },
-  { icon: 'ri-alert-line', label: 'Alerts', path: '/alert' },
-  { icon: 'ri-team-line', label: 'Users', path: '/users', adminOnly: true },
+  { icon: 'ri-pie-chart-fill', label: 'Dashboard', path: '/dashboard' },
+  { icon: 'ri-stethoscope-line', label: 'TB Records', path: '/records' },
+  { icon: 'ri-line-chart-line', label: 'Analytics & Forecasting', path: '/analytics' },
+  { icon: 'ri-compass-3-line', label: 'GIS Hotspots', path: '/gis-map' },
+  { icon: 'ri-file-text-line', label: 'Reports', path: '/reports' },
+  { icon: 'ri-notification-3-line', label: 'Alerts & Notifications', path: '/alert' },
+  { icon: 'ri-server-line', label: 'Data Integration', path: '/data-integration' },
+  { icon: 'ri-building-2-line', label: 'Barangays', path: '/barangays' },
+  { icon: 'ri-user-3-line', label: 'Users', path: '/users', adminOnly: true },
 ];
 
-/**
- * Horizontal top navigation bar — replaces Sidebar.jsx + Topbar.jsx.
- * Pill-style nav switcher (Taskio-style) + user avatar dropdown, in TBInsight navy/cyan theme.
- */
+const NAV_ACCENT = {
+  '/dashboard': '#3B82F6',
+  '/records': '#10B981',
+  '/analytics': '#8B5CF6',
+  '/gis-map': '#F59E0B',
+  '/reports': '#EC4899',
+  '/alert': '#EF4444',
+  '/data-integration': '#06B6D4',
+  '/barangays': '#14B8A6',
+  '/users': '#6366F1',
+};
+
 export default function Topbar({ user }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -57,105 +65,88 @@ export default function Topbar({ user }) {
     navigate('/login');
   };
 
+  const formatSyncTime = () => {
+    const now = new Date();
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${days[now.getDay()]}, ${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()} | ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+  };
+
   return (
-    <header
-      className="sticky top-0 z-50 w-full shrink-0"
-      style={{ background: 'transparent', padding: '16px 40px 0' }}
-    >
-      <div
-        className="grid grid-cols-[1fr_auto_1fr] items-center gap-4"
-        style={{
-          padding: '10px 0',
-        }}
-      >
-        {/* ── Logo ── */}
+    <>
+      <header className="sticky top-0 z-[1100] w-full shrink-0">
+        {/* ── Tier 1: Logo + User Bar ── */}
+        <div
+          className="flex items-center justify-between px-6 lg:px-8"
+          style={{ background: '#0B1D35', minHeight: '52px' }}
+        >
+        {/* Left: Logo */}
         <div
           className="flex items-center gap-3 cursor-pointer shrink-0"
           onClick={() => navigate('/dashboard')}
         >
-          <Logo size={36} />
-          <span className="text-xl font-extrabold tracking-tight hidden sm:block" style={{ color: '#0F2D52' }}>
-            TBInsight
+          <Logo size={30} />
+          <span className="text-lg font-extrabold tracking-tight" style={{ color: '#ffffff' }}>
+            TB<span style={{ color: '#60A5FA' }}>Insight</span>
           </span>
         </div>
 
-        {/* ── Pill Nav Switcher ── */}
-        <nav
-          className="hidden lg:flex items-center justify-self-center gap-1 rounded-full overflow-x-auto"
-          style={{ background: '#F1F5F9', padding: '5px 7px' }}
-        >
-          {visibleNavItems.map((item) => {
-            const isActive = location.pathname === item.path;
-            return (
-              <button
-                key={item.path}
-                onClick={() => navigate(item.path)}
-                className="flex items-center gap-1.5 whitespace-nowrap rounded-full text-[12px] font-bold transition-all duration-200 cursor-pointer"
-                style={{
-                  padding: '7px 15px',
-                  color: isActive ? '#ffffff' : '#475569',
-                  background: isActive ? '#0F2D52' : 'transparent',
-                  boxShadow: isActive ? '0 4px 14px rgba(37, 99, 235, 0.3)' : 'none',
-                }}
-                onMouseEnter={(e) => {
-                  if (!isActive) {
-                    e.currentTarget.style.background = '#0F2D52';
-                    e.currentTarget.style.color = '#ffffff';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isActive) {
-                    e.currentTarget.style.background = 'transparent';
-                    e.currentTarget.style.color = '#475569';
-                  }
-                }}
-              >
-                <i className={`${item.icon} ri-light text-[12px] opacity-80`} />
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
+        {/* Right: Last Synced + Icons + User */}
+        <div className="flex items-center gap-4">
+          {/* Last Synced */}
+          <div className="hidden md:flex items-center gap-2">
+            <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: 'rgba(59,130,246,0.2)' }}>
+              <i className="ri-refresh-line text-[11px]" style={{ color: '#60A5FA' }} />
+            </div>
+            <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+              Last Synced: <span style={{ color: '#CBD5E1' }}>{formatSyncTime()}</span>
+            </span>
+          </div>
 
-        {/* ── Right Icons + Avatar ── */}
-        <div className="flex items-center justify-self-end gap-2 shrink-0">
+          {/* Separator */}
+          <div className="hidden md:block w-px h-5" style={{ background: 'rgba(255,255,255,0.1)' }} />
+
+          {/* Notification Bell */}
           <button
             onClick={() => navigate('/notifications')}
             title="Notifications"
-            className="relative w-9 h-9 flex items-center justify-center rounded-full cursor-pointer transition-colors"
-            style={{ background: '#EFF6FF', color: '#2563EB' }}
+            className="relative w-9 h-9 flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
+            style={{ background: 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
           >
             <i className="ri-notification-3-line text-base" />
             <span
-              className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full"
-              style={{ background: '#ff0055', boxShadow: '0 0 6px #ff0055' }}
+              className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
+              style={{ background: '#EF4444', boxShadow: '0 0 6px #EF4444' }}
             />
           </button>
 
+          {/* Settings */}
           <button
             onClick={() => navigate('/settings')}
-            className="w-9 h-9 hidden md:flex items-center justify-center rounded-full cursor-pointer transition-colors"
-            style={{ background: '#EFF6FF', color: '#64748B' }}
+            className="w-9 h-9 hidden sm:flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
+            style={{ background: 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
           >
             <i className="ri-settings-3-line text-base" />
           </button>
 
-          {/* Avatar Dropdown */}
+          {/* User Avatar + Dropdown */}
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="flex items-center gap-1.5 cursor-pointer shrink-0 rounded-full pl-0.5 pr-2 py-0.5 transition-all"
+              className="flex items-center gap-2.5 cursor-pointer shrink-0 rounded-full pl-1 pr-3 py-1 transition-all hover:bg-white/5"
               style={{
-                background: dropdownOpen ? '#EFF6FF' : 'transparent',
-                border: '1px solid',
-                borderColor: dropdownOpen ? '#BFDBFE' : 'transparent',
+                background: dropdownOpen ? 'rgba(255,255,255,0.1)' : 'transparent',
               }}
             >
               <div
                 className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
-                style={{ background: '#0F2D52', color: '#ffffff', border: '2px solid #3B82F6' }}
+                style={{ background: '#10B981', color: '#ffffff' }}
               >
                 {initials}
+              </div>
+              <div className="hidden lg:block text-left">
+                <p className="text-xs font-bold leading-tight" style={{ color: '#ffffff' }}>{displayName}</p>
+                <p className="text-[9px] leading-tight" style={{ color: '#64748B' }}>{displayEmail}</p>
               </div>
               <i
                 className="ri-arrow-down-s-line text-sm shrink-0 transition-transform"
@@ -165,18 +156,18 @@ export default function Topbar({ user }) {
 
             {dropdownOpen && (
               <div
-                className="absolute right-0 top-full mt-2 w-60 rounded-xl overflow-hidden z-50"
+                className="absolute right-0 top-full mt-2 w-60 rounded-xl overflow-hidden z-[1200]"
                 style={{
                   background: '#ffffff',
-                  border: '1px solid #DBEAFE',
-                  boxShadow: '0 10px 40px rgba(37, 99, 235, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06)',
+                  border: '1px solid #E2E8F0',
+                  boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08)',
                 }}
               >
-                <div className="px-4 py-3" style={{ borderBottom: '1px solid #DBEAFE' }}>
+                <div className="px-4 py-3" style={{ borderBottom: '1px solid #E2E8F0' }}>
                   <div className="flex items-center gap-3">
                     <div
-                      className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-                      style={{ background: '#0F2D52', color: '#ffffff', border: '2px solid #3B82F6' }}
+                      className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+                      style={{ background: '#10B981', color: '#ffffff' }}
                     >
                       {initials}
                     </div>
@@ -209,7 +200,7 @@ export default function Topbar({ user }) {
                     <button
                       key={item.label}
                       onClick={item.action}
-                      className="w-full flex items-center gap-3 px-4 py-2 text-xs font-medium transition-colors hover:bg-blue-50"
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-colors hover:bg-blue-50"
                       style={{ color: '#334155' }}
                     >
                       <i className={`${item.icon} text-sm`} style={{ color: item.color }} />
@@ -218,10 +209,10 @@ export default function Topbar({ user }) {
                   ))}
                 </div>
 
-                <div className="py-1" style={{ borderTop: '1px solid #DBEAFE' }}>
+                <div className="py-1" style={{ borderTop: '1px solid #E2E8F0' }}>
                   <button
                     onClick={handleLogout}
-                    className="w-full flex items-center gap-3 px-4 py-2 text-xs font-medium transition-colors hover:bg-red-50"
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-colors hover:bg-red-50"
                     style={{ color: '#EF4444' }}
                   >
                     <i className="ri-logout-box-r-line text-sm" />
@@ -233,6 +224,60 @@ export default function Topbar({ user }) {
           </div>
         </div>
       </div>
-    </header>
+
+      {/* ── Tier 2: Navigation Bar ── */}
+      <nav
+        className="flex items-center gap-0.5 px-6 lg:px-8 overflow-x-auto"
+        style={{
+          background: '#0B1D35',
+          borderTop: '1px solid rgba(255,255,255,0.06)',
+          paddingBottom: '2px',
+        }}
+      >
+        {visibleNavItems.map((item) => {
+          const isActive = location.pathname === item.path;
+          const accent = NAV_ACCENT[item.path] || '#3B82F6';
+          return (
+            <button
+              key={item.path}
+              onClick={() => navigate(item.path)}
+              className="relative flex items-center gap-1.5 whitespace-nowrap text-[12px] font-semibold transition-all duration-200 cursor-pointer"
+              style={{
+                padding: '10px 14px',
+                color: isActive ? '#ffffff' : 'rgba(255,255,255,0.55)',
+                background: isActive ? 'rgba(255,255,255,0.07)' : 'transparent',
+              }}
+              onMouseEnter={(e) => {
+                if (!isActive) {
+                  e.currentTarget.style.color = 'rgba(255,255,255,0.85)';
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive) {
+                  e.currentTarget.style.color = 'rgba(255,255,255,0.55)';
+                  e.currentTarget.style.background = 'transparent';
+                }
+              }}
+            >
+              <i
+                className={`${item.icon} text-[13px]`}
+                style={{ color: isActive ? accent : 'inherit' }}
+              />
+              <span>{item.label}</span>
+              {/* Active indicator line */}
+              {isActive && (
+                <div
+                  className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
+                  style={{ background: accent }}
+                />
+              )}
+            </button>
+          );
+        })}
+      </nav>
+      </header>
+
+    </>
   );
 }
