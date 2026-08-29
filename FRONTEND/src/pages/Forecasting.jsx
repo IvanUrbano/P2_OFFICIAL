@@ -287,7 +287,7 @@ export default function Forecasting() {
           ci_lower: 0,
           ci_upper: 0,
           count: 0,
-          risk_class: r.risk_class || 'Low',
+          riskCounts: {},
         };
       }
       byPeriod[period].forecasted += Number(r.forecasted_count || 0);
@@ -295,11 +295,20 @@ export default function Forecasting() {
       byPeriod[period].ci_lower += Number(r.confidence_lower || 0);
       byPeriod[period].ci_upper += Number(r.confidence_upper || 0);
       byPeriod[period].count += 1;
-      // Keep highest risk
-      const riskOrder = { Low: 0, Moderate: 1, High: 2, 'Very High': 3 };
-      const curr = riskOrder[byPeriod[period].risk_class] || 0;
-      const next = riskOrder[r.risk_class] || 0;
-      if (next > curr) byPeriod[period].risk_class = r.risk_class;
+      // Tally risk classes for majority vote
+      const rc = r.risk_class || 'Low';
+      byPeriod[period].riskCounts[rc] = (byPeriod[period].riskCounts[rc] || 0) + 1;
+    });
+
+    // Resolve majority risk class per period
+    Object.values(byPeriod).forEach((p) => {
+      let maxCount = 0;
+      let majority = 'Low';
+      for (const [cls, cnt] of Object.entries(p.riskCounts)) {
+        if (cnt > maxCount) { maxCount = cnt; majority = cls; }
+      }
+      p.risk_class = majority;
+      delete p.riskCounts;
     });
 
     let result = Object.values(byPeriod).sort((a, b) => a.period.localeCompare(b.period));
@@ -349,26 +358,52 @@ export default function Forecasting() {
 
   /** Metric card computations */
   const totalForecasted = useMemo(
-    () => filteredForecasts.reduce((s, r) => s + r.forecasted, 0),
-    [filteredForecasts]
+    () => filteredForecasts.reduce((s, r) => {
+      const d = new Date(r.period);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const hasCases = casesData.some((c) => {
+        if (!c.date_of_diagnosis) return false;
+        const dt = new Date(c.date_of_diagnosis);
+        return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}` === key;
+      });
+      if (hasCases) return s;
+      return s + r.forecasted;
+    }, 0),
+    [filteredForecasts, casesData]
   );
 
   const growthRate = useMemo(() => {
     if (historicalCases === 0 || totalForecasted === 0) return 0;
-    return ((totalForecasted - historicalCases) / historicalCases) * 100;
-  }, [historicalCases, totalForecasted]);
+    const monthlyAvg = historicalCases / (new Set(filteredMonthly.map(r => r.month)).size || 1);
+    const firstForecast = filteredForecasts.length > 0 ? filteredForecasts[0].forecasted : 0;
+    const baseline = monthlyAvg || 1;
+    return ((firstForecast - baseline) / baseline) * 100;
+  }, [historicalCases, totalForecasted, filteredForecasts, filteredMonthly]);
 
   const riskLevel = useMemo(() => {
-    if (totalForecasted > 500) return 'Very High';
-    const pct = Math.abs(growthRate);
-    if (pct > 20) return 'High';
-    if (pct > 10) return 'Moderate';
-    return 'Low';
-  }, [totalForecasted, growthRate]);
+    if (!filteredForecasts.length) return 'Low';
+    const majorityRisk = filteredForecasts[filteredForecasts.length - 1]?.risk_class || 'Low';
+    return majorityRisk;
+  }, [filteredForecasts]);
 
   /** Chart data: historical + forecast combined */
   const forecastChartData = useMemo(() => {
     const points = [];
+    // Build actual case counts by period
+    const actualByPeriod = {};
+    casesData.forEach((r) => {
+      const d = r.date_of_diagnosis;
+      if (!d) return;
+      const dt = new Date(d);
+      if (isNaN(dt.getTime())) return;
+      const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+      if (!actualByPeriod[key]) actualByPeriod[key] = 0;
+      actualByPeriod[key] += 1;
+    });
+    const allActualPeriods = Object.keys(actualByPeriod).sort();
+    const latestActual = allActualPeriods.length > 0 ? allActualPeriods[allActualPeriods.length - 1] : null;
+
+    // Add historical actual data
     aggregatedMonthly.forEach((r) => {
       points.push({
         label: r.label,
@@ -380,20 +415,24 @@ export default function Forecasting() {
         isForecast: false,
       });
     });
+
+    // Add forecast data (only for future periods, not historical)
     filteredForecasts.forEach((r) => {
       const d = new Date(r.period);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const isFuture = !latestActual || key > latestActual;
       points.push({
         label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
         month: r.period,
         Actual: null,
-        Forecast: Math.round(r.forecasted),
-        ci_upper: r.ci_upper,
-        ci_lower: r.ci_lower,
-        isForecast: true,
+        Forecast: isFuture ? Math.round(r.forecasted) : null,
+        ci_upper: isFuture ? r.ci_upper : null,
+        ci_lower: isFuture ? r.ci_lower : null,
+        isForecast: isFuture,
       });
     });
     return points;
-  }, [aggregatedMonthly, filteredForecasts]);
+  }, [aggregatedMonthly, filteredForecasts, casesData]);
 
   /** First forecast label for the ReferenceLine */
   const forecastStartLabel = useMemo(() => {
@@ -403,23 +442,52 @@ export default function Forecasting() {
 
   /** Table rows for forecast details */
   const forecastTableRows = useMemo(() => {
-    // Compute average monthly total (total cases / distinct months)
-    const distinctMonths = new Set(filteredMonthly.map((r) => r.month)).size || 1;
-    const avgMonthlyTotal = historicalCases / distinctMonths;
+    // Build actual case counts from raw case records (tb_cases) grouped by month
+    const actualByPeriod = {};
+    let rawCases = casesData;
+    if (appliedBarangay) {
+      rawCases = rawCases.filter((r) => r.barangay_name === appliedBarangay);
+    }
+    rawCases.forEach((r) => {
+      const d = r.date_of_diagnosis;
+      if (!d) return;
+      const dt = new Date(d);
+      if (isNaN(dt.getTime())) return;
+      const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+      if (!actualByPeriod[key]) actualByPeriod[key] = 0;
+      actualByPeriod[key] += 1;
+    });
+
+    // Find the latest period that has actual data
+    const allActualPeriods = Object.keys(actualByPeriod).sort();
+    const latestActualPeriod = allActualPeriods.length > 0 ? allActualPeriods[allActualPeriods.length - 1] : null;
+    const lastActualCount = latestActualPeriod ? actualByPeriod[latestActualPeriod] : 0;
+
+    let lastForecasted = null;
 
     return filteredForecasts.map((r, i) => {
-      const actual = r.actual > 0 ? r.actual : null;
-      const forecasted = Math.round(r.forecasted);
-      // Compute growth: compare to previous forecast period, or to avg monthly total
+      const pDate = new Date(r.period);
+      const periodKey = isNaN(pDate.getTime()) ? r.period : `${pDate.getFullYear()}-${String(pDate.getMonth() + 1).padStart(2, '0')}`;
+
+      // Determine if this is a historical or forecast period
+      const hasActual = actualByPeriod[periodKey] != null;
+      const isHistorical = hasActual && periodKey <= latestActualPeriod;
+
+      const actual = isHistorical ? actualByPeriod[periodKey] : null;
+      const forecasted = isHistorical ? null : Math.round(Number(r.forecasted) || 0);
+      const ci_lower = isHistorical ? null : Math.round(Number(r.ci_lower) || 0);
+      const ci_upper = isHistorical ? null : Math.round(Number(r.ci_upper) || 0);
+
+      // Growth: first forecast compares to last actual, subsequent compare to previous forecast
       let gr = null;
-      if (i > 0) {
-        const prevForecasted = Math.round(filteredForecasts[i - 1].forecasted);
-        if (prevForecasted > 0) {
-          gr = (((forecasted - prevForecasted) / prevForecasted) * 100).toFixed(1);
+      if (!isHistorical && forecasted != null) {
+        const baseline = lastForecasted != null ? lastForecasted : lastActualCount;
+        if (baseline > 0) {
+          gr = (((forecasted - baseline) / baseline) * 100).toFixed(1);
         }
-      } else if (avgMonthlyTotal > 0) {
-        gr = (((forecasted - avgMonthlyTotal) / avgMonthlyTotal) * 100).toFixed(1);
+        lastForecasted = forecasted;
       }
+
       return {
         period: r.period,
         periodLabel: new Date(r.period).toLocaleDateString('en-US', {
@@ -428,13 +496,14 @@ export default function Forecasting() {
         }),
         actual,
         forecasted,
-        ci_lower: Math.round(r.ci_lower),
-        ci_upper: Math.round(r.ci_upper),
+        ci_lower,
+        ci_upper,
         growthRate: gr,
         risk_class: r.risk_class,
+        isHistorical,
       };
     });
-  }, [filteredForecasts, historicalCases, filteredMonthly]);
+  }, [filteredForecasts, casesData, appliedBarangay]);
 
   const sortedForecastTable = useMemo(() => {
     const sorted = [...forecastTableRows];
@@ -451,6 +520,15 @@ export default function Forecasting() {
     });
     return sorted;
   }, [forecastTableRows, sortKey, sortDir]);
+
+  /** Global min/max across all CI ranges for a shared bar scale */
+  const ciGlobalScale = useMemo(() => {
+    const forecastRows = sortedForecastTable.filter((r) => !r.isHistorical && r.forecasted != null && r.ci_lower > 0 && r.ci_upper > 0);
+    if (!forecastRows.length) return { min: 0, max: 1 };
+    const mins = forecastRows.map((r) => r.ci_lower);
+    const maxs = forecastRows.map((r) => r.ci_upper);
+    return { min: Math.min(...mins), max: Math.max(...maxs) };
+  }, [sortedForecastTable]);
 
   const handleSort = useCallback(
     (key) => {
@@ -561,8 +639,10 @@ export default function Forecasting() {
         <span className="text-sm font-medium" style={{ color: '#64748B' }}>{error}</span>
         <button
           onClick={loadAll}
-          className="px-5 py-2.5 rounded-lg text-sm font-bold text-white transition hover:opacity-90"
-          style={{ background: '#0F2D52' }}
+          className="px-4 py-2 text-xs font-medium"
+          style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+          onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
         >
           Retry
         </button>
@@ -590,21 +670,23 @@ export default function Forecasting() {
             <button
               type="button"
               onClick={handleReset}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all hover:shadow-md"
-              style={{ background: '#EFF6FF', color: '#0F2D52', border: '1px solid #DBEAFE' }}
+              className="px-3 py-2 text-xs font-medium"
+              style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
             >
-              <i className="ri-refresh-line text-sm" />
               Reset
             </button>
             <button
               type="button"
               onClick={handleRunForecast}
               disabled={filterLoading}
-              className="flex items-center gap-2 px-5 py-2 rounded-lg text-xs font-bold text-white transition-all hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] disabled:opacity-60"
-              style={{ background: '#0F2D52' }}
+              className="px-5 py-2 text-xs font-semibold disabled:opacity-60"
+              style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
             >
-              {filterLoading ? <i className="ri-loader-4-line text-sm animate-spin" /> : <i className="ri-play-fill text-sm" />}
-              Run Forecast
+              {filterLoading ? 'Running...' : 'Run Forecast'}
             </button>
           </div>
         </div>
@@ -683,15 +765,15 @@ export default function Forecasting() {
       {/* ─── Content States ─── */}
       {!forecastRan ? (
         /* ─── 9. EMPTY STATE ─── */
-        <div className="flex flex-col items-center justify-center py-24 gap-4">
+        <div className="flex flex-col items-center justify-center py-24 gap-4" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
           <div
-            className="w-20 h-20 rounded-2xl flex items-center justify-center"
+            className="w-16 h-16 rounded-2xl flex items-center justify-center"
             style={{ background: '#F1F5F9' }}
           >
-            <i className="ri-line-chart-box-line text-4xl" style={{ color: '#CBD5E1' }} />
+            <i className="ri-line-chart-line text-3xl" style={{ color: '#CBD5E1' }} />
           </div>
           <div className="text-center">
-            <p className="text-sm font-semibold" style={{ color: '#475569' }}>
+            <p className="text-sm font-bold" style={{ color: '#475569' }}>
               No Forecast Generated
             </p>
             <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
@@ -705,15 +787,15 @@ export default function Forecasting() {
         <SectionSkeleton rows={4} />
       ) : historicalCases === 0 && filteredForecasts.length === 0 ? (
         /* ─── 11. ERROR / INSUFFICIENT DATA STATE ─── */
-        <div className="flex flex-col items-center justify-center py-24 gap-4">
+        <div className="flex flex-col items-center justify-center py-24 gap-4" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
           <div
-            className="w-20 h-20 rounded-2xl flex items-center justify-center"
+            className="w-16 h-16 rounded-2xl flex items-center justify-center"
             style={{ background: '#FEE2E2' }}
           >
-            <i className="ri-error-warning-line text-4xl" style={{ color: '#EF4444' }} />
+            <i className="ri-error-warning-line text-3xl" style={{ color: '#EF4444' }} />
           </div>
           <div className="text-center">
-            <p className="text-sm font-semibold" style={{ color: '#475569' }}>
+            <p className="text-sm font-bold" style={{ color: '#475569' }}>
               Unable to Generate Forecast
             </p>
             <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
@@ -730,7 +812,7 @@ export default function Forecasting() {
               {/* Historical Cases */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-database-2-line text-base" style={{ color: '#3B82F6' }} />
+                  <i className="ri-database-2-line text-sm" style={{ color: '#6B7FA3' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Historical Cases</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
@@ -742,7 +824,7 @@ export default function Forecasting() {
               {/* Forecasted Cases */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-line-chart-line text-base" style={{ color: '#0D9488' }} />
+                  <i className="ri-line-chart-line text-sm" style={{ color: '#6B9E9E' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Forecasted Cases</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
@@ -754,7 +836,7 @@ export default function Forecasting() {
               {/* Expected Growth Rate */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className={`${growthRate >= 0 ? 'ri-arrow-up-s-fill' : 'ri-arrow-down-s-fill'} text-base`} style={{ color: growthRate >= 0 ? '#EF4444' : '#10B981' }} />
+                  <i className="ri-percent-line text-sm" style={{ color: growthRate >= 0 ? '#B07070' : '#6B9E8A' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Expected Growth Rate</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
@@ -763,8 +845,8 @@ export default function Forecasting() {
                     {growthRate >= 0 ? '+' : '\u2212'}{Math.abs(growthRate).toFixed(1)}%
                   </p>
                 </div>
-                <span className="text-[11px] font-medium mt-1" style={{ color: growthRate >= 0 ? '#EF4444' : '#10B981' }}>
-                  {growthRate >= 0 ? '↑ Rising' : '↓ Falling'} vs baseline
+                <span className="text-[11px] font-medium mt-1" style={{ color: growthRate >= 0 ? '#B07070' : '#6B9E8A' }}>
+                  {growthRate >= 0 ? 'Rising' : 'Falling'} vs baseline
                 </span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
@@ -773,7 +855,7 @@ export default function Forecasting() {
               <div className="flex flex-col px-5 py-5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <i className="ri-shield-line text-base" style={{ color: RISK_COLORS[riskLevel] }} />
+                    <i className="ri-shield-line text-sm" style={{ color: '#8B7BA3' }} />
                     <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Risk Classification</span>
                   </div>
                   <RiskBadge risk={riskLevel} />
@@ -1010,59 +1092,82 @@ export default function Forecasting() {
                     <tbody>
                       {sortedForecastTable.map((row, i) => {
                         const gr = row.growthRate != null ? Number(row.growthRate) : null;
-                        const range = row.ci_upper - row.ci_lower;
-                        const forecastPos = range > 0 ? ((row.forecasted - row.ci_lower) / range) * 100 : 50;
                         const riskColor = RISK_COLORS[row.risk_class] || '#94A3B8';
+
+                        // Historical periods: show actual only. Forecast periods: show forecast + CI only.
+                        const hasCI = row.ci_lower > 0 && row.ci_upper > 0;
+                        const showCI = !row.isHistorical && row.forecasted != null && hasCI;
+                        const { min: gMin, max: gMax } = ciGlobalScale;
+                        const gRange = gMax - gMin || 1;
+                        const barLeft = showCI ? ((row.ci_lower - gMin) / gRange) * 100 : 0;
+                        const barWidth = showCI ? ((row.ci_upper - row.ci_lower) / gRange) * 100 : 0;
+                        const forecastPos = showCI ? ((row.forecasted - gMin) / gRange) * 100 : 0;
+
                         return (
                           <tr
                             key={`${row.period}-${i}`}
                             style={{
                               borderBottom: '1px solid #F1F5F9',
-                              background: i % 2 === 0 ? '#ffffff' : '#FAFBFC',
+                              background: row.isHistorical ? '#F8FAFC' : (i % 2 === 0 ? '#ffffff' : '#FAFBFC'),
                             }}
                             className="hover:bg-blue-50/40 transition-colors"
                           >
                             <td className="px-5 py-4 text-xs font-bold" style={{ color: '#1E293B' }}>
                               {row.periodLabel}
+                              {row.isHistorical && (
+                                <span className="ml-2 text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded" style={{ background: '#E2E8F0', color: '#64748B' }}>Actual</span>
+                              )}
                             </td>
                             <td className="px-5 py-4 text-xs font-medium" style={{ color: '#1E293B' }}>
                               {row.actual != null ? row.actual.toLocaleString() : '\u2014'}
                             </td>
                             <td className="px-5 py-4 text-xs font-medium" style={{ color: '#1E293B' }}>
-                              {row.forecasted.toLocaleString()}
+                              {!row.isHistorical && row.forecasted != null ? row.forecasted.toLocaleString() : '\u2014'}
                             </td>
                             <td className="px-5 py-4">
-                              <div className="flex items-center gap-3 min-w-[160px]">
-                                <span className="text-[11px] font-medium tabular-nums" style={{ color: '#94A3B8', minWidth: 28 }}>
-                                  {row.ci_lower.toLocaleString()}
-                                </span>
-                                <div className="relative flex-1 h-2 rounded-full" style={{ background: '#E2E8F0' }}>
-                                  <div
-                                    className="absolute top-0 h-full rounded-full"
-                                    style={{
-                                      background: '#C4B5FD',
-                                      left: '0%',
-                                      width: `${Math.max(2, Math.min(100, forecastPos))}%`,
-                                    }}
-                                  />
-                                  <div
-                                    className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full border-2 border-white"
-                                    style={{ background: '#7C3AED', left: `${Math.max(0, Math.min(100, forecastPos))}%`, transform: 'translate(-50%, -50%)' }}
-                                  />
+                              {showCI ? (
+                                <div className="flex items-center gap-3 min-w-[160px]">
+                                  <span className="text-[11px] font-medium tabular-nums" style={{ color: '#94A3B8', minWidth: 28 }}>
+                                    {row.ci_lower.toLocaleString()}
+                                  </span>
+                                  <div className="relative flex-1 h-2 rounded-full" style={{ background: '#E2E8F0' }}
+                                    title={`Forecast: ${row.forecasted.toLocaleString()} | CI: ${row.ci_lower.toLocaleString()} – ${row.ci_upper.toLocaleString()}`}
+                                  >
+                                    <div
+                                      className="absolute top-0 h-full rounded-full"
+                                      style={{
+                                        background: '#C4B5FD',
+                                        left: `${barLeft}%`,
+                                        width: `${Math.max(2, barWidth)}%`,
+                                      }}
+                                    />
+                                    <div
+                                      className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full border-2 border-white"
+                                      style={{ background: '#7C3AED', left: `${forecastPos}%`, transform: 'translate(-50%, -50%)' }}
+                                    />
+                                  </div>
+                                  <span className="text-[11px] font-medium tabular-nums" style={{ color: '#94A3B8', minWidth: 28 }}>
+                                    {row.ci_upper.toLocaleString()}
+                                  </span>
                                 </div>
-                                <span className="text-[11px] font-medium tabular-nums" style={{ color: '#94A3B8', minWidth: 28 }}>
-                                  {row.ci_upper.toLocaleString()}
-                                </span>
-                              </div>
+                              ) : !row.isHistorical && row.forecasted != null ? (
+                                <span className="text-[11px]" style={{ color: '#94A3B8' }}>—</span>
+                              ) : (
+                                <span className="text-[11px]" style={{ color: '#94A3B8' }}>{"\u2014"}</span>
+                              )}
                             </td>
                             <td className="px-5 py-4 text-xs font-bold" style={{ color: gr != null ? (gr >= 0 ? '#EF4444' : '#10B981') : '#94A3B8' }}>
-                              {gr != null ? `${gr >= 0 ? '+' : ''}${gr.toFixed(1)}%` : '0%'}
+                              {!row.isHistorical && gr != null ? `${gr >= 0 ? '+' : ''}${gr.toFixed(1)}%` : '\u2014'}
                             </td>
                             <td className="px-5 py-4">
-                              <div className="flex items-center gap-2">
-                                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: riskColor }} />
-                                <span className="text-xs font-semibold" style={{ color: '#1E293B' }}>{row.risk_class}</span>
-                              </div>
+                              {!row.isHistorical && row.risk_class ? (
+                                <div className="flex items-center gap-2">
+                                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: riskColor }} />
+                                  <span className="text-xs font-semibold" style={{ color: '#1E293B' }}>{row.risk_class}</span>
+                                </div>
+                              ) : (
+                                <span className="text-[11px]" style={{ color: '#94A3B8' }}>{"\u2014"}</span>
+                              )}
                             </td>
                           </tr>
                         );

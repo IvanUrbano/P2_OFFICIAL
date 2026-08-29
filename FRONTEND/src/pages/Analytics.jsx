@@ -26,6 +26,7 @@ const OUTCOME_COLORS = {
   'FAILED': '#EF4444',
   'DIED': '#DC2626',
   'LOST TO FOLLOW-UP': '#8B5CF6',
+  'EXCLUDED': '#64748B',
   'NOT EVALUATED': '#94A3B8',
 };
 
@@ -48,7 +49,7 @@ const MONTHS = [
 
 const OUTCOMES = [
   'All Outcomes', 'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT',
-  'FAILED', 'DIED', 'LOST TO FOLLOW-UP', 'NOT EVALUATED',
+  'FAILED', 'DIED', 'LOST TO FOLLOW-UP', 'EXCLUDED', 'NOT EVALUATED',
 ];
 
 const ACTIVE_OUTCOMES = ['ON TREATMENT'];
@@ -118,6 +119,7 @@ export default function Analytics() {
   const [allCases, setAllCases] = useState([]);
   const [barangays, setBarangays] = useState([]);
   const [riskData, setRiskData] = useState([]);
+  const [forecastsData, setForecastsData] = useState([]);
   const [filterOptions, setFilterOptions] = useState({ sex: [], bacteriological_status: [], outcome_status: [] });
 
   /* Filter state */
@@ -147,16 +149,18 @@ export default function Analytics() {
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [casesRes, brgyRes, riskRes, filterRes] = await Promise.all([
+      const [casesRes, brgyRes, riskRes, filterRes, fcRes] = await Promise.all([
         API.get('/api/tb/cases?limit=99999'),
         API.get('/api/tb/barangays'),
         API.get('/api/tb/gis/choropleth'),
         API.get('/api/tb/filter-options').catch(() => ({ data: {} })),
+        API.get('/api/tb/forecasts').catch(() => ({ data: { forecasts: [] } })),
       ]);
       setAllCases(casesRes.data.cases || []);
       setBarangays(brgyRes.data.barangays || brgyRes.data || []);
       setRiskData(riskRes.data.choropleth || []);
       setFilterOptions(filterRes.data || {});
+      setForecastsData(fcRes.data.forecasts || []);
     } catch (err) {
       console.error('Analytics fetch error:', err);
       setError('Failed to load analytics data. Make sure the backend is running.');
@@ -276,9 +280,34 @@ export default function Analytics() {
     const withOutcome = filteredCases.filter((c) => c.outcome_status && c.outcome_status !== 'NOT EVALUATED');
     const success = withOutcome.filter((c) => SUCCESS_OUTCOMES.includes(c.outcome_status.toUpperCase())).length;
     const successRate = withOutcome.length > 0 ? ((success / withOutcome.length) * 100).toFixed(1) : '0.0';
-    const highRisk = riskData.filter((r) => r.risk_class === 'High').length;
+    // Compute highRisk from forecasts (model_predictions) which always has risk_class
+    // Get the latest period's forecasts, count unique barangays with High/Very High risk
+    let highRisk = 0;
+    if (forecastsData.length > 0) {
+      const latestPeriod = forecastsData.reduce((max, r) => {
+        const p = r.period || r.forecast_period || '';
+        return p > max ? p : max;
+      }, '');
+      const highBarangays = new Set();
+      forecastsData.forEach((r) => {
+        const p = r.period || r.forecast_period || '';
+        if (p !== latestPeriod) return;
+        const rc = (r.risk_class || '').toLowerCase();
+        if (rc === 'high' || rc === 'very high') {
+          highBarangays.add(r.barangay_name);
+        }
+      });
+      highRisk = highBarangays.size;
+    }
+    // Fallback to choropleth riskData if forecasts have no risk data
+    if (highRisk === 0 && riskData.length > 0) {
+      highRisk = riskData.filter((r) => {
+        const rc = (r.risk_class || '').toLowerCase();
+        return rc === 'high' || rc === 'very high';
+      }).length;
+    }
     return { total, active, successRate, highRisk };
-  }, [filteredCases, riskData]);
+  }, [filteredCases, riskData, forecastsData]);
 
   /* ── Previous year metrics (for trend badges) ── */
   const previousMetrics = useMemo(() => {
@@ -596,7 +625,7 @@ export default function Analytics() {
           <i className="ri-error-warning-line text-3xl" style={{ color: COLORS.red }} />
         </div>
         <span className="text-sm font-medium" style={{ color: '#64748B' }}>{error}</span>
-        <button onClick={loadAll} className="px-5 py-2.5 rounded-lg text-sm font-bold text-white transition hover:opacity-90" style={{ background: COLORS.blue }}>Retry</button>
+        <button onClick={loadAll} className="text-xs font-medium px-5 py-2.5" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>Retry</button>
       </div>
     );
   }
@@ -630,13 +659,11 @@ export default function Analytics() {
               a.download = `tb-analytics-${aYear || 'all'}.csv`;
               a.click();
               URL.revokeObjectURL(url);
-            }} className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all hover:shadow-md" style={{ background: '#EFF6FF', color: '#0F2D52', border: '1px solid #DBEAFE' }}>
-              <i className="ri-download-2-line text-sm" />
-              Export
+            }} className="text-xs font-semibold px-4 py-2" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
+              Download CSV
             </button>
-            <button onClick={handleApply} className="flex items-center gap-1.5 px-5 py-2 rounded-lg text-xs font-bold text-white transition-all hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]" style={{ background: '#0F2D52' }}>
-              <i className="ri-check-line text-sm" />
-              Apply
+            <button onClick={handleApply} className="text-xs font-semibold px-5 py-2" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
+              Apply Filters
             </button>
           </div>
         </div>
@@ -719,9 +746,8 @@ export default function Analytics() {
           </div>
 
           <div className="flex items-center gap-1.5">
-            <button onClick={handleClear} className="flex items-center gap-1.5 px-3 py-[7px] rounded-lg text-[11px] font-semibold transition-all hover:bg-slate-100 shrink-0" style={{ color: '#64748B', border: '1px solid #E2E8F0', background: '#ffffff' }}>
-              <i className="ri-refresh-line text-[10px]" />
-              Clear Filters
+            <button onClick={handleClear} className="text-xs font-medium px-3 py-[7px] shrink-0" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
+              Clear all
             </button>
           </div>
         </div>
@@ -733,8 +759,8 @@ export default function Analytics() {
           {activeFilters.map((f) => (
             <span key={f.key} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold" style={{ background: '#EFF6FF', color: '#0F2D52', border: '1px solid #DBEAFE' }}>
               {f.label}: <span className="font-bold">{f.value}</span>
-              <button onClick={() => removeFilter(f.key)} className="inline-flex items-center justify-center w-4 h-4 rounded transition hover:bg-blue-200" style={{ color: '#94A3B8' }}>
-                <i className="ri-close-line text-[10px]" />
+              <button onClick={() => removeFilter(f.key)} className="inline-flex items-center justify-center w-4 h-4" style={{ color: '#94A3B8' }}>
+                ×
               </button>
             </span>
           ))}
@@ -761,7 +787,7 @@ export default function Analytics() {
               {/* Total TB Cases */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-file-list-3-line text-base" style={{ color: '#3B82F6' }} />
+                  <i className="ri-file-list-3-line text-sm" style={{ color: '#6B7FA3' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Total TB Cases</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
@@ -776,7 +802,7 @@ export default function Analytics() {
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <i className="ri-first-aid-kit-line text-base" style={{ color: '#F59E0B' }} />
+                    <i className="ri-first-aid-kit-line text-sm" style={{ color: '#B8956A' }} />
                     <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Active Cases</span>
                   </div>
                   {metrics.total > 0 && (
@@ -797,7 +823,7 @@ export default function Analytics() {
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <i className="ri-check-double-line text-base" style={{ color: '#10B981' }} />
+                    <i className="ri-check-double-line text-sm" style={{ color: '#6B9E8A' }} />
                     <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Success</span>
                   </div>
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#D1FAE5', color: '#059669' }}>
@@ -816,7 +842,7 @@ export default function Analytics() {
               <div className="flex flex-col px-5 py-5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <i className="ri-alarm-warning-line text-base" style={{ color: '#DC2626' }} />
+                    <i className="ri-alarm-warning-line text-sm" style={{ color: '#C4886A' }} />
                     <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk Barangays</span>
                   </div>
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEE2E2', color: '#DC2626' }}>
@@ -854,10 +880,11 @@ export default function Analytics() {
                 </div>
                 {aYear && (
                   <button onClick={() => setCompareYear(!compareYear)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
-                    style={{ background: compareYear ? '#1E293B' : '#F8FAFC', color: compareYear ? '#ffffff' : '#64748B', border: `1px solid ${compareYear ? '#1E293B' : '#E2E8F0'}` }}>
-                    <i className="ri-git-branch-line text-[10px]" />
-                    {compareYear ? `Comparing ${prevYearLabel}` : `Compare ${prevYearLabel}`}
+                    className="text-xs font-semibold px-3 py-1.5"
+                    style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
+                    {compareYear ? `Comparing ${prevYearLabel}` : `Compare Year`}
                   </button>
                 )}
               </div>
@@ -901,10 +928,11 @@ export default function Analytics() {
                 </div>
               </div>
               <button onClick={() => setShowIncidence(!showIncidence)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
-                style={{ background: showIncidence ? '#1E293B' : '#F8FAFC', color: showIncidence ? '#ffffff' : '#64748B', border: `1px solid ${showIncidence ? '#1E293B' : '#E2E8F0'}` }}>
-                <i className="ri-percent-line text-[10px]" />
-                {showIncidence ? 'Per 100k' : 'Raw Cases'}
+                className="text-xs font-semibold px-3 py-1.5"
+                style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
+                Show Incidence
               </button>
             </div>
             <div className="px-5 pb-5">
@@ -967,42 +995,51 @@ export default function Analytics() {
 
           {/* ─── Age + Sex Cross-Tabulation + Treatment Outcomes ─── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Age + Sex Grouped Chart */}
+            {/* Sex Distribution Pie Chart */}
             <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
               <div className="flex items-center justify-between px-5 py-4">
                 <div className="flex items-center gap-3">
                   <div className="w-1 h-8 rounded-full" style={{ background: '#2563EB' }} />
                   <div>
-                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Cases by Age Group & Sex</h3>
-                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Cross-tabulation of TB cases by age group and sex.</p>
+                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Cases by Sex</h3>
+                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>TB case distribution by sex.</p>
                   </div>
                 </div>
-                {sexData.length > 0 && (
-                  <div className="flex items-center gap-3">
-                    {sexData.map((entry) => (
-                      <div key={entry.name} className="flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-sm" style={{ background: entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#EC4899' : '#94A3B8' }} />
-                        <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>{entry.name}</span>
-                        <span className="text-[11px] font-bold" style={{ color: '#1E293B' }}>{entry.value.toLocaleString()}</span>
-                        <span className="text-[10px]" style={{ color: '#94A3B8' }}>({totalSex > 0 ? ((entry.value / totalSex) * 100).toFixed(1) : 0}%)</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
               <div className="px-5 pb-5">
-                {ageSexData.length > 0 ? (
-                  <div className="w-full" style={{ height: 280 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart data={ageSexData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
-                          <XAxis dataKey="group" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={6} />
-                        <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={35} tickMargin={4} />
-                        <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
-                        <Bar dataKey="Male" fill="#60A5FA" radius={[4, 4, 0, 0]} barSize={20} name="Male" />
-                        <Bar dataKey="Female" fill="#F472B6" radius={[4, 4, 0, 0]} barSize={20} name="Female" />
-                      </ComposedChart>
-                    </ResponsiveContainer>
+                {sexData.length > 0 ? (
+                  <div className="flex items-center justify-center gap-6">
+                    <div className="w-[200px] h-[200px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={sexData}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={50}
+                            outerRadius={85}
+                            paddingAngle={3}
+                            dataKey="value"
+                            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                          >
+                            {sexData.map((entry) => (
+                              <Cell key={entry.name} fill={entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#EC4899' : '#94A3B8'} />
+                            ))}
+                          </Pie>
+                          <Tooltip formatter={(value) => value.toLocaleString()} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="space-y-2">
+                      {sexData.map((entry) => (
+                        <div key={entry.name} className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#EC4899' : '#94A3B8' }} />
+                          <span className="text-xs font-semibold" style={{ color: '#475569' }}>{entry.name}</span>
+                          <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>{entry.value.toLocaleString()}</span>
+                          <span className="text-[10px]" style={{ color: '#94A3B8' }}>({totalSex > 0 ? ((entry.value / totalSex) * 100).toFixed(1) : 0}%)</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
@@ -1010,7 +1047,7 @@ export default function Analytics() {
               </div>
             </div>
 
-            {/* Treatment Outcomes */}
+            {/* Treatment Outcomes Pie Chart */}
             <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
               <div className="px-5 py-4">
                 <div className="flex items-center gap-3">
@@ -1023,20 +1060,40 @@ export default function Analytics() {
               </div>
               <div className="px-5 pb-5">
                 {outcomeData.length > 0 ? (
-                  <div className="w-full" style={{ height: 280 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={outcomeData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
-                        <XAxis dataKey="name" tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} interval={0} angle={-30} textAnchor="end" height={60} tickMargin={4} />
-                        <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={35} tickMargin={4} />
-                        <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
-                        <Bar dataKey="Cases" radius={[6, 6, 0, 0]} barSize={22} name="Cases">
-                          {outcomeData.map((entry) => (
-                            <Cell key={entry.name} fill={OUTCOME_COLORS[entry.name] || '#94A3B8'} />
-                          ))}
-                        </Bar>
-                      </ComposedChart>
-                    </ResponsiveContainer>
+                  <div className="flex items-center justify-center gap-6">
+                    <div className="w-[200px] h-[200px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={outcomeData}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={50}
+                            outerRadius={85}
+                            paddingAngle={2}
+                            dataKey="Cases"
+                            label={({ name, percent }) => `${percent > 0.08 ? (name?.length > 10 ? name.slice(0, 8) + '..' : name) : ''} ${(percent * 100).toFixed(0)}%`}
+                            labelLine={false}
+                          >
+                            {outcomeData.map((entry) => (
+                              <Cell key={entry.name} fill={OUTCOME_COLORS[entry.name] || '#94A3B8'} />
+                            ))}
+                          </Pie>
+                          <Tooltip formatter={(value) => value.toLocaleString()} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="space-y-1.5">
+                      {outcomeData.map((entry) => (
+                        <div key={entry.name} className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: OUTCOME_COLORS[entry.name] || '#94A3B8' }} />
+                          <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>
+                            {entry.name?.length > 16 ? entry.name.slice(0, 14) + '...' : entry.name}
+                          </span>
+                          <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{entry.Cases}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>

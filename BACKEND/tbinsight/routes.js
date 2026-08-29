@@ -416,8 +416,12 @@ router.get('/dashboard/metrics', async (req, res) => {
 router.get('/dashboard/monthly', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT barangay_name, month, case_count
-      FROM monthly_case_summary
+      SELECT barangay_name,
+             DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
+             COUNT(*)::INTEGER AS case_count
+      FROM tb_cases
+      WHERE date_of_diagnosis IS NOT NULL
+      GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
       ORDER BY month, barangay_name
     `);
     res.json({ monthly: result.rows });
@@ -435,44 +439,83 @@ router.get('/dashboard/barangay/:name', async (req, res) => {
   try {
     const { name } = req.params;
 
-    // Verify barangay exists
-    const barangay = await findBarangay(name);
+    // Get barangay info — try barangays table first, then barangays_geom
+    let barangay = await findBarangay(name).catch(() => null);
     if (!barangay) {
-      return res.status(404).json({ error: `Barangay "${name}" not found.` });
+      try {
+        const geomResult = await pool.query(
+          `SELECT name, population FROM barangays_geom WHERE LOWER(name) = LOWER($1)`, [name]
+        );
+        if (geomResult.rows[0]) barangay = geomResult.rows[0];
+      } catch {}
     }
 
-    // Get monthly cases
-    const monthly = await pool.query(
-      `SELECT month, case_count FROM monthly_case_summary
-       WHERE barangay_name = $1 ORDER BY month`,
-      [name]
-    );
+    // Get monthly cases — always query tb_cases directly for accuracy
+    let monthlyRows = [];
+    try {
+      const monthly = await pool.query(
+        `SELECT DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
+                COUNT(*)::INTEGER AS case_count
+         FROM tb_cases
+         WHERE LOWER(barangay_name) = LOWER($1) AND date_of_diagnosis IS NOT NULL
+         GROUP BY DATE_TRUNC('month', date_of_diagnosis)
+         ORDER BY month`,
+        [name]
+      );
+      monthlyRows = monthly.rows;
+    } catch (e) {
+      console.error('Monthly query error:', e.message);
+    }
 
-    // Get demographics
-    const demographics = await pool.query(
-      `SELECT sex, age_group, SUM(case_count)::INTEGER as total
-       FROM demographic_summary
-       WHERE barangay_name = $1
-       GROUP BY sex, age_group
-       ORDER BY sex, age_group`,
-      [name]
-    );
+    // Get demographics — always query tb_cases directly
+    let demographicsRows = [];
+    try {
+      const demographics = await pool.query(
+        `SELECT sex,
+                CASE
+                  WHEN age IS NULL THEN 'Unknown'
+                  WHEN age <= 14 THEN '0-14'
+                  WHEN age <= 24 THEN '15-24'
+                  WHEN age <= 34 THEN '25-34'
+                  WHEN age <= 44 THEN '35-44'
+                  WHEN age <= 54 THEN '45-54'
+                  WHEN age <= 64 THEN '55-64'
+                  ELSE '65+'
+                END AS age_group,
+                COUNT(*)::INTEGER AS total
+         FROM tb_cases
+         WHERE LOWER(barangay_name) = LOWER($1)
+         GROUP BY sex, age_group
+         ORDER BY sex, age_group`,
+        [name]
+      );
+      demographicsRows = demographics.rows;
+    } catch (e) {
+      console.error('Demographics query error:', e.message);
+    }
 
-    // Get outcomes
-    const outcomes = await pool.query(
-      `SELECT outcome_status, SUM(case_count)::INTEGER as total
-       FROM outcome_summary
-       WHERE barangay_name = $1
-       GROUP BY outcome_status
-       ORDER BY total DESC`,
-      [name]
-    );
+    // Get outcomes — always query tb_cases directly
+    let outcomesRows = [];
+    try {
+      const outcomes = await pool.query(
+        `SELECT COALESCE(outcome_status, 'Unknown') AS outcome_status,
+                COUNT(*)::INTEGER AS total
+         FROM tb_cases
+         WHERE LOWER(barangay_name) = LOWER($1)
+         GROUP BY outcome_status
+         ORDER BY total DESC`,
+        [name]
+      );
+      outcomesRows = outcomes.rows;
+    } catch (e) {
+      console.error('Outcomes query error:', e.message);
+    }
 
     res.json({
       barangay,
-      monthly: monthly.rows,
-      demographics: demographics.rows,
-      outcomes: outcomes.rows,
+      monthly: monthlyRows,
+      demographics: demographicsRows,
+      outcomes: outcomesRows,
     });
   } catch (err) {
     console.error('Barangay detail error:', err.message);
@@ -554,8 +597,19 @@ router.get('/barangays/watchlist', async (req, res) => {
 router.get('/dashboard/demographics', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT barangay_name, sex, age_group, SUM(case_count)::INTEGER as total
-      FROM demographic_summary
+      SELECT barangay_name, sex,
+             CASE
+               WHEN age IS NULL THEN 'Unknown'
+               WHEN age <= 14 THEN '0-14'
+               WHEN age <= 24 THEN '15-24'
+               WHEN age <= 34 THEN '25-34'
+               WHEN age <= 44 THEN '35-44'
+               WHEN age <= 54 THEN '45-54'
+               WHEN age <= 64 THEN '55-64'
+               ELSE '65+'
+             END AS age_group,
+             COUNT(*)::INTEGER AS total
+      FROM tb_cases
       GROUP BY barangay_name, sex, age_group
       ORDER BY barangay_name, sex, age_group
     `);
@@ -573,8 +627,8 @@ router.get('/dashboard/demographics', async (req, res) => {
 router.get('/dashboard/outcomes', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT barangay_name, outcome_status, SUM(case_count)::INTEGER as total
-      FROM outcome_summary
+      SELECT barangay_name, COALESCE(outcome_status, 'Unknown') AS outcome_status, COUNT(*)::INTEGER as total
+      FROM tb_cases
       GROUP BY barangay_name, outcome_status
       ORDER BY barangay_name, total DESC
     `);
@@ -1368,6 +1422,332 @@ router.get('/forecast/backtest', async (req, res) => {
   } catch (err) {
     console.error('Backtest error:', err.message);
     res.status(500).json({ error: 'Server error generating backtest data.' });
+  }
+});
+
+// ==================== REPORTS ====================
+
+/**
+ * GET /api/tb/reports/summary
+ * Consolidated report data scoped to filters.
+ * Query params: type (monthly|quarterly|annual|barangay), month, quarter, year, barangay
+ */
+router.get('/reports/summary', async (req, res) => {
+  try {
+    const { type = 'monthly', month, quarter, year, barangay } = req.query;
+
+    // Compute date range based on report type
+    let startDate, endDate, periodLabel, coverage;
+    const yr = Number(year) || new Date().getFullYear();
+
+    if (type === 'quarterly' && quarter) {
+      const q = Number(quarter);
+      const startMonth = (q - 1) * 3 + 1;
+      startDate = `${yr}-${String(startMonth).padStart(2, '0')}-01`;
+      const endMonth = startMonth + 2;
+      const endDay = new Date(yr, endMonth, 0).getDate();
+      endDate = `${yr}-${String(endMonth).padStart(2, '0')}-${endDay}`;
+      periodLabel = `Q${q} ${yr}`;
+    } else if (type === 'annual') {
+      startDate = `${yr}-01-01`;
+      endDate = `${yr}-12-31`;
+      periodLabel = `Annual ${yr}`;
+    } else if (type === 'barangay' && barangay && month) {
+      const m = Number(month);
+      startDate = `${yr}-${String(m).padStart(2, '0')}-01`;
+      const endDay = new Date(yr, m, 0).getDate();
+      endDate = `${yr}-${String(m).padStart(2, '0')}-${endDay}`;
+      const monthName = new Date(yr, m - 1).toLocaleDateString('en-US', { month: 'long' });
+      periodLabel = `${monthName} ${yr}`;
+    } else if (type === 'barangay' && barangay) {
+      // Barangay with no month — full year
+      startDate = `${yr}-01-01`;
+      endDate = `${yr}-12-31`;
+      periodLabel = `Annual ${yr}`;
+    } else {
+      // monthly (default)
+      const m = Number(month) || new Date().getMonth() + 1;
+      startDate = `${yr}-${String(m).padStart(2, '0')}-01`;
+      const endDay = new Date(yr, m, 0).getDate();
+      endDate = `${yr}-${String(m).padStart(2, '0')}-${endDay}`;
+      const monthName = new Date(yr, m - 1).toLocaleDateString('en-US', { month: 'long' });
+      periodLabel = `${monthName} ${yr}`;
+    }
+
+    coverage = barangay || 'City-wide';
+
+    // Build base WHERE clause
+    const conditions = [`c.date_of_diagnosis >= $1`, `c.date_of_diagnosis <= $2`];
+    const params = [startDate, endDate];
+    let paramIdx = 3;
+
+    if (barangay) {
+      conditions.push(`c.barangay_name = $${paramIdx}`);
+      params.push(barangay);
+      paramIdx++;
+    }
+
+    const whereClause = 'WHERE ' + conditions.join(' AND ');
+
+    // Run all queries in parallel
+    const [
+      summaryRes,
+      outcomesRes,
+      sexRes,
+      ageRes,
+      caseProfileRes,
+      trendRes,
+      barangayDistRes,
+      riskRes,
+      forecastRes,
+      populationRes,
+      casesRes,
+    ] = await Promise.all([
+      // Summary: total cases, active cases, success rate
+      pool.query(`
+        SELECT
+          COUNT(*)::INTEGER AS total_cases,
+          SUM(CASE WHEN UPPER(outcome_status) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS active_cases,
+          SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful_count,
+          COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(outcome_status) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated_count
+        FROM tb_cases c
+        ${whereClause}
+      `, params),
+
+      // Outcomes breakdown
+      pool.query(`
+        SELECT COALESCE(outcome_status, 'Unknown') AS outcome_status, COUNT(*)::INTEGER AS count
+        FROM tb_cases c
+        ${whereClause}
+        GROUP BY outcome_status
+        ORDER BY count DESC
+      `, params),
+
+      // Sex distribution
+      pool.query(`
+        SELECT sex, COUNT(*)::INTEGER AS count
+        FROM tb_cases c
+        ${whereClause}
+        GROUP BY sex
+        ORDER BY count DESC
+      `, params),
+
+      // Age distribution
+      pool.query(`
+        SELECT
+          CASE
+            WHEN age IS NULL THEN 'Unknown'
+            WHEN age <= 14 THEN '0-14'
+            WHEN age <= 24 THEN '15-24'
+            WHEN age <= 34 THEN '25-34'
+            WHEN age <= 44 THEN '35-44'
+            WHEN age <= 54 THEN '45-54'
+            WHEN age <= 64 THEN '55-64'
+            ELSE '65+'
+          END AS age_group,
+          COUNT(*)::INTEGER AS count
+        FROM tb_cases c
+        ${whereClause}
+        GROUP BY age_group
+        ORDER BY count DESC
+      `, params),
+
+      // Case profile: registration group + anatomical site
+      pool.query(`
+        SELECT
+          COALESCE(registration_group, 'Unknown') AS registration_group,
+          COALESCE(anatomical_site, 'Unknown') AS anatomical_site,
+          COUNT(*)::INTEGER AS count
+        FROM tb_cases c
+        ${whereClause}
+        GROUP BY registration_group, anatomical_site
+      `, params),
+
+      // Monthly trend (scoped to report date range)
+      pool.query(`
+        SELECT
+          DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
+          COUNT(*)::INTEGER AS cases
+        FROM tb_cases c
+        WHERE date_of_diagnosis >= $1 AND date_of_diagnosis <= $2
+        ${barangay ? 'AND barangay_name = $' + (paramIdx) : ''}
+        GROUP BY month
+        ORDER BY month
+      `, barangay ? [startDate, endDate, barangay] : [startDate, endDate]),
+
+      // Barangay distribution (city-wide only)
+      barangay ? Promise.resolve({ rows: [] }) : pool.query(`
+        SELECT barangay_name, COUNT(*)::INTEGER AS cases
+        FROM tb_cases c
+        WHERE date_of_diagnosis >= $1 AND date_of_diagnosis <= $2
+        GROUP BY barangay_name
+        ORDER BY cases DESC
+      `, [startDate, endDate]),
+
+      // Risk scores (latest period)
+      pool.query(`
+        SELECT DISTINCT ON (barangay_name)
+          barangay_name, risk_class, incidence_per_100k, risk_score, trend_direction
+        FROM barangay_risk_scores
+        ORDER BY barangay_name, period DESC
+      `),
+
+      // Forecast (latest period that overlaps with report range)
+      pool.query(`
+        SELECT DISTINCT ON (barangay_name)
+          barangay_name, forecasted_count, period, confidence_lower, confidence_upper
+        FROM model_predictions
+        WHERE period >= $1
+        ORDER BY barangay_name, period ASC
+        LIMIT 30
+      `, [startDate]),
+
+      // Population for incidence calculation
+      pool.query(`SELECT name, population FROM barangays`),
+
+      // All matching case records for the detailed table
+      pool.query(`
+        SELECT c.id, c.date_of_diagnosis, c.barangay_name, c.sex, c.age,
+          COALESCE(c.registration_group, 'Unknown') AS registration_group,
+          COALESCE(c.anatomical_site, 'Unknown') AS anatomical_site,
+          COALESCE(c.outcome_status, 'Unknown') AS outcome_status,
+          COALESCE(c.bacteriological_status, 'Unknown') AS bacteriological_status
+        FROM tb_cases c
+        ${whereClause}
+        ORDER BY c.date_of_diagnosis DESC
+      `, params),
+    ]);
+
+    // Compute summary values
+    const summaryRow = summaryRes.rows[0] || {};
+    const totalCases = summaryRow.total_cases || 0;
+    const activeCases = summaryRow.active_cases || 0;
+    const evaluatedCount = summaryRow.evaluated_count || 0;
+    const successfulCount = summaryRow.successful_count || 0;
+    const successRate = evaluatedCount > 0 ? Number(((successfulCount / evaluatedCount) * 100).toFixed(1)) : null;
+
+    // Compute outcomes with percentages
+    const outcomes = outcomesRes.rows.map(r => ({
+      outcome_status: r.outcome_status,
+      count: r.count,
+      percentage: totalCases > 0 ? Number(((r.count / totalCases) * 100).toFixed(1)) : 0,
+    }));
+
+    // Compute sex distribution with percentages
+    const sex = sexRes.rows.map(r => ({
+      sex: r.sex || 'Unknown',
+      count: r.count,
+      percentage: totalCases > 0 ? Number(((r.count / totalCases) * 100).toFixed(1)) : 0,
+    }));
+
+    // Age groups
+    const ageGroups = ageRes.rows.map(r => ({
+      age_group: r.age_group,
+      count: r.count,
+      percentage: totalCases > 0 ? Number(((r.count / totalCases) * 100).toFixed(1)) : 0,
+    }));
+
+    // Case profile: aggregate registration groups
+    const regGroups = {};
+    const sites = {};
+    caseProfileRes.rows.forEach(r => {
+      regGroups[r.registration_group] = (regGroups[r.registration_group] || 0) + r.count;
+      sites[r.anatomical_site] = (sites[r.anatomical_site] || 0) + r.count;
+    });
+    const caseProfile = {
+      newCases: regGroups['New'] || regGroups['NEW'] || 0,
+      relapse: (regGroups['Relapse'] || 0) + (regGroups['RECAPTURE'] || 0) + (regGroups['Recapture'] || 0),
+      pulmonary: sites['Pulmonary'] || sites['PULMONARY'] || 0,
+      extraPulmonary: Object.entries(sites).filter(([k]) => !k.toLowerCase().includes('pulmonary')).reduce((s, [, v]) => s + v, 0),
+    };
+
+    // Trend data
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const trend = trendRes.rows.map(r => {
+      const d = new Date(r.month);
+      return {
+        month: r.month,
+        label: `${monthNames[d.getMonth()]} ${d.getFullYear()}`,
+        cases: r.cases,
+      };
+    });
+
+    // Barangay distribution with incidence and risk
+    const popMap = {};
+    populationRes.rows.forEach(r => { popMap[r.name] = r.population || 0; });
+
+    const barangayDistribution = barangayDistRes.rows.map(r => {
+      const pop = popMap[r.barangay_name] || 0;
+      const incidence = pop > 0 ? Number(((r.cases / pop) * 100000).toFixed(1)) : null;
+      return {
+        barangay: r.barangay_name,
+        cases: r.cases,
+        population: pop,
+        incidence,
+      };
+    });
+
+    // Risk summary (city-wide)
+    const riskMap = {};
+    riskRes.rows.forEach(r => { riskMap[r.barangay_name] = r; });
+
+    const riskSummary = barangayDistribution.map(r => ({
+      barangay: r.barangay,
+      cases: r.cases,
+      incidence: r.incidence,
+      riskLevel: riskMap[r.barangay]?.risk_class || 'No Data',
+      trendDirection: riskMap[r.barangay]?.trend_direction || 'N/A',
+    }));
+
+    // Forecast
+    const totalForecasted = forecastRes.rows.reduce((s, r) => s + Math.round(Number(r.forecasted_count || 0)), 0);
+    const forecastPeriod = forecastRes.rows.length > 0 ? forecastRes.rows[0].period : null;
+    const forecast = {
+      available: forecastRes.rows.length > 0,
+      forecastedCases: totalForecasted,
+      period: forecastPeriod ? new Date(forecastPeriod).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : null,
+    };
+
+    // Recommendations (rule-based)
+    const recommendations = [];
+    if (successRate !== null && successRate < 85) {
+      recommendations.push('Treatment success rate is below the 85% target. Strengthen treatment adherence monitoring and patient follow-up.');
+    }
+    const highRiskBarangays = riskRes.rows.filter(r => r.risk_class === 'High' || r.risk_class === 'Very High');
+    if (highRiskBarangays.length > 0) {
+      recommendations.push(`Prioritize monitoring and resource allocation in ${highRiskBarangays.length} high-risk barangay(s): ${highRiskBarangays.map(r => r.barangay_name).join(', ')}.`);
+    }
+    if (recommendations.length === 0) {
+      recommendations.push('No high-risk barangays were identified for the selected reporting period. Continue routine surveillance.');
+    }
+
+    // Recent import (last sync)
+    const syncRes = await pool.query(`SELECT MAX(imported_at) AS last_sync FROM tb_cases`);
+    const lastSync = syncRes.rows[0]?.last_sync || null;
+
+    res.json({
+      report: {
+        type,
+        period: periodLabel,
+        coverage,
+        generatedAt: new Date().toISOString(),
+        lastSync,
+      },
+      summary: { totalCases, activeCases, successRate, evaluatedCount },
+      outcomes,
+      demographics: { sex, ageGroups },
+      caseProfile,
+      trend,
+      barangayDistribution,
+      riskSummary,
+      forecast,
+      recommendations,
+      cases: casesRes.rows,
+      population: populationRes.rows,
+    });
+  } catch (err) {
+    console.error('Reports summary error:', err.message);
+    res.status(500).json({ error: 'Server error generating report.' });
   }
 });
 

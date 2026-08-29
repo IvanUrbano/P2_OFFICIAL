@@ -201,10 +201,10 @@ export default function BarangayWatchlist() {
       {summary && (
         <MetricStrip
           list={[
-            { title: 'High Risk', value: summary.high, icon: 'ri-alarm-warning-line', color: '#EF4444' },
-            { title: 'Medium Risk', value: summary.medium, icon: 'ri-error-warning-line', color: '#F97316' },
-            { title: 'Cases This Month', value: fmt(summary.cases), icon: 'ri-heart-pulse-line', color: '#2E6FAF' },
-            { title: 'Forecast Next Month', value: fmt(summary.forecast), icon: 'ri-arrow-right-up-line', color: '#10B981' },
+            { title: 'High Risk', value: summary.high, icon: 'ri-alarm-warning-line', color: '#C4886A' },
+            { title: 'Medium Risk', value: summary.medium, icon: 'ri-error-warning-line', color: '#B8956A' },
+            { title: 'Cases This Month', value: fmt(summary.cases), icon: 'ri-heart-pulse-line', color: '#6B7FA3' },
+            { title: 'Forecast Next Month', value: fmt(summary.forecast), icon: 'ri-arrow-right-up-line', color: '#6B9E9E' },
           ]}
         />
       )}
@@ -233,11 +233,13 @@ export default function BarangayWatchlist() {
               <button
                 key={c}
                 onClick={() => setRiskFilter(c)}
-                className="px-3 h-9 rounded-lg text-xs font-bold transition-all cursor-pointer appearance-none"
+                className="px-3 h-9 text-xs font-semibold"
                 style={{
-                  color: active ? '#ffffff' : '#64748B',
-                  background: active ? '#0F2D52' : '#ffffff',
-                  border: `1px solid ${active ? '#0F2D52' : '#E2E8F0'}`,
+                  color: active ? '#ffffff' : '#374151',
+                  background: active ? '#0F2D52' : '#F3F4F6',
+                  border: `1px solid ${active ? '#0F2D52' : '#D1D5DB'}`,
+                  borderRadius: 4,
+                  transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s',
                 }}
               >
                 {c}

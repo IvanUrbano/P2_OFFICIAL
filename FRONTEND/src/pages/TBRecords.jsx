@@ -336,7 +336,7 @@ export default function TBRecords() {
             {/* 1. Total TB Cases */}
             <div className="flex flex-col px-5 py-5 relative">
               <div className="flex items-center gap-2">
-                <i className="ri-file-list-3-line text-base" style={{ color: '#3B82F6' }} />
+                <i className="ri-file-list-3-line text-sm" style={{ color: '#6B7FA3' }} />
                 <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Total TB Cases</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
@@ -350,7 +350,7 @@ export default function TBRecords() {
             <div className="flex flex-col px-5 py-5 relative">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <i className="ri-first-aid-kit-line text-base" style={{ color: '#F59E0B' }} />
+                  <i className="ri-first-aid-kit-line text-sm" style={{ color: '#B8956A' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>On Treatment</span>
                 </div>
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEF3C7', color: '#D97706' }}>
@@ -368,7 +368,7 @@ export default function TBRecords() {
             <div className="flex flex-col px-5 py-5 relative">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <i className="ri-check-double-line text-base" style={{ color: '#10B981' }} />
+                  <i className="ri-check-double-line text-sm" style={{ color: '#6B9E8A' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Cured</span>
                 </div>
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#D1FAE5', color: '#059669' }}>
@@ -386,7 +386,7 @@ export default function TBRecords() {
             <div className="flex flex-col px-5 py-5 relative">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <i className="ri-emotion-sad-line text-base" style={{ color: '#DC2626' }} />
+                  <i className="ri-emotion-sad-line text-sm" style={{ color: '#B07070' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Died</span>
                 </div>
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEE2E2', color: '#DC2626' }}>
@@ -404,7 +404,7 @@ export default function TBRecords() {
             <div className="flex flex-col px-5 py-5 relative">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <i className="ri-user-unfollow-line text-base" style={{ color: '#7C3AED' }} />
+                  <i className="ri-user-unfollow-line text-sm" style={{ color: '#8B7BA3' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Lost to Follow-up</span>
                 </div>
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#EDE9FE', color: '#7C3AED' }}>
@@ -422,7 +422,7 @@ export default function TBRecords() {
             <div className="flex flex-col px-5 py-5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <i className="ri-checkbox-circle-line text-base" style={{ color: '#2563EB' }} />
+                  <i className="ri-checkbox-circle-line text-sm" style={{ color: '#6B7FA3' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Completed</span>
                 </div>
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#DBEAFE', color: '#2563EB' }}>
@@ -467,13 +467,14 @@ export default function TBRecords() {
               </div>
               <button
                 onClick={openAdvancedFilters}
-                className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition whitespace-nowrap"
-                style={{ background: activeFilterCount > 0 ? '#0F2D52' : '#EFF6FF', color: activeFilterCount > 0 ? '#ffffff' : '#0F2D52', border: activeFilterCount > 0 ? '1px solid #0F2D52' : '1px solid #DBEAFE' }}
+                className="inline-flex items-center justify-center h-8 w-8 text-xs font-semibold"
+                style={{ background: activeFilterCount > 0 ? '#0F2D52' : '#F3F4F6', color: activeFilterCount > 0 ? '#ffffff' : '#374151', border: activeFilterCount > 0 ? '1px solid #0F2D52' : '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { if (activeFilterCount > 0) { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; } else { e.currentTarget.style.background = '#E5E7EB'; } }}
+                onMouseLeave={e => { if (activeFilterCount > 0) { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; } else { e.currentTarget.style.background = '#F3F4F6'; } }}
               >
-                <i className="ri-filter-3-line text-sm" />
-                Filters
+                <i className="ri-filter-3-line" />
                 {activeFilterCount > 0 && (
-                  <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold" style={{ background: '#3B82F6', color: '#ffffff' }}>
+                  <span className="absolute -top-1.5 -right-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold" style={{ background: '#3B82F6', color: '#ffffff' }}>
                     {activeFilterCount}
                   </span>
                 )}
@@ -493,21 +494,23 @@ export default function TBRecords() {
                   {f.label}: {formatChipValue(f.key, f.value)}
                   <button
                     onClick={() => removeFilter(f.key)}
-                    className="inline-flex h-4 w-4 items-center justify-center rounded-full transition"
-                    style={{ color: '#94A3B8' }}
+                    className="inline-flex h-4 w-4 items-center justify-center text-[10px]"
+                    style={{ color: '#94A3B8', borderRadius: 4 }}
                     aria-label={`Remove ${f.label} filter`}
                   >
-                    <i className="ri-close-line text-[10px]" />
+                    ×
                   </button>
                 </span>
               ))}
-              <button
-                onClick={clearAllFilters}
-                className="text-[11px] font-medium transition hover:underline ml-1"
-                style={{ color: '#94A3B8' }}
-              >
-                Clear all
-              </button>
+                  <button
+                    onClick={clearAllFilters}
+                    className="text-[11px] font-medium ml-1"
+                    style={{ color: '#374151', background: '#F3F4F6', border: '1px solid #D1D5DB', borderRadius: 4, padding: '2px 8px', transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
+                  >
+                    Clear all
+                  </button>
             </div>
           )}
 
@@ -564,9 +567,11 @@ export default function TBRecords() {
                       </td>
                       <td className="px-3 py-3.5 text-center">
                         <button aria-label="View record" onClick={() => setSelectedRecord(record)}
-                          className="inline-flex items-center justify-center w-8 h-8 rounded-lg transition hover:opacity-80"
-                          style={{ background: '#DBEAFE', color: '#2563EB' }}>
-                          <i className="ri-eye-line text-sm" />
+                          className="inline-flex items-center justify-center h-8 w-8 text-sm"
+                          style={{ color: '#64748B', borderRadius: 4, transition: 'color 0.15s' }}
+                          onMouseEnter={e => { e.currentTarget.style.color = '#0F2D52'; }}
+                          onMouseLeave={e => { e.currentTarget.style.color = '#64748B'; }}>
+                          <i className="ri-eye-line" />
                         </button>
                       </td>
                     </tr>
@@ -590,9 +595,11 @@ export default function TBRecords() {
             <div className="flex items-center gap-1.5">
               <button aria-label="Previous page" onClick={() => currentPage > 1 && setCurrentPage(currentPage - 1)}
                 disabled={currentPage <= 1 || loading}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
-                style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}>
-                <i className="ri-arrow-left-s-line text-base" />
+                className="inline-flex h-8 w-8 items-center justify-center text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
+                ‹
               </button>
               {(() => {
                 const totalPages = pagination.totalPages || 1;
@@ -613,8 +620,8 @@ export default function TBRecords() {
                     <span key={`e-${idx}`} className="inline-flex h-8 w-8 items-center justify-center text-xs" style={{ color: '#94A3B8' }}>...</span>
                   ) : (
                     <button key={page} onClick={() => setCurrentPage(page)}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold transition"
-                      style={currentPage === page ? { background: '#0F2D52', color: '#ffffff' } : { color: '#64748B' }}>
+                      className="inline-flex h-8 w-8 items-center justify-center text-xs font-semibold"
+                      style={(currentPage === page ? { background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 } : { background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 })}>
                       {page}
                     </button>
                   )
@@ -622,9 +629,11 @@ export default function TBRecords() {
               })()}
               <button aria-label="Next page" onClick={() => setCurrentPage(currentPage + 1)}
                 disabled={currentPage >= pagination.totalPages || pagination.total === 0 || loading}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
-                style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}>
-                <i className="ri-arrow-right-s-line text-base" />
+                className="inline-flex h-8 w-8 items-center justify-center text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
+                ›
               </button>
             </div>
           </div>
@@ -641,8 +650,11 @@ export default function TBRecords() {
               <div className="flex items-center justify-between px-6 py-4">
                 <h2 className="text-sm font-extrabold tracking-tight" style={{ color: '#ffffff' }}>FILTERS</h2>
                 <button onClick={() => setShowAdvancedFilters(false)} aria-label="Close filters"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full transition hover:opacity-80" style={{ color: '#93C5FD' }}>
-                  <i className="ri-close-line text-base" />
+                  className="inline-flex h-8 w-8 items-center justify-center text-xs font-medium"
+                  style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
+                  ✕
                 </button>
               </div>
             </div>
@@ -714,15 +726,19 @@ export default function TBRecords() {
             <div className="sticky bottom-0 flex items-center gap-3 px-6 py-4" style={{ borderTop: '1px solid #E2E8F0', background: '#ffffff' }}>
               <button
                 onClick={clearPendingFilters}
-                className="flex-1 rounded-lg px-4 py-2.5 text-xs font-semibold transition"
-                style={{ color: '#64748B', border: '1px solid #E2E8F0', background: '#ffffff' }}
+                className="flex-1 px-4 py-2.5 text-xs font-medium"
+                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
               >
                 Clear All
               </button>
               <button
                 onClick={applyPendingFilters}
-                className="flex-1 rounded-lg px-4 py-2.5 text-xs font-semibold transition"
-                style={{ background: '#0F2D52', color: '#ffffff' }}
+                className="flex-1 px-4 py-2.5 text-xs font-semibold"
+                style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
               >
                 Apply Filters
               </button>
@@ -740,8 +756,11 @@ export default function TBRecords() {
               <div className="flex items-center justify-between px-6 py-4">
                 <h2 className="text-base font-extrabold tracking-tight" style={{ color: '#ffffff' }}>RECORD DETAILS</h2>
                 <button onClick={() => setSelectedRecord(null)} aria-label="Close modal"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full transition hover:opacity-80" style={{ color: '#93C5FD' }}>
-                  <i className="ri-close-line text-base" />
+                  className="inline-flex h-8 w-8 items-center justify-center text-xs font-medium"
+                  style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
+                  ✕
                 </button>
               </div>
             </div>

@@ -56,6 +56,9 @@ export default function DataIntegration() {
   const [batchSummary, setBatchSummary] = useState(null);
   const [batchErrors, setBatchErrors] = useState([]);
   const [batchLoading, setBatchLoading] = useState(false);
+  const [pipelineRunning, setPipelineRunning] = useState(false);
+  const [pipelineResult, setPipelineResult] = useState(null);
+  const [pipelineError, setPipelineError] = useState('');
 
   useEffect(() => {
     if (getStoredUser()?.role !== 'admin') return;
@@ -119,6 +122,21 @@ export default function DataIntegration() {
     }
   };
 
+  const handleRunPipeline = async () => {
+    if (pipelineRunning) return;
+    setPipelineRunning(true);
+    setPipelineResult(null);
+    setPipelineError('');
+    try {
+      const res = await API.post('/api/tb/pipeline');
+      setPipelineResult(res.data);
+    } catch (err) {
+      setPipelineError(err.response?.data?.error || 'Pipeline failed. Make sure the ML service is running.');
+    } finally {
+      setPipelineRunning(false);
+    }
+  };
+
   if (!isAdmin) {
     return (
       <div className="flex flex-col gap-6">
@@ -179,10 +197,11 @@ export default function DataIntegration() {
           <button
             onClick={handleUpload}
             disabled={!selectedFile || uploading}
-            className="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-xs font-bold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ background: 'linear-gradient(135deg, #0066FF 0%, #00D8F6 100%)' }}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
           >
-            <i className={uploading ? 'ri-loader-4-line animate-spin' : 'ri-upload-cloud-2-line'} />
             {uploading ? 'Importing...' : 'Import File'}
           </button>
         </div>
@@ -263,6 +282,85 @@ export default function DataIntegration() {
         </div>
       )}
 
+      {uploadResult && uploadResult.batch?.imported > 0 && !pipelineResult && (
+        <div
+          className="rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+          style={{ background: 'rgba(13,148,136,0.06)', border: '1px solid rgba(13,148,136,0.25)' }}
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(13,148,136,0.1)' }}>
+              <i className="ri-refresh-line text-lg" style={{ color: '#0D9488' }} />
+            </div>
+            <div>
+              <p className="text-sm font-bold" style={{ color: t.text }}>Update forecasts and risk data</p>
+              <p className="text-[11px] mt-0.5" style={{ color: t.textSecondary }}>
+                Forecast, risk classification, and alert data may be outdated after this import.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleRunPipeline}
+            disabled={pipelineRunning}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
+          >
+            {pipelineRunning ? 'Running...' : 'Run Pipeline'}
+          </button>
+        </div>
+      )}
+
+      {pipelineResult && (
+        <div
+          className="rounded-xl p-4 flex items-center justify-between gap-3"
+          style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.25)' }}
+        >
+          <div className="flex items-center gap-3">
+            <i className="ri-checkbox-circle-line text-lg" style={{ color: '#10B981' }} />
+            <div>
+              <p className="text-sm font-bold" style={{ color: t.text }}>Pipeline completed successfully</p>
+              <p className="text-[11px] mt-0.5" style={{ color: t.textSecondary }}>
+                Forecasts, risk scores, and alerts are now up to date.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setPipelineResult(null)}
+            className="inline-flex h-7 w-7 items-center justify-center shrink-0 text-xs font-medium"
+            style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
+          >
+            Close
+          </button>
+        </div>
+      )}
+
+      {pipelineError && (
+        <div
+          className="rounded-xl p-4 flex items-center justify-between gap-3"
+          style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)' }}
+        >
+          <div className="flex items-center gap-3">
+            <i className="ri-error-warning-line text-lg" style={{ color: '#EF4444' }} />
+            <div>
+              <p className="text-sm font-bold" style={{ color: t.text }}>Pipeline failed</p>
+              <p className="text-[11px] mt-0.5" style={{ color: '#B91C1C' }}>{pipelineError}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setPipelineError('')}
+            className="inline-flex h-7 w-7 items-center justify-center shrink-0 text-xs font-medium"
+            style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
+          >
+            Close
+          </button>
+        </div>
+      )}
+
       {uploadError && (
         <div
           className="rounded-xl p-4 text-sm font-semibold"
@@ -287,10 +385,12 @@ export default function DataIntegration() {
                 setBatchErrors([]);
               }}
               aria-label="Close batch errors"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full transition hover:opacity-80"
-              style={{ background: t.panel, color: t.textSecondary }}
+              className="inline-flex h-8 w-8 items-center justify-center text-xs font-medium"
+              style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
             >
-              <i className="ri-close-line" />
+              Close
             </button>
           </div>
           {batchLoading ? (
@@ -383,10 +483,11 @@ export default function DataIntegration() {
                         <button
                           onClick={() => handleViewErrors(row.batch_id)}
                           disabled={Number(row.error_rows) === 0}
-                          className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-[11px] font-bold transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
-                          style={{ background: 'rgba(46,111,175,0.1)', border: '1px solid rgba(46,111,175,0.25)', color: '#2E6FAF' }}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-40"
+                          style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                          onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
                         >
-                          <i className={selectedBatch === row.batch_id ? 'ri-eye-off-line' : 'ri-eye-line'} />
                           {selectedBatch === row.batch_id ? 'Hide Errors' : 'Errors'}
                         </button>
                       </td>

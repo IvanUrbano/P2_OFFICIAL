@@ -157,9 +157,9 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
       }
     }
 
-    // Fallback: if ML service is down or ARIMA failed, generate simple forecasts from historical data
+    // Fallback: if ML service is down or ARIMA failed, generate seasonal naive forecasts
     if (forecastResults.length === 0 && forecastSeries.length > 0) {
-      console.log('🔄 ML service unavailable — generating fallback forecasts from historical data');
+      console.log('🔄 ML service unavailable — generating seasonal naive fallback forecasts');
       const barangayMap = {};
       for (const row of forecastSeries) {
         if (!barangayMap[row.barangay_name]) barangayMap[row.barangay_name] = [];
@@ -168,29 +168,51 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
 
       for (const [bName, pts] of Object.entries(barangayMap)) {
         const sorted = pts.sort((a, c) => a.month.localeCompare(c.month));
-        const lastCount = sorted.length > 0 ? sorted[sorted.length - 1].case_count : 0;
         const predictions = [];
+
+        // Build a lookup: month index (0-11) -> case_count for the most recent year
+        const monthLookup = {};
+        for (const pt of sorted) {
+          const d = new Date(pt.month);
+          const monthIdx = d.getUTCMonth();
+          monthLookup[monthIdx] = pt.case_count;
+        }
+
+        // Compute simple trend from last 6 months vs previous 6 months
+        const last6 = sorted.slice(-6);
+        const prev6 = sorted.slice(-12, -6);
+        const avgRecent = last6.length > 0 ? last6.reduce((s, p) => s + p.case_count, 0) / last6.length : 0;
+        const avgPrev = prev6.length > 0 ? prev6.reduce((s, p) => s + p.case_count, 0) / prev6.length : 0;
+        const trendFactor = avgPrev > 0 ? avgRecent / avgPrev : 1;
+
         for (let i = 1; i <= forecastHorizon; i++) {
           const nextDate = new Date(results.period);
           nextDate.setUTCMonth(nextDate.getUTCMonth() + (i - 1));
-          // Normalize to 1st of month
           const nextPeriod = nextDate.toISOString().slice(0, 8) + '01';
+          const monthIdx = nextDate.getUTCMonth();
+
+          // Seasonal naive: use same month last year, adjusted by trend
+          const seasonalValue = monthLookup[monthIdx] != null ? monthLookup[monthIdx] : avgRecent;
+          const yhat = Math.max(0, Math.round(seasonalValue * trendFactor));
+
+          // CI widens with forecast horizon
+          const ciSpread = 0.15 + (i * 0.03);
           predictions.push({
             month: nextPeriod,
-            yhat: lastCount,
-            yhat_lower: Math.max(0, Math.round(lastCount * 0.7)),
-            yhat_upper: Math.round(lastCount * 1.3),
+            yhat,
+            yhat_lower: Math.max(0, Math.round(yhat * (1 - ciSpread))),
+            yhat_upper: Math.round(yhat * (1 + ciSpread)),
           });
         }
         forecastResults.push({
           barangay_name: bName,
-          method: 'fallback-historical',
+          method: 'seasonal-naive-fallback',
           backtest_mae: 0,
           predictions,
         });
       }
       results.forecastsCount = forecastResults.length;
-      console.log(`🔄 Fallback: ${forecastResults.length} barangays forecasted from historical data`);
+      console.log(`🔄 Fallback: ${forecastResults.length} barangays forecasted with seasonal naive`);
     }
 
     // ── Step 5: Compute RF features per barangay ──

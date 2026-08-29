@@ -288,6 +288,11 @@ body {
   max-height: none !important;
 }
 
+/* Dark tile filter — inverts & dims OSM tiles to match dark theme */
+.dark-tiles {
+  filter: invert(1) hue-rotate(180deg) brightness(0.65) contrast(1.2) saturate(0.6);
+}
+
 /* ==================== Leaflet Popup Overrides ==================== */
 .leaflet-popup-content-wrapper {
   background: rgba(8, 16, 24, 0.95) !important;
@@ -409,4 +414,16 @@ body {
   background: #ffffff !important;
   border: 1px solid #DBEAFE !important;
   box-shadow: none !important;
+}
+
+/* ==================== Print Styles ==================== */
+@media print {
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  body { background: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .report-preview { box-shadow: none !important; border: none !important; max-width: 100% !important; }
+  .report-preview table { page-break-inside: auto; }
+  .report-preview tr { page-break-inside: avoid; }
+  .report-preview thead { display: table-header-group; }
+  @page { margin: 1cm; size: A4; }
 }

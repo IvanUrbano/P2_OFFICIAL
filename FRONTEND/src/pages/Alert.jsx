@@ -168,15 +168,19 @@ export default function Alert() {
                 {/* Actions */}
                 <div className="flex items-center gap-2 shrink-0">
                   <button
-                    className="text-xs px-3 py-1.5 rounded-lg font-bold transition-opacity hover:opacity-80"
-                    style={{ color: '#0066FF', border: '1px solid rgba(0,102,255,0.2)', background: 'rgba(0,102,255,0.06)' }}
+                    className="text-xs font-semibold px-3 py-1.5"
+                    style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
                   >
                     View Details
                   </button>
                   <button
                     onClick={() => handleDismiss(a.id)}
-                    className="text-xs px-3 py-1.5 rounded-lg font-bold transition-opacity hover:opacity-80"
-                    style={{ color: '#64748B', border: '1px solid #e2e8f0', background: '#ffffff' }}
+                    className="text-xs font-medium px-3 py-1.5"
+                    style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
                   >
                     Dismiss
                   </button>

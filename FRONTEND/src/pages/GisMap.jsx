@@ -150,7 +150,9 @@ export default function GisMap() {
         });
         Object.values(grouped).forEach(arr => arr.sort((a, b) => a.month.localeCompare(b.month)));
         if (!cancelled) setMonthlyByBarangay(grouped);
-      } catch {}
+      } catch (err) {
+        console.error('Monthly data fetch error:', err);
+      }
     })();
     return () => { cancelled = true; };
   }, []);
@@ -169,10 +171,11 @@ export default function GisMap() {
       zoomSnap: 0.5,
       zoomDelta: 0.5,
     });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       maxZoom: 19,
-      subdomains: 'abcd',
+      subdomains: 'abc',
+      className: 'dark-tiles',
     }).addTo(map);
     mapInstance.current = map;
     L.control.zoom({ position: 'bottomleft' }).addTo(map);
@@ -262,8 +265,8 @@ export default function GisMap() {
             <div style="height: 1px; background: rgba(255,255,255,0.08); margin: 10px 0;"></div>
             <!-- Action Buttons -->
             <div style="display: flex; gap: 8px;">
-              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 700; border: none; border-radius: 8px; cursor: pointer; background: #0F2D52; color: #ffffff; transition: opacity 0.15s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">View Analytics</button>
-              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewDetails', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; cursor: pointer; background: transparent; color: #ffffff; transition: background 0.15s;" onmouseenter="this.style.background='rgba(255,255,255,0.08)'" onmouseleave="this.style.background='transparent'">Details</button>
+              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 600; border: 1px solid #0F2D52; border-radius: 4px; cursor: pointer; background: #0F2D52; color: #ffffff;">View Analytics</button>
+              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewDetails', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 500; border: 1px solid #D1D5DB; border-radius: 4px; cursor: pointer; background: #F3F4F6; color: #374151;">Details</button>
             </div>
           </div>
         `;
@@ -356,7 +359,8 @@ export default function GisMap() {
       try {
         const res = await API.get(`/api/tb/dashboard/barangay/${encodeURIComponent(selectedBarangayName)}`);
         if (!cancelled) setBarangayDetail(res.data);
-      } catch {
+      } catch (err) {
+        console.error('Barangay detail fetch error:', err);
         if (!cancelled) setBarangayDetail(null);
       } finally {
         if (!cancelled) setBarangayDetailLoading(false);
@@ -434,28 +438,31 @@ export default function GisMap() {
             {hasActiveFilters && (
               <button
                 onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); }}
-                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition hover:opacity-80"
-                style={{ color: '#EF4444' }}
+                className="text-xs font-medium px-3 py-2"
+                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
               >
-                <i className="ri-close-circle-line text-sm" />
                 Clear Filters
               </button>
             )}
 
             <button
-              className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold transition hover:opacity-80"
-              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#0F2D52' }}
+              className="text-xs font-semibold px-3.5 py-2"
+              style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
             >
-              <i className="ri-download-2-line text-sm" style={{ color: '#2563EB' }} />
               Export Map
             </button>
 
             <button
               onClick={toggleFullscreen}
-              className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold transition hover:opacity-80"
-              style={{ background: '#0F2D52', color: '#ffffff' }}
+              className="text-xs font-semibold px-3.5 py-2"
+              style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
             >
-              <i className={`ri-${isFullscreen ? 'fullscreen-exit' : 'fullscreen'}-line text-sm`} />
               {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
             </button>
           </div>
@@ -477,10 +484,11 @@ export default function GisMap() {
         {isFullscreen && (
           <button
             onClick={toggleFullscreen}
-            className="absolute top-4 left-4 z-[1001] flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition hover:opacity-80"
-            style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)', color: '#0F2D52' }}
+            className="absolute top-4 left-4 z-[1001] text-xs font-medium px-3 py-2"
+            style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
           >
-            <i className="ri-fullscreen-exit-line text-sm" style={{ color: '#2563EB' }} />
             Exit Fullscreen
           </button>
         )}
@@ -527,7 +535,7 @@ export default function GisMap() {
             {/* 1. Barangays */}
             <div className="flex flex-col px-5 py-5 relative">
               <div className="flex items-center gap-2">
-                <i className="ri-stack-line text-base" style={{ color: '#3B82F6' }} />
+                <i className="ri-stack-line text-sm" style={{ color: '#6B7FA3' }} />
                 <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Barangays</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
@@ -538,7 +546,7 @@ export default function GisMap() {
             {/* 2. TB Cases */}
             <div className="flex flex-col px-5 py-5 relative">
               <div className="flex items-center gap-2">
-                <i className="ri-stethoscope-line text-base" style={{ color: '#F59E0B' }} />
+                <i className="ri-stethoscope-line text-sm" style={{ color: '#B8956A' }} />
                 <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>TB Cases</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
@@ -549,7 +557,7 @@ export default function GisMap() {
             {/* 3. High-Risk Barangays */}
             <div className="flex flex-col px-5 py-5 relative">
               <div className="flex items-center gap-2">
-                <i className="ri-alarm-warning-line text-base" style={{ color: '#DC2626' }} />
+                <i className="ri-alarm-warning-line text-sm" style={{ color: '#C4886A' }} />
                 <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk Barangays</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
@@ -560,7 +568,7 @@ export default function GisMap() {
             {/* 4. Case Density */}
             <div className="flex flex-col px-5 py-5">
               <div className="flex items-center gap-2">
-                <i className="ri-node-tree text-base" style={{ color: '#2563EB' }} />
+                <i className="ri-node-tree text-sm" style={{ color: '#6B9E9E' }} />
                 <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Density</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
@@ -668,8 +676,8 @@ export default function GisMap() {
                           <p className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>per 100k</p>
                         </div>
                         <div className="flex items-center gap-1.5 justify-end">
-                          <button className="px-3 py-1.5 text-[11px] font-bold rounded-lg transition hover:opacity-80" style={{ background: '#0F2D52', color: '#ffffff' }} onClick={() => window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: b.name }))}>Analytics</button>
-                          <button className="px-3 py-1.5 text-[11px] font-bold rounded-lg transition hover:bg-slate-100" style={{ color: '#0F2D52', border: '1px solid #E2E8F0' }} onClick={() => setSelectedBarangayName(b.name)}>Details</button>
+                          <button className="px-3 py-1.5 text-[11px] font-semibold" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onClick={() => window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: b.name }))} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>Analytics</button>
+                          <button className="px-3 py-1.5 text-[11px] font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onClick={() => setSelectedBarangayName(b.name)} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>Details</button>
                         </div>
                       </div>
                     );
@@ -704,10 +712,12 @@ export default function GisMap() {
                 <button
                   onClick={() => setSelectedBarangayName(null)}
                   aria-label="Close modal"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full transition hover:opacity-80"
-                  style={{ color: '#93C5FD' }}
+                  className="inline-flex h-8 w-8 items-center justify-center text-xs font-medium"
+                  style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
                 >
-                  <i className="ri-close-line text-base" />
+                  ✕
                 </button>
               </div>
             </div>
@@ -729,7 +739,15 @@ export default function GisMap() {
               const b = barangayDetail?.barangay || {};
               const outcomes = barangayDetail?.outcomes || [];
               const demographics = barangayDetail?.demographics || [];
-              const monthly = barangayDetail?.monthly || [];
+
+              // Case-insensitive lookup for monthlyByBarangay
+              const monthlyKey = Object.keys(monthlyByBarangay).find(
+                k => k.toLowerCase() === selectedBarangayName?.toLowerCase()
+              );
+              const monthly = barangayDetail?.monthly?.length > 0
+                ? barangayDetail.monthly
+                : (monthlyByBarangay[monthlyKey] || monthlyByBarangay[selectedBarangayName] || []);
+
               const merged = { ...geoProps, ...b };
 
               const riskColor = RISK_COLORS[merged.risk_class] || '#64748B';
@@ -756,12 +774,6 @@ export default function GisMap() {
                   {/* Hero: Barangay name + Risk badge */}
                   <div>
                     <div className="flex items-center gap-3 mb-3">
-                      <div
-                        className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
-                        style={{ background: `${riskColor}15`, border: `1px solid ${riskColor}30` }}
-                      >
-                        <i className="ri-building-2-line text-xl" style={{ color: riskColor }} />
-                      </div>
                       <div>
                         <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>{merged.name || selectedBarangayName}</h3>
                         <span
@@ -780,7 +792,6 @@ export default function GisMap() {
                   {/* Section: Barangay Profile */}
                   <div>
                     <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
-                      <i className="ri-information-line mr-1" style={{ color: '#2563EB' }} />
                       Barangay Profile
                     </h4>
                     <div className="space-y-2.5">
@@ -800,21 +811,18 @@ export default function GisMap() {
                     <>
                       <div>
                         <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
-                          <i className="ri-team-line mr-1" style={{ color: '#2563EB' }} />
                           Demographics
                         </h4>
                         {/* Gender split summary */}
                         <div className="grid grid-cols-2 gap-3 mb-4">
                           <div className="rounded-xl p-3" style={{ background: '#EFF6FF', border: '1px solid #DBEAFE' }}>
                             <div className="flex items-center gap-2 mb-1">
-                              <i className="ri-men-line text-sm" style={{ color: '#2563EB' }} />
                               <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Male</span>
                             </div>
                             <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{totalMale}</p>
                           </div>
                           <div className="rounded-xl p-3" style={{ background: '#FDF2F8', border: '1px solid #FBCFE8' }}>
                             <div className="flex items-center gap-2 mb-1">
-                              <i className="ri-women-line text-sm" style={{ color: '#EC4899' }} />
                               <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Female</span>
                             </div>
                             <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{totalFemale}</p>
@@ -856,7 +864,6 @@ export default function GisMap() {
                   {outcomes.length > 0 && (
                     <div>
                       <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
-                        <i className="ri-thermometer-line mr-1" style={{ color: '#2563EB' }} />
                         Treatment Outcomes
                       </h4>
                       {/* Outcome summary cards */}
@@ -896,35 +903,43 @@ export default function GisMap() {
                     </div>
                   )}
 
-                  {/* Section: Monthly Trend (if available) */}
-                  {monthly.length > 0 && (
-                    <>
-                      <div style={{ borderTop: '1px solid #E2E8F0' }} />
-                      <div>
-                        <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
-                          <i className="ri-bar-chart-grouped-line mr-1" style={{ color: '#2563EB' }} />
-                          Monthly Case Trend
-                        </h4>
-                        <div className="flex items-end gap-1" style={{ height: '80px' }}>
-                          {monthly.slice(-12).map((m, i) => {
-                            const maxCount = Math.max(...monthly.slice(-12).map(x => x.case_count || 0), 1);
-                            const h = ((m.case_count || 0) / maxCount) * 100;
-                            const monthLabel = m.month ? new Date(m.month).toLocaleString('default', { month: 'short' }) : '';
+                  {/* Section: Monthly Trend */}
+                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
+                      Monthly Case Trend
+                    </h4>
+                    {monthly.length > 0 ? (
+                      <div className="space-y-1.5">
+                        {(() => {
+                          const visibleMonths = monthly.slice(-12).map((m) => ({
+                            ...m,
+                            count: Number(m.case_count ?? 0),
+                            label: m.month ? new Date(m.month).toLocaleString('default', { month: 'short' }) : '',
+                          }));
+                          const maxCount = Math.max(...visibleMonths.map(m => m.count), 1);
+
+                          return visibleMonths.map((m, i) => {
+                            const pct = maxCount > 0 ? (m.count / maxCount) * 100 : 0;
                             return (
-                              <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                                <div
-                                  className="w-full rounded-t transition-all"
-                                  style={{ height: `${h}%`, background: '#3B82F6', minHeight: '2px', opacity: 0.8 }}
-                                  title={`${monthLabel}: ${m.case_count}`}
-                                />
-                                <span className="text-[8px] font-medium" style={{ color: '#94A3B8' }}>{monthLabel}</span>
+                              <div key={`${m.month || i}`} className="flex items-center gap-2">
+                                <span className="text-[10px] font-semibold w-6 shrink-0" style={{ color: '#64748B' }}>{m.label}</span>
+                                <div className="flex-1 h-3.5 rounded" style={{ background: '#E2E8F0' }}>
+                                  <div
+                                    className="h-full rounded transition-all"
+                                    style={{ width: `${Math.max(pct, m.count > 0 ? 8 : 0)}%`, background: '#3B82F6' }}
+                                  />
+                                </div>
+                                <span className="text-[10px] font-bold w-6 text-right shrink-0" style={{ color: '#0F2D52' }}>{m.count}</span>
                               </div>
                             );
-                          })}
-                        </div>
+                          });
+                        })()}
                       </div>
-                    </>
-                  )}
+                    ) : (
+                      <p className="text-[11px]" style={{ color: '#94A3B8' }}>No monthly data available.</p>
+                    )}
+                  </div>
 
                   {/* Empty state */}
                   {!barangayDetail && !barangayDetailLoading && (

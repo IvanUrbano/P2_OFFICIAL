@@ -87,10 +87,15 @@ export default function Topbar({ user }) {
           className="flex items-center gap-3 cursor-pointer shrink-0"
           onClick={() => navigate('/dashboard')}
         >
-          <Logo size={30} />
-          <span className="text-lg font-extrabold tracking-tight" style={{ color: '#ffffff' }}>
-            TB<span style={{ color: '#60A5FA' }}>Insight</span>
-          </span>
+          <Logo size={32} />
+          <div className="flex items-center gap-2.5">
+            <span className="text-lg font-extrabold tracking-tight" style={{ color: '#ffffff' }}>
+              TBInsight
+            </span>
+            <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>
+              Pasig City TB Surveillance
+            </span>
+          </div>
         </div>
 
         {/* Right: Last Synced + Icons + User */}
