@@ -166,7 +166,7 @@ export default function LoginPage() {
 
             {error && (
               <div className="mb-6 px-4 py-3.5 rounded-2xl text-sm flex items-center gap-3 border bg-red-50 border-red-200 text-red-600">
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 bg-red-100">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-red-100">
                   <i className="ri-error-warning-line text-sm" />
                 </div>
                 <span>{error}</span>
@@ -182,7 +182,7 @@ export default function LoginPage() {
                   <input type="email" name="email" value={formData.email} onChange={handleChange} required
                     disabled={lockoutSeconds > 0 || loading} placeholder="you@example.com"
                     onFocus={() => setActiveField('email')} onBlur={() => setActiveField(null)}
-                    className="w-full pl-5 pr-4 py-3.5 rounded-xl text-sm font-medium outline-none transition-all duration-300 disabled:opacity-40"
+                    className="w-full pl-5 pr-4 py-3.5 rounded-lg text-sm font-medium outline-none transition-all duration-300 disabled:opacity-40"
                     style={{ background: activeField === 'email' ? t.inputBg : t.inputBg, border: `1.5px solid ${activeField === 'email' ? '#0066FF' : t.inputBorder}`, color: t.text }} />
                 </div>
               </div>
@@ -195,7 +195,7 @@ export default function LoginPage() {
                   <input type={showPassword ? 'text' : 'password'} name="password" value={formData.password} onChange={handleChange} required
                     disabled={lockoutSeconds > 0 || loading} placeholder="Enter your password"
                     onFocus={() => setActiveField('password')} onBlur={() => setActiveField(null)}
-                    className="w-full pl-5 pr-12 py-3.5 rounded-xl text-sm font-medium outline-none transition-all duration-300 disabled:opacity-40"
+                    className="w-full pl-5 pr-12 py-3.5 rounded-lg text-sm font-medium outline-none transition-all duration-300 disabled:opacity-40"
                     style={{ background: activeField === 'password' ? t.inputBg : t.inputBg, border: `1.5px solid ${activeField === 'password' ? '#0066FF' : t.inputBorder}`, color: t.text }} />
                   <button type="button" onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-4 top-1/2 -translate-y-1/2 transition-colors duration-200"
@@ -228,7 +228,7 @@ export default function LoginPage() {
               </div>
 
               <button type="submit" disabled={loading || lockoutSeconds > 0}
-                className="w-full py-3.5 rounded-xl font-bold text-[15px] text-white transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full py-3.5 rounded-lg font-bold text-[15px] text-white transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ background: lockoutSeconds > 0 ? 'linear-gradient(135deg, #F59E0B, #D97706)' : 'linear-gradient(135deg, #0F2D52 0%, #2E6FAF 100%)', boxShadow: lockoutSeconds > 0 ? '0 4px 20px rgba(245,158,11,0.3)' : '0 4px 20px rgba(15,45,82,0.25)' }}
                 onMouseEnter={(e) => { if (!loading && lockoutSeconds <= 0) { e.currentTarget.style.boxShadow = '0 8px 30px rgba(15,45,82,0.35)'; e.currentTarget.style.transform = 'translateY(-1px)'; } }}
                 onMouseLeave={(e) => { e.currentTarget.style.boxShadow = lockoutSeconds > 0 ? '0 4px 20px rgba(245,158,11,0.3)' : '0 4px 20px rgba(15,45,82,0.25)'; e.currentTarget.style.transform = 'translateY(0)'; }}>
@@ -324,7 +324,7 @@ export default function LoginPage() {
 
             {/* Close */}
             <button onClick={closeForgotModal}
-              className="absolute top-4 right-4 z-10 w-8 h-8 rounded-xl flex items-center justify-center transition-colors"
+              className="absolute top-4 right-4 z-10 w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
               style={{ background: t.panel, color: t.textMuted }}
               onMouseEnter={(e) => { e.currentTarget.style.background = t.borderStrong; e.currentTarget.style.color = t.textSecondary; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = t.panel; e.currentTarget.style.color = t.textMuted; }}>
@@ -339,7 +339,7 @@ export default function LoginPage() {
 
             {/* Role Tabs */}
             <div className="px-8">
-              <div className="flex gap-2 p-1 rounded-xl" style={{ background: t.panel }}>
+              <div className="flex gap-2 p-1 rounded-lg" style={{ background: t.panel }}>
                 {[
                   { id: 'staff', label: 'Staff', icon: 'ri-user-line' },
                   { id: 'admin', label: 'Administrator', icon: 'ri-shield-keyhole-line' },
@@ -383,13 +383,13 @@ export default function LoginPage() {
                     <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>Registered email address</label>
                     <input type="email" required value={resetEmail} onChange={(e) => setResetEmail(e.target.value)}
                       placeholder="you@pasigcity.gov.ph"
-                      className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all"
+                      className="w-full px-4 py-3 rounded-lg text-sm font-medium outline-none transition-all"
                       style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text }}
                       onFocus={(e) => { e.target.style.borderColor = '#0066FF'; }}
                       onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
                   </div>
                   <button type="submit"
-                    className="w-full py-3 rounded-xl font-bold text-[13px] text-white transition-all duration-200 flex items-center justify-center gap-2"
+                    className="w-full py-3 rounded-lg font-bold text-[13px] text-white transition-all duration-200 flex items-center justify-center gap-2"
                     style={{ background: 'linear-gradient(135deg, #0F2D52, #2E6FAF)', boxShadow: '0 4px 14px rgba(15,45,82,0.2)' }}
                     onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-1px)'; }}
                     onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; }}>
@@ -410,7 +410,7 @@ export default function LoginPage() {
                     <p className="text-[11px] mt-1" style={{ color: t.textMuted }}>Check your console for the OTP code</p>
                   </div>
                   {otpError && (
-                    <div className="px-3 py-2 rounded-xl text-[12px] flex items-center gap-2 border bg-red-50 border-red-200 text-red-600">
+                    <div className="px-3 py-2 rounded-lg text-[12px] flex items-center gap-2 border bg-red-50 border-red-200 text-red-600">
                       <i className="ri-error-warning-line text-sm" />
                       {otpError}
                     </div>
@@ -418,13 +418,13 @@ export default function LoginPage() {
                   <div>
                     <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>Enter OTP code</label>
                     <input type="text" required maxLength={6} placeholder="000000" value={otpCode} onChange={(e) => { setOtpCode(e.target.value.replace(/\D/g, '')); setOtpError(''); }}
-                      className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all text-center tracking-[0.3em]"
+                      className="w-full px-4 py-3 rounded-lg text-sm font-medium outline-none transition-all text-center tracking-[0.3em]"
                       style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text, fontSize: '18px' }}
                       onFocus={(e) => { e.target.style.borderColor = '#0066FF'; }}
                       onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
                   </div>
                   <button type="submit"
-                    className="w-full py-3 rounded-xl font-bold text-[13px] text-white transition-all duration-200"
+                    className="w-full py-3 rounded-lg font-bold text-[13px] text-white transition-all duration-200"
                     style={{ background: 'linear-gradient(135deg, #0F2D52, #2E6FAF)' }}>
                     Verify Code
                   </button>
@@ -451,7 +451,7 @@ export default function LoginPage() {
                     <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>New password</label>
                     <input type="password" required minLength={6} value={resetNewPassword} onChange={(e) => setResetNewPassword(e.target.value)}
                       placeholder="Min. 6 characters"
-                      className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all"
+                      className="w-full px-4 py-3 rounded-lg text-sm font-medium outline-none transition-all"
                       style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text }}
                       onFocus={(e) => { e.target.style.borderColor = '#10B981'; }}
                       onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
@@ -459,13 +459,13 @@ export default function LoginPage() {
                   <div>
                     <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>Confirm password</label>
                     <input type="password" required minLength={6} placeholder="Re-enter password"
-                      className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all"
+                      className="w-full px-4 py-3 rounded-lg text-sm font-medium outline-none transition-all"
                       style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text }}
                       onFocus={(e) => { e.target.style.borderColor = '#10B981'; }}
                       onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
                   </div>
                   <button type="submit"
-                    className="w-full py-3 rounded-xl font-bold text-[13px] text-white transition-all duration-200"
+                    className="w-full py-3 rounded-lg font-bold text-[13px] text-white transition-all duration-200"
                     style={{ background: 'linear-gradient(135deg, #10B981, #059669)', boxShadow: '0 4px 14px rgba(16,185,129,0.25)' }}>
                     <i className="ri-check-line mr-1" /> Reset Password
                   </button>
@@ -481,7 +481,7 @@ export default function LoginPage() {
                   <h3 className="text-base font-bold mb-1" style={{ color: '#0F2D52' }}>Password Reset Successfully</h3>
                   <p className="text-[13px] mb-5" style={{ color: '#94A3B8' }}>Your password has been updated. You can now sign in with your new credentials.</p>
                   <button onClick={closeForgotModal}
-                    className="px-6 py-2.5 rounded-xl font-bold text-[13px] text-white transition-all"
+                    className="px-6 py-2.5 rounded-lg font-bold text-[13px] text-white transition-all"
                     style={{ background: 'linear-gradient(135deg, #0F2D52, #2E6FAF)' }}>
                     <i className="ri-login-box-line mr-1" /> Back to Login
                   </button>

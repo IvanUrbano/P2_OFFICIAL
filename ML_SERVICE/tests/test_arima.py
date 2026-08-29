@@ -45,17 +45,17 @@ def test_seasonal_naive_forecast():
     series = pd.Series([5, 10, 8, 12, 9, 15, 11, 14, 10, 13, 8, 12])  # 12 months
     result = _seasonal_naive_forecast(series)
     # index -12 = index 0 = value 5 (same month last year)
-    assert result["forecasted_count"] == 5
+    assert result["forecasted_count"] == [5]
     assert result["method"] == "seasonal_naive"
-    assert result["confidence_lower"] < result["forecasted_count"]
-    assert result["confidence_upper"] > result["forecasted_count"]
+    assert result["confidence_lower"][0] < result["forecasted_count"][0]
+    assert result["confidence_upper"][0] > result["forecasted_count"][0]
 
 
 def test_seasonal_naive_short_series():
     """Seasonal naive with <12 months should use last value."""
     series = pd.Series([5, 10, 8, 12])
     result = _seasonal_naive_forecast(series)
-    assert result["forecasted_count"] == 12  # Last value
+    assert result["forecasted_count"] == [12]  # Last value
     assert result["method"] == "seasonal_naive"
 
 
@@ -64,16 +64,18 @@ def test_exponential_smoothing_forecast():
     series = pd.Series([5, 10, 8, 12, 9, 15, 11, 14, 10, 13, 8, 12,
                         6, 11, 9, 13, 10, 16, 12, 15, 11, 14, 9, 13])
     result = _exponential_smoothing_forecast(series)
-    assert result["forecasted_count"] >= 0
+    assert isinstance(result["forecasted_count"], list)
+    assert len(result["forecasted_count"]) == 1
+    assert result["forecasted_count"][0] >= 0
     assert result["method"] == "exponential_smoothing"
-    assert result["confidence_lower"] < result["confidence_upper"]
+    assert result["confidence_lower"][0] < result["confidence_upper"][0]
 
 
 def test_forecast_barangay_empty_series():
     """Empty series should return zero forecast."""
     empty = pd.Series([], dtype=float)
     result = forecast_barangay("TestBarangay", empty)
-    assert result["forecasted_count"] == 0
+    assert result["predictions"] == []
     assert result["barangay_name"] == "TestBarangay"
 
 
@@ -86,9 +88,11 @@ def test_forecast_barangay_normal_series():
 
     result = forecast_barangay("TestBarangay", series)
     assert result["barangay_name"] == "TestBarangay"
-    assert result["forecasted_count"] >= 0
-    assert result["confidence_lower"] >= 0
-    assert result["confidence_upper"] >= result["forecasted_count"]
+    assert isinstance(result["predictions"], list)
+    assert len(result["predictions"]) == 1  # default forecast_horizon=1
+    assert result["predictions"][0]["yhat"] >= 0
+    assert result["predictions"][0]["yhat_lower"] >= 0
+    assert result["predictions"][0]["yhat_upper"] >= result["predictions"][0]["yhat"]
     assert result["method"] in ["arima", "exponential_smoothing"]
     assert result["period"] != ""
 

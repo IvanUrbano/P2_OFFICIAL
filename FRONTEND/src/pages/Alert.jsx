@@ -42,7 +42,7 @@ export default function Alert() {
     <div className="flex flex-col gap-5">
       {/* ── Stats Bar ── */}
       <div
-        className="rounded-2xl overflow-hidden"
+        className="rounded-xl overflow-hidden"
         style={{
           background: '#ffffff',
           border: '1px solid #e2e8f0',
@@ -112,7 +112,7 @@ export default function Alert() {
       <div className="flex flex-col gap-3">
         {alerts.length === 0 ? (
           <div
-            className="rounded-2xl p-12 text-center"
+            className="rounded-xl p-12 text-center"
             style={{
               background: '#ffffff',
               border: '1px solid #e2e8f0',

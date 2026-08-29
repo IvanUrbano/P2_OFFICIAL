@@ -53,6 +53,28 @@ router.get('/facilities', async (req, res) => {
 });
 
 /**
+ * GET /api/tb/filter-options
+ * Distinct values for dropdown filters: sex, bacteriological_status, outcome_status
+ */
+router.get('/filter-options', async (req, res) => {
+  try {
+    const [sexRes, bactRes, outcomeRes] = await Promise.all([
+      pool.query(`SELECT DISTINCT sex FROM tb_cases WHERE sex IS NOT NULL AND sex != '' ORDER BY sex`),
+      pool.query(`SELECT DISTINCT bacteriological_status FROM tb_cases WHERE bacteriological_status IS NOT NULL AND bacteriological_status != '' ORDER BY bacteriological_status`),
+      pool.query(`SELECT DISTINCT outcome_status FROM tb_cases WHERE outcome_status IS NOT NULL AND outcome_status != '' ORDER BY outcome_status`),
+    ]);
+    res.json({
+      sex: sexRes.rows.map(r => r.sex),
+      bacteriological_status: bactRes.rows.map(r => r.bacteriological_status),
+      outcome_status: outcomeRes.rows.map(r => r.outcome_status),
+    });
+  } catch (err) {
+    console.error('Fetch filter options error:', err.message);
+    res.status(500).json({ error: 'Server error fetching filter options.' });
+  }
+});
+
+/**
  * POST /api/tb/barangays/seed
  * Seed barangays and facilities from data files (admin only)
  */
@@ -159,7 +181,8 @@ router.get('/import/:batchId/errors', authenticateToken, authorizeRoles('admin')
 /**
  * GET /api/tb/cases
  * List individual TB case records with filtering, search, and pagination
- * Query params: page, limit, search, barangay, year, month, outcome
+ * Query params: page, limit, search, barangay, year, month, outcome, facility,
+ *               sex, bacteriological_status, validation_status
  */
 router.get('/cases', async (req, res) => {
   try {
@@ -172,6 +195,9 @@ router.get('/cases', async (req, res) => {
       month = '',
       outcome = '',
       facility = '',
+      sex = '',
+      bacteriological_status = '',
+      validation_status = '',
     } = req.query;
 
     const offset = (Math.max(1, Number(page)) - 1) * Number(limit);
@@ -222,6 +248,26 @@ router.get('/cases', async (req, res) => {
       conditions.push(`c.screening_facility = $${paramIdx}`);
       params.push(facilityTrimmed);
       paramIdx++;
+    }
+
+    if (sex) {
+      conditions.push(`c.sex ILIKE $${paramIdx}`);
+      params.push(sex);
+      paramIdx++;
+    }
+
+    if (bacteriological_status) {
+      conditions.push(`c.bacteriological_status ILIKE $${paramIdx}`);
+      params.push(bacteriological_status);
+      paramIdx++;
+    }
+
+    if (validation_status) {
+      if (validation_status === 'Validated') {
+        conditions.push(`c.batch_id IS NOT NULL`);
+      } else if (validation_status === 'Pending') {
+        conditions.push(`c.batch_id IS NULL`);
+      }
     }
 
     const whereClause = conditions.length > 0
@@ -828,7 +874,7 @@ router.get('/forecasts', async (req, res) => {
       SELECT
         barangay_name, period, forecasted_count,
         confidence_lower, confidence_upper,
-        incidence_per_100k, model_version,
+        risk_class, incidence_per_100k, model_version,
         actual_count, forecast_error
       FROM model_predictions
       ORDER BY period DESC, barangay_name
@@ -839,7 +885,7 @@ router.get('/forecasts', async (req, res) => {
         SELECT
           barangay_name, period, forecasted_count,
           confidence_lower, confidence_upper,
-          incidence_per_100k, model_version,
+          risk_class, incidence_per_100k, model_version,
           actual_count, forecast_error
         FROM model_predictions
         WHERE barangay_name = $1
@@ -870,13 +916,10 @@ router.get('/forecast/actual-vs-predicted', async (req, res) => {
         mp.forecasted_count,
         mp.confidence_lower,
         mp.confidence_upper,
-        COALESCE(mc.case_count, 0) AS actual_count,
+        COALESCE(mp.actual_count, 0) AS actual_count,
         mp.risk_class,
         mp.incidence_per_100k
       FROM model_predictions mp
-      LEFT JOIN monthly_case_summary mc
-        ON mp.barangay_name = mc.barangay_name
-        AND mp.period = mc.month
       ORDER BY mp.period, mp.barangay_name
     `;
     const params = [];
@@ -888,13 +931,10 @@ router.get('/forecast/actual-vs-predicted', async (req, res) => {
           mp.forecasted_count,
           mp.confidence_lower,
           mp.confidence_upper,
-          COALESCE(mc.case_count, 0) AS actual_count,
+          COALESCE(mp.actual_count, 0) AS actual_count,
           mp.risk_class,
           mp.incidence_per_100k
         FROM model_predictions mp
-        LEFT JOIN monthly_case_summary mc
-          ON mp.barangay_name = mc.barangay_name
-          AND mp.period = mc.month
         WHERE mp.barangay_name = $1
         ORDER BY mp.period, mp.barangay_name
       `;
@@ -1266,6 +1306,68 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
   } catch (err) {
     console.error('Evaluate error:', err.message);
     res.status(500).json({ error: 'Evaluation failed.', details: err.message });
+  }
+});
+
+/**
+ * GET /api/tb/forecast/backtest
+ * Walk-forward backtest: for each month, predict using value from 12 months ago (seasonal naive).
+ * Returns per-barangay per-period actual vs predicted for historical validation.
+ */
+router.get('/forecast/backtest', async (req, res) => {
+  try {
+    const { barangay } = req.query;
+    let query = `
+      SELECT barangay_name, month, case_count
+      FROM monthly_case_summary
+      ORDER BY barangay_name, month
+    `;
+    const params = [];
+    if (barangay) {
+      query = `
+        SELECT barangay_name, month, case_count
+        FROM monthly_case_summary
+        WHERE barangay_name = $1
+        ORDER BY barangay_name, month
+      `;
+      params.push(barangay);
+    }
+    const result = await pool.query(query, params);
+
+    // Group by barangay
+    const byBarangay = {};
+    for (const row of result.rows) {
+      const name = row.barangay_name;
+      if (!byBarangay[name]) byBarangay[name] = [];
+      byBarangay[name].push({
+        month: row.month.toISOString().slice(0, 10),
+        case_count: row.case_count,
+      });
+    }
+
+    // For each barangay, produce backtest predictions
+    const backtestRows = [];
+    const SEASONAL_PERIOD = 12;
+
+    for (const [name, pts] of Object.entries(byBarangay)) {
+      if (pts.length <= SEASONAL_PERIOD) continue; // need at least 13 months
+      for (let i = SEASONAL_PERIOD; i < pts.length; i++) {
+        const actual = pts[i].case_count;
+        const predicted = pts[i - SEASONAL_PERIOD].case_count;
+        backtestRows.push({
+          barangay_name: name,
+          period: pts[i].month,
+          actual_count: actual,
+          predicted_count: predicted,
+          error: Math.abs(actual - predicted),
+        });
+      }
+    }
+
+    res.json({ data: backtestRows });
+  } catch (err) {
+    console.error('Backtest error:', err.message);
+    res.status(500).json({ error: 'Server error generating backtest data.' });
   }
 });
 

@@ -293,7 +293,7 @@ export default function DashboardPage() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([month, cases]) => {
         const d = new Date(month);
-        const label = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+        const label = d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
         return { label, actual: cases, month };
       });
   }, [monthlyData]);
@@ -556,7 +556,7 @@ export default function DashboardPage() {
                   </linearGradient>
                 </defs>
 
-                <CartesianGrid strokeDasharray="3 3" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
 
                 <XAxis dataKey="label" tick={{ fill: t.textSecondary, fontSize: 10 }} />
                 <YAxis tick={{ fill: t.textSecondary, fontSize: 10 }} />
@@ -682,7 +682,7 @@ export default function DashboardPage() {
           }
         >
           <div
-            className="flex-1 rounded-xl relative overflow-hidden cursor-pointer group"
+            className="flex-1 rounded-lg relative overflow-hidden cursor-pointer group"
             style={{ minHeight: 260 }}
             onClick={() => navigate('/gis-map')}
           >
@@ -809,7 +809,7 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={a.title}
-                    className="rounded-2xl p-4 transition-all hover:-translate-y-1"
+                    className="rounded-xl p-4 transition-all hover:-translate-y-1"
                     style={{
                       background: isDanger
                         ? 'rgba(239,68,68,0.08)'

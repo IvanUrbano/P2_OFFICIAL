@@ -1,14 +1,15 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  ComposedChart, Bar, Line, Area, CartesianGrid, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, Legend,
+  ComposedChart, Bar, Line, Area, PieChart, Pie, Cell,
+  CartesianGrid, XAxis, YAxis, Tooltip,
+  ResponsiveContainer,
 } from 'recharts';
 import API from '../api/axios';
-import { useTheme } from '../theme';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
 const COLORS = {
+  primary: '#0F2D52',
   blue: '#2E6FAF',
   cyan: '#4FD1C5',
   red: '#EF4444',
@@ -16,132 +17,93 @@ const COLORS = {
   purple: '#7c3aed',
   amber: '#F59E0B',
   gray: '#94A3B8',
-  darkBlue: '#0066FF',
 };
 
-const RISK_COLORS = {
-  Low: COLORS.green,
-  Medium: COLORS.amber,
-  High: COLORS.red,
+const OUTCOME_COLORS = {
+  'CURED': '#10B981',
+  'TREATMENT COMPLETED': '#3B82F6',
+  'ON TREATMENT': '#F59E0B',
+  'FAILED': '#EF4444',
+  'DIED': '#DC2626',
+  'LOST TO FOLLOW-UP': '#8B5CF6',
+  'NOT EVALUATED': '#94A3B8',
 };
+
+const AGE_GROUP_ORDER = ['0-14', '15-24', '25-44', '45-64', '65+'];
+
+function categorizeAge(age) {
+  const n = Number(age);
+  if (isNaN(n) || n < 0) return 'Unknown';
+  if (n <= 14) return '0-14';
+  if (n <= 24) return '15-24';
+  if (n <= 44) return '25-44';
+  if (n <= 64) return '45-64';
+  return '65+';
+}
+
+const MONTHS = [
+  'All Months', 'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+const OUTCOMES = [
+  'All Outcomes', 'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT',
+  'FAILED', 'DIED', 'LOST TO FOLLOW-UP', 'NOT EVALUATED',
+];
+
+const ACTIVE_OUTCOMES = ['ON TREATMENT'];
+const SUCCESS_OUTCOMES = ['CURED', 'TREATMENT COMPLETED'];
 
 /* ─── Helper Components ──────────────────────────────────────────────── */
 
-function MetricItem({ title, value, icon, color, trend, isLast }) {
-  const { t } = useTheme();
+function ChartTooltip({ active, payload, label, light }) {
+  if (!active || !payload || !payload.length) return null;
   return (
-    <div className="p-4 flex flex-col justify-center relative">
-      {!isLast && (
-        <div
-          className="absolute right-0 top-1/2 -translate-y-1/2 w-[2px] h-20"
-          style={{ background: 'rgba(0,0,0,0.4)' }}
-        />
-      )}
-      <div className="flex items-center gap-2 mb-2">
-        <i className={`${icon} text-lg`} style={{ color }} />
-        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: t.textSecondary }}>
-          {title}
-        </span>
-      </div>
-      <div className="flex items-end justify-between">
-        <div className="text-2xl font-bold" style={{ color: t.text }}>{value}</div>
-        <div className="text-xs font-semibold" style={{ color }}>{trend}</div>
-      </div>
-    </div>
-  );
-}
-
-function VizCard({ title, icon, iconColor, children, headerAction }) {
-  const { t } = useTheme();
-  return (
-    <div className="glass-card flex flex-col p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
-          <i className={icon} style={{ color: iconColor || COLORS.blue }} />
-          <span>{title}</span>
+    <div className="px-3 py-2.5 rounded-lg text-xs shadow-lg" style={{
+      background: '#ffffff',
+      border: '1px solid #E2E8F0',
+      minWidth: 120,
+    }}>
+      {label && <div className="text-[10px] font-semibold mb-1.5 pb-1" style={{ color: '#64748B', borderBottom: '1px solid #F1F5F9' }}>{label}</div>}
+      {payload.map((entry, i) => (
+        <div key={i} className="flex items-center justify-between gap-4 py-0.5">
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: entry.color || entry.fill }} />
+            <span style={{ color: '#64748B' }}>{entry.name}</span>
+          </div>
+          <span className="font-bold" style={{ color: '#1E293B' }}>{entry.value != null ? Number(entry.value).toLocaleString() : '—'}</span>
         </div>
-        {headerAction && <div>{headerAction}</div>}
-      </div>
-      {children}
+      ))}
     </div>
   );
 }
 
-function ReportCard({ title, value, subtitle, icon, color }) {
-  const { t } = useTheme();
+function TrendBadge({ current, previous, inverse }) {
+  if (previous == null || previous === 0 || current == null) return null;
+  const diff = ((current - previous) / Math.abs(previous)) * 100;
+  const pct = Math.abs(diff).toFixed(1);
+  if (pct === '0.0') return null;
+  const isUp = diff > 0;
+  const isGood = inverse ? !isUp : isUp;
   return (
-    <div
-      className="glass-card p-4 flex flex-col gap-2"
-      style={{ borderLeft: `3px solid ${color || COLORS.blue}` }}
-    >
-      <div className="flex items-center gap-2">
-        <i className={`${icon} text-base`} style={{ color: color || COLORS.blue }} />
-        <span className="text-xs font-bold uppercase tracking-wider" style={{ color: t.textSecondary }}>
-          {title}
-        </span>
-      </div>
-      <div className="text-xl font-bold" style={{ color: t.text }}>{value}</div>
-      {subtitle && (
-        <div className="text-xs" style={{ color: t.textMuted }}>{subtitle}</div>
-      )}
-    </div>
-  );
-}
-
-function RiskBadge({ risk }) {
-  const bg = RISK_COLORS[risk] || COLORS.gray;
-  return (
-    <span
-      className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold text-white"
-      style={{ backgroundColor: bg }}
-    >
-      {risk}
+    <span className="inline-flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded"
+      style={{ background: isGood ? '#D1FAE5' : '#FEE2E2', color: isGood ? '#059669' : '#DC2626' }}>
+      <i className={`${isUp ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line'} text-[10px]`} />
+      {pct}%
     </span>
   );
 }
 
-function AvsPTooltip({ active, payload, label }) {
-  const { t } = useTheme();
-  if (!active || !payload || !payload.length) return null;
-
-  const actual = payload.find((p) => p.dataKey === 'Actual');
-  const predicted = payload.find((p) => p.dataKey === 'Predicted');
-  const ciEntry = payload.find((p) => p.dataKey === 'ci_upper' || p.dataKey === 'ci_lower');
-
+function EmptyState() {
   return (
-    <div
-      className="px-3 py-2.5 rounded-lg text-xs font-medium shadow-lg"
-      style={{
-        background: t.cardSolid,
-        border: `1px solid ${t.borderStrong}`,
-        color: t.text,
-        boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-      }}
-    >
-      <div className="font-bold mb-1" style={{ color: t.text }}>{label}</div>
-      {actual && (
-        <div className="flex items-center gap-2">
-          <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: COLORS.blue }} />
-          <span style={{ color: t.textSecondary }}>Actual:</span>
-          <span className="font-semibold">{actual.value}</span>
-        </div>
-      )}
-      {predicted && (
-        <div className="flex items-center gap-2">
-          <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: COLORS.red }} />
-          <span style={{ color: t.textSecondary }}>Predicted:</span>
-          <span className="font-semibold">{predicted.value}</span>
-        </div>
-      )}
-      {ciEntry && actual?.payload?.ci_lower != null && actual?.payload?.ci_upper != null && (
-        <div className="flex items-center gap-2 mt-1">
-          <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: 'rgba(46,111,175,0.15)' }} />
-          <span style={{ color: t.textSecondary }}>CI:</span>
-          <span className="font-semibold">
-            {actual.payload.ci_lower} – {actual.payload.ci_upper}
-          </span>
-        </div>
-      )}
+    <div className="flex flex-col items-center justify-center py-20 gap-3">
+      <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: '#F1F5F9' }}>
+        <i className="ri-bar-chart-grouped-line text-2xl" style={{ color: '#CBD5E1' }} />
+      </div>
+      <p className="text-sm font-semibold" style={{ color: '#475569' }}>No Data Available</p>
+      <p className="text-xs text-center max-w-xs" style={{ color: '#94A3B8' }}>
+        No TB records match the selected filters. Try adjusting your filters and apply again.
+      </p>
     </div>
   );
 }
@@ -149,45 +111,52 @@ function AvsPTooltip({ active, payload, label }) {
 /* ─── Main Analytics Component ───────────────────────────────────────── */
 
 export default function Analytics() {
-  const { t } = useTheme();
-  const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  /* ── Data state ── */
-  const [monthlyData, setMonthlyData] = useState([]);
-  const [forecastsData, setForecastsData] = useState([]);
-  const [actualVsPredicted, setActualVsPredicted] = useState([]);
+  /* Raw data from API */
+  const [allCases, setAllCases] = useState([]);
   const [barangays, setBarangays] = useState([]);
-  const [outcomesData, setOutcomesData] = useState([]);
+  const [riskData, setRiskData] = useState([]);
+  const [filterOptions, setFilterOptions] = useState({ sex: [], bacteriological_status: [], outcome_status: [] });
 
-  /* ── Control state ── */
-  const [selectedBarangays, setSelectedBarangays] = useState([]);
-  const [forecastMonths, setForecastMonths] = useState(12);
-  const [customMonths, setCustomMonths] = useState('');
-  const [runningPipeline, setRunningPipeline] = useState(false);
-  const [pipelineResult, setPipelineResult] = useState(null);
-  const [showBarangayDropdown, setShowBarangayDropdown] = useState(false);
+  /* Filter state */
+  const [filterYear, setFilterYear] = useState('');
+  const [filterMonth, setFilterMonth] = useState('');
+  const [filterBarangay, setFilterBarangay] = useState('');
+  const [filterOutcome, setFilterOutcome] = useState('');
+  const [filterSex, setFilterSex] = useState('');
+  const [filterAgeGroup, setFilterAgeGroup] = useState('');
+  const [filterBact, setFilterBact] = useState('');
+  const [applied, setApplied] = useState(false);
 
-  /* ── Table sorting ── */
-  const [sortKey, setSortKey] = useState('barangay_name');
-  const [sortDir, setSortDir] = useState('asc');
+  /* Applied filter state */
+  const [aYear, setAYear] = useState('');
+  const [aMonth, setAMonth] = useState('');
+  const [aBarangay, setABarangay] = useState('');
+  const [aOutcome, setAOutcome] = useState('');
+  const [aSex, setASex] = useState('');
+  const [aAgeGroup, setAAgeGroup] = useState('');
+  const [aBact, setABact] = useState('');
+
+  /* Enhancement toggles */
+  const [compareYear, setCompareYear] = useState(false);
+  const [showIncidence, setShowIncidence] = useState(false);
 
   /* ── Data fetching ── */
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [monthlyRes, forecastsRes, avpRes, barangaysRes, outcomesRes] = await Promise.all([
-        API.get('/api/tb/dashboard/monthly'),
-        API.get('/api/tb/forecasts'),
-        API.get('/api/tb/forecast/actual-vs-predicted'),
+      const [casesRes, brgyRes, riskRes, filterRes] = await Promise.all([
+        API.get('/api/tb/cases?limit=99999'),
         API.get('/api/tb/barangays'),
-        API.get('/api/tb/dashboard/outcomes'),
+        API.get('/api/tb/gis/choropleth'),
+        API.get('/api/tb/filter-options').catch(() => ({ data: {} })),
       ]);
-      setMonthlyData(monthlyRes.data.monthly || []);
-      setForecastsData(forecastsRes.data.forecasts || []);
-      setActualVsPredicted(avpRes.data.data || []);
-      setBarangays(barangaysRes.data.barangays || barangaysRes.data || []);
-      setOutcomesData(outcomesRes.data.outcomes || []);
+      setAllCases(casesRes.data.cases || []);
+      setBarangays(brgyRes.data.barangays || brgyRes.data || []);
+      setRiskData(riskRes.data.choropleth || []);
+      setFilterOptions(filterRes.data || {});
     } catch (err) {
       console.error('Analytics fetch error:', err);
       setError('Failed to load analytics data. Make sure the backend is running.');
@@ -196,670 +165,916 @@ export default function Analytics() {
     }
   }, []);
 
-  useEffect(() => {
-    loadAll();
-  }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll]);
 
-  /* ── Run forecast pipeline ── */
-  const handleRunForecast = useCallback(async () => {
-    try {
-      setRunningPipeline(true);
-      setPipelineResult(null);
-      const body = {
-        forecastHorizon: forecastMonths,
-        barangays: selectedBarangays.length > 0 ? selectedBarangays : undefined,
-      };
-      const res = await API.post('/api/tb/pipeline', body);
-      setPipelineResult({ success: true, message: res.data.message || 'Pipeline completed successfully.' });
-      await loadAll();
-    } catch (err) {
-      console.error('Pipeline error:', err);
-      setPipelineResult({
-        success: false,
-        message: err.response?.data?.error || err.message || 'Pipeline failed.',
-      });
-    } finally {
-      setRunningPipeline(false);
-    }
-  }, [forecastMonths, selectedBarangays, loadAll]);
+  /* ── Apply filters ── */
+  const handleApply = useCallback(() => {
+    setAYear(filterYear);
+    setAMonth(filterMonth);
+    setABarangay(filterBarangay);
+    setAOutcome(filterOutcome);
+    setASex(filterSex);
+    setAAgeGroup(filterAgeGroup);
+    setABact(filterBact);
+    setApplied(true);
+  }, [filterYear, filterMonth, filterBarangay, filterOutcome, filterSex, filterAgeGroup, filterBact]);
 
-  /* ── Barangay dropdown helpers ── */
+  const handleClear = useCallback(() => {
+    setFilterYear('');
+    setFilterMonth('');
+    setFilterBarangay('');
+    setFilterOutcome('');
+    setFilterSex('');
+    setFilterAgeGroup('');
+    setFilterBact('');
+    setAYear('');
+    setAMonth('');
+    setABarangay('');
+    setAOutcome('');
+    setASex('');
+    setAAgeGroup('');
+    setABact('');
+    setApplied(false);
+  }, []);
+
+  /* ── Remove a single filter chip ── */
+  const removeFilter = useCallback((key) => {
+    const setters = {
+      year: () => { setFilterYear(''); setAYear(''); },
+      month: () => { setFilterMonth(''); setAMonth(''); },
+      barangay: () => { setFilterBarangay(''); setABarangay(''); },
+      outcome: () => { setFilterOutcome(''); setAOutcome(''); },
+      sex: () => { setFilterSex(''); setASex(''); },
+      age: () => { setFilterAgeGroup(''); setAAgeGroup(''); },
+      bacterio: () => { setFilterBact(''); setABact(''); },
+    };
+    if (setters[key]) setters[key]();
+    /* Re-apply with the remaining filters */
+    setTimeout(() => setApplied(true), 0);
+  }, []);
+
+  /* ── Derived barangay names ── */
   const barangayNames = useMemo(() => {
-    return barangays.map((b) => b.barangay_name || b.name).filter(Boolean);
+    return barangays.map((b) => b.barangay_name || b.name).filter(Boolean).sort();
   }, [barangays]);
 
-  const toggleBarangay = useCallback((name) => {
-    setSelectedBarangays((prev) =>
-      prev.includes(name) ? prev.filter((b) => b !== name) : [...prev, name]
-    );
-  }, []);
-
-  const selectAllBarangays = useCallback(() => {
-    setSelectedBarangays([...barangayNames]);
-  }, [barangayNames]);
-
-  const clearBarangays = useCallback(() => {
-    setSelectedBarangays([]);
-  }, []);
-
-  /* ── Computed values ── */
-  const totalCases = useMemo(() => {
-    return outcomesData.reduce((sum, r) => sum + Number(r.total || 0), 0);
-  }, [outcomesData]);
-
-  const successRate = useMemo(() => {
-    if (!outcomesData.length) return '0%';
-    const cured = outcomesData
-      .filter((r) => r.outcome_status === 'CURED')
-      .reduce((s, r) => s + Number(r.total || 0), 0);
-    const completed = outcomesData
-      .filter((r) => r.outcome_status === 'TREATMENT COMPLETED')
-      .reduce((s, r) => s + Number(r.total || 0), 0);
-    if (totalCases === 0) return '0%';
-    return `${Math.round(((cured + completed) / totalCases) * 100)}%`;
-  }, [outcomesData, totalCases]);
-
-  const peakMonth = useMemo(() => {
-    if (!monthlyData.length) return { label: 'N/A', cases: 0 };
-    const byMonth = {};
-    monthlyData.forEach((r) => {
-      byMonth[r.month] = (byMonth[r.month] || 0) + Number(r.case_count || 0);
-    });
-    const entries = Object.entries(byMonth).sort(([, a], [, b]) => b - a);
-    const [month, cases] = entries[0] || ['N/A', 0];
-    const d = new Date(month);
-    const label = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-    return { label, cases };
-  }, [monthlyData]);
-
-  const highRiskCount = useMemo(() => {
-    return barangays.filter((b) => Number(b.total_cases || 0) > 200).length;
-  }, [barangays]);
-
-  /* ── Chart data: aggregate actual-vs-predicted by period ── */
-  const chartData = useMemo(() => {
-    if (!actualVsPredicted.length) return [];
-
-    const filtered = selectedBarangays.length > 0
-      ? actualVsPredicted.filter((r) => selectedBarangays.includes(r.barangay_name))
-      : actualVsPredicted;
-
-    const byPeriod = {};
-    filtered.forEach((r) => {
-      const period = r.period || r.forecast_period || '';
-      if (!byPeriod[period]) {
-        byPeriod[period] = { actual: 0, predicted: 0, ci_lower: 0, ci_upper: 0, count: 0 };
+  /* ── Available years from data ── */
+  const availableYears = useMemo(() => {
+    const years = new Set();
+    allCases.forEach((c) => {
+      if (c.date_of_diagnosis) {
+        years.add(new Date(c.date_of_diagnosis).getFullYear());
       }
-      byPeriod[period].actual += Number(r.actual || r.actual_cases || 0);
-      byPeriod[period].predicted += Number(r.predicted || r.predicted_count || 0);
-      byPeriod[period].ci_lower += Number(r.ci_lower || 0);
-      byPeriod[period].ci_upper += Number(r.ci_upper || 0);
-      byPeriod[period].count += 1;
     });
+    return [...years].sort((a, b) => b - a).map(String);
+  }, [allCases]);
 
-    return Object.entries(byPeriod)
+  /* ── Filtered cases ── */
+  const filteredCases = useMemo(() => {
+    if (!applied) return allCases;
+    return allCases.filter((c) => {
+      if (aBarangay && c.barangay_name !== aBarangay) return false;
+      if (aSex && !(c.sex || '').toLowerCase().includes(aSex.toLowerCase())) return false;
+      if (aOutcome && c.outcome_status !== aOutcome) return false;
+      if (aBact && !(c.bacteriological_status || '').toLowerCase().includes(aBact.toLowerCase())) return false;
+      if (aYear || aMonth) {
+        const d = new Date(c.date_of_diagnosis);
+        if (isNaN(d.getTime())) return false;
+        if (aYear && d.getFullYear() !== Number(aYear)) return false;
+        if (aMonth && (d.getMonth() + 1) !== Number(aMonth)) return false;
+      }
+      if (aAgeGroup) {
+        const group = categorizeAge(c.age);
+        if (group !== aAgeGroup) return false;
+      }
+      return true;
+    });
+  }, [allCases, applied, aYear, aMonth, aBarangay, aOutcome, aSex, aAgeGroup, aBact]);
+
+  /* ── Previous year cases (for trend indicators) ── */
+  const previousYearCases = useMemo(() => {
+    if (!aYear) return [];
+    const prevYear = String(Number(aYear) - 1);
+    return allCases.filter((c) => {
+      const d = new Date(c.date_of_diagnosis);
+      if (isNaN(d.getTime())) return false;
+      if (d.getFullYear() !== Number(prevYear)) return false;
+      if (aBarangay && c.barangay_name !== aBarangay) return false;
+      if (aSex && !(c.sex || '').toLowerCase().includes(aSex.toLowerCase())) return false;
+      if (aOutcome && c.outcome_status !== aOutcome) return false;
+      if (aBact && !(c.bacteriological_status || '').toLowerCase().includes(aBact.toLowerCase())) return false;
+      if (aMonth && (d.getMonth() + 1) !== Number(aMonth)) return false;
+      if (aAgeGroup && categorizeAge(c.age) !== aAgeGroup) return false;
+      return true;
+    });
+  }, [allCases, aYear, aMonth, aBarangay, aOutcome, aSex, aAgeGroup, aBact]);
+
+  /* ── Summary Metrics ── */
+  const metrics = useMemo(() => {
+    const total = filteredCases.length;
+    const active = filteredCases.filter((c) => ACTIVE_OUTCOMES.includes((c.outcome_status || '').toUpperCase())).length;
+    const withOutcome = filteredCases.filter((c) => c.outcome_status && c.outcome_status !== 'NOT EVALUATED');
+    const success = withOutcome.filter((c) => SUCCESS_OUTCOMES.includes(c.outcome_status.toUpperCase())).length;
+    const successRate = withOutcome.length > 0 ? ((success / withOutcome.length) * 100).toFixed(1) : '0.0';
+    const highRisk = riskData.filter((r) => r.risk_class === 'High').length;
+    return { total, active, successRate, highRisk };
+  }, [filteredCases, riskData]);
+
+  /* ── Previous year metrics (for trend badges) ── */
+  const previousMetrics = useMemo(() => {
+    const total = previousYearCases.length;
+    const active = previousYearCases.filter((c) => ACTIVE_OUTCOMES.includes((c.outcome_status || '').toUpperCase())).length;
+    const withOutcome = previousYearCases.filter((c) => c.outcome_status && c.outcome_status !== 'NOT EVALUATED');
+    const success = withOutcome.filter((c) => SUCCESS_OUTCOMES.includes(c.outcome_status.toUpperCase())).length;
+    const successRate = withOutcome.length > 0 ? ((success / withOutcome.length) * 100).toFixed(1) : '0.0';
+    return { total, active, successRate };
+  }, [previousYearCases]);
+
+  /* ── TB Cases Trend (monthly) ── */
+  const trendData = useMemo(() => {
+    const byMonth = {};
+    filteredCases.forEach((c) => {
+      if (!c.date_of_diagnosis) return;
+      const d = new Date(c.date_of_diagnosis);
+      if (isNaN(d.getTime())) return;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!byMonth[key]) byMonth[key] = 0;
+      byMonth[key]++;
+    });
+    return Object.entries(byMonth)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([period, data]) => {
-        const d = new Date(period);
-        const label = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+      .map(([month, count]) => {
+        const d = new Date(month + '-01');
         return {
-          label,
-          period,
-          Actual: data.actual,
-          Predicted: Math.round(data.predicted),
-          ci_lower: data.ci_lower,
-          ci_upper: data.ci_upper,
+          key: month,
+          label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+          Cases: count,
         };
       });
-  }, [actualVsPredicted, selectedBarangays]);
+  }, [filteredCases]);
 
-  /* ── Forecast report: latest period summary ── */
-  const forecastReport = useMemo(() => {
-    if (!forecastsData.length) {
+  /* ── Previous year trend (for YoY comparison) ── */
+  const previousYearTrendData = useMemo(() => {
+    if (!compareYear || !aYear) return [];
+    const prevYear = String(Number(aYear) - 1);
+    const prevCases = allCases.filter((c) => {
+      const d = new Date(c.date_of_diagnosis);
+      if (isNaN(d.getTime())) return false;
+      if (d.getFullYear() !== Number(prevYear)) return false;
+      if (aBarangay && c.barangay_name !== aBarangay) return false;
+      if (aSex && !(c.sex || '').toLowerCase().includes(aSex.toLowerCase())) return false;
+      if (aOutcome && c.outcome_status !== aOutcome) return false;
+      if (aBact && !(c.bacteriological_status || '').toLowerCase().includes(aBact.toLowerCase())) return false;
+      if (aAgeGroup && categorizeAge(c.age) !== aAgeGroup) return false;
+      return true;
+    });
+    const byMonth = {};
+    prevCases.forEach((c) => {
+      if (!c.date_of_diagnosis) return;
+      const d = new Date(c.date_of_diagnosis);
+      if (isNaN(d.getTime())) return;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!byMonth[key]) byMonth[key] = 0;
+      byMonth[key]++;
+    });
+    return Object.entries(byMonth)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, count]) => {
+        const d = new Date(month + '-01');
+        return {
+          key: month,
+          label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+          [`Prev (${prevYear})`]: count,
+        };
+      });
+  }, [compareYear, aYear, allCases, aBarangay, aOutcome, aSex, aBact, aAgeGroup]);
+
+  /* ── Merged YoY trend data ── */
+  const mergedTrendData = useMemo(() => {
+    if (!compareYear || previousYearTrendData.length === 0) return trendData;
+    const prevMap = {};
+    previousYearTrendData.forEach((d) => { prevMap[d.key] = d; });
+    return trendData.map((item) => ({
+      ...item,
+      [`Prev (${Number(aYear) - 1})`]: prevMap[item.key]?.[`Prev (${Number(aYear) - 1})`] || 0,
+    }));
+  }, [compareYear, trendData, previousYearTrendData, aYear]);
+
+  /* ── TB Cases by Barangay ── */
+  const barangayData = useMemo(() => {
+    const byBarangay = {};
+    filteredCases.forEach((c) => {
+      const name = c.barangay_name || 'Unknown';
+      if (!byBarangay[name]) byBarangay[name] = 0;
+      byBarangay[name]++;
+    });
+    return Object.entries(byBarangay)
+      .map(([name, count]) => ({ name, Cases: count }))
+      .sort((a, b) => b.Cases - a.Cases);
+  }, [filteredCases]);
+
+  /* ── Barangay Incidence Data (per 100k) ── */
+  const barangayIncidenceData = useMemo(() => {
+    const popMap = {};
+    barangays.forEach((b) => {
+      const name = b.barangay_name || b.name;
+      if (name) popMap[name] = Number(b.population) || 0;
+    });
+    return barangayData.map((d) => {
+      const pop = popMap[d.name] || 0;
       return {
-        totalForecast: 0,
-        projectedIncrease: 0,
-        avgCIWidth: 0,
-        avgMAE: 0,
-        highRiskBarangays: 0,
-        periodLabel: 'N/A',
-        barangaysCount: 0,
+        ...d,
+        Population: pop,
+        Incidence: pop > 0 ? Number(((d.Cases / pop) * 100000).toFixed(1)) : 0,
       };
+    });
+  }, [barangayData, barangays]);
+
+  /* ── Cases by Health Facility ── */
+  const facilityData = useMemo(() => {
+    const byFacility = {};
+    filteredCases.forEach((c) => {
+      const name = c.screening_facility || c.treatment_facility || 'Unknown';
+      if (!byFacility[name]) byFacility[name] = 0;
+      byFacility[name]++;
+    });
+    return Object.entries(byFacility)
+      .filter(([name]) => name !== 'Unknown')
+      .map(([name, Cases]) => ({ name, Cases }))
+      .sort((a, b) => b.Cases - a.Cases)
+      .slice(0, 15);
+  }, [filteredCases]);
+
+  /* ── TB Cases by Age Group ── */
+  const ageData = useMemo(() => {
+    const byAge = {};
+    filteredCases.forEach((c) => {
+      const group = categorizeAge(c.age);
+      if (!byAge[group]) byAge[group] = 0;
+      byAge[group]++;
+    });
+    return AGE_GROUP_ORDER.map((group) => ({
+      group,
+      Cases: byAge[group] || 0,
+    }));
+  }, [filteredCases]);
+
+  /* ── TB Cases by Sex ── */
+  const sexData = useMemo(() => {
+    const bySex = {};
+    filteredCases.forEach((c) => {
+      const sex = (c.sex || 'Unknown').trim();
+      const key = sex.charAt(0).toUpperCase() + sex.slice(1).toLowerCase();
+      if (!bySex[key]) bySex[key] = 0;
+      bySex[key]++;
+    });
+    return Object.entries(bySex)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [filteredCases]);
+
+  const totalSex = useMemo(() => sexData.reduce((s, r) => s + r.value, 0), [sexData]);
+
+  /* ── Age + Sex Cross-Tabulation ── */
+  const ageSexData = useMemo(() => {
+    const crossTab = {};
+    AGE_GROUP_ORDER.forEach((g) => { crossTab[g] = { group: g }; });
+    filteredCases.forEach((c) => {
+      const ageGroup = categorizeAge(c.age);
+      if (ageGroup === 'Unknown') return;
+      const sex = (c.sex || 'Unknown').trim();
+      const sexKey = sex.charAt(0).toUpperCase() + sex.slice(1).toLowerCase();
+      if (!crossTab[ageGroup]) crossTab[ageGroup] = { group: ageGroup };
+      crossTab[ageGroup][sexKey] = (crossTab[ageGroup][sexKey] || 0) + 1;
+    });
+    return AGE_GROUP_ORDER.map((g) => crossTab[g] || { group: g, Male: 0, Female: 0 });
+  }, [filteredCases]);
+
+  /* ── Treatment Outcomes ── */
+  const outcomeData = useMemo(() => {
+    const byOutcome = {};
+    filteredCases.forEach((c) => {
+      const status = (c.outcome_status || 'Unknown').toUpperCase();
+      if (!byOutcome[status]) byOutcome[status] = 0;
+      byOutcome[status]++;
+    });
+    return Object.entries(byOutcome)
+      .map(([name, count]) => ({ name, Cases: count }))
+      .sort((a, b) => b.Cases - a.Cases);
+  }, [filteredCases]);
+
+  /* ── Active Filter Chips ── */
+  const activeFilters = useMemo(() => {
+    const chips = [];
+    if (aYear) chips.push({ key: 'year', label: 'Year', value: aYear });
+    if (aMonth) chips.push({ key: 'month', label: 'Month', value: MONTHS[Number(aMonth)] || aMonth });
+    if (aBarangay) chips.push({ key: 'barangay', label: 'Barangay', value: aBarangay });
+    if (aOutcome) chips.push({ key: 'outcome', label: 'Outcome', value: aOutcome });
+    if (aSex) chips.push({ key: 'sex', label: 'Sex', value: aSex });
+    if (aAgeGroup) chips.push({ key: 'age', label: 'Age Group', value: aAgeGroup });
+    if (aBact) chips.push({ key: 'bacterio', label: 'Bacterio', value: aBact });
+    return chips;
+  }, [aYear, aMonth, aBarangay, aOutcome, aSex, aAgeGroup, aBact]);
+
+  /* ── Key Insights ── */
+  const insights = useMemo(() => {
+    const list = [];
+    if (filteredCases.length === 0) return list;
+
+    if (barangayData.length > 0) {
+      const top = barangayData[0];
+      list.push({
+        category: 'HOTSPOT',
+        color: '#DC2626',
+        stat: top.Cases.toLocaleString(),
+        unit: 'cases',
+        text: `${top.name} has the highest number of reported TB cases.`,
+      });
     }
 
-    const periods = [...new Set(forecastsData.map((r) => r.forecast_period || r.period))];
-    const latestPeriod = periods.sort().pop();
-    const latestRows = forecastsData.filter(
-      (r) => (r.forecast_period || r.period) === latestPeriod
-    );
-
-    const totalForecast = latestRows.reduce(
-      (s, r) => s + Number(r.predicted_count || r.predicted || 0), 0
-    );
-    const totalActual = latestRows.reduce(
-      (s, r) => s + Number(r.actual || r.actual_count || 0), 0
-    );
-    const projectedIncrease = totalActual > 0
-      ? Math.round(((totalForecast - totalActual) / totalActual) * 100)
-      : 0;
-
-    const avgCIWidth = latestRows.length > 0
-      ? Math.round(
-          latestRows.reduce((s, r) => {
-            const upper = Number(r.ci_upper || 0);
-            const lower = Number(r.ci_lower || 0);
-            return s + (upper - lower);
-          }, 0) / latestRows.length
-        )
-      : 0;
-
-    const avgMAE = latestRows.length > 0
-      ? Math.round(
-          latestRows.reduce((s, r) => {
-            const actual = Number(r.actual || r.actual_count || 0);
-            const predicted = Number(r.predicted_count || r.predicted || 0);
-            return s + Math.abs(actual - predicted);
-          }, 0) / latestRows.length
-        )
-      : 0;
-
-    const highRiskBarangays = latestRows.filter(
-      (r) => r.risk_class === 'High'
-    ).length;
-
-    const d = new Date(latestPeriod);
-    const periodLabel = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-
-    return {
-      totalForecast,
-      projectedIncrease,
-      avgCIWidth,
-      avgMAE,
-      highRiskBarangays,
-      periodLabel,
-      barangaysCount: latestRows.length,
-    };
-  }, [forecastsData]);
-
-  /* ── Forecast table: latest period rows ── */
-  const forecastTable = useMemo(() => {
-    if (!forecastsData.length) return [];
-
-    const periods = [...new Set(forecastsData.map((r) => r.forecast_period || r.period))];
-    const latestPeriod = periods.sort().pop();
-    const latestRows = forecastsData.filter(
-      (r) => (r.forecast_period || r.period) === latestPeriod
-    );
-
-    return latestRows.map((r) => {
-      const actual = Number(r.actual || r.actual_count || 0);
-      const predicted = Number(r.predicted_count || r.predicted || 0);
-      const population = Number(r.population || 0);
-      const incidence = population > 0 ? ((predicted / population) * 100000).toFixed(1) : '0.0';
-      return {
-        barangay_name: r.barangay_name || 'Unknown',
-        actual,
-        predicted,
-        difference: predicted - actual,
-        ci_lower: Number(r.ci_lower || 0),
-        ci_upper: Number(r.ci_upper || 0),
-        risk_class: r.risk_class || 'Low',
-        incidence,
-      };
-    });
-  }, [forecastsData]);
-
-  const sortedForecastTable = useMemo(() => {
-    const sorted = [...forecastTable];
-    sorted.sort((a, b) => {
-      let valA = a[sortKey];
-      let valB = b[sortKey];
-      if (typeof valA === 'string') valA = valA.toLowerCase();
-      if (typeof valB === 'string') valB = valB.toLowerCase();
-      if (valA < valB) return sortDir === 'asc' ? -1 : 1;
-      if (valA > valB) return sortDir === 'asc' ? 1 : -1;
-      return 0;
-    });
-    return sorted;
-  }, [forecastTable, sortKey, sortDir]);
-
-  const handleSort = useCallback((key) => {
-    setSortKey((prev) => {
-      if (prev === key) {
-        setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-        return key;
+    if (trendData.length >= 2) {
+      const recent = trendData.slice(-3).reduce((s, r) => s + r.Cases, 0) / 3;
+      const older = trendData.slice(0, 3).reduce((s, r) => s + r.Cases, 0) / 3;
+      if (older > 0) {
+        const pct = (((recent - older) / older) * 100).toFixed(0);
+        if (pct > 5) list.push({ category: 'TREND', color: '#0D9488', stat: `+${pct}`, unit: '%', text: 'TB cases have increased compared to the earlier period.' });
+        else if (pct < -5) list.push({ category: 'TREND', color: '#059669', stat: `${pct}`, unit: '%', text: 'TB cases have decreased compared to the earlier period.' });
+        else list.push({ category: 'TREND', color: '#64748B', stat: '~0', unit: '%', text: 'TB cases have remained relatively stable across the selected period.' });
       }
-      setSortDir('asc');
-      return key;
-    });
-  }, []);
+    }
 
-  const renderSortIcon = useCallback((key) => {
-    if (sortKey !== key) return <i className="ri-arrow-up-down-line text-xs ml-1 opacity-40" />;
-    return sortDir === 'asc'
-      ? <i className="ri-arrow-up-line text-xs ml-1" />
-      : <i className="ri-arrow-down-line text-xs ml-1" />;
-  }, [sortKey, sortDir]);
+    if (ageData.length > 0) {
+      const topAge = ageData.reduce((max, r) => r.Cases > max.Cases ? r : max, ageData[0]);
+      if (topAge.Cases > 0) {
+        list.push({
+          category: 'DEMOGRAPHICS',
+          color: '#1E293B',
+          stat: topAge.Cases.toLocaleString(),
+          unit: 'cases',
+          text: `The ${topAge.group} age group accounts for the largest proportion of cases.`,
+        });
+      }
+    }
+
+    if (Number(metrics.successRate) > 0) {
+      const rate = Number(metrics.successRate);
+      const isBelow = rate < 85;
+      list.push({
+        category: 'TREATMENT',
+        color: isBelow ? '#DC2626' : '#059669',
+        stat: metrics.successRate,
+        unit: '%',
+        text: isBelow ? 'Treatment success rate is currently below target.' : 'Treatment success rate meets the target threshold.',
+      });
+    }
+
+    if (metrics.highRisk > 0) {
+      list.push({
+        category: 'HIGH RISK',
+        color: '#DC2626',
+        stat: String(metrics.highRisk),
+        unit: `barangay${metrics.highRisk > 1 ? 's' : ''}`,
+        text: `${metrics.highRisk} barangay${metrics.highRisk > 1 ? 's are' : ' is'} currently classified as high risk.`,
+      });
+    }
+
+    if (sexData.length >= 2) {
+      const topSex = sexData[0];
+      list.push({
+        category: 'DEMOGRAPHICS',
+        color: '#1E293B',
+        stat: `${((topSex.value / totalSex) * 100).toFixed(0)}`,
+        unit: '%',
+        text: `${topSex.name} cases account for the majority of all reported TB cases.`,
+      });
+    }
+
+    if (facilityData.length > 0) {
+      const top = facilityData[0];
+      list.push({
+        category: 'FACILITY LOAD',
+        color: '#7C3AED',
+        stat: top.Cases.toLocaleString(),
+        unit: 'cases',
+        text: `${top.name} handles the most TB cases among health facilities.`,
+      });
+    }
+
+    if (barangayIncidenceData.length > 0) {
+      const sorted = [...barangayIncidenceData].filter((d) => d.Population > 0).sort((a, b) => b.Incidence - a.Incidence);
+      if (sorted.length > 0) {
+        list.push({
+          category: 'INCIDENCE',
+          color: '#D97706',
+          stat: sorted[0].Incidence.toLocaleString(),
+          unit: 'per 100k',
+          text: `${sorted[0].name} has the highest incidence rate among Pasig City barangays.`,
+        });
+      }
+    }
+
+    return list;
+  }, [filteredCases, barangayData, trendData, ageData, metrics, sexData, totalSex, facilityData, barangayIncidenceData]);
+
+  /* ── Last updated ── */
+  const lastUpdated = useMemo(() => {
+    const dates = allCases
+      .map((c) => c.imported_at || c.date_of_diagnosis)
+      .filter(Boolean)
+      .map((d) => new Date(d).getTime())
+      .filter((t) => !isNaN(t));
+    if (dates.length === 0) return 'N/A';
+    const latest = new Date(Math.max(...dates));
+    return latest.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  }, [allCases]);
+
+  /* ── Error state ── */
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <i className="ri-error-warning-line text-4xl" style={{ color: COLORS.red }} />
-        <span className="text-sm font-medium" style={{ color: t.textSecondary }}>{error}</span>
-        <button
-          onClick={loadAll}
-          className="px-4 py-2 rounded-lg text-sm font-semibold text-white"
-          style={{ background: COLORS.blue }}
-        >
-          Retry
-        </button>
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: '#FEE2E2' }}>
+          <i className="ri-error-warning-line text-3xl" style={{ color: COLORS.red }} />
+        </div>
+        <span className="text-sm font-medium" style={{ color: '#64748B' }}>{error}</span>
+        <button onClick={loadAll} className="px-5 py-2.5 rounded-lg text-sm font-bold text-white transition hover:opacity-90" style={{ background: COLORS.blue }}>Retry</button>
       </div>
     );
   }
 
-  /* ── Main JSX ── */
-  return (
-    <div className="space-y-6 p-1">
+  const hasData = filteredCases.length > 0;
+  const prevYearLabel = aYear ? String(Number(aYear) - 1) : '';
 
-      {/* ─── Section 1: Forecast Controls ─── */}
-      <div className="glass-card p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <i className="ri-dashboard-3-line text-lg" style={{ color: COLORS.blue }} />
-          <span className="text-sm font-bold" style={{ color: t.text }}>Forecast Controls</span>
+  return (
+    <div className="space-y-6">
+      {/* ─── Header + Filters ─── */}
+      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
+        {/* Header row */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
+          <div className="shrink-0">
+            <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Analytics</h1>
+            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Analyze tuberculosis trends, case distribution, demographics, and treatment outcomes across Pasig City.</p>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[11px] font-medium mr-2" style={{ color: '#94A3B8' }}>
+              Last updated: {lastUpdated}
+            </span>
+            <button onClick={() => {
+              if (!filteredCases.length) return;
+              const headers = ['Barangay', 'Sex', 'Age', 'Date of Diagnosis', 'Outcome', 'Bacteriological Status'];
+              const rows = filteredCases.map((c) => [c.barangay_name, c.sex, c.age, c.date_of_diagnosis, c.outcome_status, c.bacteriological_status]);
+              const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+              const blob = new Blob([csv], { type: 'text/csv' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `tb-analytics-${aYear || 'all'}.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }} className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all hover:shadow-md" style={{ background: '#EFF6FF', color: '#0F2D52', border: '1px solid #DBEAFE' }}>
+              <i className="ri-download-2-line text-sm" />
+              Export
+            </button>
+            <button onClick={handleApply} className="flex items-center gap-1.5 px-5 py-2 rounded-lg text-xs font-bold text-white transition-all hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]" style={{ background: '#0F2D52' }}>
+              <i className="ri-check-line text-sm" />
+              Apply
+            </button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        {/* Filter bar */}
+        <div className="flex items-center justify-between px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Year */}
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Year:</span>
+              <select value={filterYear} onChange={(e) => setFilterYear(e.target.value)} className="rounded-lg pl-[42px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
+                <option value="">All</option>
+                {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+            </div>
 
-          {/* Barangay multi-select */}
-          <div className="relative">
-            <label className="block text-xs font-bold uppercase tracking-wider mb-2" style={{ color: t.textSecondary }}>
-              Barangays
-            </label>
-            <button
-              type="button"
-              onClick={() => setShowBarangayDropdown((v) => !v)}
-              className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm text-left"
-              style={{
-                background: t.inputBg,
-                border: `1px solid ${t.inputBorder}`,
-                color: t.text,
-              }}
-            >
-              <span>
-                {selectedBarangays.length === 0
-                  ? 'All Barangays'
-                  : `${selectedBarangays.length} selected`}
-              </span>
-              <i className={`ri-arrow-${showBarangayDropdown ? 'up' : 'down'}-s-line`} style={{ color: t.textMuted }} />
-            </button>
-            {showBarangayDropdown && (
-              <div
-                className="absolute z-30 mt-1 w-full max-h-60 overflow-y-auto rounded-lg shadow-lg"
-                style={{
-                  background: t.cardSolid,
-                  border: `1px solid ${t.borderStrong}`,
-                }}
-              >
-                <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: t.border }}>
-                  <button
-                    type="button"
-                    onClick={selectAllBarangays}
-                    className="text-xs font-semibold hover:underline"
-                    style={{ color: COLORS.blue }}
-                  >
-                    Select All
-                  </button>
-                  <button
-                    type="button"
-                    onClick={clearBarangays}
-                    className="text-xs font-semibold hover:underline"
-                    style={{ color: COLORS.red }}
-                  >
-                    Clear
-                  </button>
-                </div>
-                {barangayNames.map((name) => (
-                  <label
-                    key={name}
-                    className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-opacity-50 text-sm"
-                    style={{
-                      color: t.text,
-                      background: 'transparent',
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = t.tableStripe; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                  >
-                    <input
-                      type="checkbox"
-                      className="rounded"
-                      checked={selectedBarangays.includes(name)}
-                      onChange={() => toggleBarangay(name)}
-                    />
-                    <span>{name}</span>
-                  </label>
+            {/* Month */}
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Month:</span>
+              <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="rounded-lg pl-[52px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
+                <option value="">All</option>
+                {MONTHS.map((m, i) => <option key={m} value={i === 0 ? '' : String(i)}>{m}</option>)}
+              </select>
+              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+            </div>
+
+            {/* Barangay */}
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Barangay:</span>
+              <select value={filterBarangay} onChange={(e) => setFilterBarangay(e.target.value)} className="rounded-lg pl-[74px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0', minWidth: 150 }}>
+                <option value="">All</option>
+                {barangayNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+            </div>
+
+            {/* Outcome */}
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Outcome:</span>
+              <select value={filterOutcome} onChange={(e) => setFilterOutcome(e.target.value)} className="rounded-lg pl-[63px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
+                <option value="">All</option>
+                {OUTCOMES.map((o) => <option key={o} value={o === 'All Outcomes' ? '' : o}>{o}</option>)}
+              </select>
+              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+            </div>
+
+            {/* Sex */}
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Sex:</span>
+              <select value={filterSex} onChange={(e) => setFilterSex(e.target.value)} className="rounded-lg pl-[36px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
+                <option value="">All</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+              </select>
+              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+            </div>
+
+            {/* Age Group */}
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Age:</span>
+              <select value={filterAgeGroup} onChange={(e) => setFilterAgeGroup(e.target.value)} className="rounded-lg pl-[38px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
+                <option value="">All</option>
+                {AGE_GROUP_ORDER.map((g) => <option key={g} value={g}>{g}</option>)}
+              </select>
+              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+            </div>
+
+            {/* Bacteriological Status */}
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Bacterio:</span>
+              <select value={filterBact} onChange={(e) => setFilterBact(e.target.value)} className="rounded-lg pl-[66px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
+                <option value="">All</option>
+                {(filterOptions.bacteriological_status || []).map((s) => (
+                  <option key={s} value={s}>{s}</option>
                 ))}
-              </div>
-            )}
-          </div>
-
-          {/* Forecast months */}
-          <div>
-            <label className="block text-xs font-bold uppercase tracking-wider mb-2" style={{ color: t.textSecondary }}>
-              Forecast Horizon
-            </label>
-            <div className="flex items-center gap-2">
-              {[3, 6, 12].map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => { setForecastMonths(m); setCustomMonths(''); }}
-                  className="flex-1 py-2 rounded-lg text-sm font-semibold transition-colors"
-                  style={{
-                    background: forecastMonths === m && customMonths === '' ? COLORS.blue : t.inputBg,
-                    color: forecastMonths === m && customMonths === '' ? '#ffffff' : t.text,
-                    border: `1px solid ${forecastMonths === m && customMonths === '' ? COLORS.blue : t.inputBorder}`,
-                  }}
-                >
-                  {m}m
-                </button>
-              ))}
-              <input
-                type="number"
-                min={1}
-                max={24}
-                placeholder="1–24"
-                value={customMonths}
-                onChange={(e) => setCustomMonths(e.target.value)}
-                className="w-20 px-2 py-2 rounded-lg text-sm text-center"
-                style={{
-                  background: t.inputBg,
-                  border: `1px solid ${t.inputBorder}`,
-                  color: t.text,
-                }}
-              />
+              </select>
+              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
             </div>
           </div>
 
-          {/* Run button + pipeline result */}
-          <div className="flex flex-col justify-end gap-2">
-            <button
-              type="button"
-              onClick={handleRunForecast}
-              disabled={runningPipeline}
-              className="flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold text-white transition-colors disabled:opacity-60"
-              style={{ background: COLORS.blue }}
-            >
-              {runningPipeline ? (
-                <>
-                  <div
-                    className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
-                  />
-                  Running Pipeline...
-                </>
-              ) : (
-                <>
-                  <i className="ri-play-circle-line" />
-                  Run Forecast
-                </>
-              )}
+          <div className="flex items-center gap-1.5">
+            <button onClick={handleClear} className="flex items-center gap-1.5 px-3 py-[7px] rounded-lg text-[11px] font-semibold transition-all hover:bg-slate-100 shrink-0" style={{ color: '#64748B', border: '1px solid #E2E8F0', background: '#ffffff' }}>
+              <i className="ri-refresh-line text-[10px]" />
+              Clear Filters
             </button>
-            {pipelineResult && (
-              <div
-                className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium"
-                style={{
-                  background: pipelineResult.success ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                  color: pipelineResult.success ? COLORS.green : COLORS.red,
-                  border: `1px solid ${pipelineResult.success ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`,
-                }}
-              >
-                <i className={pipelineResult.success ? 'ri-check-line' : 'ri-close-circle-line'} />
-                {pipelineResult.message}
-              </div>
-            )}
           </div>
         </div>
       </div>
 
-      {/* ─── Section 2: Summary Metrics ─── */}
-      <div
-        className="glass-card grid grid-cols-2 lg:grid-cols-4 divide-x"
-        style={{ borderColor: t.border }}
-      >
-        <MetricItem
-          title="Total TB Cases"
-          value={totalCases.toLocaleString()}
-          icon="ri-virus-line"
-          color={COLORS.blue}
-          trend={`${barangays.length} barangays`}
-          isLast={false}
-        />
-        <MetricItem
-          title="Peak Month"
-          value={peakMonth.label}
-          icon="ri-calendar-event-line"
-          color={COLORS.red}
-          trend={`${peakMonth.cases} cases`}
-          isLast={false}
-        />
-        <MetricItem
-          title="Success Rate"
-          value={successRate}
-          icon="ri-heart-pulse-line"
-          color={COLORS.green}
-          trend="Cured + Completed"
-          isLast={false}
-        />
-        <MetricItem
-          title="High-Risk Areas"
-          value={highRiskCount}
-          icon="ri-alarm-warning-line"
-          color={COLORS.amber}
-          trend=">200 cases"
-          isLast
-        />
-      </div>
-
-      {/* ─── Section 3: Actual vs Predicted Chart ─── */}
-      <VizCard
-        title="Actual vs Predicted Cases"
-        icon="ri-line-chart-line"
-        iconColor={COLORS.blue}
-      >
-        {chartData.length > 0 ? (
-          <div className="w-full" style={{ height: 380 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="ciBand" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={COLORS.blue} stopOpacity={0.12} />
-                    <stop offset="100%" stopColor={COLORS.blue} stopOpacity={0.03} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke={t.chartGrid} />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fontSize: 11, fill: t.textMuted }}
-                  axisLine={{ stroke: t.chartGrid }}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 11, fill: t.textMuted }}
-                  axisLine={{ stroke: t.chartGrid }}
-                  tickLine={false}
-                />
-                <Tooltip content={<AvsPTooltip />} />
-                <Area
-                  type="monotone"
-                  dataKey="ci_upper"
-                  stroke="none"
-                  fill="url(#ciBand)"
-                  isAnimationActive={false}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="ci_lower"
-                  stroke="none"
-                  fill={t.cardSolid}
-                  isAnimationActive={false}
-                />
-                <Bar
-                  dataKey="Actual"
-                  fill={COLORS.blue}
-                  radius={[3, 3, 0, 0]}
-                  barSize={28}
-                  opacity={0.85}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="Predicted"
-                  stroke={COLORS.red}
-                  strokeWidth={2.5}
-                  strokeDasharray="5 5"
-                  dot={{ fill: COLORS.red, r: 3 }}
-                  activeDot={{ r: 5 }}
-                />
-                <Legend
-                  verticalAlign="bottom"
-                  height={36}
-                  formatter={(value) => {
-                    const colors = { Actual: COLORS.blue, Predicted: COLORS.red };
-                    return (
-                      <span style={{ color: colors[value] || t.text, fontSize: 12, fontWeight: 600 }}>
-                        {value}
-                      </span>
-                    );
-                  }}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-12 gap-2">
-            <i className="ri-bar-chart-grouped-line text-3xl" style={{ color: t.textMuted }} />
-            <span className="text-sm" style={{ color: t.textMuted }}>
-              No forecast data available. Run the pipeline to generate predictions.
+      {/* ─── Active Filter Chips ─── */}
+      {activeFilters.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {activeFilters.map((f) => (
+            <span key={f.key} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold" style={{ background: '#EFF6FF', color: '#0F2D52', border: '1px solid #DBEAFE' }}>
+              {f.label}: <span className="font-bold">{f.value}</span>
+              <button onClick={() => removeFilter(f.key)} className="inline-flex items-center justify-center w-4 h-4 rounded transition hover:bg-blue-200" style={{ color: '#94A3B8' }}>
+                <i className="ri-close-line text-[10px]" />
+              </button>
             </span>
+          ))}
+        </div>
+      )}
+
+      {/* ─── Loading ─── */}
+      {loading ? (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="rounded-xl p-5 animate-pulse" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+              <div className="h-3 w-24 rounded mb-3" style={{ background: '#E2E8F0' }} />
+              <div className="h-7 w-16 rounded" style={{ background: '#E2E8F0' }} />
+            </div>
+          ))}
+        </div>
+      ) : !hasData ? (
+        <EmptyState />
+      ) : (
+        <>
+          {/* ─── Metric Cards (with Trend Indicators) ─── */}
+          <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15,45,82,0.12), 0 2px 8px rgba(15,45,82,0.08)' }}>
+            <div className="grid grid-cols-2 lg:grid-cols-4">
+              {/* Total TB Cases */}
+              <div className="flex flex-col px-5 py-5 relative">
+                <div className="flex items-center gap-2">
+                  <i className="ri-file-list-3-line text-base" style={{ color: '#3B82F6' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Total TB Cases</span>
+                </div>
+                <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+                <div className="flex items-end gap-2">
+                  <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.total.toLocaleString()}</p>
+                  {aYear && <TrendBadge current={metrics.total} previous={previousMetrics.total} inverse={true} />}
+                </div>
+                <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
+              </div>
+
+              {/* Active TB Cases */}
+              <div className="flex flex-col px-5 py-5 relative">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <i className="ri-first-aid-kit-line text-base" style={{ color: '#F59E0B' }} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Active Cases</span>
+                  </div>
+                  {metrics.total > 0 && (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEF3C7', color: '#D97706' }}>
+                      {((metrics.active / metrics.total) * 100).toFixed(1)}%
+                    </span>
+                  )}
+                </div>
+                <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+                <div className="flex items-end gap-2">
+                  <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.active.toLocaleString()}</p>
+                  {aYear && <TrendBadge current={metrics.active} previous={previousMetrics.active} inverse={true} />}
+                </div>
+                <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
+              </div>
+
+              {/* Treatment Success Rate */}
+              <div className="flex flex-col px-5 py-5 relative">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <i className="ri-check-double-line text-base" style={{ color: '#10B981' }} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Success</span>
+                  </div>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#D1FAE5', color: '#059669' }}>
+                    {metrics.successRate}%
+                  </span>
+                </div>
+                <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+                <div className="flex items-end gap-2">
+                  <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.successRate}%</p>
+                  {aYear && <TrendBadge current={Number(metrics.successRate)} previous={Number(previousMetrics.successRate)} inverse={false} />}
+                </div>
+                <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
+              </div>
+
+              {/* High-Risk Barangays */}
+              <div className="flex flex-col px-5 py-5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <i className="ri-alarm-warning-line text-base" style={{ color: '#DC2626' }} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk Barangays</span>
+                  </div>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEE2E2', color: '#DC2626' }}>
+                    {metrics.highRisk}/30
+                  </span>
+                </div>
+                <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.highRisk}</p>
+              </div>
+            </div>
           </div>
-        )}
-      </VizCard>
 
-      {/* ─── Section 4: Forecast Report Cards ─── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <ReportCard
-          title="Total Forecast"
-          value={forecastReport.totalForecast.toLocaleString()}
-          subtitle={`Across ${forecastReport.barangaysCount} barangays`}
-          icon="ri-chart-line"
-          color={COLORS.blue}
-        />
-        <ReportCard
-          title="Projected Increase"
-          value={`${forecastReport.projectedIncrease > 0 ? '+' : ''}${forecastReport.projectedIncrease}%`}
-          subtitle="vs historical average"
-          icon="ri-arrow-up-circle-line"
-          color={forecastReport.projectedIncrease > 0 ? COLORS.red : COLORS.green}
-        />
-        <ReportCard
-          title="Avg Confidence Interval"
-          value={forecastReport.avgCIWidth.toLocaleString()}
-          subtitle="Average CI width"
-          icon="ri-git-branch-line"
-          color={COLORS.cyan}
-        />
-        <ReportCard
-          title="Model Accuracy"
-          value={forecastReport.avgMAE.toLocaleString()}
-          subtitle="Mean Absolute Error"
-          icon="ri-bullseye-line"
-          color={COLORS.green}
-        />
-        <ReportCard
-          title="High-Risk Barangays"
-          value={forecastReport.highRiskBarangays}
-          subtitle="Classified as High risk"
-          icon="ri-alarm-warning-line"
-          color={COLORS.red}
-        />
-        <ReportCard
-          title="Forecast Period"
-          value={forecastReport.periodLabel}
-          subtitle={`${forecastReport.barangaysCount} barangay forecasts`}
-          icon="ri-calendar-line"
-          color={COLORS.purple}
-        />
-      </div>
+          {/* ─── TB Cases Trend (with YoY Comparison) ─── */}
+          <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+            <div className="flex items-center justify-between px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="w-1 h-8 rounded-full" style={{ background: '#2563EB' }} />
+                <div>
+                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>TB Cases Trend</h3>
+                  <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Monthly tuberculosis cases over the selected period.</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 mr-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-6 h-[3px] rounded-full" style={{ background: '#2563EB' }} />
+                    <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Cases</span>
+                  </div>
+                  {compareYear && prevYearLabel && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-4 h-0 border-t-2" style={{ borderColor: '#CBD5E1', borderStyle: 'dashed' }} />
+                      <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>Prev ({prevYearLabel})</span>
+                    </div>
+                  )}
+                </div>
+                {aYear && (
+                  <button onClick={() => setCompareYear(!compareYear)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
+                    style={{ background: compareYear ? '#1E293B' : '#F8FAFC', color: compareYear ? '#ffffff' : '#64748B', border: `1px solid ${compareYear ? '#1E293B' : '#E2E8F0'}` }}>
+                    <i className="ri-git-branch-line text-[10px]" />
+                    {compareYear ? `Comparing ${prevYearLabel}` : `Compare ${prevYearLabel}`}
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="px-5 pb-5">
+              {mergedTrendData.length > 0 ? (
+                <div className="w-full" style={{ height: 300 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={mergedTrendData} margin={{ top: 10, right: 15, left: -10, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#2563EB" stopOpacity={0.08} />
+                          <stop offset="100%" stopColor="#2563EB" stopOpacity={0.01} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={6} />
+                      <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={40} tickMargin={4} />
+                      <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#E2E8F0', strokeWidth: 1 }} />
+                      <Area type="monotone" dataKey="Cases" stroke="#2563EB" strokeWidth={2.5} fill="url(#trendGrad)" dot={{ fill: '#2563EB', r: 3.5, strokeWidth: 2, stroke: '#ffffff' }} activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }} name="Cases" />
+                      {compareYear && prevYearLabel && (
+                        <Line type="monotone" dataKey={`Prev (${prevYearLabel})`} stroke="#CBD5E1" strokeWidth={1.5} strokeDasharray="6 4" dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: '#ffffff' }} name={`Prev Year (${prevYearLabel})`} connectNulls />
+                      )}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No trend data available for the selected filters.</p>
+              )}
+            </div>
+          </div>
 
-      {/* ─── Section 5: Forecast Table ─── */}
-      <VizCard
-        title="Barangay Forecast Details"
-        icon="ri-table-line"
-        iconColor={COLORS.blue}
-      >
-        {sortedForecastTable.length > 0 ? (
-          <div className="overflow-x-auto -mx-5">
-            <table className="w-full text-sm" style={{ minWidth: 800 }}>
-              <thead>
-                <tr style={{ borderBottom: `1px solid ${t.borderStrong}` }}>
-                  {[
-                    { key: 'barangay_name', label: 'Barangay' },
-                    { key: 'actual', label: 'Actual' },
-                    { key: 'predicted', label: 'Predicted' },
-                    { key: 'difference', label: 'Difference' },
-                    { key: 'ci_lower', label: 'CI Lower' },
-                    { key: 'ci_upper', label: 'CI Upper' },
-                    { key: 'risk_class', label: 'Risk' },
-                    { key: 'incidence', label: 'Incidence/100k' },
-                  ].map((col) => (
-                    <th
-                      key={col.key}
-                      onClick={() => handleSort(col.key)}
-                      className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider cursor-pointer select-none"
-                      style={{ color: t.textSecondary }}
-                    >
-                      <span className="inline-flex items-center">
-                        {col.label}
-                        {renderSortIcon(col.key)}
-                      </span>
-                    </th>
+          {/* ─── TB Cases by Barangay (with Incidence Toggle) ─── */}
+          <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+            <div className="flex items-center justify-between px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="w-1 h-8 rounded-full" style={{ background: showIncidence ? '#D97706' : '#0D9488' }} />
+                <div>
+                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>TB Cases by Barangay</h3>
+                  <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>{showIncidence ? 'Incidence rate per 100,000 population across Pasig City barangays.' : 'Distribution of reported TB cases across the 30 barangays of Pasig City.'}</p>
+                </div>
+              </div>
+              <button onClick={() => setShowIncidence(!showIncidence)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
+                style={{ background: showIncidence ? '#1E293B' : '#F8FAFC', color: showIncidence ? '#ffffff' : '#64748B', border: `1px solid ${showIncidence ? '#1E293B' : '#E2E8F0'}` }}>
+                <i className="ri-percent-line text-[10px]" />
+                {showIncidence ? 'Per 100k' : 'Raw Cases'}
+              </button>
+            </div>
+            <div className="px-5 pb-5">
+              {barangayIncidenceData.length > 0 ? (
+                <div className="w-full" style={{ height: Math.max(380, barangayIncidenceData.length * 26) }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={barangayIncidenceData} layout="vertical" margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                      <XAxis type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
+                      <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={105} tickMargin={4} />
+                      <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
+                      <Bar dataKey={showIncidence ? 'Incidence' : 'Cases'} radius={[0, 6, 6, 0]} barSize={16} name={showIncidence ? 'Per 100k' : 'Cases'}>
+                        {barangayIncidenceData.map((entry, i) => (
+                          <Cell key={i} fill={showIncidence
+                            ? (entry.Incidence > 100 ? '#DC2626' : entry.Incidence > 50 ? '#D97706' : '#059669')
+                            : (i === 0 ? '#0D9488' : i < 5 ? '#14B8A6' : '#99F6E4')
+                          } />
+                        ))}
+                      </Bar>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No barangay data available.</p>
+              )}
+            </div>
+          </div>
+
+          {/* ─── Cases by Health Facility ─── */}
+          {facilityData.length > 0 && (
+            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+              <div className="px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-1 h-8 rounded-full" style={{ background: '#7C3AED' }} />
+                  <div>
+                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Cases by Health Facility</h3>
+                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Top 15 health facilities handling TB cases in Pasig City.</p>
+                  </div>
+                </div>
+              </div>
+              <div className="px-5 pb-5">
+                <div className="w-full" style={{ height: Math.max(260, facilityData.length * 28) }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={facilityData} layout="vertical" margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                      <XAxis type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
+                      <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={140} tickMargin={4} />
+                      <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
+                      <Bar dataKey="Cases" radius={[0, 6, 6, 0]} barSize={16} name="Cases">
+                        {facilityData.map((entry, i) => (
+                          <Cell key={i} fill={i === 0 ? '#6D28D9' : i < 5 ? '#8B5CF6' : '#C4B5FD'} />
+                        ))}
+                      </Bar>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ─── Age + Sex Cross-Tabulation + Treatment Outcomes ─── */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Age + Sex Grouped Chart */}
+            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+              <div className="flex items-center justify-between px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-1 h-8 rounded-full" style={{ background: '#2563EB' }} />
+                  <div>
+                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Cases by Age Group & Sex</h3>
+                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Cross-tabulation of TB cases by age group and sex.</p>
+                  </div>
+                </div>
+                {sexData.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    {sexData.map((entry) => (
+                      <div key={entry.name} className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-sm" style={{ background: entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#EC4899' : '#94A3B8' }} />
+                        <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>{entry.name}</span>
+                        <span className="text-[11px] font-bold" style={{ color: '#1E293B' }}>{entry.value.toLocaleString()}</span>
+                        <span className="text-[10px]" style={{ color: '#94A3B8' }}>({totalSex > 0 ? ((entry.value / totalSex) * 100).toFixed(1) : 0}%)</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="px-5 pb-5">
+                {ageSexData.length > 0 ? (
+                  <div className="w-full" style={{ height: 280 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart data={ageSexData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                          <XAxis dataKey="group" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={6} />
+                        <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={35} tickMargin={4} />
+                        <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
+                        <Bar dataKey="Male" fill="#60A5FA" radius={[4, 4, 0, 0]} barSize={20} name="Male" />
+                        <Bar dataKey="Female" fill="#F472B6" radius={[4, 4, 0, 0]} barSize={20} name="Female" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Treatment Outcomes */}
+            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+              <div className="px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-1 h-8 rounded-full" style={{ background: '#059669' }} />
+                  <div>
+                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Treatment Outcomes</h3>
+                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Distribution of treatment outcomes.</p>
+                  </div>
+                </div>
+              </div>
+              <div className="px-5 pb-5">
+                {outcomeData.length > 0 ? (
+                  <div className="w-full" style={{ height: 280 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={outcomeData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                        <XAxis dataKey="name" tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} interval={0} angle={-30} textAnchor="end" height={60} tickMargin={4} />
+                        <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={35} tickMargin={4} />
+                        <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
+                        <Bar dataKey="Cases" radius={[6, 6, 0, 0]} barSize={22} name="Cases">
+                          {outcomeData.map((entry) => (
+                            <Cell key={entry.name} fill={OUTCOME_COLORS[entry.name] || '#94A3B8'} />
+                          ))}
+                        </Bar>
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* ─── Key Insights ─── */}
+          {insights.length > 0 && (
+            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+              <div className="px-5 py-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#7C3AED' }}>Summary</span>
+                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Key Insights</h3>
+                </div>
+              </div>
+              <div className="px-5 pb-5">
+                <div className="flex flex-col gap-4">
+                  {insights.map((insight, i) => (
+                    <div key={i} className="flex gap-3" style={{ borderBottom: i < insights.length - 1 ? '1px solid #F1F5F9' : 'none', paddingBottom: i < insights.length - 1 ? 16 : 0 }}>
+                      <div className="w-[3px] rounded-full shrink-0" style={{ background: insight.color }} />
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: insight.color }}>{insight.category}</span>
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="text-xl font-extrabold" style={{ color: '#1E293B', letterSpacing: '-0.02em' }}>{insight.stat}</span>
+                          <span className="text-sm font-medium" style={{ color: '#94A3B8' }}>{insight.unit}</span>
+                        </div>
+                        <p className="text-[12px] leading-relaxed" style={{ color: '#64748B' }}>{insight.text}</p>
+                      </div>
+                    </div>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
-                {sortedForecastTable.map((row, i) => (
-                  <tr
-                    key={`${row.barangay_name}-${i}`}
-                    style={{
-                      borderBottom: `1px solid ${t.border}`,
-                      background: i % 2 === 0 ? 'transparent' : t.tableStripe,
-                    }}
-                  >
-                    <td className="px-4 py-3 font-medium" style={{ color: t.text }}>
-                      {row.barangay_name}
-                    </td>
-                    <td className="px-4 py-3" style={{ color: t.text }}>{row.actual}</td>
-                    <td className="px-4 py-3" style={{ color: t.text }}>{row.predicted}</td>
-                    <td className="px-4 py-3 font-semibold" style={{ color: row.difference >= 0 ? COLORS.green : COLORS.red }}>
-                      {row.difference >= 0 ? '+' : ''}{row.difference}
-                    </td>
-                    <td className="px-4 py-3" style={{ color: t.textMuted }}>{row.ci_lower}</td>
-                    <td className="px-4 py-3" style={{ color: t.textMuted }}>{row.ci_upper}</td>
-                    <td className="px-4 py-3">
-                      <RiskBadge risk={row.risk_class} />
-                    </td>
-                    <td className="px-4 py-3" style={{ color: t.text }}>{row.incidence}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-12 gap-2">
-            <i className="ri-file-list-3-line text-3xl" style={{ color: t.textMuted }} />
-            <span className="text-sm" style={{ color: t.textMuted }}>
-              No forecast data available for the table. Run the pipeline to generate predictions.
-            </span>
-          </div>
-        )}
-      </VizCard>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

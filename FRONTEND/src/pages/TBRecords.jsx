@@ -63,15 +63,48 @@ const DetailRow = ({ label, value }) => {
   );
 };
 
+/* ─── Filter select for sidebar ─── */
+function FilterSelect({ label, value, onChange, options, placeholder }) {
+  const formatOption = (opt) => {
+    if (!opt) return '';
+    return opt.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  };
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-[11px] font-semibold" style={{ color: '#64748B' }}>{label}</label>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-lg pl-3 pr-7 py-2 text-xs font-semibold outline-none transition cursor-pointer appearance-none"
+          style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: value ? '#0F2D52' : '#94A3B8' }}
+        >
+          <option value="">{placeholder}</option>
+          {options.map((opt) => (
+            <option key={opt} value={opt}>
+              {formatOption(opt)}
+            </option>
+          ))}
+        </select>
+        <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+      </div>
+    </div>
+  );
+}
+
+const ALL_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const ALL_YEARS = ["2025","2024","2023"];
+const ALL_OUTCOME_STATUSES = [
+  "ON TREATMENT", "CURED", "TREATMENT COMPLETED",
+  "DIED", "LOST TO FOLLOW-UP", "EXCLUDED",
+];
+
 export default function TBRecords() {
   const [records, setRecords] = useState([]);
   const [barangays, setBarangays] = useState([]);
-  const ALL_OUTCOME_STATUSES = [
-    "ON TREATMENT", "CURED", "TREATMENT COMPLETED",
-    "DIED", "LOST TO FOLLOW-UP", "EXCLUDED",
-  ];
-
   const [outcomeStatuses, setOutcomeStatuses] = useState([]);
+  const [bacteriologicalStatuses, setBacteriologicalStatuses] = useState([]);
+  const [sexStatuses, setSexStatuses] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   const [metrics, setMetrics] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -82,11 +115,99 @@ export default function TBRecords() {
   const [selectedBarangay, setSelectedBarangay] = useState("");
   const [selectedOutcomeStatus, setSelectedOutcomeStatus] = useState("");
   const [selectedFacility, setSelectedFacility] = useState("");
+  const [selectedSex, setSelectedSex] = useState("");
+  const [selectedBacteriologicalStatus, setSelectedBacteriologicalStatus] = useState("");
+  const [selectedValidationStatus, setSelectedValidationStatus] = useState("");
   const [facilities, setFacilities] = useState([]);
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [pendingFilters, setPendingFilters] = useState({});
   const recordsPerPage = 20;
 
+  /* ─── Derived active filter list ─── */
+  const activeFilters = [
+    { key: 'year', label: 'Year', value: selectedYear },
+    { key: 'month', label: 'Month', value: selectedMonth },
+    { key: 'barangay', label: 'Barangay', value: selectedBarangay },
+    { key: 'outcome', label: 'Outcome', value: selectedOutcomeStatus },
+    { key: 'facility', label: 'Facility', value: selectedFacility },
+    { key: 'sex', label: 'Sex', value: selectedSex },
+    { key: 'bacteriological', label: 'Bacteriological', value: selectedBacteriologicalStatus },
+    { key: 'validation', label: 'Validation', value: selectedValidationStatus },
+  ].filter(f => f.value);
+
+  const activeFilterCount = activeFilters.length;
+
+  /* ─── Filter setter map for chips ─── */
+  const filterSetters = {
+    year: setSelectedYear,
+    month: setSelectedMonth,
+    barangay: setSelectedBarangay,
+    outcome: setSelectedOutcomeStatus,
+    facility: setSelectedFacility,
+    sex: setSelectedSex,
+    bacteriological: setSelectedBacteriologicalStatus,
+    validation: setSelectedValidationStatus,
+  };
+
+  const removeFilter = (key) => {
+    if (filterSetters[key]) filterSetters[key]("");
+    setCurrentPage(1);
+  };
+
+  const clearAllFilters = () => {
+    setSearchTerm(""); setSelectedYear(""); setSelectedMonth("");
+    setSelectedBarangay(""); setSelectedOutcomeStatus(""); setSelectedFacility("");
+    setSelectedSex(""); setSelectedBacteriologicalStatus(""); setSelectedValidationStatus("");
+    setCurrentPage(1);
+  };
+
+  /* ─── Advanced Filters Modal helpers ─── */
+  const openAdvancedFilters = () => {
+    setPendingFilters({
+      year: selectedYear,
+      month: selectedMonth,
+      barangay: selectedBarangay,
+      outcome: selectedOutcomeStatus,
+      facility: selectedFacility,
+      sex: selectedSex,
+      bacteriological: selectedBacteriologicalStatus,
+      validation: selectedValidationStatus,
+    });
+    setShowAdvancedFilters(true);
+  };
+
+  const updatePending = (key, value) => {
+    setPendingFilters(prev => ({ ...prev, [key]: value }));
+  };
+
+  const applyPendingFilters = () => {
+    setSelectedYear(pendingFilters.year || "");
+    setSelectedMonth(pendingFilters.month || "");
+    setSelectedBarangay(pendingFilters.barangay || "");
+    setSelectedOutcomeStatus(pendingFilters.outcome || "");
+    setSelectedFacility(pendingFilters.facility || "");
+    setSelectedSex(pendingFilters.sex || "");
+    setSelectedBacteriologicalStatus(pendingFilters.bacteriological || "");
+    setSelectedValidationStatus(pendingFilters.validation || "");
+    setCurrentPage(1);
+    setShowAdvancedFilters(false);
+  };
+
+  const clearPendingFilters = () => {
+    setPendingFilters({ year: "", month: "", barangay: "", outcome: "", facility: "", sex: "", bacteriological: "", validation: "" });
+  };
+
+  /* ─── Format chip display ─── */
+  const formatChipValue = (key, value) => {
+    if (!value) return "";
+    if (key === 'year') return value;
+    if (key === 'month') return value;
+    return value.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  };
+
+  /* ─── Fetch metrics ─── */
   useEffect(() => {
     const fetchMetrics = async () => {
       try {
@@ -119,6 +240,7 @@ export default function TBRecords() {
     fetchMetrics();
   }, []);
 
+  /* ─── Fetch barangays ─── */
   useEffect(() => {
     const fetchBarangays = async () => {
       try {
@@ -131,6 +253,7 @@ export default function TBRecords() {
     fetchBarangays();
   }, []);
 
+  /* ─── Fetch facilities ─── */
   useEffect(() => {
     const fetchFacilities = async () => {
       try {
@@ -144,6 +267,30 @@ export default function TBRecords() {
     fetchFacilities();
   }, []);
 
+  /* ─── Fetch filter options (sex, bacteriological status, outcome status) ─── */
+  useEffect(() => {
+    const fetchFilterOptions = async () => {
+      try {
+        const res = await API.get("/api/tb/filter-options");
+        setSexStatuses((res.data.sex || []).filter(Boolean).sort());
+        setBacteriologicalStatuses((res.data.bacteriological_status || []).filter(Boolean).sort());
+        setOutcomeStatuses((res.data.outcome_status || []).filter(Boolean).sort());
+      } catch {
+        try {
+          const res = await API.get("/api/tb/cases?limit=9999");
+          const allCases = res.data.cases || [];
+          setSexStatuses([...new Set(allCases.map(r => r.sex).filter(Boolean))].sort());
+          setBacteriologicalStatuses([...new Set(allCases.map(r => r.bacteriological_status).filter(Boolean))].sort());
+          setOutcomeStatuses([...new Set(allCases.map(r => r.outcome_status).filter(Boolean))].sort());
+        } catch (err2) {
+          console.error("Failed to fetch filter options:", err2);
+        }
+      }
+    };
+    fetchFilterOptions();
+  }, []);
+
+  /* ─── Fetch cases ─── */
   useEffect(() => {
     let cancelled = false;
     const fetchCases = async () => {
@@ -161,13 +308,14 @@ export default function TBRecords() {
         }
         if (selectedOutcomeStatus) params.append("outcome", selectedOutcomeStatus);
         if (selectedFacility) params.append("facility", selectedFacility);
+        if (selectedSex) params.append("sex", selectedSex);
+        if (selectedBacteriologicalStatus) params.append("bacteriological_status", selectedBacteriologicalStatus);
+        if (selectedValidationStatus) params.append("validation_status", selectedValidationStatus);
         const res = await API.get(`/api/tb/cases?${params.toString()}`);
         if (cancelled) return;
         const cases = res.data.cases || [];
         setRecords(cases);
         setPagination(res.data.pagination || { page: 1, limit: 10, total: 0, totalPages: 1 });
-        const statuses = [...new Set(cases.map(r => r.outcome_status).filter(Boolean))].sort();
-        setOutcomeStatuses(statuses);
       } catch (err) {
         if (!cancelled) console.error("Failed to fetch cases:", err);
       } finally {
@@ -176,21 +324,14 @@ export default function TBRecords() {
     };
     fetchCases();
     return () => { cancelled = true; };
-  }, [currentPage, debouncedSearch, selectedYear, selectedMonth, selectedBarangay, selectedOutcomeStatus, selectedFacility]);
-
-  const handleClearFilters = () => {
-    setSearchTerm(""); setSelectedYear(""); setSelectedMonth("");
-    setSelectedBarangay(""); setSelectedOutcomeStatus(""); setSelectedFacility("");
-    setCurrentPage(1);
-  };
+  }, [currentPage, debouncedSearch, selectedYear, selectedMonth, selectedBarangay, selectedOutcomeStatus, selectedFacility, selectedSex, selectedBacteriologicalStatus, selectedValidationStatus]);
 
   return (
     <div className="flex flex-col gap-5">
 
-
       {/* ── Metric Cards ── */}
       <div>
-        <div className="rounded-2xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.12), 0 2px 8px rgba(15, 45, 82, 0.08)' }}>
+        <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.12), 0 2px 8px rgba(15, 45, 82, 0.08)' }}>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
             {/* 1. Total TB Cases */}
             <div className="flex flex-col px-5 py-5 relative">
@@ -297,74 +438,80 @@ export default function TBRecords() {
         </div>
       </div>
 
-      {/* ── Table ── */}
+      {/* ── Table Card ── */}
       <div>
-        <div className="rounded-2xl overflow-hidden" style={{ background: '#ffffff' }}>
+        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
 
-          {/* Filter Toolbar */}
-          <div className="flex flex-wrap items-center gap-3 px-5 py-4" style={{ borderBottom: '1px solid #E2E8F0' }}>
-            <div className="relative flex-1 max-w-xs">
-              <i className="ri-search-line pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm" style={{ color: '#94A3B8' }} />
-              <input
-                type="text"
-                placeholder="Search by case ID, barangay, facility..."
-                value={searchTerm}
-                onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
-                className="w-full rounded-lg py-2 pl-9 pr-3 text-xs font-medium outline-none transition"
-                style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#0F2D52' }}
-              />
-              {searchTerm && searchTerm !== debouncedSearch && (
-                <i className="ri-loader-4-line absolute right-3 top-1/2 -translate-y-1/2 text-xs animate-spin" style={{ color: '#94A3B8' }} />
-              )}
+          {/* ── Header ── */}
+          <div className="flex flex-col gap-3 px-6 py-3.5 sm:flex-row sm:items-center sm:justify-between" style={{ borderBottom: '1px solid #DBEAFE' }}>
+            {/* Left: Title */}
+            <div>
+              <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>TB Records</h1>
+              <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Manage and monitor tuberculosis records efficiently.</p>
             </div>
-
-            <select value={selectedYear} onChange={(e) => { setSelectedYear(e.target.value); setCurrentPage(1); }}
-              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
-              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}>
-              <option value="">All Years</option>
-              <option value="2025">2025</option>
-              <option value="2024">2024</option>
-              <option value="2023">2023</option>
-            </select>
-
-            <select value={selectedMonth} onChange={(e) => { setSelectedMonth(e.target.value); setCurrentPage(1); }}
-              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
-              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}>
-              <option value="">All Months</option>
-              {["January","February","March","April","May","June","July","August","September","October","November","December"].map(m => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
-
-            <select value={selectedBarangay} onChange={(e) => { setSelectedBarangay(e.target.value); setCurrentPage(1); }}
-              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
-              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}>
-              <option value="">All Barangays</option>
-              {barangays.map((b) => (<option key={b} value={b}>{b}</option>))}
-            </select>
-
-            <select value={selectedOutcomeStatus} onChange={(e) => { setSelectedOutcomeStatus(e.target.value); setCurrentPage(1); }}
-              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
-              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}>
-              <option value="">All Status</option>
-              {ALL_OUTCOME_STATUSES.map((status) => (
-                <option key={status} value={status}>{status.charAt(0) + status.slice(1).toLowerCase()}</option>
-              ))}
-            </select>
-
-            <select value={selectedFacility} onChange={(e) => { setSelectedFacility(e.target.value); setCurrentPage(1); }}
-              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
-              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}>
-              <option value="">All Facilities</option>
-              {facilities.map((f) => (<option key={f} value={f}>{f}</option>))}
-            </select>
-
-            <button onClick={handleClearFilters} className="ml-auto text-xs font-bold transition hover:underline" style={{ color: '#0066FF' }}>
-              Clear Filters
-            </button>
+            {/* Right: Search + Advanced Filters */}
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <i className="ri-search-line pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm" style={{ color: '#94A3B8' }} />
+                <input
+                  type="text"
+                  placeholder="Search by case ID, barangay, facility..."
+                  value={searchTerm}
+                  onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                  className="w-64 rounded-lg py-1.5 pl-9 pr-3 text-xs font-medium outline-none transition"
+                  style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', color: '#0F2D52' }}
+                />
+                {searchTerm && searchTerm !== debouncedSearch && (
+                  <i className="ri-loader-4-line absolute right-3 top-1/2 -translate-y-1/2 text-xs animate-spin" style={{ color: '#94A3B8' }} />
+                )}
+              </div>
+              <button
+                onClick={openAdvancedFilters}
+                className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition whitespace-nowrap"
+                style={{ background: activeFilterCount > 0 ? '#0F2D52' : '#EFF6FF', color: activeFilterCount > 0 ? '#ffffff' : '#0F2D52', border: activeFilterCount > 0 ? '1px solid #0F2D52' : '1px solid #DBEAFE' }}
+              >
+                <i className="ri-filter-3-line text-sm" />
+                Filters
+                {activeFilterCount > 0 && (
+                  <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold" style={{ background: '#3B82F6', color: '#ffffff' }}>
+                    {activeFilterCount}
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
 
-          {/* Table (scrollable) */}
+          {/* ── Active Filter Chips ── */}
+          {activeFilterCount > 0 && (
+            <div className="flex flex-wrap items-center gap-2 px-6 py-3" style={{ borderBottom: '1px solid #E2E8F0' }}>
+              {activeFilters.map((f) => (
+                <span
+                  key={f.key}
+                  className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium"
+                  style={{ background: '#EFF6FF', color: '#334155' }}
+                >
+                  {f.label}: {formatChipValue(f.key, f.value)}
+                  <button
+                    onClick={() => removeFilter(f.key)}
+                    className="inline-flex h-4 w-4 items-center justify-center rounded-full transition"
+                    style={{ color: '#94A3B8' }}
+                    aria-label={`Remove ${f.label} filter`}
+                  >
+                    <i className="ri-close-line text-[10px]" />
+                  </button>
+                </span>
+              ))}
+              <button
+                onClick={clearAllFilters}
+                className="text-[11px] font-medium transition hover:underline ml-1"
+                style={{ color: '#94A3B8' }}
+              >
+                Clear all
+              </button>
+            </div>
+          )}
+
+          {/* ── Table (scrollable) ── */}
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
             <table className="w-full text-left text-sm" style={{ borderCollapse: 'collapse' }}>
               <thead>
@@ -429,7 +576,7 @@ export default function TBRecords() {
             </table>
           </div>
 
-          {/* Pagination */}
+          {/* ── Pagination ── */}
           <div className="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between" style={{ borderTop: '1px solid #E2E8F0' }}>
             <p className="text-xs font-semibold" style={{ color: '#94A3B8' }}>
               {loading ? (
@@ -485,6 +632,105 @@ export default function TBRecords() {
         </div>
       </div>
 
+      {/* ── Advanced Filters Sidebar ── */}
+      {showAdvancedFilters && (
+        <div className="fixed inset-0 z-[1200] flex justify-end bg-slate-950/20 backdrop-blur-sm">
+          <div className="absolute inset-0" onClick={() => setShowAdvancedFilters(false)} />
+          <div className="relative w-full max-w-sm h-full overflow-y-auto bg-white" style={{ boxShadow: '-8px 0 40px rgba(15, 45, 82, 0.12)', animation: 'slide-in-right 0.3s ease-out both' }}>
+            <div className="sticky top-0 z-10" style={{ background: '#0F2D52' }}>
+              <div className="flex items-center justify-between px-6 py-4">
+                <h2 className="text-sm font-extrabold tracking-tight" style={{ color: '#ffffff' }}>FILTERS</h2>
+                <button onClick={() => setShowAdvancedFilters(false)} aria-label="Close filters"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full transition hover:opacity-80" style={{ color: '#93C5FD' }}>
+                  <i className="ri-close-line text-base" />
+                </button>
+              </div>
+            </div>
+            <div className="px-6 py-5 space-y-5">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Date</h3>
+                <div className="space-y-3">
+                  <FilterSelect
+                    label="Year"
+                    value={pendingFilters.year || ""} onChange={(v) => updatePending('year', v)}
+                    options={ALL_YEARS} placeholder="All Years"
+                  />
+                  <FilterSelect
+                    label="Month"
+                    value={pendingFilters.month || ""} onChange={(v) => updatePending('month', v)}
+                    options={ALL_MONTHS} placeholder="All Months"
+                  />
+                </div>
+              </div>
+              <div style={{ borderTop: '1px solid #E2E8F0' }} />
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Location</h3>
+                <div className="space-y-3">
+                  <FilterSelect
+                    label="Barangay"
+                    value={pendingFilters.barangay || ""} onChange={(v) => updatePending('barangay', v)}
+                    options={barangays} placeholder="All Barangays"
+                  />
+                  <FilterSelect
+                    label="Facility"
+                    value={pendingFilters.facility || ""} onChange={(v) => updatePending('facility', v)}
+                    options={facilities} placeholder="All Facilities"
+                  />
+                </div>
+              </div>
+              <div style={{ borderTop: '1px solid #E2E8F0' }} />
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Patient</h3>
+                <div className="space-y-3">
+                  <FilterSelect
+                    label="Sex"
+                    value={pendingFilters.sex || ""} onChange={(v) => updatePending('sex', v)}
+                    options={sexStatuses} placeholder="All Sexes"
+                  />
+                </div>
+              </div>
+              <div style={{ borderTop: '1px solid #E2E8F0' }} />
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Case Status</h3>
+                <div className="space-y-3">
+                  <FilterSelect
+                    label="Outcome Status"
+                    value={pendingFilters.outcome || ""} onChange={(v) => updatePending('outcome', v)}
+                    options={ALL_OUTCOME_STATUSES} placeholder="All Outcomes"
+                  />
+                  <FilterSelect
+                    label="Bacteriological Status"
+                    value={pendingFilters.bacteriological || ""} onChange={(v) => updatePending('bacteriological', v)}
+                    options={bacteriologicalStatuses} placeholder="All Statuses"
+                  />
+                  <FilterSelect
+                    label="Validation Status"
+                    value={pendingFilters.validation || ""} onChange={(v) => updatePending('validation', v)}
+                    options={["Validated", "Pending"]} placeholder="All Statuses"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="sticky bottom-0 flex items-center gap-3 px-6 py-4" style={{ borderTop: '1px solid #E2E8F0', background: '#ffffff' }}>
+              <button
+                onClick={clearPendingFilters}
+                className="flex-1 rounded-lg px-4 py-2.5 text-xs font-semibold transition"
+                style={{ color: '#64748B', border: '1px solid #E2E8F0', background: '#ffffff' }}
+              >
+                Clear All
+              </button>
+              <button
+                onClick={applyPendingFilters}
+                className="flex-1 rounded-lg px-4 py-2.5 text-xs font-semibold transition"
+                style={{ background: '#0F2D52', color: '#ffffff' }}
+              >
+                Apply Filters
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Record detail modal ── */}
       {selectedRecord && (
         <div className="fixed inset-0 z-[1200] flex justify-end bg-slate-950/20 backdrop-blur-sm">
@@ -508,6 +754,8 @@ export default function TBRecords() {
               <div>
                 <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Case Summary</h3>
                 <div className="space-y-2.5">
+                  <DetailRow label="ITIS Case ID" value={selectedRecord.itis_case_id ?? null} />
+                  <DetailRow label="Source Type" value={selectedRecord.source_type ?? null} />
                   <DetailRow label="Validation Status" value={selectedRecord.batch_id ? "Validated" : "Pending"} />
                   <DetailRow label="Encoded By" value={selectedRecord.source_of_patient} />
                   <DetailRow label="Imported From" value={selectedRecord.screening_facility} />
@@ -522,6 +770,7 @@ export default function TBRecords() {
                   <DetailRow label="Sex" value={selectedRecord.sex} />
                   <DetailRow label="Barangay" value={selectedRecord.barangay_name} />
                   <DetailRow label="City" value="Pasig City" />
+                  <DetailRow label="Location Classification" value={selectedRecord.location_classification ?? null} />
                   <DetailRow label="Source" value={selectedRecord.source_of_patient || "Walk-in"} />
                 </div>
               </div>

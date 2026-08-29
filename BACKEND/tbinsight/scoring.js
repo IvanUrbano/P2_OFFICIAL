@@ -192,7 +192,7 @@ function generateAlerts({ forecasts, classifications, barangayList, prevRiskClas
  * Store pipeline results into L4 tables.
  *
  * @param {object} client - pg client (in transaction)
- * @param {string} period - Forecast period (YYYY-MM-DD)
+ * @param {string} period - Forecast period (YYYY-MM-DD) — start of forecast window
  * @param {Array} forecasts - ML forecast results
  * @param {Array} classifications - ML classify results
  * @param {Array} riskScores - [{barangay_name, risk_score, risk_class, incidence_per_100k, trend_direction}]
@@ -200,36 +200,84 @@ function generateAlerts({ forecasts, classifications, barangayList, prevRiskClas
  * @param {string} modelVersion - Version string
  */
 async function storeResults(client, period, forecasts, classifications, riskScores, alerts, modelVersion) {
-  // Clear previous results for this period (idempotent re-runs)
-  await client.query('DELETE FROM model_predictions WHERE period = $1', [period]);
+  // Collect all forecast periods so we can clear them idempotently
+  const allPeriods = new Set();
+  for (const fc of forecasts) {
+    for (const pt of (fc.predictions || [])) {
+      if (pt.month) allPeriods.add(pt.month);
+    }
+  }
+  // Fallback: ensure at least the primary period is included
+  if (allPeriods.size === 0) allPeriods.add(period);
+  const periodList = [...allPeriods].sort();
+
+  // Clear previous results for all forecast periods (idempotent re-runs)
+  await client.query(
+    'DELETE FROM model_predictions WHERE period = ANY($1::date[])',
+    [periodList]
+  );
   await client.query('DELETE FROM barangay_risk_scores WHERE period = $1', [period]);
   await client.query('DELETE FROM alerts WHERE period = $1', [period]);
 
-  // Store forecasts
+  // Batch-fetch actual counts per barangay per period from monthly_case_summary
+  let actualCountsByPeriod = {};
+  try {
+    const acResult = await client.query(
+      `SELECT barangay_name, month, case_count
+       FROM monthly_case_summary`
+    );
+    for (const row of acResult.rows) {
+      const key = `${row.barangay_name}||${row.month.toISOString().slice(0, 10)}`;
+      actualCountsByPeriod[key] = row.case_count;
+    }
+  } catch {
+    // table might be empty on first run
+  }
+
+  // Build all INSERT rows in memory, then batch insert
+  const insertRows = [];
   for (const fc of forecasts) {
     const predPoints = fc.predictions || [];
-    const latest = predPoints[predPoints.length - 1];
-    if (!latest) continue;
-
     const risk = riskScores.find(r => r.barangay_name === fc.barangay_name);
     const classResult = classifications.find(c => c.barangay_name === fc.barangay_name);
 
-    await client.query(
-      `INSERT INTO model_predictions
-        (barangay_name, period, forecasted_count, confidence_lower, confidence_upper,
-         risk_class, incidence_per_100k, model_version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [
+    for (const pt of predPoints) {
+      if (!pt.month) continue;
+      // Look up actual count for this specific barangay + period
+      const lookupKey = `${fc.barangay_name}||${pt.month}`;
+      const actualCount = actualCountsByPeriod[lookupKey] ?? null;
+      insertRows.push([
         fc.barangay_name,
-        period,
-        latest.yhat,
-        latest.yhat_lower,
-        latest.yhat_upper,
+        pt.month,
+        pt.yhat,
+        pt.yhat_lower,
+        pt.yhat_upper,
         classResult?.risk_class || null,
         risk?.incidence_per_100k || 0,
+        actualCount,
         modelVersion,
-      ]
-    );
+      ]);
+    }
+  }
+
+  // Batch INSERT using multi-row VALUES
+  if (insertRows.length > 0) {
+    const chunkSize = 100;
+    for (let i = 0; i < insertRows.length; i += chunkSize) {
+      const chunk = insertRows.slice(i, i + chunkSize);
+      const placeholders = chunk.map((_, idx) => {
+        const base = idx * 9;
+        return `($${base+1}, $${base+2}, $${base+3}, $${base+4}, $${base+5}, $${base+6}, $${base+7}, $${base+8}, $${base+9})`;
+      }).join(', ');
+      const flatParams = chunk.flat();
+      await client.query(
+        `INSERT INTO model_predictions
+          (barangay_name, period, forecasted_count, confidence_lower, confidence_upper,
+           risk_class, incidence_per_100k, actual_count, model_version)
+         VALUES ${placeholders}`,
+        flatParams
+      );
+    }
   }
 
   // Store risk scores

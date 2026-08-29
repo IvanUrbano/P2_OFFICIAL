@@ -147,7 +147,7 @@ export default function DataIntegration() {
         </p>
 
         <label
-          className="mt-4 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed px-6 py-10 text-center cursor-pointer transition hover:opacity-80"
+          className="mt-4 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-10 text-center cursor-pointer transition hover:opacity-80"
           style={{ borderColor: 'rgba(46,111,175,0.35)', background: 'rgba(46,111,175,0.04)' }}
         >
           <input type="file" accept=".csv,.xls,.xlsx" className="sr-only" onChange={handleFileChange} />
@@ -188,7 +188,7 @@ export default function DataIntegration() {
         </div>
 
         {showColumns && (
-          <div className="mt-4 rounded-2xl p-4" style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}` }}>
+          <div className="mt-4 rounded-xl p-4" style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}` }}>
             <p className="text-[11px] font-bold uppercase tracking-widest mb-3" style={{ color: t.textSecondary }}>
               Expected columns (column order is flexible — headers are matched by keyword)
             </p>
@@ -213,7 +213,7 @@ export default function DataIntegration() {
       </div>
 
       {uploadResult && (
-        <div className="rounded-2xl p-5" style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.25)' }}>
+        <div className="rounded-xl p-5" style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.25)' }}>
           <div className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
             <i className="ri-checkbox-circle-line text-lg" style={{ color: '#10B981' }} />
             Import complete
@@ -265,7 +265,7 @@ export default function DataIntegration() {
 
       {uploadError && (
         <div
-          className="rounded-2xl p-4 text-sm font-semibold"
+          className="rounded-xl p-4 text-sm font-semibold"
           style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', color: '#B91C1C' }}
         >
           <i className="ri-error-warning-line mr-2" />

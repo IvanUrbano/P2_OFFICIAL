@@ -5,7 +5,8 @@ import Logo from './Logo';
 const NAV_ITEMS = [
   { icon: 'ri-pie-chart-fill', label: 'Dashboard', path: '/dashboard' },
   { icon: 'ri-stethoscope-line', label: 'TB Records', path: '/records' },
-  { icon: 'ri-line-chart-line', label: 'Analytics & Forecasting', path: '/analytics' },
+  { icon: 'ri-line-chart-line', label: 'Analytics', path: '/analytics' },
+  { icon: 'ri-line-chart-line', label: 'Forecasting', path: '/forecasting' },
   { icon: 'ri-compass-3-line', label: 'GIS Hotspots', path: '/gis-map' },
   { icon: 'ri-file-text-line', label: 'Reports', path: '/reports' },
   { icon: 'ri-notification-3-line', label: 'Alerts & Notifications', path: '/alert' },
@@ -18,6 +19,7 @@ const NAV_ACCENT = {
   '/dashboard': '#3B82F6',
   '/records': '#10B981',
   '/analytics': '#8B5CF6',
+  '/forecasting': '#F97316',
   '/gis-map': '#F59E0B',
   '/reports': '#EC4899',
   '/alert': '#EF4444',

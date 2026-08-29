@@ -6,7 +6,7 @@ const inputStyle = (t) => ({
   width: '100%',
   background: t.inputBg,
   border: `1px solid ${t.inputBorder}`,
-  borderRadius: '10px',
+  borderRadius: '8px',
   padding: '10px 12px',
   fontSize: '13px',
   color: t.text,
@@ -16,14 +16,14 @@ const inputStyle = (t) => ({
 const cardStyle = (t) => ({
   background: t.card,
   border: `1px solid ${t.border}`,
-  borderRadius: '16px',
+  borderRadius: '12px',
   boxShadow: '0 4px 16px rgba(15,23,42,0.04)',
 });
 
 const primaryBtnStyle = {
   background: '#2E6FAF',
   color: '#fff',
-  borderRadius: '10px',
+  borderRadius: '8px',
   padding: '9px 18px',
   fontSize: '13px',
   fontWeight: 600,

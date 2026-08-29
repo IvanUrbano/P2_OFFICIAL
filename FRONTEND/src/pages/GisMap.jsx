@@ -262,8 +262,8 @@ export default function GisMap() {
             <div style="height: 1px; background: rgba(255,255,255,0.08); margin: 10px 0;"></div>
             <!-- Action Buttons -->
             <div style="display: flex; gap: 8px;">
-              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 700; border: none; border-radius: 10px; cursor: pointer; background: #0F2D52; color: #ffffff; transition: opacity 0.15s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">View Analytics</button>
-              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewDetails', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; cursor: pointer; background: transparent; color: #ffffff; transition: background 0.15s;" onmouseenter="this.style.background='rgba(255,255,255,0.08)'" onmouseleave="this.style.background='transparent'">Details</button>
+              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 700; border: none; border-radius: 8px; cursor: pointer; background: #0F2D52; color: #ffffff; transition: opacity 0.15s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">View Analytics</button>
+              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewDetails', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; cursor: pointer; background: transparent; color: #ffffff; transition: background 0.15s;" onmouseenter="this.style.background='rgba(255,255,255,0.08)'" onmouseleave="this.style.background='transparent'">Details</button>
             </div>
           </div>
         `;
@@ -382,7 +382,7 @@ export default function GisMap() {
 
       {/* ── Header + Map (connected) ── */}
       <div
-        className={isFullscreen ? '' : 'rounded-2xl overflow-hidden'}
+        className={isFullscreen ? '' : 'rounded-xl overflow-hidden'}
         style={isFullscreen
           ? { position: 'fixed', inset: 0, zIndex: 9999, background: '#0a1128' }
           : { background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.10), 0 1px 4px rgba(15, 45, 82, 0.06)' }
@@ -399,29 +399,37 @@ export default function GisMap() {
 
           {/* Right — Filters + Actions */}
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={filterBarangay}
-              onChange={(e) => setFilterBarangay(e.target.value)}
-              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
-              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
-            >
-              <option value="">All Barangays</option>
-              {barangayNames.map((b) => (
-                <option key={b} value={b}>{b}</option>
-              ))}
-            </select>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Barangay:</span>
+              <select
+                value={filterBarangay}
+                onChange={(e) => setFilterBarangay(e.target.value)}
+                className="rounded-lg pl-[74px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
+                style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52' }}
+              >
+                <option value="">All</option>
+                {barangayNames.map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+            </div>
 
-            <select
-              value={filterRiskLevel}
-              onChange={(e) => setFilterRiskLevel(e.target.value)}
-              className="rounded-lg px-3 py-2 text-xs font-medium outline-none transition"
-              style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#64748B' }}
-            >
-              <option value="">All Risk Levels</option>
-              <option value="High">High Risk</option>
-              <option value="Medium">Moderate</option>
-              <option value="Low">Low Risk</option>
-            </select>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Risk:</span>
+              <select
+                value={filterRiskLevel}
+                onChange={(e) => setFilterRiskLevel(e.target.value)}
+                className="rounded-lg pl-[38px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
+                style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52' }}
+              >
+                <option value="">All</option>
+                <option value="High">High Risk</option>
+                <option value="Medium">Moderate</option>
+                <option value="Low">Low Risk</option>
+              </select>
+              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+            </div>
 
             {hasActiveFilters && (
               <button
@@ -514,7 +522,7 @@ export default function GisMap() {
 
       {/* ── Metric Cards ── */}
       {!isFullscreen && stats && (
-        <div className="rounded-2xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.12), 0 2px 8px rgba(15, 45, 82, 0.08)' }}>
+        <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.12), 0 2px 8px rgba(15, 45, 82, 0.08)' }}>
           <div className="grid grid-cols-2 lg:grid-cols-4">
             {/* 1. Barangays */}
             <div className="flex flex-col px-5 py-5 relative">
@@ -564,160 +572,111 @@ export default function GisMap() {
 
       {/* ── Risk Distribution ── */}
       {!isFullscreen && data?.features && (() => {
-        const grouped = { High: [], Medium: [], Low: [] };
+        const groups = { High: [], Medium: [], Low: [], 'No Data': [] };
         data.features.forEach(f => {
           const p = f.properties;
-          if (!p) return;
-          const cls = p.risk_class;
-          if (grouped[cls]) {
-            grouped[cls].push(p);
-          }
+          if (!p || !p.name) return;
+          const cls = p.risk_class || 'No Data';
+          if (groups[cls]) groups[cls].push(p);
         });
-        // Sort each group by risk_score descending
-        Object.keys(grouped).forEach(k => {
-          grouped[k].sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0));
+        Object.keys(groups).forEach(k => {
+          groups[k].sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0));
         });
+
+        const allBarangays = [...groups.High, ...groups.Medium, ...groups.Low, ...groups['No Data']];
+        const maxScore = Math.max(...allBarangays.map(b => b.risk_score || 0), 1);
 
         const sections = [
-          {
-            key: 'High',
-            label: 'High Risk Barangays',
-            subtitle: 'Immediate Action Required',
-            icon: 'ri-temp-hot-line',
-            color: '#EF4444',
-            bgLight: '#FEF2F2',
-            border: '#FECACA',
-            barBg: '#EF4444',
-          },
-          {
-            key: 'Medium',
-            label: 'Moderate Risk Barangays',
-            subtitle: 'Close Monitoring Recommended',
-            icon: 'ri-timer-flash-line',
-            color: '#F97316',
-            bgLight: '#FFF7ED',
-            border: '#FED7AA',
-            barBg: '#F97316',
-          },
-          {
-            key: 'Low',
-            label: 'Low Risk Barangays',
-            subtitle: 'Routine Surveillance',
-            icon: 'ri-shield-check-line',
-            color: '#10B981',
-            bgLight: '#ECFDF5',
-            border: '#A7F3D0',
-            barBg: '#10B981',
-          },
-        ];
+          { key: 'High', label: 'High Risk', subtitle: 'Immediate Action Required', color: '#EF4444', items: groups.High },
+          { key: 'Medium', label: 'Moderate Risk', subtitle: 'Close Monitoring Recommended', color: '#F97316', items: groups.Medium },
+          { key: 'Low', label: 'Low Risk', subtitle: 'Routine Surveillance', color: '#FBBF24', items: groups.Low },
+        ].filter(s => s.items.length > 0);
+
+        let globalRank = 0;
 
         return (
-          <div className="flex flex-col gap-6">
-            {sections.map(sec => {
-              const items = grouped[sec.key];
-              if (!items || items.length === 0) return null;
-              return (
-                <div
-                  key={sec.key}
-                  className="rounded-2xl overflow-hidden"
-                  style={{
-                    background: 'rgba(255,255,255,0.8)',
-                    border: '1px solid #DBEAFE',
-                    boxShadow: '0 4px 20px rgba(37, 99, 235, 0.08)',
-                  }}
-                >
-                  {/* Section Header */}
-                  <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid #DBEAFE' }}>
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="w-9 h-9 rounded-xl flex items-center justify-center"
-                        style={{ background: sec.bgLight, border: `1px solid ${sec.border}` }}
-                      >
-                        <i className={`${sec.icon} text-base`} style={{ color: sec.color }} />
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>
-                          {sec.label} <span className="font-normal" style={{ color: '#94A3B8' }}>— {sec.subtitle}</span>
-                        </h3>
-                        <p className="text-[11px] mt-0.5 font-medium" style={{ color: '#94A3B8' }}>
-                          {items.length} barangay{items.length !== 1 ? 's' : ''} classified as {sec.key} risk
-                        </p>
-                      </div>
-                    </div>
-                    <div
-                      className="px-3 py-1.5 rounded-full text-xs font-bold"
-                      style={{ background: sec.bgLight, color: sec.color, border: `1px solid ${sec.border}` }}
-                    >
-                      {items.length}
-                    </div>
+          <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E8ECF1', boxShadow: '0 4px 24px rgba(15,45,82,0.06)' }}>
+            {/* Header */}
+            <div className="px-6 py-5" style={{ borderBottom: '1px solid #F1F5F9' }}>
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: '#EF4444' }}>Priority Watchlist</p>
+                  <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>Risk-Ranked Barangays</h3>
+                  <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Grouped by risk classification — {allBarangays.length} Pasig City barangays</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{allBarangays.length}</span>
+                  <span className="text-sm font-semibold" style={{ color: '#94A3B8' }}>/30</span>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide mt-0.5" style={{ color: '#94A3B8' }}>of Pasig Barangays</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4 mt-3">
+                {sections.map(s => (
+                  <div key={s.key} className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: s.color }} />
+                    <span className="text-[11px] font-semibold" style={{ color: '#64748B' }}>{s.label} ({s.items.length})</span>
                   </div>
+                ))}
+              </div>
+            </div>
 
-                  {/* Cards Grid */}
-                  <div className="p-5">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                      {items.map((b, i) => (
-                        <div
-                          key={b.name || i}
-                          className="rounded-2xl overflow-hidden"
-                          style={{
-                            background: '#ffffff',
-                            boxShadow: '0 4px 20px rgba(15, 45, 82, 0.10), 0 2px 6px rgba(15, 45, 82, 0.06)',
-                          }}
-                        >
-                          <div className="p-4 pb-3">
-                            {/* Name + Badge */}
-                            <div className="flex items-center justify-between mb-3">
-                              <h4 className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>{b.name}</h4>
-                              <span
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold"
-                                style={{ background: `${sec.color}12`, color: sec.color }}
-                              >
-                                <span className="w-1.5 h-1.5 rounded-full" style={{ background: sec.color }} />
-                                {sec.key}
-                              </span>
-                            </div>
+            {/* Table */}
+            <div className="overflow-x-auto">
+              {/* Column Headers */}
+              <div className="grid items-center px-6 py-2.5 text-[10px] font-bold uppercase tracking-wider" style={{ gridTemplateColumns: '32px 140px 900px 60px 80px auto', background:'#0F2D52', color: '#ffffff', borderBottom: '1px solid #0F2D52' }}>
+                <span>Rank</span>
+                <span>Barangay</span>
+                <span></span>
+                <span className="text-right">Score</span>
+                <span className="text-right">per 100k</span>
+                <span className="text-right">Actions</span>
+              </div>
 
-                            {/* Stats */}
-                            <div className="flex flex-col gap-2.5">
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs" style={{ color: '#94A3B8' }}>Cases:</span>
-                                <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>{formatNum(b.total_cases)}</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs" style={{ color: '#94A3B8' }}>Risk Score:</span>
-                                <span className="text-xs font-bold" style={{ color: sec.color }}>{formatNum(b.risk_score)}</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs" style={{ color: '#94A3B8' }}>Incidence / 100k:</span>
-                                <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>{formatNum(b.incidence_per_100k)}</span>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Actions */}
-                          <div className="flex items-center gap-2 px-4 pb-4">
-                            <button
-                              className="flex-1 py-2.5 text-xs font-bold rounded-xl transition hover:opacity-80"
-                              style={{ background: '#0F2D52', color: '#ffffff' }}
-                              onClick={() => window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: b.name }))}
-                            >
-                              View Analytics
-                            </button>
-                            <button
-                              className="px-4 py-2.5 text-xs font-bold rounded-xl transition hover:bg-gray-50"
-                              style={{ color: '#0F2D52', border: '1px solid #E2E8F0' }}
-                              onClick={() => setSelectedBarangayName(b.name)}
-                            >
-                              Details
-                            </button>
+              {/* Grouped Rows */}
+              {sections.map(sec => (
+                <div key={sec.key}>
+                  <div className="px-6 py-2.5 flex items-center gap-2" style={{ background: `${sec.color}08`, borderBottom: '1px solid #F1F5F9' }}>
+                    <span className="w-2 h-2 rounded-full" style={{ background: sec.color }} />
+                    <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: sec.color }}>{sec.label}</span>
+                    <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>— {sec.subtitle}</span>
+                    <span className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: `${sec.color}15`, color: sec.color }}>{sec.items.length}</span>
+                  </div>
+                  {sec.items.map((b) => {
+                    globalRank++;
+                    const pct = Math.max(((b.risk_score || 0) / maxScore) * 100, 4);
+                    return (
+                      <div key={b.name} className="grid items-center px-6 py-3.5 transition hover:bg-slate-50/60" style={{ gridTemplateColumns: '32px 140px 900px 60px 80px auto', borderBottom: '1px solid #F1F5F9' }}>
+                        <span className="text-sm font-bold" style={{ color: '#CBD5E1' }}>{String(globalRank).padStart(2, '0')}</span>
+                        <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                          <div className="w-1 h-8 rounded-full shrink-0" style={{ background: sec.color }} />
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold truncate" style={{ color: '#0F2D52' }}>{b.name}</p>
+                            <p className="text-[11px] truncate" style={{ color: '#94A3B8' }}>{formatNum(b.total_cases)} active cases</p>
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  </div>
+                        <div className="px-2">
+                          <div className="h-2 rounded-full w-full" style={{ background: '#F1F5F9' }}>
+                            <div className="h-2 rounded-full transition-all" style={{ width: `${pct}%`, background: sec.color }} />
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-sm font-extrabold" style={{ color: sec.color }}>{formatNum(b.risk_score)}</span>
+                          <p className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>score</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-sm font-bold" style={{ color: '#475569' }}>{formatNum(b.incidence_per_100k)}</span>
+                          <p className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>per 100k</p>
+                        </div>
+                        <div className="flex items-center gap-1.5 justify-end">
+                          <button className="px-3 py-1.5 text-[11px] font-bold rounded-lg transition hover:opacity-80" style={{ background: '#0F2D52', color: '#ffffff' }} onClick={() => window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: b.name }))}>Analytics</button>
+                          <button className="px-3 py-1.5 text-[11px] font-bold rounded-lg transition hover:bg-slate-100" style={{ color: '#0F2D52', border: '1px solid #E2E8F0' }} onClick={() => setSelectedBarangayName(b.name)}>Details</button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              ))}
+            </div>
           </div>
         );
       })()}

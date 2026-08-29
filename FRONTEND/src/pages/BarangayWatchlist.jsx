@@ -213,7 +213,7 @@ export default function BarangayWatchlist() {
       <div className="flex flex-wrap items-center gap-3">
         <div
           className="flex items-center gap-2 px-3 h-9 rounded-lg flex-1 min-w-[220px] max-w-sm"
-          style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}` }}
+          style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}
         >
           <i className="ri-search-line text-sm" style={{ color: t.textMuted }} />
           <input
@@ -233,11 +233,11 @@ export default function BarangayWatchlist() {
               <button
                 key={c}
                 onClick={() => setRiskFilter(c)}
-                className="px-3 h-9 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                className="px-3 h-9 rounded-lg text-xs font-bold transition-all cursor-pointer appearance-none"
                 style={{
-                  color: active ? (c === 'All' ? '#ffffff' : RISK_COLORS[c]) : color,
-                  background: active ? `${color}26` : 'transparent',
-                  border: `1px solid ${active ? `${color}66` : t.inputBorder}`,
+                  color: active ? '#ffffff' : '#64748B',
+                  background: active ? '#0F2D52' : '#ffffff',
+                  border: `1px solid ${active ? '#0F2D52' : '#E2E8F0'}`,
                 }}
               >
                 {c}

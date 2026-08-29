@@ -241,7 +241,7 @@ body {
 
   box-shadow: var(--glass-shadow);
 
-  border-radius: 24px;
+  border-radius: 12px;
 
   transition: all 0.3s ease;
 }

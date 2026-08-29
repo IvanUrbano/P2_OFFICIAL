@@ -120,14 +120,15 @@ async def run_forecast(req: ForecastRequest):
             # Compute backtest MAE (temporal, no shuffle)
             mae = backtest_mae(counts, horizon=6, seasonal_m=req.seasonal_m)
 
-            # Build prediction points
-            period = fc["period"]
-            points = [PredictionPoint(
-                month=period,
-                yhat=fc["forecasted_count"],
-                yhat_lower=fc["confidence_lower"],
-                yhat_upper=fc["confidence_upper"],
-            )]
+            # Build prediction points — one per forecast month
+            points = []
+            for pt in fc.get("predictions", []):
+                points.append(PredictionPoint(
+                    month=pt["month"],
+                    yhat=pt["yhat"],
+                    yhat_lower=pt["yhat_lower"],
+                    yhat_upper=pt["yhat_upper"],
+                ))
 
             forecast_outs.append(ForecastOut(
                 barangay_name=name,
@@ -235,7 +236,7 @@ async def run_pipeline(req: PipelineRequest):
         recent_trend = compute_trend(ts)
         seasonality_flag = 1 if detect_seasonality(ts) else 0
 
-        forecasted = forecast["forecasted_count"]
+        forecasted = forecast["predictions"][0]["yhat"] if forecast["predictions"] else 0
         pop_density = compute_incidence(forecasted, pop)
         hist_bias = req.historical_bias.get(barangay_name, 0.0)
         neighbor_risk = req.neighbor_risk.get(barangay_name, 0.0)
@@ -285,13 +286,14 @@ async def run_pipeline(req: PipelineRequest):
             # Rule-based fallback (no training data)
             risk_class = classify_risk_simple([feature], thresholds_dict)[0]
 
+        first_pred = forecast["predictions"][0] if forecast["predictions"] else {"yhat": 0, "yhat_lower": 0, "yhat_upper": 0}
         return PipelineResponse(
             forecast=PipelineForecast(
                 barangay_name=forecast["barangay_name"],
                 period=forecast["period"],
-                forecasted_count=forecast["forecasted_count"],
-                confidence_lower=forecast["confidence_lower"],
-                confidence_upper=forecast["confidence_upper"],
+                forecasted_count=first_pred["yhat"],
+                confidence_lower=first_pred["yhat_lower"],
+                confidence_upper=first_pred["yhat_upper"],
                 method=forecast["method"],
             ),
             classification=PipelineClassification(

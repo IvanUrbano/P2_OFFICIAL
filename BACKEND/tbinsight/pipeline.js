@@ -157,6 +157,42 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
       }
     }
 
+    // Fallback: if ML service is down or ARIMA failed, generate simple forecasts from historical data
+    if (forecastResults.length === 0 && forecastSeries.length > 0) {
+      console.log('🔄 ML service unavailable — generating fallback forecasts from historical data');
+      const barangayMap = {};
+      for (const row of forecastSeries) {
+        if (!barangayMap[row.barangay_name]) barangayMap[row.barangay_name] = [];
+        barangayMap[row.barangay_name].push(row);
+      }
+
+      for (const [bName, pts] of Object.entries(barangayMap)) {
+        const sorted = pts.sort((a, c) => a.month.localeCompare(c.month));
+        const lastCount = sorted.length > 0 ? sorted[sorted.length - 1].case_count : 0;
+        const predictions = [];
+        for (let i = 1; i <= forecastHorizon; i++) {
+          const nextDate = new Date(results.period);
+          nextDate.setUTCMonth(nextDate.getUTCMonth() + (i - 1));
+          // Normalize to 1st of month
+          const nextPeriod = nextDate.toISOString().slice(0, 8) + '01';
+          predictions.push({
+            month: nextPeriod,
+            yhat: lastCount,
+            yhat_lower: Math.max(0, Math.round(lastCount * 0.7)),
+            yhat_upper: Math.round(lastCount * 1.3),
+          });
+        }
+        forecastResults.push({
+          barangay_name: bName,
+          method: 'fallback-historical',
+          backtest_mae: 0,
+          predictions,
+        });
+      }
+      results.forecastsCount = forecastResults.length;
+      console.log(`🔄 Fallback: ${forecastResults.length} barangays forecasted from historical data`);
+    }
+
     // ── Step 5: Compute RF features per barangay ──
 
     // 5a. Compute neighbor risks
@@ -352,6 +388,10 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     results.alertsCount = alerts.length;
 
     // ── Step 9: Store everything in a transaction ──
+    // Clean up old rows with non-1st-of-month dates (legacy data)
+    await client.query(
+      `DELETE FROM model_predictions WHERE period::date != date_trunc('month', period)::date`
+    );
     await client.query('BEGIN');
 
     await storeResults(
@@ -469,7 +509,8 @@ function _detectSeasonality(series) {
 function _nextMonth(dateStr) {
   const d = new Date(dateStr + 'T00:00:00Z');
   d.setUTCMonth(d.getUTCMonth() + 1);
-  return d.toISOString().slice(0, 10);
+  // Always normalize to 1st of month
+  return d.toISOString().slice(0, 8) + '01';
 }
 
 /**

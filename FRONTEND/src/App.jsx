@@ -4,6 +4,7 @@ import DashboardPage from './pages/DashboardPage';
 import Layout from '../components/Layout';
 import TBRecords from './pages/TBRecords';
 import Analytics from './pages/Analytics';
+import Forecasting from './pages/Forecasting';
 import DataIntegration from './pages/DataIntegration';
 import GisMap from './pages/GisMap';
 import BarangayWatchlist from './pages/BarangayWatchlist';
@@ -25,6 +26,7 @@ function App() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/records" element={<TBRecords />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/forecasting" element={<Forecasting />} />
           <Route path="/data-integration" element={<DataIntegration />} />
           <Route path="/gis-map" element={<GisMap />} />
           <Route path="/barangays" element={<BarangayWatchlist />} />
