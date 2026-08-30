@@ -1,6 +1,11 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import html2canvas from 'html2canvas';
+import {
+  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+  CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
+} from 'recharts';
 import API from '../api/axios';
 
 const RISK_COLORS = {
@@ -10,8 +15,39 @@ const RISK_COLORS = {
   'No Data': '#64748B',
 };
 
+const OUTCOME_COLORS = {
+  'CURED': '#10B981',
+  'TREATMENT COMPLETED': '#22C55E',
+  'ON TREATMENT': '#3B82F6',
+  'LOST TO FOLLOW-UP': '#F97316',
+  'DIED': '#EF4444',
+  'EXCLUDED': '#64748B',
+  'FAILED': '#EF4444',
+  'DEFAULTED': '#F97316',
+  'NOT EVALUATED': '#94A3B8',
+};
+
+const PASIG_AREA_KM2 = 31.3;
+
 const PASIG_BOUNDS = L.latLngBounds([14.48, 121.02], [14.64, 121.13]);
 const MAX_BOUNDS = L.latLngBounds([14.3, 120.85], [14.85, 121.25]);
+
+function FilterSelect({ label, value, onChange, children, selectStyle }) {
+  return (
+    <div className="relative inline-flex items-center">
+      <span className="absolute left-3 text-[11px] pointer-events-none whitespace-nowrap" style={{ color: '#94A3B8' }}>{label}:</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-lg py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
+        style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52', paddingLeft: `${label.length * 6.5 + 26}px`, paddingRight: '28px', maxWidth: 160, ...selectStyle }}
+      >
+        {children}
+      </select>
+      <i className="ri-arrow-down-s-line absolute right-2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+    </div>
+  );
+}
 
 function riskStyle(feature) {
   const risk = feature.properties?.risk_class || 'No Data';
@@ -48,7 +84,7 @@ function DetailRow({ label, value }) {
 }
 
 function buildLabels(map, features, layerRef) {
-  layerRef.current.forEach(l => { try { map.removeLayer(l); } catch {} });
+  layerRef.current.forEach(l => { try { map.removeLayer(l); } catch { void 0; } });
   layerRef.current = [];
   const zoom = map.getZoom();
   const layer = L.layerGroup();
@@ -91,22 +127,6 @@ function buildLabels(map, features, layerRef) {
   layerRef.current = [layer];
 }
 
-function SectionHeader({ icon, iconColor, title, right }) {
-  return (
-    <div className="flex items-center justify-between mb-3">
-      <div className="flex items-center gap-2">
-        <div className="w-6 h-6 rounded flex items-center justify-center" style={{ background: `${iconColor}15` }}>
-          <i className={`${icon} text-xs`} style={{ color: iconColor }} />
-        </div>
-        <span className="text-xs font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>
-          {title}
-        </span>
-      </div>
-      {right}
-    </div>
-  );
-}
-
 export default function GisMap() {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
@@ -122,6 +142,10 @@ export default function GisMap() {
   const [selectedBarangayName, setSelectedBarangayName] = useState(null);
   const [barangayDetail, setBarangayDetail] = useState(null);
   const [barangayDetailLoading, setBarangayDetailLoading] = useState(false);
+  const [hoveredBarangay, setHoveredBarangay] = useState(null);
+  const [timelineMonth, setTimelineMonth] = useState(null);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -198,12 +222,20 @@ export default function GisMap() {
 
   const hasActiveFilters = filterBarangay || filterRiskLevel;
 
+  // Click-to-zoom on barangay polygon
+  const handlePolygonClick = useCallback((feature, layer) => {
+    if (layer.getBounds) {
+      mapInstance.current?.fitBounds(layer.getBounds(), { padding: [60, 60], maxZoom: 16, animate: true });
+    }
+    setSelectedBarangayName(feature.properties?.name);
+  }, []);
+
   useEffect(() => {
     if (!mapInstance.current || !data) return;
     const map = mapInstance.current;
     if (geojsonLayerRef.current) map.removeLayer(geojsonLayerRef.current);
     if (outlineLayerRef.current) map.removeLayer(outlineLayerRef.current);
-    labelsRef.current.forEach(l => { try { map.removeLayer(l); } catch {} });
+    labelsRef.current.forEach(l => { try { map.removeLayer(l); } catch { void 0; } });
     labelsRef.current = [];
     if (data.outline) {
       const outlineLayer = L.geoJSON(
@@ -220,59 +252,31 @@ export default function GisMap() {
         const p = feature.properties || {};
         const riskColor = RISK_COLORS[p.risk_class] || '#6B7280';
         const trendArrow = p.trend_direction === 'Increasing' ? '\u2191' : p.trend_direction === 'Decreasing' ? '\u2193' : '\u2192';
-        const popupContent = `
-          <div style="font-family: Inter, sans-serif; min-width: 230px;">
-            <!-- Header -->
-            <div style="margin-bottom: 10px;">
-              <div style="font-size: 15px; font-weight: 700; color: #ffffff;">${p.name || 'Unknown'}</div>
-              <span style="display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; background: ${riskColor}22; color: ${riskColor}; text-transform: uppercase; letter-spacing: 0.5px;">${p.risk_class || 'No Data'} Risk</span>
+        const tooltipHtml = `
+          <div style="font-family: Inter, sans-serif; min-width: 180px; padding: 2px;">
+            <div style="font-size: 13px; font-weight: 700; color: #0F2D52; margin-bottom: 4px;">${p.name || 'Unknown'}</div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+              <span style="font-size: 10px; color: #94A3B8;">Risk</span>
+              <span style="font-size: 10px; font-weight: 700; color: ${riskColor};">${p.risk_class || 'No Data'}</span>
             </div>
-            <!-- Divider -->
-            <div style="height: 1px; background: rgba(255,255,255,0.08); margin-bottom: 10px;"></div>
-            <!-- Stats -->
-            <div style="display: flex; flex-direction: column; gap: 6px;">
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 11px; color: #94a3b8;">Risk Score</span>
-                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${formatNum(p.risk_score)}</span>
-              </div>
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 11px; color: #94a3b8;">Incidence / 100k</span>
-                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${formatNum(p.incidence_per_100k)}</span>
-              </div>
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 11px; color: #94a3b8;">Trend</span>
-                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${trendArrow} ${p.trend_direction || 'Stable'}</span>
-              </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+              <span style="font-size: 10px; color: #94A3B8;">Score</span>
+              <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${formatNum(p.risk_score)}</span>
             </div>
-            <!-- Divider -->
-            <div style="height: 1px; background: rgba(255,255,255,0.08); margin: 10px 0;"></div>
-            <!-- Forecasted & Cases -->
-            <div style="display: flex; flex-direction: column; gap: 6px;">
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 11px; color: #94a3b8;">Forecasted Cases</span>
-                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${formatNum(p.forecasted_count)}</span>
-              </div>
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 11px; color: #94a3b8;">Total Cases</span>
-                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${formatNum(p.total_cases)}</span>
-              </div>
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 11px; color: #94a3b8;">Population</span>
-                <span style="font-size: 12px; font-weight: 600; color: #ffffff;">${formatNum(p.population)}</span>
-              </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+              <span style="font-size: 10px; color: #94A3B8;">Trend</span>
+              <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${trendArrow} ${p.trend_direction || 'Stable'}</span>
             </div>
-            <!-- Divider -->
-            <div style="height: 1px; background: rgba(255,255,255,0.08); margin: 10px 0;"></div>
-            <!-- Action Buttons -->
-            <div style="display: flex; gap: 8px;">
-              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 600; border: 1px solid #0F2D52; border-radius: 4px; cursor: pointer; background: #0F2D52; color: #ffffff;">View Analytics</button>
-              <button onclick="window.dispatchEvent(new CustomEvent('gis:viewDetails', { detail: '${p.name || ''}' }))" style="flex: 1; padding: 8px 0; font-size: 11px; font-weight: 500; border: 1px solid #D1D5DB; border-radius: 4px; cursor: pointer; background: #F3F4F6; color: #374151;">Details</button>
+            <div style="display: flex; justify-content: space-between;">
+              <span style="font-size: 10px; color: #94A3B8;">Cases</span>
+              <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${formatNum(p.total_cases)}</span>
             </div>
           </div>
         `;
-        layer.bindPopup(popupContent, { className: 'tb-popup', maxWidth: 300, closeButton: true });
-        layer.on('mouseover', highlightFeature);
-        layer.on('mouseout', (e) => resetHighlight(e, geojsonLayer));
+        layer.bindTooltip(tooltipHtml, { className: 'barangay-tooltip', sticky: true, direction: 'top', offset: [0, -10] });
+        layer.on('mouseover', (e) => { highlightFeature(e); setHoveredBarangay(p.name); });
+        layer.on('mouseout', (e) => { resetHighlight(e, geojsonLayer); setHoveredBarangay(null); });
+        layer.on('click', () => handlePolygonClick(feature, layer));
       },
     }).addTo(map);
     geojsonLayerRef.current = geojsonLayer;
@@ -281,7 +285,82 @@ export default function GisMap() {
     map.on('zoomend', onZoom);
     map.fitBounds(PASIG_BOUNDS, { padding: [40, 40] });
     return () => { map.off('zoomend', onZoom); };
-  }, [data, filteredFeatures]);
+  }, [data, filteredFeatures, handlePolygonClick]);
+
+  // Linked hover: highlight polygon on map when hovering table row
+  useEffect(() => {
+    if (!geojsonLayerRef.current) return;
+    geojsonLayerRef.current.eachLayer(layer => {
+      if (!layer.feature) return;
+      const name = layer.feature.properties?.name;
+      if (name === hoveredBarangay) {
+        layer.setStyle({ weight: 1.5, fillOpacity: 0.8, color: '#00bfff' });
+        layer.bringToFront();
+      } else {
+        geojsonLayerRef.current.resetStyle(layer);
+      }
+    });
+  }, [hoveredBarangay]);
+
+  // Timeline animation: update polygon colors per month
+  useEffect(() => {
+    if (!geojsonLayerRef.current || !data?.features) return;
+    if (!timelineMonth) {
+      // Reset to default risk colors when not animating
+      geojsonLayerRef.current.eachLayer(layer => {
+        if (!layer.feature) return;
+        geojsonLayerRef.current.resetStyle(layer);
+      });
+      return;
+    }
+
+    // Compute case count per barangay for the current timeline month
+    const monthCases = {};
+    Object.entries(monthlyByBarangay).forEach(([name, months]) => {
+      const entry = months.find(m => m.month === timelineMonth);
+      monthCases[name] = entry ? Number(entry.case_count || 0) : 0;
+    });
+
+    // Compute incidence per 100k
+    const withIncidence = data.features.map(f => {
+      const name = f.properties?.name;
+      const pop = f.properties?.population || 1;
+      const cases = monthCases[name] || 0;
+      const incidence = (cases / pop) * 100000;
+      return { name, incidence, cases };
+    });
+
+    // Sort by incidence to compute tertiles
+    const sorted = [...withIncidence].sort((a, b) => a.incidence - b.incidence);
+    const n = sorted.length;
+    const lowMax = Math.floor(n / 3);
+    const medMax = Math.floor((2 * n) / 3);
+    const riskMap = {};
+    sorted.forEach((item, i) => {
+      let riskClass;
+      if (i < lowMax) riskClass = 'Low';
+      else if (i < medMax) riskClass = 'Medium';
+      else riskClass = 'High';
+      riskMap[item.name] = { riskClass, cases: item.cases, incidence: item.incidence };
+    });
+
+    // Update polygon colors
+    geojsonLayerRef.current.eachLayer(layer => {
+      if (!layer.feature) return;
+      const name = layer.feature.properties?.name;
+      const risk = riskMap[name];
+      if (!risk) return;
+      const color = RISK_COLORS[risk.riskClass] || RISK_COLORS['No Data'];
+      layer.setStyle({
+        fillColor: color,
+        weight: 0.5,
+        opacity: 1,
+        color: 'rgba(0,0,0,0.35)',
+        fillOpacity: 0.6,
+      });
+    });
+  }, [timelineMonth, data, monthlyByBarangay]);
+
   const stats = React.useMemo(() => {
     if (!filteredFeatures.length) return { classes: { High: 0, Medium: 0, Low: 0, 'No Data': 0 }, totalCases: 0, totalPop: 0, total: 0 };
     const features = filteredFeatures.map(f => f.properties);
@@ -294,28 +373,6 @@ export default function GisMap() {
       totalPop += f.population || 0;
     }
     return { classes, totalCases, totalPop, total: features.length };
-  }, [filteredFeatures]);
-
-  const topRisk = React.useMemo(() => {
-    return filteredFeatures
-      .map(f => f.properties)
-      .sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0))
-      .slice(0, 8);
-  }, [filteredFeatures]);
-
-  const riskDist = React.useMemo(() => {
-    if (!filteredFeatures.length) return [];
-    const maxScore = Math.max(...filteredFeatures.map(f => f.properties?.risk_score || 0), 1);
-    return filteredFeatures
-      .map(f => f.properties)
-      .sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0))
-      .slice(0, 15)
-      .map(f => ({
-        name: f.name,
-        score: f.risk_score || 0,
-        pct: ((f.risk_score || 0) / maxScore) * 100,
-        risk_class: f.risk_class || 'No Data',
-      }));
   }, [filteredFeatures]);
 
   const barangayNames = React.useMemo(() => {
@@ -369,6 +426,49 @@ export default function GisMap() {
     return () => { cancelled = true; };
   }, [selectedBarangayName]);
 
+  // Build timeline data: { 'YYYY-MM': { barangayName: caseCount } }
+  const timelineMonths = React.useMemo(() => {
+    if (!data?.features) return [];
+    const allMonths = new Set();
+    Object.values(monthlyByBarangay).forEach(arr => arr.forEach(m => allMonths.add(m.month)));
+    return [...allMonths].sort();
+  }, [data, monthlyByBarangay]);
+
+  // Export map as PNG
+  const handleExportMap = useCallback(async () => {
+    if (!mapRef.current) return;
+    setExporting(true);
+    try {
+      const canvas = await html2canvas(mapRef.current, { useCORS: true, scale: 2, backgroundColor: '#0a1128' });
+      const link = document.createElement('a');
+      link.download = `gis-hotspot-map-${new Date().toISOString().slice(0, 10)}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    } catch (err) {
+      console.error('Export failed:', err);
+    } finally {
+      setExporting(false);
+    }
+  }, []);
+
+  // Timeline animation
+  const animateTimeline = useCallback(() => {
+    if (timelineMonths.length === 0) return;
+    setIsAnimating(true);
+    let idx = 0;
+    const interval = setInterval(() => {
+      if (idx >= timelineMonths.length) {
+        clearInterval(interval);
+        setIsAnimating(false);
+        setTimelineMonth(null);
+        return;
+      }
+      setTimelineMonth(timelineMonths[idx]);
+      idx++;
+    }, 800);
+    return () => clearInterval(interval);
+  }, [timelineMonths]);
+
   if (error) {
     return (
       <div className="flex items-center justify-center" style={{ background: '#F8FAFC', height: 'calc(100vh - 72px)', margin: '-24px', width: 'calc(100% + 48px)' }}>
@@ -402,38 +502,18 @@ export default function GisMap() {
           </div>
 
           {/* Right — Filters + Actions */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Barangay:</span>
-              <select
-                value={filterBarangay}
-                onChange={(e) => setFilterBarangay(e.target.value)}
-                className="rounded-lg pl-[74px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-                style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52' }}
-              >
-                <option value="">All</option>
-                {barangayNames.map((b) => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 180 }}>
+              <option value="">All</option>
+              {barangayNames.map((b) => <option key={b} value={b}>{b}</option>)}
+            </FilterSelect>
 
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Risk:</span>
-              <select
-                value={filterRiskLevel}
-                onChange={(e) => setFilterRiskLevel(e.target.value)}
-                className="rounded-lg pl-[38px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-                style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52' }}
-              >
-                <option value="">All</option>
-                <option value="High">High Risk</option>
-                <option value="Medium">Moderate</option>
-                <option value="Low">Low Risk</option>
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
+            <FilterSelect label="Risk" value={filterRiskLevel} onChange={setFilterRiskLevel}>
+              <option value="">All</option>
+              <option value="High">High Risk</option>
+              <option value="Medium">Moderate</option>
+              <option value="Low">Low Risk</option>
+            </FilterSelect>
 
             {hasActiveFilters && (
               <button
@@ -448,22 +528,25 @@ export default function GisMap() {
             )}
 
             <button
+              onClick={handleExportMap}
+              disabled={exporting}
               className="text-xs font-semibold px-3.5 py-2"
-              style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+              style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s', opacity: exporting ? 0.7 : 1 }}
               onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
               onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
             >
-              Export Map
+              {exporting ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Exporting...</> : 'Export Map'}
             </button>
 
             <button
               onClick={toggleFullscreen}
-              className="text-xs font-semibold px-3.5 py-2"
+              className="text-xs font-semibold w-8 h-8 flex items-center justify-center"
               style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
               onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
               onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
+              title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
             >
-              {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+              <i className={`${isFullscreen ? 'ri-fullscreen-exit-line' : 'ri-fullscreen-line'} text-sm`} />
             </button>
           </div>
         </div>
@@ -484,23 +567,53 @@ export default function GisMap() {
         {isFullscreen && (
           <button
             onClick={toggleFullscreen}
-            className="absolute top-4 left-4 z-[1001] text-xs font-medium px-3 py-2"
+            className="absolute top-4 left-4 z-[1001] w-8 h-8 flex items-center justify-center text-xs font-medium"
             style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
             onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
             onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
+            title="Exit Fullscreen"
           >
-            Exit Fullscreen
+            <i className="ri-fullscreen-exit-line text-sm" />
           </button>
         )}
 
         {/* ── Floating: Barangay Count Badge (top-right) ── */}
-        <div
-          className="absolute top-4 right-4 z-[1000] rounded-lg px-3 py-1.5"
-          style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)' }}
-        >
-          <span className="text-xs font-semibold" style={{ color: '#64748B' }}>
-            {stats?.total || 0} barangay{(stats?.total || 0) !== 1 ? 's' : ''} shown
-          </span>
+        <div className="absolute top-4 right-4 z-[1000] flex items-center gap-2">
+          {timelineMonth && (
+            <div
+              className="rounded-lg px-3 py-1.5"
+              style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)' }}
+            >
+              <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>
+                {new Date(timelineMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </span>
+            </div>
+          )}
+          {timelineMonths.length > 0 && !isFullscreen && (
+            <button
+              onClick={isAnimating ? () => { setIsAnimating(false); setTimelineMonth(null); } : animateTimeline}
+              className="rounded-lg px-3 py-1.5 text-xs font-semibold"
+              style={{
+                background: isAnimating ? '#EF4444' : 'rgba(255,255,255,0.92)',
+                color: isAnimating ? '#ffffff' : '#0F2D52',
+                border: `1px solid ${isAnimating ? '#EF4444' : '#DBEAFE'}`,
+                backdropFilter: 'blur(8px)',
+                boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)',
+                transition: 'background 0.15s, color 0.15s',
+              }}
+            >
+              <i className={`${isAnimating ? 'ri-stop-line' : 'ri-play-line'} mr-1`} />
+              {isAnimating ? 'Stop' : 'Animate'}
+            </button>
+          )}
+          <div
+            className="rounded-lg px-3 py-1.5"
+            style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)' }}
+          >
+            <span className="text-xs font-semibold" style={{ color: '#64748B' }}>
+              {stats?.total || 0} barangay{(stats?.total || 0) !== 1 ? 's' : ''} shown
+            </span>
+          </div>
         </div>
 
         {/* ── Floating: Legend (bottom-right) ── */}
@@ -513,9 +626,10 @@ export default function GisMap() {
           </p>
           <div className="flex flex-col gap-2">
             {[
-              { label: 'High Risk (>80 cases)', color: '#EF4444' },
-              { label: 'Moderate (50-80)', color: '#F97316' },
-              { label: 'Low Risk (<50)', color: '#10B981' },
+              { label: 'High Risk (score >66)', color: RISK_COLORS.High },
+              { label: 'Moderate (score 34-66)', color: RISK_COLORS.Medium },
+              { label: 'Low Risk (score ≤33)', color: RISK_COLORS.Low },
+              { label: 'No Data', color: RISK_COLORS['No Data'] },
             ].map(({ label, color }) => (
               <div key={label} className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
@@ -572,7 +686,7 @@ export default function GisMap() {
                 <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Density</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{(stats.totalCases / 31.3).toFixed(1)}</p>
+              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{(stats.totalCases / PASIG_AREA_KM2).toFixed(1)}</p>
             </div>
           </div>
         </div>
@@ -631,7 +745,7 @@ export default function GisMap() {
             {/* Table */}
             <div className="overflow-x-auto">
               {/* Column Headers */}
-              <div className="grid items-center px-6 py-2.5 text-[10px] font-bold uppercase tracking-wider" style={{ gridTemplateColumns: '32px 140px 900px 60px 80px auto', background:'#0F2D52', color: '#ffffff', borderBottom: '1px solid #0F2D52' }}>
+              <div className="grid items-center px-6 py-2.5 text-[10px] font-bold uppercase tracking-wider" style={{ gridTemplateColumns: '32px 150px 1fr 70px 110px 90px', background:'#0F2D52', color: '#ffffff', borderBottom: '1px solid #0F2D52' }}>
                 <span>Rank</span>
                 <span>Barangay</span>
                 <span></span>
@@ -649,11 +763,22 @@ export default function GisMap() {
                     <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>— {sec.subtitle}</span>
                     <span className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: `${sec.color}15`, color: sec.color }}>{sec.items.length}</span>
                   </div>
-                  {sec.items.map((b) => {
+                   {sec.items.map((b) => {
                     globalRank++;
                     const pct = Math.max(((b.risk_score || 0) / maxScore) * 100, 4);
+                    const isHovered = hoveredBarangay === b.name;
                     return (
-                      <div key={b.name} className="grid items-center px-6 py-3.5 transition hover:bg-slate-50/60" style={{ gridTemplateColumns: '32px 140px 900px 60px 80px auto', borderBottom: '1px solid #F1F5F9' }}>
+                      <div
+                        key={b.name}
+                        className="grid items-center px-6 py-3.5 transition"
+                        style={{
+                          gridTemplateColumns: '32px 150px 1fr 70px 110px 90px',
+                          borderBottom: '1px solid #F1F5F9',
+                          background: isHovered ? `${sec.color}10` : undefined,
+                        }}
+                        onMouseEnter={() => setHoveredBarangay(b.name)}
+                        onMouseLeave={() => setHoveredBarangay(null)}
+                      >
                         <span className="text-sm font-bold" style={{ color: '#CBD5E1' }}>{String(globalRank).padStart(2, '0')}</span>
                         <div className="flex items-center gap-2.5 min-w-0 pr-2">
                           <div className="w-1 h-8 rounded-full shrink-0" style={{ background: sec.color }} />
@@ -676,8 +801,7 @@ export default function GisMap() {
                           <p className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>per 100k</p>
                         </div>
                         <div className="flex items-center gap-1.5 justify-end">
-                          <button className="px-3 py-1.5 text-[11px] font-semibold" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onClick={() => window.dispatchEvent(new CustomEvent('gis:viewAnalytics', { detail: b.name }))} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>Analytics</button>
-                          <button className="px-3 py-1.5 text-[11px] font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onClick={() => setSelectedBarangayName(b.name)} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>Details</button>
+                          <button className="px-3 py-1.5 text-[11px] font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onClick={() => { setSelectedBarangayName(b.name); }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>Details</button>
                         </div>
                       </div>
                     );
@@ -689,7 +813,7 @@ export default function GisMap() {
         );
       })()}
 
-      {/* ── Barangay Detail Side Modal ── */}
+      {/* ── Barangay Side Modal (Profile + Analytics tabs) ── */}
       {selectedBarangayName && (
         <div className="fixed inset-0 z-[1200] flex justify-end bg-slate-950/20 backdrop-blur-sm">
           {/* Backdrop */}
@@ -706,7 +830,7 @@ export default function GisMap() {
             <div className="sticky top-0 z-10" style={{ background: '#0F2D52' }}>
               <div className="flex items-center justify-between px-6 py-4">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#93C5FD' }}>Barangay Profile</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#93C5FD' }}>Barangay Inspector</p>
                   <h2 className="text-base font-extrabold tracking-tight" style={{ color: '#ffffff' }}>{selectedBarangayName}</h2>
                 </div>
                 <button
@@ -734,218 +858,260 @@ export default function GisMap() {
 
             {/* Content */}
             {!barangayDetailLoading && (() => {
-              // Merge GeoJSON properties with API detail
               const geoProps = data?.features?.find(f => f.properties?.name === selectedBarangayName)?.properties || {};
               const b = barangayDetail?.barangay || {};
               const outcomes = barangayDetail?.outcomes || [];
               const demographics = barangayDetail?.demographics || [];
-
-              // Case-insensitive lookup for monthlyByBarangay
               const monthlyKey = Object.keys(monthlyByBarangay).find(
                 k => k.toLowerCase() === selectedBarangayName?.toLowerCase()
               );
               const monthly = barangayDetail?.monthly?.length > 0
                 ? barangayDetail.monthly
                 : (monthlyByBarangay[monthlyKey] || monthlyByBarangay[selectedBarangayName] || []);
-
               const merged = { ...geoProps, ...b };
-
               const riskColor = RISK_COLORS[merged.risk_class] || '#64748B';
               const totalOutcomeCases = outcomes.reduce((s, o) => s + (o.total || 0), 0);
-
-              // Outcome colors
-              const outcomeColors = {
-                'CURED': '#10B981',
-                'TREATMENT COMPLETED': '#22C55E',
-                'ON TREATMENT': '#3B82F6',
-                'LOST TO FOLLOW-UP': '#F97316',
-                'DIED': '#EF4444',
-                'EXCLUDED': '#64748B',
-                'FAILED': '#EF4444',
-                'DEFAULTED': '#F97316',
-              };
-
-              // Demographics summary
               const totalMale = demographics.filter(d => d.sex === 'Male').reduce((s, d) => s + (d.total || 0), 0);
               const totalFemale = demographics.filter(d => d.sex === 'Female').reduce((s, d) => s + (d.total || 0), 0);
 
+              // Analytics tab data
+              const activeCases = outcomes.find(o => o.outcome_status === 'ON TREATMENT')?.total || 0;
+              const successCases = outcomes.filter(o => ['CURED', 'TREATMENT COMPLETED'].includes(o.outcome_status)).reduce((s, o) => s + o.total, 0);
+              const evaluatedCases = outcomes.filter(o => o.outcome_status !== 'NOT EVALUATED').reduce((s, o) => s + o.total, 0);
+              const successRate = evaluatedCases > 0 ? ((successCases / evaluatedCases) * 100).toFixed(1) : '—';
+
+              const trendChartData = monthly.slice(-12).map(m => ({
+                label: m.month ? new Date(m.month).toLocaleString('default', { month: 'short', year: '2-digit' }) : '',
+                cases: Number(m.case_count ?? 0),
+              }));
+
+              const ageGroups = {};
+              demographics.forEach(d => {
+                if (!ageGroups[d.age_group]) ageGroups[d.age_group] = { Male: 0, Female: 0 };
+                ageGroups[d.age_group][d.sex] = (d.total || 0);
+              });
+              const demoChartData = Object.entries(ageGroups)
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([age, counts]) => ({ name: age, Male: counts.Male, Female: counts.Female }));
+
+              const outcomeChartData = outcomes.map(o => ({
+                name: o.outcome_status?.length > 16 ? o.outcome_status.slice(0, 14) + '...' : o.outcome_status,
+                value: o.total,
+                color: OUTCOME_COLORS[o.outcome_status] || '#64748B',
+              }));
+
+              // ── Unified View ──
               return (
-                <div className="px-6 py-5 space-y-6">
-                  {/* Hero: Barangay name + Risk badge */}
+                <div className="px-6 py-5 space-y-5">
+                  {/* Hero + Key Metrics */}
                   <div>
                     <div className="flex items-center gap-3 mb-3">
                       <div>
                         <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>{merged.name || selectedBarangayName}</h3>
-                        <span
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold"
-                          style={{ background: `${riskColor}15`, color: riskColor }}
-                        >
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: `${riskColor}15`, color: riskColor }}>
                           <span className="w-1.5 h-1.5 rounded-full" style={{ background: riskColor }} />
                           {merged.risk_class || 'No Data'} Risk
                         </span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 mt-3">
+                      <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                        <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Total Cases</span>
+                        <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.total_cases)}</p>
+                      </div>
+                      <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                        <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Incidence / 100k</span>
+                        <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.incidence_per_100k)}</p>
+                      </div>
+                      <div className="rounded-lg p-3" style={{ background: '#EFF6FF', border: '1px solid #DBEAFE' }}>
+                        <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Active Cases</span>
+                        <p className="text-xl font-extrabold mt-1" style={{ color: '#2563EB' }}>{activeCases}</p>
+                      </div>
+                      <div className="rounded-lg p-3" style={{ background: successRate !== '—' && Number(successRate) >= 85 ? '#F0FDF4' : '#FFF7ED', border: `1px solid ${successRate !== '—' && Number(successRate) >= 85 ? '#BBF7D0' : '#FED7AA'}` }}>
+                        <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Success Rate</span>
+                        <p className="text-xl font-extrabold mt-1" style={{ color: successRate !== '—' && Number(successRate) >= 85 ? '#16A34A' : '#EA580C' }}>{successRate}%</p>
                       </div>
                     </div>
                   </div>
 
                   <div style={{ borderTop: '1px solid #E2E8F0' }} />
 
-                  {/* Section: Barangay Profile */}
+                  {/* Cases Over Time + Month-over-Month */}
+                  {trendChartData.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Cases Over Time</h4>
+                      {(() => {
+                        const last = trendChartData[trendChartData.length - 1]?.cases || 0;
+                        const prev = trendChartData.length >= 2 ? (trendChartData[trendChartData.length - 2]?.cases || 0) : 0;
+                        const delta = prev > 0 ? (((last - prev) / prev) * 100).toFixed(1) : null;
+                        const isUp = last > prev;
+                        return delta !== null && prev > 0 ? (
+                          <div className="flex items-center gap-1.5 mb-3">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: isUp ? '#FEF2F2' : '#F0FDF4', color: isUp ? '#EF4444' : '#16A34A' }}>
+                              <i className={`ri-arrow-${isUp ? 'up' : 'down'}-line text-[10px]`} />
+                              {delta}%
+                            </span>
+                            <span className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>vs previous month</span>
+                          </div>
+                        ) : null;
+                      })()}
+                      <div style={{ height: 180 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={trendChartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+                            <defs>
+                              <linearGradient id="gisAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#3B82F6" stopOpacity={0.2} />
+                                <stop offset="100%" stopColor="#3B82F6" stopOpacity={0.02} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                            <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#94A3B8' }} />
+                            <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} allowDecimals={false} />
+                            <Tooltip
+                              contentStyle={{ background: '#0F2D52', border: 'none', borderRadius: 8, color: '#fff', fontSize: 11 }}
+                              labelStyle={{ color: '#94A3B8', fontSize: 10 }}
+                              itemStyle={{ color: '#fff' }}
+                            />
+                            <Area type="monotone" dataKey="cases" stroke="#3B82F6" strokeWidth={2} fill="url(#gisAreaGrad)" name="Cases" />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
+
+                  {/* Risk Factors Breakdown */}
+                  {merged.risk_score != null && (
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Risk Factors</h4>
+                      <div className="space-y-2.5">
+                        {(() => {
+                          const factors = [
+                            { label: 'Incidence', weight: 0.45, value: merged.norm_incidence || 0 },
+                            { label: 'Trend', weight: 0.25, value: merged.norm_trend || 0 },
+                            { label: 'Neighbor Risk', weight: 0.20, value: merged.norm_neighbor_risk || 0 },
+                            { label: 'Forecast Error', weight: 0.10, value: merged.norm_forecast_error || 0 },
+                          ];
+                          return factors.map(f => {
+                            const pct = Math.min(f.value * 100, 100);
+                            const level = pct > 66 ? 'High' : pct > 33 ? 'Medium' : 'Low';
+                            const levelColor = RISK_COLORS[level] || '#64748B';
+                            return (
+                              <div key={f.label}>
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-[11px] font-semibold" style={{ color: '#475569' }}>{f.label} <span style={{ color: '#94A3B8' }}>({Math.round(f.weight * 100)}%)</span></span>
+                                  <span className="text-[10px] font-bold" style={{ color: levelColor }}>{level}</span>
+                                </div>
+                                <div className="h-2 rounded-full overflow-hidden" style={{ background: '#E2E8F0' }}>
+                                  <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: levelColor }} />
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
+
+                  {/* Demographics Chart */}
+                  {demoChartData.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Demographics</h4>
+                      <div style={{ height: 200 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={demoChartData} layout="vertical" margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                            <XAxis type="number" tick={{ fontSize: 9, fill: '#94A3B8' }} allowDecimals={false} />
+                            <YAxis type="category" dataKey="name" tick={{ fontSize: 9, fill: '#64748B' }} width={40} />
+                            <Tooltip
+                              contentStyle={{ background: '#0F2D52', border: 'none', borderRadius: 8, color: '#fff', fontSize: 11 }}
+                              labelStyle={{ color: '#94A3B8', fontSize: 10 }}
+                            />
+                            <Bar dataKey="Male" fill="#3B82F6" radius={[0, 2, 2, 0]} barSize={10} />
+                            <Bar dataKey="Female" fill="#EC4899" radius={[0, 2, 2, 0]} barSize={10} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="flex items-center gap-4 mt-2 justify-center">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#3B82F6' }} />
+                          <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>Male</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#EC4899' }} />
+                          <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>Female</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
+
+                  {/* Outcomes Donut Chart */}
+                  {outcomeChartData.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Treatment Outcomes</h4>
+                      <div className="flex items-center gap-4">
+                        <div style={{ width: 140, height: 140 }}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie
+                                data={outcomeChartData}
+                                cx="50%"
+                                cy="50%"
+                                innerRadius={35}
+                                outerRadius={60}
+                                dataKey="value"
+                                stroke="none"
+                              >
+                                {outcomeChartData.map((entry, i) => (
+                                  <Cell key={i} fill={entry.color} />
+                                ))}
+                              </Pie>
+                              <Tooltip
+                                contentStyle={{ background: '#0F2D52', border: 'none', borderRadius: 8, color: '#fff', fontSize: 11 }}
+                                formatter={(value, name) => [`${value} cases`, name]}
+                              />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="flex-1 space-y-1.5">
+                          {outcomeChartData.map((o) => {
+                            const pct = totalOutcomeCases > 0 ? ((o.value / totalOutcomeCases) * 100).toFixed(1) : 0;
+                            return (
+                              <div key={o.name} className="flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: o.color }} />
+                                <span className="text-[10px] font-medium flex-1 truncate" style={{ color: '#475569' }}>{o.name}</span>
+                                <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{pct}%</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
+
+                  {/* Barangay Profile (compact) */}
                   <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
-                      Barangay Profile
-                    </h4>
+                    <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Barangay Profile</h4>
                     <div className="space-y-2.5">
                       <DetailRow label="Population" value={formatNum(merged.population)} />
-                      <DetailRow label="Total Cases" value={formatNum(merged.total_cases)} />
-                      <DetailRow label="Incidence / 100k" value={formatNum(merged.incidence_per_100k)} />
                       <DetailRow label="Risk Score" value={formatNum(merged.risk_score)} />
                       <DetailRow label="Trend Direction" value={merged.trend_direction || '—'} />
                       <DetailRow label="Forecasted Cases" value={formatNum(merged.forecasted_count)} />
                     </div>
                   </div>
 
-                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
-
-                  {/* Section: Demographics */}
-                  {demographics.length > 0 && (
-                    <>
-                      <div>
-                        <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
-                          Demographics
-                        </h4>
-                        {/* Gender split summary */}
-                        <div className="grid grid-cols-2 gap-3 mb-4">
-                          <div className="rounded-xl p-3" style={{ background: '#EFF6FF', border: '1px solid #DBEAFE' }}>
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Male</span>
-                            </div>
-                            <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{totalMale}</p>
-                          </div>
-                          <div className="rounded-xl p-3" style={{ background: '#FDF2F8', border: '1px solid #FBCFE8' }}>
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Female</span>
-                            </div>
-                            <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{totalFemale}</p>
-                          </div>
-                        </div>
-                        {/* Age group breakdown */}
-                        <div className="space-y-2">
-                          {(() => {
-                            const ageGroups = {};
-                            demographics.forEach(d => {
-                              if (!ageGroups[d.age_group]) ageGroups[d.age_group] = { Male: 0, Female: 0 };
-                              ageGroups[d.age_group][d.sex] = (d.total || 0);
-                            });
-                            const maxAgeCount = Math.max(...Object.values(ageGroups).map(v => v.Male + v.Female), 1);
-                            return Object.entries(ageGroups).sort((a, b) => a[0].localeCompare(b[0])).map(([age, counts]) => {
-                              const total = counts.Male + counts.Female;
-                              const pct = (total / maxAgeCount) * 100;
-                              return (
-                                <div key={age}>
-                                  <div className="flex items-center justify-between mb-1">
-                                    <span className="text-[11px] font-semibold" style={{ color: '#475569' }}>{age}</span>
-                                    <span className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>{total}</span>
-                                  </div>
-                                  <div className="flex h-2 rounded-full overflow-hidden" style={{ background: '#E2E8F0' }}>
-                                    <div style={{ width: `${(counts.Male / total) * pct}%`, background: '#3B82F6' }} />
-                                    <div style={{ width: `${(counts.Female / total) * pct}%`, background: '#EC4899' }} />
-                                  </div>
-                                </div>
-                              );
-                            });
-                          })()}
-                        </div>
-                      </div>
-                      <div style={{ borderTop: '1px solid #E2E8F0' }} />
-                    </>
-                  )}
-
-                  {/* Section: Treatment Outcomes */}
-                  {outcomes.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
-                        Treatment Outcomes
-                      </h4>
-                      {/* Outcome summary cards */}
-                      <div className="grid grid-cols-3 gap-2 mb-4">
-                        {outcomes.slice(0, 6).map((o) => {
-                          const color = outcomeColors[o.outcome_status] || '#64748B';
-                          const pct = totalOutcomeCases > 0 ? ((o.total / totalOutcomeCases) * 100).toFixed(1) : 0;
-                          return (
-                            <div key={o.outcome_status} className="rounded-lg p-2.5 text-center" style={{ background: `${color}08`, border: `1px solid ${color}20` }}>
-                              <p className="text-lg font-extrabold" style={{ color }}>{o.total}</p>
-                              <p className="text-[9px] font-bold uppercase leading-tight mt-0.5" style={{ color: '#64748B' }}>
-                                {o.outcome_status?.length > 18 ? o.outcome_status.slice(0, 16) + '...' : o.outcome_status}
-                              </p>
-                              <p className="text-[10px] font-semibold mt-0.5" style={{ color }}>{pct}%</p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      {/* Outcome bars */}
-                      <div className="space-y-2.5">
-                        {outcomes.map((o) => {
-                          const color = outcomeColors[o.outcome_status] || '#64748B';
-                          const pct = totalOutcomeCases > 0 ? (o.total / totalOutcomeCases) * 100 : 0;
-                          return (
-                            <div key={o.outcome_status}>
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-[11px] font-semibold" style={{ color: '#475569' }}>{o.outcome_status}</span>
-                                <span className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>{o.total} <span style={{ color: '#94A3B8' }}>({pct.toFixed(1)}%)</span></span>
-                              </div>
-                              <div className="h-2 rounded-full overflow-hidden" style={{ background: '#E2E8F0' }}>
-                                <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Section: Monthly Trend */}
-                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
-                  <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
-                      Monthly Case Trend
-                    </h4>
-                    {monthly.length > 0 ? (
-                      <div className="space-y-1.5">
-                        {(() => {
-                          const visibleMonths = monthly.slice(-12).map((m) => ({
-                            ...m,
-                            count: Number(m.case_count ?? 0),
-                            label: m.month ? new Date(m.month).toLocaleString('default', { month: 'short' }) : '',
-                          }));
-                          const maxCount = Math.max(...visibleMonths.map(m => m.count), 1);
-
-                          return visibleMonths.map((m, i) => {
-                            const pct = maxCount > 0 ? (m.count / maxCount) * 100 : 0;
-                            return (
-                              <div key={`${m.month || i}`} className="flex items-center gap-2">
-                                <span className="text-[10px] font-semibold w-6 shrink-0" style={{ color: '#64748B' }}>{m.label}</span>
-                                <div className="flex-1 h-3.5 rounded" style={{ background: '#E2E8F0' }}>
-                                  <div
-                                    className="h-full rounded transition-all"
-                                    style={{ width: `${Math.max(pct, m.count > 0 ? 8 : 0)}%`, background: '#3B82F6' }}
-                                  />
-                                </div>
-                                <span className="text-[10px] font-bold w-6 text-right shrink-0" style={{ color: '#0F2D52' }}>{m.count}</span>
-                              </div>
-                            );
-                          });
-                        })()}
-                      </div>
-                    ) : (
-                      <p className="text-[11px]" style={{ color: '#94A3B8' }}>No monthly data available.</p>
-                    )}
-                  </div>
-
                   {/* Empty state */}
                   {!barangayDetail && !barangayDetailLoading && (
                     <div className="text-center py-10">
                       <i className="ri-information-line text-3xl mb-2 block" style={{ color: '#CBD5E1' }} />
-                      <p className="text-xs" style={{ color: '#94A3B8' }}>No detail data available for this barangay.</p>
+                      <p className="text-xs" style={{ color: '#94A3B8' }}>No data available for this barangay.</p>
                     </div>
                   )}
                 </div>

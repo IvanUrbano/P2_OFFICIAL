@@ -328,9 +328,70 @@ router.get('/cases', async (req, res) => {
 /**
  * GET /api/tb/dashboard/summary
  * Key metrics: total cases, unique months, cases per barangay
+ * Query params: year, month, barangay, outcome, facility, sex, bacteriological_status, validation_status
  */
 router.get('/dashboard/summary', async (req, res) => {
   try {
+    const {
+      year = '',
+      month = '',
+      barangay = '',
+      outcome = '',
+      facility = '',
+      sex = '',
+      bacteriological_status = '',
+      validation_status = '',
+    } = req.query;
+
+    const conditions = [];
+    const params = [];
+    let paramIdx = 1;
+
+    if (year) {
+      conditions.push(`EXTRACT(YEAR FROM date_of_diagnosis) = $${paramIdx}`);
+      params.push(Number(year));
+      paramIdx++;
+    }
+    if (month) {
+      conditions.push(`EXTRACT(MONTH FROM date_of_diagnosis) = $${paramIdx}`);
+      params.push(Number(month));
+      paramIdx++;
+    }
+    if (barangay) {
+      conditions.push(`barangay_name = $${paramIdx}`);
+      params.push(barangay);
+      paramIdx++;
+    }
+    if (outcome) {
+      conditions.push(`outcome_status = $${paramIdx}`);
+      params.push(outcome);
+      paramIdx++;
+    }
+    if (facility) {
+      conditions.push(`screening_facility = $${paramIdx}`);
+      params.push(facility.trim());
+      paramIdx++;
+    }
+    if (sex) {
+      conditions.push(`sex ILIKE $${paramIdx}`);
+      params.push(sex);
+      paramIdx++;
+    }
+    if (bacteriological_status) {
+      conditions.push(`bacteriological_status ILIKE $${paramIdx}`);
+      params.push(bacteriological_status);
+      paramIdx++;
+    }
+    if (validation_status) {
+      if (validation_status === 'Validated') {
+        conditions.push(`batch_id IS NOT NULL`);
+      } else if (validation_status === 'Pending') {
+        conditions.push(`batch_id IS NULL`);
+      }
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
     const result = await pool.query(`
       SELECT
         COUNT(*)::INTEGER as total_cases,
@@ -349,7 +410,8 @@ router.get('/dashboard/summary', async (req, res) => {
         SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
                   AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as prev_month_cases
       FROM tb_cases
-    `);
+      ${whereClause}
+    `, params);
     console.log('[metrics]', result.rows[0]);
     res.json({ summary: result.rows[0] });
   } catch (err) {
@@ -544,7 +606,11 @@ router.get('/barangays/watchlist', async (req, res) => {
         COALESCE(r.risk_score, 0)::NUMERIC AS risk_score,
         COALESCE(r.risk_class, 'No Data') AS risk_class,
         COALESCE(r.incidence_per_100k, 0)::NUMERIC AS incidence_per_100k,
-        COALESCE(r.trend_direction, 'Stable') AS trend_direction
+        COALESCE(r.trend_direction, 'Stable') AS trend_direction,
+        COALESCE(r.norm_incidence, 0)::NUMERIC AS norm_incidence,
+        COALESCE(r.norm_trend, 0)::NUMERIC AS norm_trend,
+        COALESCE(r.norm_neighbor_risk, 0)::NUMERIC AS norm_neighbor_risk,
+        COALESCE(r.norm_forecast_error, 0)::NUMERIC AS norm_forecast_error
       FROM barangays_geom g
       LEFT JOIN LATERAL (
         SELECT SUM(case_count)::INTEGER AS current_cases
@@ -596,6 +662,14 @@ router.get('/barangays/watchlist', async (req, res) => {
  */
 router.get('/dashboard/demographics', async (req, res) => {
   try {
+    const { year, month, barangay } = req.query;
+    const conditions = [];
+    const params = [];
+    let idx = 1;
+    if (year) { conditions.push(`EXTRACT(YEAR FROM date_of_diagnosis) = $${idx}`); params.push(Number(year)); idx++; }
+    if (month) { conditions.push(`EXTRACT(MONTH FROM date_of_diagnosis) = $${idx}`); params.push(Number(month)); idx++; }
+    if (barangay) { conditions.push(`barangay_name = $${idx}`); params.push(barangay); idx++; }
+    const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
     const result = await pool.query(`
       SELECT barangay_name, sex,
              CASE
@@ -610,9 +684,10 @@ router.get('/dashboard/demographics', async (req, res) => {
              END AS age_group,
              COUNT(*)::INTEGER AS total
       FROM tb_cases
+      ${where}
       GROUP BY barangay_name, sex, age_group
       ORDER BY barangay_name, sex, age_group
-    `);
+    `, params);
     res.json({ demographics: result.rows });
   } catch (err) {
     console.error('Demographics error:', err.message);
@@ -626,12 +701,21 @@ router.get('/dashboard/demographics', async (req, res) => {
  */
 router.get('/dashboard/outcomes', async (req, res) => {
   try {
+    const { year, month, barangay } = req.query;
+    const conditions = [];
+    const params = [];
+    let idx = 1;
+    if (year) { conditions.push(`EXTRACT(YEAR FROM date_of_diagnosis) = $${idx}`); params.push(Number(year)); idx++; }
+    if (month) { conditions.push(`EXTRACT(MONTH FROM date_of_diagnosis) = $${idx}`); params.push(Number(month)); idx++; }
+    if (barangay) { conditions.push(`barangay_name = $${idx}`); params.push(barangay); idx++; }
+    const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
     const result = await pool.query(`
       SELECT barangay_name, COALESCE(outcome_status, 'Unknown') AS outcome_status, COUNT(*)::INTEGER as total
       FROM tb_cases
+      ${where}
       GROUP BY barangay_name, outcome_status
       ORDER BY barangay_name, total DESC
-    `);
+    `, params);
     res.json({ outcomes: result.rows });
   } catch (err) {
     console.error('Outcomes error:', err.message);
@@ -706,7 +790,11 @@ router.get('/gis/geojson', async (req, res) => {
         COALESCE(risk_score, 0) as risk_score,
         COALESCE(risk_class, 'No Data') as risk_class,
         COALESCE(incidence_per_100k, 0) as incidence_per_100k,
-        COALESCE(trend_direction, 'Stable') as trend_direction
+        COALESCE(trend_direction, 'Stable') as trend_direction,
+        COALESCE(norm_incidence, 0) as norm_incidence,
+        COALESCE(norm_trend, 0) as norm_trend,
+        COALESCE(norm_neighbor_risk, 0) as norm_neighbor_risk,
+        COALESCE(norm_forecast_error, 0) as norm_forecast_error
       FROM barangay_risk_scores
       WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)
     `);
@@ -757,6 +845,10 @@ router.get('/gis/geojson', async (req, res) => {
           confidence_lower: forecast.confidence_lower || 0,
           confidence_upper: forecast.confidence_upper || 0,
           total_cases: cases.total_cases || 0,
+          norm_incidence: risk.norm_incidence || 0,
+          norm_trend: risk.norm_trend || 0,
+          norm_neighbor_risk: risk.norm_neighbor_risk || 0,
+          norm_forecast_error: risk.norm_forecast_error || 0,
         },
         geometry: row.geometry,
       };
@@ -900,6 +992,10 @@ router.get('/gis/choropleth', async (req, res) => {
         COALESCE(brs.risk_class, 'No Data') as risk_class,
         COALESCE(brs.incidence_per_100k, 0) as incidence_per_100k,
         COALESCE(brs.trend_direction, 'Stable') as trend_direction,
+        COALESCE(brs.norm_incidence, 0) as norm_incidence,
+        COALESCE(brs.norm_trend, 0) as norm_trend,
+        COALESCE(brs.norm_neighbor_risk, 0) as norm_neighbor_risk,
+        COALESCE(brs.norm_forecast_error, 0) as norm_forecast_error,
         brs.period
       FROM barangays b
       LEFT JOIN barangay_risk_scores brs ON b.name = brs.barangay_name
@@ -909,6 +1005,52 @@ router.get('/gis/choropleth', async (req, res) => {
         )
       ORDER BY b.name
     `);
+
+    // Fallback: if risk data is missing or uniform, compute from case counts using tertiles
+    const riskClasses = new Set(result.rows.map(r => r.risk_class).filter(Boolean));
+    const hasMeaningfulRiskData = riskClasses.size > 1;
+
+    if (!hasMeaningfulRiskData) {
+      // Fetch total case counts per barangay
+      const caseResult = await pool.query(`
+        SELECT barangay_name, SUM(case_count)::INTEGER as total_cases
+        FROM monthly_case_summary
+        GROUP BY barangay_name
+      `);
+      const caseMap = {};
+      for (const row of caseResult.rows) caseMap[row.barangay_name] = row.total_cases;
+
+      // Compute incidence per 100k for each barangay
+      const withIncidence = result.rows.map(r => {
+        const pop = r.population || 1;
+        const cases = caseMap[r.name] || 0;
+        const incidence = (cases / pop) * 100000;
+        return { ...r, _incidence: incidence };
+      });
+
+      // Sort by incidence to compute tertiles
+      withIncidence.sort((a, b) => a._incidence - b._incidence);
+      const n = withIncidence.length;
+      const lowMax = Math.floor(n / 3);
+      const medMax = Math.floor((2 * n) / 3);
+
+      withIncidence.forEach((r, i) => {
+        if (i < lowMax) {
+          r.risk_class = 'Low';
+        } else if (i < medMax) {
+          r.risk_class = 'Medium';
+        } else {
+          r.risk_class = 'High';
+        }
+        r.risk_score = Math.round((r._incidence / (withIncidence[n - 1]._incidence || 1)) * 100 * 100) / 100;
+        r.incidence_per_100k = Math.round(r._incidence * 100) / 100;
+        delete r._incidence;
+      });
+
+      result.rows.length = 0;
+      result.rows.push(...withIncidence);
+    }
+
     res.json({ choropleth: result.rows });
   } catch (err) {
     console.error('Choropleth error:', err.message);

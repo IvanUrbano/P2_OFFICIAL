@@ -360,7 +360,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
       const neighbor = neighborRisks[name] || 0;
       const histErr = historicalBias[name] || 0;
 
-      const { riskScore, riskClass } = computeRiskScore({
+      const { riskScore, riskClass, normIncidence, normTrend, normError, neighborRisk } = computeRiskScore({
         incidence: inc,
         trend,
         neighborRisk: neighbor,
@@ -380,6 +380,10 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
         risk_class: finalClass,
         incidence_per_100k: Math.round(inc * 100) / 100,
         trend_direction: trendByBarangay[name]?.direction || 'Stable',
+        norm_incidence: normIncidence,
+        norm_trend: normTrend,
+        norm_neighbor_risk: neighborRisk,
+        norm_forecast_error: normError,
       };
     });
     results.riskScoresCount = riskScores.length;

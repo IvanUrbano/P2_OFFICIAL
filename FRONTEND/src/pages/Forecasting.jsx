@@ -4,7 +4,6 @@ import {
   Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 import API from '../api/axios';
-import { useTheme } from '../theme';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
@@ -98,15 +97,36 @@ function SectionSkeleton({ rows = 3 }) {
   );
 }
 
+/* ─── Filter Select (same as DashboardPage) ─── */
+function FilterSelect({ label, value, onChange, children, selectStyle }) {
+  return (
+    <div className="relative">
+      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none whitespace-nowrap" style={{ color: '#94A3B8' }}>{label}:</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-lg pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
+        style={{
+          background: '#ffffff',
+          color: '#0F2D52',
+          border: '1px solid #E2E8F0',
+          paddingLeft: `${(label.length * 6.5) + 24}px`,
+          ...selectStyle,
+        }}
+      >
+        {children}
+      </select>
+      <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+    </div>
+  );
+}
+
 /* ─── Main Forecasting Component ─────────────────────────────────────── */
 
 export default function Forecasting() {
-  const { t } = useTheme();
-
   /* ── Data state ── */
   const [monthlyData, setMonthlyData] = useState([]);
   const [forecastsData, setForecastsData] = useState([]);
-  const [avpData, setAvpData] = useState([]);
   const [backtestData, setBacktestData] = useState([]);
   const [barangays, setBarangays] = useState([]);
   const [casesData, setCasesData] = useState([]);
@@ -117,6 +137,8 @@ export default function Forecasting() {
   const [endYear, setEndYear] = useState('2025');
   const [selectedBarangay, setSelectedBarangay] = useState('');
   const [forecastMonths, setForecastMonths] = useState(3);
+  const [compareBarangay, setCompareBarangay] = useState('');
+  const [showCompare, setShowCompare] = useState(false);
 
   /* ── Applied state (updated only on Run Forecast) ── */
   const [appliedStartYear, setAppliedStartYear] = useState(null);
@@ -126,7 +148,6 @@ export default function Forecasting() {
 
   /* ── UI state ── */
   const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [filterLoading, setFilterLoading] = useState(false);
   const [forecastRan, setForecastRan] = useState(false);
 
@@ -139,11 +160,10 @@ export default function Forecasting() {
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [monthlyRes, forecastsRes, avpRes, barangaysRes, casesRes, pipelineRes, backtestRes] =
+      const [monthlyRes, forecastsRes, barangaysRes, casesRes, pipelineRes, backtestRes] =
         await Promise.all([
           API.get('/api/tb/dashboard/monthly'),
           API.get('/api/tb/forecasts'),
-          API.get('/api/tb/forecast/actual-vs-predicted'),
           API.get('/api/tb/barangays'),
           API.get('/api/tb/cases?limit=9999'),
           API.get('/api/tb/pipeline/status').catch(() => ({ data: { latest_run: null } })),
@@ -151,7 +171,6 @@ export default function Forecasting() {
         ]);
       setMonthlyData(monthlyRes.data.monthly || []);
       setForecastsData(forecastsRes.data.forecasts || []);
-      setAvpData(avpRes.data.data || []);
       setBarangays(barangaysRes.data.barangays || []);
       setCasesData(casesRes.data.cases || []);
       setPipelineStatus(pipelineRes.data.latest_run || null);
@@ -159,8 +178,6 @@ export default function Forecasting() {
     } catch (err) {
       console.error('Forecasting fetch error:', err);
       setError('Failed to load analytics data. Make sure the backend is running.');
-    } finally {
-      setLoading(false);
     }
   }, []);
 
@@ -317,6 +334,25 @@ export default function Forecasting() {
     return result;
   }, [forecastsData, appliedBarangay, appliedMonths]);
 
+  /** Comparison forecasts for barangay comparison */
+  const comparisonForecasts = useMemo(() => {
+    if (!showCompare || !compareBarangay || !appliedMonths) return [];
+    let data = forecastsData.filter((r) => (r.barangay_name || '') === compareBarangay);
+    const byPeriod = {};
+    data.forEach((r) => {
+      const period = r.period || r.forecast_period || '';
+      if (!period) return;
+      if (!byPeriod[period]) {
+        byPeriod[period] = { period, forecasted: 0, count: 0 };
+      }
+      byPeriod[period].forecasted += Number(r.forecasted_count || 0);
+      byPeriod[period].count += 1;
+    });
+    let result = Object.values(byPeriod).sort((a, b) => a.period.localeCompare(b.period));
+    if (appliedMonths) result = result.slice(0, appliedMonths);
+    return result;
+  }, [showCompare, compareBarangay, forecastsData, appliedMonths]);
+
   /** Build AVP chart data from backtest results (historical actual vs predicted) */
   const avpChartData = useMemo(() => {
     if (!backtestData.length) return [];
@@ -421,18 +457,23 @@ export default function Forecasting() {
       const d = new Date(r.period);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       const isFuture = !latestActual || key > latestActual;
+      const comparePoint = comparisonForecasts.find((c) => {
+        const cd = new Date(c.period);
+        return `${cd.getFullYear()}-${String(cd.getMonth() + 1).padStart(2, '0')}` === key;
+      });
       points.push({
         label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
         month: r.period,
         Actual: null,
         Forecast: isFuture ? Math.round(r.forecasted) : null,
+        CompareForecast: isFuture && comparePoint ? Math.round(comparePoint.forecasted) : null,
         ci_upper: isFuture ? r.ci_upper : null,
         ci_lower: isFuture ? r.ci_lower : null,
         isForecast: isFuture,
       });
     });
     return points;
-  }, [aggregatedMonthly, filteredForecasts, casesData]);
+  }, [aggregatedMonthly, filteredForecasts, comparisonForecasts, casesData]);
 
   /** First forecast label for the ReferenceLine */
   const forecastStartLabel = useMemo(() => {
@@ -686,78 +727,46 @@ export default function Forecasting() {
               onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
               onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
             >
-              {filterLoading ? 'Running...' : 'Run Forecast'}
+              {filterLoading ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Running...</> : 'Run Forecast'}
             </button>
           </div>
         </div>
 
         {/* Filter bar */}
         <div className="flex items-center justify-between px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Start Year */}
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Start:</span>
-              <select
-                value={startYear}
-                onChange={(e) => setStartYear(e.target.value)}
-                className="rounded-lg pl-[42px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-                style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}
-              >
-                {ALL_YEARS.map((yr) => (
-                  <option key={yr} value={yr}>{yr}</option>
-                ))}
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
-
-            {/* End Year */}
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>End:</span>
-              <select
-                value={endYear}
-                onChange={(e) => setEndYear(e.target.value)}
-                className="rounded-lg pl-[38px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-                style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}
-              >
-                {ALL_YEARS.map((yr) => (
-                  <option key={yr} value={yr}>{yr}</option>
-                ))}
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
-
-            {/* Barangay */}
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Barangay:</span>
-              <select
-                value={selectedBarangay}
-                onChange={(e) => setSelectedBarangay(e.target.value)}
-                className="rounded-lg pl-[74px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-                style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}
-              >
-                <option value="">All Pasig Barangays</option>
-                {barangayNames.map((name) => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
-
-            {/* Forecast Horizon */}
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Horizon:</span>
-              <select
-                value={forecastMonths}
-                onChange={(e) => setForecastMonths(Number(e.target.value))}
-                className="rounded-lg pl-[62px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-                style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}
-              >
-                {HORIZON_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <FilterSelect label="Start" value={startYear} onChange={setStartYear}>
+              {ALL_YEARS.map((yr) => <option key={yr} value={yr}>{yr}</option>)}
+            </FilterSelect>
+            <FilterSelect label="End" value={endYear} onChange={setEndYear}>
+              {ALL_YEARS.map((yr) => <option key={yr} value={yr}>{yr}</option>)}
+            </FilterSelect>
+            <FilterSelect label="Barangay" value={selectedBarangay} onChange={setSelectedBarangay} selectStyle={{ maxWidth: 180 }}>
+              <option value="">All Pasig Barangays</option>
+              {barangayNames.map((name) => <option key={name} value={name}>{name}</option>)}
+            </FilterSelect>
+            <FilterSelect label="Horizon" value={forecastMonths} onChange={(v) => setForecastMonths(Number(v))}>
+              {HORIZON_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+            </FilterSelect>
+            <button
+              type="button"
+              onClick={() => setShowCompare(!showCompare)}
+              className="px-3 py-[7px] text-[11px] font-semibold rounded-lg transition"
+              style={{
+                background: showCompare ? '#0F2D52' : '#ffffff',
+                color: showCompare ? '#ffffff' : '#0F2D52',
+                border: `1px solid ${showCompare ? '#0F2D52' : '#E2E8F0'}`,
+              }}
+            >
+              <i className="ri-git-branch-line mr-1" />
+              Compare
+            </button>
+            {showCompare && (
+              <FilterSelect label="Compare" value={compareBarangay} onChange={setCompareBarangay} selectStyle={{ maxWidth: 180, borderColor: '#F59E0B' }}>
+                <option value="">Select Barangay</option>
+                {barangayNames.filter((n) => n !== selectedBarangay).map((name) => <option key={name} value={name}>{name}</option>)}
+              </FilterSelect>
+            )}
           </div>
         </div>
       </div>
@@ -887,6 +896,12 @@ export default function Forecasting() {
                   <span className="w-4 h-0 border-t-2" style={{ borderColor: '#0D9488', borderStyle: 'dashed' }} />
                   <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Forecast</span>
                 </div>
+                {showCompare && compareBarangay && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-4 h-0 border-t-2" style={{ borderColor: '#F59E0B', borderStyle: 'dashed' }} />
+                    <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>{compareBarangay}</span>
+                  </div>
+                )}
               </div>
             </div>
             <div className="px-5 pb-5">
@@ -904,13 +919,13 @@ export default function Forecasting() {
                       <XAxis
                         dataKey="label"
                         tick={{ fontSize: 10, fill: '#94A3B8' }}
-                        axisLine={{ stroke: t.chartGrid }}
+                        axisLine={{ stroke: '#E2E8F0' }}
                         tickLine={false}
                         tickMargin={8}
                       />
                       <YAxis
                         tick={{ fontSize: 10, fill: '#94A3B8' }}
-                        axisLine={{ stroke: t.chartGrid }}
+                        axisLine={{ stroke: '#E2E8F0' }}
                         tickLine={false}
                         tickMargin={4}
                         width={40}
@@ -959,6 +974,21 @@ export default function Forecasting() {
                         connectNulls={false}
                         name="Forecasted Cases"
                       />
+
+                      {/* Comparison Forecast line */}
+                      {showCompare && compareBarangay && (
+                        <Line
+                          type="monotone"
+                          dataKey="CompareForecast"
+                          stroke="#F59E0B"
+                          strokeWidth={2.5}
+                          strokeDasharray="8 4"
+                          dot={{ fill: '#F59E0B', r: 4, strokeWidth: 2, stroke: '#ffffff' }}
+                          activeDot={{ r: 6, strokeWidth: 2, stroke: '#ffffff' }}
+                          connectNulls={false}
+                          name={`${compareBarangay} Forecast`}
+                        />
+                      )}
 
                       {/* Forecast start marker */}
                       {forecastStartLabel && (
@@ -1018,13 +1048,13 @@ export default function Forecasting() {
                       <XAxis
                         dataKey="label"
                         tick={{ fontSize: 10, fill: '#94A3B8' }}
-                        axisLine={{ stroke: t.chartGrid }}
+                        axisLine={{ stroke: '#E2E8F0' }}
                         tickLine={false}
                         tickMargin={8}
                       />
                       <YAxis
                         tick={{ fontSize: 10, fill: '#94A3B8' }}
-                        axisLine={{ stroke: t.chartGrid }}
+                        axisLine={{ stroke: '#E2E8F0' }}
                         tickLine={false}
                         tickMargin={4}
                         width={40}
@@ -1194,6 +1224,29 @@ export default function Forecasting() {
                 </div>
               </div>
               <div className="px-5 pb-5">
+                {/* Key metrics grid */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                  <div className="p-3 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Forecast Period</span>
+                    <p className="text-sm font-bold mt-1" style={{ color: '#0F2D52' }}>{appliedMonths} months</p>
+                  </div>
+                  <div className="p-3 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Growth Rate</span>
+                    <p className="text-sm font-bold mt-1" style={{ color: forecastSummaryParts.growthRateValue.startsWith('+') ? '#EF4444' : '#10B981' }}>{forecastSummaryParts.growthRateValue}</p>
+                  </div>
+                  <div className="p-3 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Peak Period</span>
+                    <p className="text-sm font-bold mt-1" style={{ color: '#0F2D52' }}>{forecastSummaryParts.peakLabel}</p>
+                  </div>
+                  <div className="p-3 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Risk Level</span>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <span className="w-2 h-2 rounded-full" style={{ background: forecastSummaryParts.riskColor }} />
+                      <p className="text-sm font-bold" style={{ color: forecastSummaryParts.riskColor }}>{forecastSummaryParts.riskLevel}</p>
+                    </div>
+                  </div>
+                </div>
+                {/* Summary text */}
                 <p className="text-sm leading-relaxed" style={{ color: '#475569' }}>
                   {forecastSummaryParts.paragraphs.map((part, i) => {
                     if (part === forecastSummaryParts.trendWord || part === forecastSummaryParts.peakLabel || part === forecastSummaryParts.growthRateValue) {
@@ -1205,18 +1258,6 @@ export default function Forecasting() {
                     return <span key={i}>{part}</span>;
                   })}
                 </p>
-                <div className="flex flex-wrap items-center gap-3 mt-4">
-                  <span
-                    className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold"
-                    style={{ background: '#F1F5F9', color: '#64748B' }}
-                  >
-                    {appliedMonths}-month forecast
-                  </span>
-                  <span className="flex items-center gap-1.5 text-[11px] font-bold" style={{ color: forecastSummaryParts.riskColor }}>
-                    <span className="w-2 h-2 rounded-full" style={{ background: forecastSummaryParts.riskColor }} />
-                    {forecastSummaryParts.riskLevel} risk
-                  </span>
-                </div>
               </div>
             </div>
           )}

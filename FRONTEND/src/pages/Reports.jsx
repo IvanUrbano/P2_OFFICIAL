@@ -72,7 +72,7 @@ function SkeletonBlock({ className }) {
 /* ─── Report Builders ────────────────────────────────────────────────── */
 
 function buildMonthlyReport(data, barangay, month, year) {
-  const { summary, outcomes, demographics, trend, barangayDistribution, recommendations, cases } = data;
+  const { summary, outcomes, demographics, trend, barangayDistribution, recommendations, cases, caseProfile, forecast } = data;
   const monthName = MONTH_OPTIONS.find(m => m.value === month)?.label || month;
   const isCitywide = !barangay;
 
@@ -101,6 +101,9 @@ function buildMonthlyReport(data, barangay, month, year) {
         rows: demographics?.sex?.map(s => [s.sex, s.count, `${s.percentage}%`]) || [],
       },
     ],
+    ageGroups: demographics?.ageGroups,
+    caseProfile,
+    forecast,
     trend,
     barangayDistribution: isCitywide ? barangayDistribution : null,
     recommendations,
@@ -109,7 +112,7 @@ function buildMonthlyReport(data, barangay, month, year) {
 }
 
 function buildQuarterlyReport(data, quarter, year) {
-  const { summary, outcomes, trend, barangayDistribution, recommendations, cases } = data;
+  const { summary, outcomes, demographics, trend, barangayDistribution, recommendations, cases, caseProfile, forecast } = data;
   const qLabel = QUARTER_OPTIONS.find(q => q.value === quarter)?.label || `Q${quarter}`;
 
   return {
@@ -130,6 +133,16 @@ function buildQuarterlyReport(data, quarter, year) {
         rows: outcomes?.map(o => [o.outcome_status, o.count, `${o.percentage}%`]) || [],
       },
     ],
+    sideBySide: [
+      {
+        title: 'SEX DISTRIBUTION',
+        headers: ['Sex', 'Count', 'Percentage'],
+        rows: demographics?.sex?.map(s => [s.sex, s.count, `${s.percentage}%`]) || [],
+      },
+    ],
+    ageGroups: demographics?.ageGroups,
+    caseProfile,
+    forecast,
     trend,
     barangayDistribution,
     recommendations,
@@ -138,7 +151,7 @@ function buildQuarterlyReport(data, quarter, year) {
 }
 
 function buildAnnualReport(data, year) {
-  const { summary, outcomes, demographics, trend, barangayDistribution, recommendations, cases } = data;
+  const { summary, outcomes, demographics, trend, barangayDistribution, recommendations, cases, caseProfile, forecast } = data;
 
   return {
     type: 'annual',
@@ -166,6 +179,9 @@ function buildAnnualReport(data, year) {
         rows: demographics?.sex?.map(s => [s.sex, s.count, `${s.percentage}%`]) || [],
       },
     ],
+    ageGroups: demographics?.ageGroups,
+    caseProfile,
+    forecast,
     trend,
     barangayDistribution,
     recommendations,
@@ -173,38 +189,15 @@ function buildAnnualReport(data, year) {
   };
 }
 
-function buildBarangayReport(data, barangay, year, month) {
-  const { summary, outcomes, demographics, trend, recommendations, cases } = data;
-  const monthName = month ? MONTH_OPTIONS.find(m => m.value === month)?.label : null;
-
-  if (!barangay) {
-    return {
-      type: 'barangay',
-      title: `Barangay Summary Report \u2014 All Barangays \u00B7 ${year}`,
-      headerTitle: 'BARANGAY TB STATUS REPORT',
-      subtitle: `All 30 Barangays  \u00B7  ${year}`,
-      footerPeriod: `Barangay Summary \u00B7 ${year}`,
-      kpis: [
-        { label: 'Total Cases', value: summary.totalCases },
-        { label: 'Active Cases', value: summary.activeCases },
-        { label: 'Success Rate', value: summary.successRate != null ? `${summary.successRate}%` : 'N/A' },
-      ],
-      tables: [],
-      barangayDistribution: data.barangayDistribution,
-      recommendations,
-      cases,
-    };
-  }
-
-  const subtitle = monthName ? `Barangay ${barangay}  \u00B7  ${monthName} ${year}` : `Barangay ${barangay}  \u00B7  ${year}`;
-  const footerPeriod = monthName ? `Barangay ${barangay} \u00B7 ${monthName} ${year}` : `Barangay ${barangay} \u00B7 ${year}`;
+function buildBarangayReport(data, barangay, year) {
+  const { summary, outcomes, demographics, trend, recommendations, cases, caseProfile, forecast } = data;
 
   return {
     type: 'barangay',
-    title: `Barangay TB Report \u2014 ${barangay} \u00B7 ${monthName ? monthName + ' ' + year : year}`,
+    title: `Barangay TB Report \u2014 ${barangay} \u00B7 ${year}`,
     headerTitle: 'BARANGAY TB DETAIL REPORT',
-    subtitle,
-    footerPeriod,
+    subtitle: `Barangay ${barangay}  \u00B7  ${year}`,
+    footerPeriod: `Barangay ${barangay} \u00B7 ${year}`,
     kpis: [
       { label: 'Total Cases', value: summary.totalCases },
       { label: 'Active Cases', value: summary.activeCases },
@@ -224,6 +217,9 @@ function buildBarangayReport(data, barangay, year, month) {
         rows: demographics?.sex?.map(s => [s.sex, s.count, `${s.percentage}%`]) || [],
       },
     ],
+    ageGroups: demographics?.ageGroups,
+    caseProfile,
+    forecast,
     trend,
     recommendations,
     cases,
@@ -236,62 +232,59 @@ function ReportRenderer({ report }) {
   if (!report) return null;
 
   return (
-    <div id="printable-report" style={{ background: '#ffffff', borderRadius: 12, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
+    <div id="printable-report" style={{ background: '#fff', border: '1px solid #d1d5db', fontFamily: 'serif' }}>
 
-      {/* Official Report Header */}
-      <div className="px-8 py-8 text-center" style={{ borderBottom: '1px solid #E2E8F0' }}>
-        <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: '#94A3B8' }}>Republic of the Philippines</p>
-        <p className="text-sm font-extrabold mt-1" style={{ color: '#1E293B' }}>Pasig City Health Office</p>
-        <h2 className="text-xl font-extrabold mt-4 tracking-tight" style={{ color: '#0F2D52' }}>{report.headerTitle}</h2>
-        <p className="text-sm font-semibold mt-1" style={{ color: '#64748B' }}>{report.subtitle}</p>
+      {/* Header */}
+      <div className="px-10 py-6" style={{ borderBottom: '2px solid #0F2D52' }}>
+        <div className="text-center">
+          <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: '#374151' }}>Republic of the Philippines</p>
+          <p className="text-sm font-bold mt-0.5" style={{ color: '#111827' }}>Pasig City Health Office</p>
+          <div className="mt-3 mb-1" style={{ borderBottom: '1px solid #9CA3AF' }} />
+          <h2 className="text-base font-bold uppercase tracking-wide mt-2" style={{ color: '#0F2D52' }}>{report.headerTitle}</h2>
+          <p className="text-xs mt-1" style={{ color: '#4B5563' }}>{report.subtitle}</p>
+          <div className="mt-1" style={{ borderBottom: '1px solid #9CA3AF' }} />
+        </div>
       </div>
 
-      {/* Generated / Printed info */}
-      <div className="flex items-center justify-between px-8 py-3">
-        <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>Generated by TBInsight</span>
-        <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>printed {new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })}</span>
-      </div>
+      <div className="px-10 py-6 space-y-6">
 
-      <div className="px-8 pb-8 space-y-8">
-
-        {/* KPI Cards */}
+        {/* Summary */}
         {report.kpis?.length > 0 && (
-          <div className="grid grid-cols-4 gap-0" style={{ border: '1px solid #E2E8F0', borderRadius: 8, overflow: 'hidden' }}>
-            {report.kpis.map((kpi, i) => (
-              <div key={i} className="px-6 py-5" style={{ borderRight: i < report.kpis.length - 1 ? '1px solid #E2E8F0' : 'none' }}>
-                <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>{kpi.label}</p>
-                <p className="text-2xl font-extrabold mt-2" style={{ color: '#1E293B' }}>{kpi.value}</p>
-              </div>
-            ))}
+          <div>
+            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Summary</p>
+            <div className="grid gap-x-12" style={{ gridTemplateColumns: `repeat(${report.kpis.length}, 1fr)` }}>
+              {report.kpis.map((kpi, i) => (
+                <div key={i}>
+                  <p className="text-[10px] uppercase" style={{ color: '#6B7280' }}>{kpi.label}</p>
+                  <p className="text-lg font-bold" style={{ color: '#111827' }}>{kpi.value}</p>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
         {/* Tables */}
         {report.tables?.map((table, ti) => (
           <div key={ti}>
-            <p className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>{table.title}</p>
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, overflow: 'hidden' }}>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
-                    {table.headers.map((h, hi) => (
-                      <th key={hi} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>{h}</th>
+            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>{table.title}</p>
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid #111827' }}>
+                  {table.headers.map((h, hi) => (
+                    <th key={hi} className="py-2 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {table.rows.map((row, ri) => (
+                  <tr key={ri} style={{ borderBottom: ri < table.rows.length - 1 ? '1px solid #E5E7EB' : 'none' }}>
+                    {row.map((cell, ci) => (
+                      <td key={ci} className="py-2" style={{ color: '#1F2937' }}>{cell}</td>
                     ))}
                   </tr>
-                </thead>
-                <tbody>
-                  {table.rows.map((row, ri) => (
-                    <tr key={ri} style={{ borderBottom: ri < table.rows.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
-                      {row.map((cell, ci) => (
-                        <td key={ci} className="px-5 py-3 text-[13px]" style={{ color: '#1E293B' }}>
-                          {cell}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         ))}
 
@@ -300,111 +293,184 @@ function ReportRenderer({ report }) {
           <div className="grid grid-cols-2 gap-8">
             {report.sideBySide.map((section, si) => (
               <div key={si}>
-                <p className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>{section.title}</p>
-                <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, overflow: 'hidden' }}>
-                  {section.type === 'keyValue' ? (
-                    <table className="w-full text-sm">
-                      <tbody>
-                        {section.rows.map(([key, value], ri) => (
-                          <tr key={ri} style={{ borderBottom: ri < section.rows.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
-                            <td className="px-5 py-3 text-[13px]" style={{ color: '#64748B' }}>{key}</td>
-                            <td className="px-5 py-3 text-[13px] text-right font-bold" style={{ color: '#1E293B' }}>{value}</td>
-                          </tr>
+                <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>{section.title}</p>
+                <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid #111827' }}>
+                      {section.headers.map((h, hi) => (
+                        <th key={hi} className="py-2 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {section.rows.map((row, ri) => (
+                      <tr key={ri} style={{ borderBottom: ri < section.rows.length - 1 ? '1px solid #E5E7EB' : 'none' }}>
+                        {row.map((cell, ci) => (
+                          <td key={ci} className="py-2" style={{ color: '#1F2937' }}>{cell}</td>
                         ))}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
-                          {section.headers.map((h, hi) => (
-                            <th key={hi} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {section.rows.map((row, ri) => (
-                          <tr key={ri} style={{ borderBottom: ri < section.rows.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
-                            {row.map((cell, ci) => (
-                              <td key={ci} className="px-5 py-3 text-[13px]" style={{ color: '#1E293B' }}>{cell}</td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Age Distribution Table */}
+        {report.ageGroups?.length > 0 && (
+          <div>
+            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Age Distribution</p>
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid #111827' }}>
+                  <th className="py-2 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Age Group</th>
+                  <th className="py-2 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Count</th>
+                  <th className="py-2 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Percentage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.ageGroups.map((row, i) => (
+                  <tr key={i} style={{ borderBottom: i < report.ageGroups.length - 1 ? '1px solid #E5E7EB' : 'none' }}>
+                    <td className="py-2" style={{ color: '#1F2937' }}>{row.age_group}</td>
+                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{row.count}</td>
+                    <td className="py-2 text-right" style={{ color: '#4B5563' }}>{row.percentage}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Case Profile */}
+        {report.caseProfile && (
+          <div className="grid grid-cols-2 gap-8">
+            <div>
+              <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Registration Group</p>
+              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                <tbody>
+                  <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+                    <td className="py-2" style={{ color: '#4B5563' }}>New Cases</td>
+                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.newCases}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2" style={{ color: '#4B5563' }}>Relapse / Recapture</td>
+                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.relapse}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Anatomical Site</p>
+              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                <tbody>
+                  <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+                    <td className="py-2" style={{ color: '#4B5563' }}>Pulmonary</td>
+                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.pulmonary}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2" style={{ color: '#4B5563' }}>Extra-pulmonary</td>
+                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.extraPulmonary}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Forecast */}
+        {report.forecast?.available && (
+          <div>
+            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Forecast</p>
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+              <tbody>
+                <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+                  <td className="py-2" style={{ color: '#4B5563' }}>Forecasted Cases</td>
+                  <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.forecastedCases}</td>
+                </tr>
+                <tr>
+                  <td className="py-2" style={{ color: '#4B5563' }}>Forecast Period</td>
+                  <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.period}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         )}
 
         {/* TB Case Trend Table */}
         {report.trend?.length > 0 && (
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>TB Case Trend</p>
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, overflow: 'hidden' }}>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
-                    <th className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Month</th>
-                    <th className="px-5 py-3 text-right text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Cases</th>
+            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>TB Case Trend</p>
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid #111827' }}>
+                  <th className="py-2 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Month</th>
+                  <th className="py-2 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Cases</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.trend.map((row, i) => (
+                  <tr key={i} style={{ borderBottom: i < report.trend.length - 1 ? '1px solid #E5E7EB' : 'none' }}>
+                    <td className="py-2" style={{ color: '#1F2937' }}>{row.label}</td>
+                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {report.trend.map((row, i) => (
-                    <tr key={i} style={{ borderBottom: i < report.trend.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
-                      <td className="px-5 py-3 text-[13px]" style={{ color: '#1E293B' }}>{row.label}</td>
-                      <td className="px-5 py-3 text-[13px] text-right font-bold" style={{ color: '#0F2D52' }}>{row.cases}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
 
         {/* Barangay Distribution Table */}
         {report.barangayDistribution?.length > 0 && (
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>TB Cases by Barangay</p>
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, overflow: 'hidden' }}>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
-                    <th className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Barangay</th>
-                    <th className="px-5 py-3 text-right text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Cases</th>
+            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>TB Cases by Barangay</p>
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid #111827' }}>
+                  <th className="py-2 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Barangay</th>
+                  <th className="py-2 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Cases</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.barangayDistribution.map((row, i) => (
+                  <tr key={i} style={{ borderBottom: i < report.barangayDistribution.length - 1 ? '1px solid #E5E7EB' : 'none' }}>
+                    <td className="py-2" style={{ color: '#1F2937' }}>{row.barangay}</td>
+                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {report.barangayDistribution.map((row, i) => (
-                    <tr key={i} style={{ borderBottom: i < report.barangayDistribution.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
-                      <td className="px-5 py-3 text-[13px]" style={{ color: '#1E293B' }}>{row.barangay}</td>
-                      <td className="px-5 py-3 text-[13px] text-right font-bold" style={{ color: '#0F2D52' }}>{row.cases}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
 
-      {/* Recommendations */}
+        {/* Recommendations */}
         {report.recommendations?.length > 0 && (
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>Recommendations</p>
-            <div className="space-y-2">
+            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Recommendations</p>
+            <div className="space-y-1">
               {report.recommendations.map((rec, i) => (
-                <p key={i} className="text-[13px] leading-relaxed" style={{ color: '#475569' }}>{rec}</p>
+                <p key={i} className="text-xs leading-relaxed" style={{ color: '#374151' }}>{i + 1}. {rec}</p>
               ))}
             </div>
           </div>
         )}
 
-        {/* Report Footer */}
-        <div className="flex items-center justify-between pt-4" style={{ borderTop: '1px solid #E2E8F0' }}>
-          <span className="text-[11px]" style={{ color: '#94A3B8' }}>TBInsight Dashboard · Pasig City Health Office</span>
-          <span className="text-[11px]" style={{ color: '#94A3B8' }}>{report.footerPeriod} · Printed: {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+        {/* Footer */}
+        <div className="pt-4" style={{ borderTop: '2px solid #0F2D52' }}>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px]" style={{ color: '#6B7280' }}>TBInsight Dashboard &middot; Pasig City Health Office</span>
+            <span className="text-[10px]" style={{ color: '#6B7280' }}>{report.footerPeriod}</span>
+          </div>
+          <div className="mt-3 flex items-center justify-between">
+            <div className="text-center">
+              <div className="w-32" style={{ borderTop: '1px solid #111827' }} />
+              <p className="text-[10px] mt-1" style={{ color: '#374151' }}>Prepared by</p>
+            </div>
+            <div className="text-center">
+              <div className="w-32" style={{ borderTop: '1px solid #111827' }} />
+              <p className="text-[10px] mt-1" style={{ color: '#374151' }}>Noted by</p>
+            </div>
+          </div>
         </div>
 
       </div>
@@ -429,6 +495,16 @@ export default function Reports() {
   const [error, setError] = useState('');
   const [recentReports, setRecentReports] = useState(() => getRecentReports());
 
+  const handleReportTypeChange = useCallback((newType) => {
+    setReportType(newType);
+    setReport(null);
+    setReportData(null);
+    setError('');
+    setFilterMonth(String(new Date().getMonth() + 1));
+    setFilterQuarter('1');
+    setFilterBarangay('');
+  }, []);
+
   /* ── Generate report ── */
   const handleGenerate = useCallback(async () => {
     setLoading(true);
@@ -437,13 +513,13 @@ export default function Reports() {
     setReport(null);
     try {
       const params = { type: reportType, year: filterYear };
-      if (reportType === 'monthly' || (reportType === 'barangay' && filterMonth)) {
+      if (reportType === 'monthly') {
         params.month = filterMonth;
       }
       if (reportType === 'quarterly') {
         params.quarter = filterQuarter;
       }
-      if (filterBarangay) {
+      if (reportType === 'barangay') {
         params.barangay = filterBarangay;
       }
       const res = await API.get('/api/tb/reports/summary', { params });
@@ -456,7 +532,7 @@ export default function Reports() {
         if (reportType === 'monthly') built = buildMonthlyReport(res.data, filterBarangay, filterMonth, filterYear);
         else if (reportType === 'quarterly') built = buildQuarterlyReport(res.data, filterQuarter, filterYear);
         else if (reportType === 'annual') built = buildAnnualReport(res.data, filterYear);
-        else if (reportType === 'barangay') built = buildBarangayReport(res.data, filterBarangay, filterYear, filterMonth || null);
+        else if (reportType === 'barangay') built = buildBarangayReport(res.data, filterBarangay, filterYear);
         setReport(built);
       } catch (buildErr) {
         console.error('Report build error:', buildErr);
@@ -480,13 +556,19 @@ export default function Reports() {
     setError('');
   }, []);
 
+  const handleDeleteReport = useCallback((id) => {
+    if (window.confirm('Delete this report?')) {
+      setRecentReports(deleteRecentReport(id));
+    }
+  }, []);
+
   /* ────────── Render ────────── */
 
   return (
     <div className="space-y-6">
 
       {/* ─── Page Header + Tabs + Filters ─── */}
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
+      <div className="rounded-xl overflow-hidden no-print" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <div>
@@ -509,7 +591,7 @@ export default function Reports() {
             {REPORT_TYPES.map(rt => (
               <button
                 key={rt.key}
-                onClick={() => { setReportType(rt.key); setReport(null); setReportData(null); }}
+                onClick={() => handleReportTypeChange(rt.key)}
                 className="relative px-6 py-3 text-left transition-colors"
                 style={{ background: 'transparent' }}
               >
@@ -535,55 +617,37 @@ export default function Reports() {
           <div className="flex items-center gap-2 flex-wrap">
             {reportType === 'monthly' && (
               <>
-                <FilterSelect label="Month" value={filterMonth} onChange={setFilterMonth}>
-                  {MONTH_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                </FilterSelect>
                 <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
                   {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
                 </FilterSelect>
-                <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay}>
-                  <option value="">All barangays (city-wide)</option>
-                  {BARANGAYS.map(b => <option key={b} value={b}>{b}</option>)}
+                <FilterSelect label="Month" value={filterMonth} onChange={setFilterMonth}>
+                  {MONTH_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                 </FilterSelect>
               </>
             )}
             {reportType === 'quarterly' && (
               <>
-                <FilterSelect label="Quarter" value={filterQuarter} onChange={setFilterQuarter}>
-                  {QUARTER_OPTIONS.map(q => <option key={q.value} value={q.value}>{q.label}</option>)}
-                </FilterSelect>
                 <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
                   {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
                 </FilterSelect>
-                <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay}>
-                  <option value="">All barangays (city-wide)</option>
-                  {BARANGAYS.map(b => <option key={b} value={b}>{b}</option>)}
+                <FilterSelect label="Quarter" value={filterQuarter} onChange={setFilterQuarter}>
+                  {QUARTER_OPTIONS.map(q => <option key={q.value} value={q.value}>{q.label}</option>)}
                 </FilterSelect>
               </>
             )}
             {reportType === 'annual' && (
-              <>
-                <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
-                  {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-                </FilterSelect>
-                <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay}>
-                  <option value="">All barangays (city-wide)</option>
-                  {BARANGAYS.map(b => <option key={b} value={b}>{b}</option>)}
-                </FilterSelect>
-              </>
+              <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
+                {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+              </FilterSelect>
             )}
             {reportType === 'barangay' && (
               <>
-                <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay}>
-                  <option value="">All Barangays (Summary)</option>
-                  {BARANGAYS.map(b => <option key={b} value={b}>{b}</option>)}
-                </FilterSelect>
                 <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
                   {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
                 </FilterSelect>
-                <FilterSelect label="Month" value={filterMonth} onChange={setFilterMonth}>
-                  <option value="">All Months</option>
-                  {MONTH_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay}>
+                  <option value="">Select Barangay</option>
+                  {BARANGAYS.map(b => <option key={b} value={b}>{b}</option>)}
                 </FilterSelect>
               </>
             )}
@@ -682,7 +746,7 @@ export default function Reports() {
       {!loading && !error && report && (
         <div className="space-y-5">
           {/* Action Bar */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between no-print">
             <div>
               <p className="text-sm font-bold" style={{ color: '#0F2D52' }}>{report.title}</p>
               <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Generated report preview</p>
@@ -695,7 +759,7 @@ export default function Reports() {
                 onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
                 Print
               </button>
-              <button onClick={() => exportPDF(reportData)}
+              <button onClick={() => exportPDF(report)}
                 className="px-3 py-1.5 text-xs font-semibold"
                 style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
@@ -711,17 +775,16 @@ export default function Reports() {
       )}
 
       {/* ─── Recent Reports ─── */}
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
+      <div className="rounded-xl overflow-hidden no-print" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+        <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: '1px solid #F1F5F9' }}>
           <div className="flex items-center gap-3">
-            <div className="w-1 h-6 rounded-full" style={{ background: '#64748B' }} />
             <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Recent Reports</h3>
           </div>
           <span className="text-[11px] font-bold" style={{ color: '#94A3B8' }}>{recentReports.length} reports</span>
         </div>
-        <div className="px-5 pb-5">
+        <div className="pb-4">
           {recentReports.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-10 gap-2">
+            <div className="flex flex-col items-center justify-center py-10 gap-2 px-5">
               <i className="ri-file-list-3-line text-xl" style={{ color: '#CBD5E1' }} />
               <p className="text-xs" style={{ color: '#94A3B8' }}>No reports generated yet.</p>
             </div>
@@ -729,30 +792,38 @@ export default function Reports() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
-                    {['Report', 'Type', 'Period', 'Coverage', 'Generated', 'Actions'].map(h => (
-                      <th key={h} className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#64748B' }}>{h}</th>
+                  <tr style={{ background: '#0F2D52' }}>
+                    {['Type', 'Period', 'Coverage', 'Generated', 'Actions'].map(h => (
+                      <th key={h} className="px-4 py-2 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#ffffff' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {recentReports.slice(0, 10).map((rpt, i) => (
-                    <tr key={rpt.id} style={{ borderBottom: '1px solid #F1F5F9', background: i % 2 === 0 ? '#ffffff' : '#FAFBFC' }}>
-                      <td className="px-4 py-3 text-xs font-mono font-bold" style={{ color: '#0F2D52' }}>{rpt.id.substring(0, 12)}</td>
-                      <td className="px-4 py-3 text-xs font-semibold" style={{ color: '#1E293B' }}>{rpt.type}</td>
-                      <td className="px-4 py-3 text-xs font-medium" style={{ color: '#64748B' }}>{rpt.period}</td>
-                      <td className="px-4 py-3 text-xs font-medium" style={{ color: '#64748B' }}>{rpt.coverage}</td>
-                      <td className="px-4 py-3 text-xs font-medium" style={{ color: '#94A3B8' }}>
+                  {recentReports.slice(0, 10).map((rpt) => (
+                    <tr key={rpt.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                      <td className="px-4 py-2 text-xs font-semibold" style={{ color: '#1E293B' }}>{rpt.type ? rpt.type.charAt(0).toUpperCase() + rpt.type.slice(1) : 'Report'}</td>
+                      <td className="px-4 py-2 text-xs font-medium" style={{ color: '#64748B' }}>{rpt.period || '\u2014'}</td>
+                      <td className="px-4 py-2 text-xs font-medium" style={{ color: '#64748B' }}>{rpt.coverage || '\u2014'}</td>
+                      <td className="px-4 py-2 text-xs font-medium" style={{ color: '#94A3B8' }}>
                         {rpt.generatedAt ? new Date(rpt.generatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '\u2014'}
                       </td>
-                      <td className="px-4 py-3">
-                        <button onClick={() => setRecentReports(deleteRecentReport(rpt.id))}
-                          className="px-2.5 py-1 text-[11px] font-medium"
-                          style={{ background: '#FEE2E2', color: '#DC2626', border: '1px solid #FECACA', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                          onMouseEnter={e => { e.currentTarget.style.background = '#FECACA'; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = '#FEE2E2'; }}>
-                          Delete
-                        </button>
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-1">
+                          <button aria-label="View report" onClick={() => { setReportType(rpt.type); setFilterYear(String(new Date(rpt.generatedAt).getFullYear())); handleGenerate(); }}
+                            className="inline-flex items-center justify-center h-7 w-7 text-sm"
+                            style={{ color: '#64748B', borderRadius: 4, transition: 'color 0.15s' }}
+                            onMouseEnter={e => { e.currentTarget.style.color = '#0F2D52'; }}
+                            onMouseLeave={e => { e.currentTarget.style.color = '#64748B'; }}>
+                            <i className="ri-eye-line" />
+                          </button>
+                          <button aria-label="Delete report" onClick={() => handleDeleteReport(rpt.id)}
+                            className="inline-flex items-center justify-center h-7 w-7 text-sm"
+                            style={{ color: '#64748B', borderRadius: 4, transition: 'color 0.15s' }}
+                            onMouseEnter={e => { e.currentTarget.style.color = '#EF4444'; }}
+                            onMouseLeave={e => { e.currentTarget.style.color = '#64748B'; }}>
+                            <i className="ri-delete-bin-line" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

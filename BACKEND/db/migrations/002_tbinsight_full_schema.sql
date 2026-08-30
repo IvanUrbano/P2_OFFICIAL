@@ -166,6 +166,12 @@ CREATE TABLE IF NOT EXISTS barangay_risk_scores (
   PRIMARY KEY (barangay_name, period)
 );
 
+-- Add normalized risk component columns (safe to re-run)
+ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS norm_incidence DOUBLE PRECISION;
+ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS norm_trend DOUBLE PRECISION;
+ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS norm_neighbor_risk DOUBLE PRECISION;
+ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS norm_forecast_error DOUBLE PRECISION;
+
 -- alerts: generated alerts + recommendations
 CREATE TABLE IF NOT EXISTS alerts (
   id BIGSERIAL PRIMARY KEY,

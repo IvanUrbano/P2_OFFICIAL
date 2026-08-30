@@ -345,6 +345,23 @@ body {
   padding: 1px 4px !important;
 }
 
+/* Barangay hover tooltip — light card style */
+.barangay-tooltip {
+  background: #ffffff !important;
+  border: 1px solid #DBEAFE !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 16px rgba(15, 45, 82, 0.12) !important;
+  padding: 0 !important;
+  font-family: var(--font-sans) !important;
+}
+.barangay-tooltip .leaflet-tooltip-content {
+  margin: 0 !important;
+  padding: 8px 10px !important;
+}
+.barangay-tooltip::before {
+  border-top-color: #ffffff !important;
+}
+
 /* Pasig City center label — shows when zoomed out */
 .pasig-city-label {
   background: transparent !important;
@@ -420,10 +437,10 @@ body {
 @media print {
   .no-print { display: none !important; }
   .print-only { display: block !important; }
-  body { background: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .report-preview { box-shadow: none !important; border: none !important; max-width: 100% !important; }
-  .report-preview table { page-break-inside: auto; }
-  .report-preview tr { page-break-inside: avoid; }
-  .report-preview thead { display: table-header-group; }
-  @page { margin: 1cm; size: A4; }
+  body { background: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; margin: 0; padding: 0; }
+  #printable-report { display: block !important; box-shadow: none !important; border: none !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
+  #printable-report table { page-break-inside: auto; }
+  #printable-report tr { page-break-inside: avoid; }
+  #printable-report thead { display: table-header-group; }
+  @page { margin: 1.5cm; size: A4; }
 }

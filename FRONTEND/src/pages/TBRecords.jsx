@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react";
+﻿import { useState, useEffect, useCallback } from "react";
 import API from "../api/axios";
 
 /* ─── Debounce hook ─── */
@@ -93,10 +93,10 @@ function FilterSelect({ label, value, onChange, options, placeholder }) {
 }
 
 const ALL_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const ALL_YEARS = ["2025","2024","2023"];
+const ALL_YEARS = ["2026","2025","2024","2023"];
 const ALL_OUTCOME_STATUSES = [
   "ON TREATMENT", "CURED", "TREATMENT COMPLETED",
-  "DIED", "LOST TO FOLLOW-UP", "EXCLUDED",
+  "DIED", "LOST TO FOLLOW-UP", "EXCLUDED", "NOT EVALUATED",
 ];
 
 export default function TBRecords() {
@@ -207,45 +207,57 @@ export default function TBRecords() {
     return value.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
   };
 
-  /* ─── Fetch metrics ─── */
-  useEffect(() => {
-    const fetchMetrics = async () => {
-      try {
-        const res = await API.get("/api/tb/dashboard/summary");
-        const s = res.data.summary;
-        if (!s) return;
-        const prevMonth = s.prev_month_cases || 0;
-        const currentMonth = s.current_month_cases || 0;
-        const caseTrendPct = prevMonth > 0
-          ? Math.round(((currentMonth - prevMonth) / prevMonth) * 100) : 0;
-        const totalOutcomes = s.total_outcomes || 0;
-        const successful = s.successful_count || 0;
-        const successRate = totalOutcomes > 0
-          ? Math.round((successful / totalOutcomes) * 100) : 0;
-        setMetrics({
-          totalCases: s.total_cases || 0,
-          onTreatmentCount: s.on_treatment_count || 0,
-          curedCount: s.cured_count || 0,
-          treatmentCompletedCount: s.treatment_completed_count || 0,
-          diedCount: s.died_count || 0,
-          ltfuCount: s.ltfu_count || 0,
-          successRate,
-          caseTrend: { value: caseTrendPct, direction: caseTrendPct >= 0 ? 'up' : 'down' },
-          activeStatus: (s.on_treatment_count || 0) > 0 ? 'Ongoing' : 'None',
-        });
-      } catch (err) {
-        console.error("Failed to fetch metrics:", err);
+  /* ─── Fetch metrics (filter-aware) ─── */
+  const fetchMetrics = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (selectedYear) params.append("year", selectedYear);
+      if (selectedMonth) {
+        const monthNum = getMonthNumber(selectedMonth);
+        if (monthNum) params.append("month", monthNum);
       }
-    };
-    fetchMetrics();
-  }, []);
+      if (selectedBarangay) params.append("barangay", selectedBarangay);
+      if (selectedOutcomeStatus) params.append("outcome", selectedOutcomeStatus);
+      if (selectedFacility) params.append("facility", selectedFacility);
+      if (selectedSex) params.append("sex", selectedSex);
+      if (selectedBacteriologicalStatus) params.append("bacteriological_status", selectedBacteriologicalStatus);
+      if (selectedValidationStatus) params.append("validation_status", selectedValidationStatus);
+      const qs = params.toString();
+      const res = await API.get(`/api/tb/dashboard/summary${qs ? `?${qs}` : ''}`);
+      const s = res.data.summary;
+      if (!s) return;
+      const prevMonth = s.prev_month_cases || 0;
+      const currentMonth = s.current_month_cases || 0;
+      const caseTrendPct = prevMonth > 0
+        ? Math.round(((currentMonth - prevMonth) / prevMonth) * 100) : 0;
+      const totalOutcomes = s.total_outcomes || 0;
+      const successful = s.successful_count || 0;
+      const successRate = totalOutcomes > 0
+        ? Math.round((successful / totalOutcomes) * 100) : 0;
+      setMetrics({
+        totalCases: s.total_cases || 0,
+        onTreatmentCount: s.on_treatment_count || 0,
+        curedCount: s.cured_count || 0,
+        treatmentCompletedCount: s.treatment_completed_count || 0,
+        diedCount: s.died_count || 0,
+        ltfuCount: s.ltfu_count || 0,
+        successRate,
+        caseTrend: { value: caseTrendPct, direction: caseTrendPct >= 0 ? 'up' : 'down' },
+        activeStatus: (s.on_treatment_count || 0) > 0 ? 'Ongoing' : 'None',
+      });
+    } catch (err) {
+      console.error("Failed to fetch metrics:", err);
+    }
+  }, [selectedYear, selectedMonth, selectedBarangay, selectedOutcomeStatus, selectedFacility, selectedSex, selectedBacteriologicalStatus, selectedValidationStatus]);
+
+  useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
 
   /* ─── Fetch barangays ─── */
   useEffect(() => {
     const fetchBarangays = async () => {
       try {
         const res = await API.get("/api/tb/barangays");
-        setBarangays(res.data.barangays.map(b => b.name).sort());
+        setBarangays(res.data.barangays.map(b => b.barangay_name || b.name).filter(Boolean).sort());
       } catch (err) {
         console.error("Failed to fetch barangays:", err);
       }
@@ -708,7 +720,7 @@ export default function TBRecords() {
                   <FilterSelect
                     label="Outcome Status"
                     value={pendingFilters.outcome || ""} onChange={(v) => updatePending('outcome', v)}
-                    options={ALL_OUTCOME_STATUSES} placeholder="All Outcomes"
+                    options={outcomeStatuses.length > 0 ? outcomeStatuses : ALL_OUTCOME_STATUSES} placeholder="All Outcomes"
                   />
                   <FilterSelect
                     label="Bacteriological Status"

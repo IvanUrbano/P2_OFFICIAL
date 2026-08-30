@@ -49,7 +49,7 @@ function computeRiskScore({ incidence, trend, neighborRisk, forecastError, maxIn
   else if (riskScore <= 66) riskClass = 'Medium';
   else riskClass = 'High';
 
-  return { riskScore, riskClass };
+  return { riskScore, riskClass, normIncidence, normTrend, normError, neighborRisk };
 }
 
 /**
@@ -284,8 +284,9 @@ async function storeResults(client, period, forecasts, classifications, riskScor
   for (const rs of riskScores) {
     await client.query(
       `INSERT INTO barangay_risk_scores
-        (barangay_name, period, risk_score, risk_class, incidence_per_100k, trend_direction)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+        (barangay_name, period, risk_score, risk_class, incidence_per_100k, trend_direction,
+         norm_incidence, norm_trend, norm_neighbor_risk, norm_forecast_error)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         rs.barangay_name,
         period,
@@ -293,6 +294,10 @@ async function storeResults(client, period, forecasts, classifications, riskScor
         rs.risk_class,
         rs.incidence_per_100k,
         rs.trend_direction,
+        rs.norm_incidence ?? null,
+        rs.norm_trend ?? null,
+        rs.norm_neighbor_risk ?? null,
+        rs.norm_forecast_error ?? null,
       ]
     );
   }

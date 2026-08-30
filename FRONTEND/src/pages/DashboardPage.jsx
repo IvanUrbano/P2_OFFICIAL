@@ -1,14 +1,13 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  LineChart, Line, BarChart, Bar, Cell, Area, AreaChart,
+  Cell, Area, AreaChart,
   CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie,
 } from 'recharts';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import API from '../api/axios';
-import { useTheme } from '../theme';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
@@ -54,6 +53,8 @@ const GIS_RISK_COLORS = {
 };
 
 const PASIG_BOUNDS = L.latLngBounds([14.48, 121.02], [14.64, 121.13]);
+
+const RISK_PRIORITY = { 'Very High': 4, High: 3, Medium: 2, Moderate: 2, Low: 1, 'No Data': 0 };
 
 function riskStyle(feature) {
   const risk = feature.properties?.risk_class || 'No Data';
@@ -221,33 +222,7 @@ function RiskBadge({ risk }) {
   );
 }
 
-function MetricCard({ icon, iconColor, title, value, subtitle, linkTo, linkLabel }) {
-  const navigate = useNavigate();
-  return (
-    <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
-      <div className="flex flex-col px-5 py-5">
-        <div className="flex items-center gap-2 mb-2">
-          <i className={`${icon} text-base`} style={{ color: iconColor }} />
-          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>{title}</span>
-        </div>
-        <div className="h-px mb-3" style={{ background: '#E2E8F0' }} />
-        <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{value}</p>
-        {subtitle && <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{subtitle}</span>}
-        {linkTo && (
-          <button
-            onClick={() => navigate(linkTo)}
-            className="flex items-center gap-1 mt-2 text-[11px] font-semibold transition hover:underline"
-            style={{ color: '#0F2D52' }}
-          >
-            {linkLabel || 'View'} <i className="ri-arrow-right-s-line text-sm" />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SectionCard({ title, icon, iconColor, description, action, actionTo, children }) {
+function SectionCard({ title, iconColor, description, action, actionTo, children }) {
   const navigate = useNavigate();
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
@@ -312,7 +287,6 @@ function FilterSelect({ label, value, onChange, children }) {
 /* ─── Main Dashboard Component ──────────────────────────────────────── */
 
 export default function DashboardPage() {
-  const { t } = useTheme();
   const navigate = useNavigate();
 
   /* ── State ── */
@@ -383,6 +357,25 @@ export default function DashboardPage() {
     setAppliedYear(''); setAppliedMonth(''); setAppliedBarangay('');
   }, []);
 
+  /* ── Re-fetch filter-dependent endpoints when filters change ── */
+  const refetchFiltered = useCallback(async () => {
+    if (loading) return;
+    const params = {};
+    if (appliedYear) params.year = appliedYear;
+    if (appliedMonth) params.month = appliedMonth;
+    if (appliedBarangay) params.barangay = appliedBarangay;
+    const qs = new URLSearchParams(params).toString();
+    const suffix = qs ? `?${qs}` : '';
+    const [outcomesRes, demoRes] = await Promise.all([
+      API.get(`/api/tb/dashboard/outcomes${suffix}`).catch(() => ({ data: { outcomes: [] } })),
+      API.get(`/api/tb/dashboard/demographics${suffix}`).catch(() => ({ data: { demographics: [] } })),
+    ]);
+    setOutcomesData(outcomesRes.data.outcomes || []);
+    setDemographicsData(demoRes.data.demographics || []);
+  }, [appliedYear, appliedMonth, appliedBarangay, loading]);
+
+  useEffect(() => { refetchFiltered(); }, [refetchFiltered]);
+
   /* ── Barangay names ── */
   const barangayNames = useMemo(
     () => barangays.map((b) => b.barangay_name || b.name).filter(Boolean).sort(),
@@ -402,16 +395,7 @@ export default function DashboardPage() {
   }, [monthlyData, appliedYear, appliedMonth, appliedBarangay]);
 
   /* ── Filtered outcomes ── */
-  const filteredOutcomes = useMemo(() => {
-    // Outcomes data doesn't have date/barangay in the same format, so we use it as-is
-    // unless filters are applied — in that case, we derive from filteredMonthly barangays
-    if (!appliedBarangay && !appliedYear && !appliedMonth) return outcomesData;
-    // Filter by barangay if available
-    if (appliedBarangay) {
-      return outcomesData.filter((r) => !r.barangay_name || r.barangay_name === appliedBarangay);
-    }
-    return outcomesData;
-  }, [outcomesData, appliedBarangay, appliedYear, appliedMonth]);
+  const filteredOutcomes = outcomesData;
 
   /* ── 1. Total TB Cases ── */
   const totalCases = useMemo(() => {
@@ -443,13 +427,14 @@ export default function DashboardPage() {
 
   /* ── 4. High-Risk Barangays ── */
   const highRiskCount = useMemo(() => {
-    // Use choropleth data (current risk status) as primary source
+    // Source 1: choropleth data (pipeline-computed risk scores)
     const fromChoropleth = riskData.filter((r) => {
       const rc = (r.risk_class || '').toLowerCase();
       return rc === 'high' || rc === 'very high' || rc === 'medium';
     }).length;
     if (fromChoropleth > 0) return fromChoropleth;
-    // Fallback: forecasts data
+
+    // Source 2: forecasts data with risk_class
     if (forecastsData.length > 0) {
       const latestPeriod = forecastsData.reduce((max, r) => {
         const p = r.period || '';
@@ -461,10 +446,36 @@ export default function DashboardPage() {
         const rc = (r.risk_class || '').toLowerCase();
         if (rc === 'high' || rc === 'very high' || rc === 'medium') highSet.add(r.barangay_name);
       });
-      return highSet.size;
+      if (highSet.size > 0) return highSet.size;
     }
+
+    // Source 3: compute from monthly case counts + barangay population (tertiles)
+    if (filteredMonthly.length > 0 && barangays.length > 0) {
+      const popMap = {};
+      barangays.forEach((b) => { popMap[b.barangay_name || b.name] = b.population || 0; });
+      const casesByBrgy = {};
+      filteredMonthly.forEach((r) => {
+        if (!r.barangay_name) return;
+        casesByBrgy[r.barangay_name] = (casesByBrgy[r.barangay_name] || 0) + Number(r.case_count || 0);
+      });
+      const entries = Object.entries(casesByBrgy).map(([name, totalCases]) => {
+        const pop = popMap[name] || 1;
+        return { name, incidence: (totalCases / pop) * 100000 };
+      }).filter((e) => e.incidence > 0);
+      if (entries.length === 0) return 0;
+      entries.sort((a, b) => a.incidence - b.incidence);
+      const n = entries.length;
+      const lowMax = Math.floor(n / 3);
+      const medMax = Math.floor((2 * n) / 3);
+      let count = 0;
+      entries.forEach((e, i) => {
+        if (i >= lowMax) count++;
+      });
+      return count;
+    }
+
     return 0;
-  }, [forecastsData, riskData]);
+  }, [forecastsData, riskData, filteredMonthly, barangays]);
 
   /* ── 5. Forecasted Cases ── */
   const forecastSummary = useMemo(() => {
@@ -503,6 +514,44 @@ export default function DashboardPage() {
     return { total, period: periodLabel, growthRate, riskLevel: majorityRisk };
   }, [forecastsData, monthlyData]);
 
+  /* ── Forecast mini chart data (actual vs projected) ── */
+  const forecastChartData = useMemo(() => {
+    // Historical: aggregate monthlyData by month (last 12 months)
+    const byMonth = {};
+    monthlyData.forEach((r) => {
+      if (!r.month) return;
+      byMonth[r.month] = (byMonth[r.month] || 0) + Number(r.case_count || 0);
+    });
+    const histEntries = Object.entries(byMonth)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-12)
+      .map(([month, cases]) => {
+        const d = new Date(month);
+        return { label: d.toLocaleDateString('en-US', { month: 'short' }), actual: cases, projected: null, month };
+      });
+
+    // Forecast: aggregate forecastsData by period
+    const byPeriod = {};
+    forecastsData.forEach((r) => {
+      if (!r.period) return;
+      byPeriod[r.period] = (byPeriod[r.period] || 0) + Math.round(Number(r.forecasted_count || 0));
+    });
+    const fcEntries = Object.entries(byPeriod)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([period, cases]) => {
+        const d = new Date(period);
+        return { label: d.toLocaleDateString('en-US', { month: 'short' }), actual: null, projected: cases, month: period };
+      });
+
+    // Merge: keep all historical, add forecast entries that don't overlap
+    const histMonths = new Set(histEntries.map((e) => e.month));
+    const merged = [
+      ...histEntries,
+      ...fcEntries.filter((e) => !histMonths.has(e.month)),
+    ];
+    return merged;
+  }, [monthlyData, forecastsData]);
+
   /* ── 6. Case Fatality Rate (CFR) ── */
   const caseFatalityRate = useMemo(() => {
     const byStatus = {};
@@ -536,10 +585,7 @@ export default function DashboardPage() {
   }, [filteredMonthly]);
 
   /* ── 8. Filtered Demographics ── */
-  const filteredDemographics = useMemo(() => {
-    if (!appliedBarangay) return demographicsData;
-    return demographicsData.filter((r) => r.barangay_name === appliedBarangay);
-  }, [demographicsData, appliedBarangay]);
+  const filteredDemographics = demographicsData;
 
   const sexData = useMemo(() => {
     const totals = { Male: 0, Female: 0 };
@@ -634,11 +680,44 @@ export default function DashboardPage() {
         }
       });
     }
+    // Fallback: if no barangay has a meaningful risk class OR all have the same class, compute from monthly + population
+    const riskValues = Object.values(byBarangay).map((b) => b.risk).filter(Boolean);
+    const uniqueRisks = new Set(riskValues);
+    const hasMeaningfulRisk = uniqueRisks.size > 1 && !uniqueRisks.has('No Data');
+    if (!hasMeaningfulRisk && barangays.length > 0) {
+      const popMap = {};
+      barangays.forEach((b) => { popMap[b.barangay_name || b.name] = b.population || 0; });
+      const entries = Object.values(byBarangay).map((b) => {
+        const pop = popMap[b.name] || 1;
+        return { name: b.name, incidence: (b.cases / pop) * 100000 };
+      });
+      entries.sort((a, b) => a.incidence - b.incidence);
+      const n = entries.length;
+      if (n > 0) {
+        const lowMax = Math.floor(n / 3);
+        const medMax = Math.floor((2 * n) / 3);
+        const riskMap = {};
+        entries.forEach((e, i) => {
+          riskMap[e.name] = i < lowMax ? 'Low' : i < medMax ? 'Medium' : 'High';
+        });
+        const maxInc = entries[n - 1].incidence || 1;
+        Object.values(byBarangay).forEach((b) => {
+          const inc = ((b.cases || 0) / ((popMap[b.name] || 1))) * 100000;
+          b.risk = riskMap[b.name] || 'Low';
+          b.score = Math.round((inc / maxInc) * 100 * 100) / 100;
+        });
+      }
+    }
     return Object.values(byBarangay)
-      .sort((a, b) => (b.score || b.cases) - (a.score || a.cases))
+      .sort((a, b) => {
+        const rpA = RISK_PRIORITY[a.risk] ?? 0;
+        const rpB = RISK_PRIORITY[b.risk] ?? 0;
+        if (rpB !== rpA) return rpB - rpA;
+        return (b.score || b.cases) - (a.score || a.cases);
+      })
       .slice(0, 5)
       .map((b, i) => ({ rank: i + 1, ...b }));
-  }, [filteredMonthly, forecastsData, riskData]);
+  }, [filteredMonthly, forecastsData, riskData, barangays]);
 
   /* ── Treatment Outcomes chart data ── */
   const outcomeChartData = useMemo(() => {
@@ -717,8 +796,8 @@ export default function DashboardPage() {
           <div className="px-6 py-3 flex gap-2" style={{ background: '#F8FAFC' }}><SkeletonBlock className="h-8 w-24" /><SkeletonBlock className="h-8 w-24" /><SkeletonBlock className="h-8 w-32" /></div>
         </div>
         {/* Metrics skeleton */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-          {Array.from({ length: 5 }).map((_, i) => (
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="rounded-xl p-5" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
               <SkeletonBlock className="h-3 w-24 mb-3" />
               <SkeletonBlock className="h-8 w-16 mb-2" />
@@ -867,7 +946,7 @@ export default function DashboardPage() {
               </div>
 
               {/* Forecasted Cases */}
-              <div className="flex flex-col px-5 py-5">
+              <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <i className="ri-line-chart-line text-sm" style={{ color: '#6B9E9E' }} />
@@ -987,7 +1066,7 @@ export default function DashboardPage() {
                   </table>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-12 gap-2">
+                <div className="flex flex-col items-center justify-center py-16 gap-2">
                   <i className="ri-list-ordered text-xl" style={{ color: '#CBD5E1' }} />
                   <p className="text-xs" style={{ color: '#94A3B8' }}>No barangay risk data available.</p>
                 </div>
@@ -1020,7 +1099,7 @@ export default function DashboardPage() {
                   })()}
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-12 gap-2">
+                <div className="flex flex-col items-center justify-center py-16 gap-2">
                   <i className="ri-group-line text-xl" style={{ color: '#CBD5E1' }} />
                   <p className="text-xs" style={{ color: '#94A3B8' }}>No age data available.</p>
                 </div>
@@ -1080,7 +1159,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-12 gap-2">
+                <div className="flex flex-col items-center justify-center py-16 gap-2">
                   <i className="ri-men-line text-xl" style={{ color: '#CBD5E1' }} />
                   <p className="text-xs" style={{ color: '#94A3B8' }}>No demographic data available.</p>
                 </div>
@@ -1131,7 +1210,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-12 gap-2">
+                <div className="flex flex-col items-center justify-center py-16 gap-2">
                   <i className="ri-pie-chart-2-line text-xl" style={{ color: '#CBD5E1' }} />
                   <p className="text-xs" style={{ color: '#94A3B8' }}>No outcome data available.</p>
                 </div>
@@ -1142,36 +1221,91 @@ export default function DashboardPage() {
           {/* ─── 8. Forecasting Summary + Recent Alerts ─── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Forecasting Summary */}
-            <SectionCard
-              title="Forecasting Summary"
-              icon="ri-line-chart-line"
-              iconColor="#0D9488"
-              description="Latest projected TB cases based on available historical records."
-              action="View Full Forecast"
-              actionTo="/forecasting"
-            >
-              <div className="grid grid-cols-2 gap-4">
-                {[
-                  { label: 'Forecasted Cases', value: forecastSummary.total.toLocaleString(), icon: 'ri-line-chart-line', color: '#0D9488' },
-                  { label: 'Growth Rate', value: `${forecastSummary.growthRate >= 0 ? '+' : ''}${forecastSummary.growthRate.toFixed(1)}%`, icon: forecastSummary.growthRate >= 0 ? 'ri-arrow-up-s-fill' : 'ri-arrow-down-s-fill', color: forecastSummary.growthRate >= 0 ? '#EF4444' : '#10B981' },
-                  { label: 'Risk Level', value: forecastSummary.riskLevel, icon: 'ri-shield-line', color: RISK_COLORS[forecastSummary.riskLevel] || '#94A3B8' },
-                  { label: 'Forecast Period', value: forecastSummary.period || 'N/A', icon: 'ri-calendar-line', color: '#64748B' },
-                ].map((item) => (
-                  <div key={item.label} className="flex flex-col p-4 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <i className={`${item.icon} text-sm`} style={{ color: item.color }} />
-                      <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>{item.label}</span>
-                    </div>
-                    <p className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>{item.value}</p>
+            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-1 h-8 rounded-full" style={{ background: '#0D9488' }} />
+                  <div>
+                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Forecasting Summary</h3>
+                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Forecasted TB cases for the next quarter</p>
                   </div>
-                ))}
+                </div>
+                <button
+                  onClick={() => navigate('/forecasting')}
+                  className="flex items-center gap-1 text-[11px] font-semibold transition hover:underline"
+                  style={{ color: '#0F2D52' }}
+                >
+                  View Full Forecast <i className="ri-arrow-right-s-line text-sm" />
+                </button>
               </div>
-            </SectionCard>
+
+              {/* Content — same wrapper as SectionCard */}
+              <div className="px-5 pb-5">
+                {/* Key-value list */}
+                <div>
+                  {[
+                    { label: 'Forecasted Cases', value: forecastSummary.total.toLocaleString(), valueColor: '#0F2D52' },
+                    { label: 'Growth Rate', value: `${forecastSummary.growthRate >= 0 ? '+' : ''}${forecastSummary.growthRate.toFixed(1)}%`, valueColor: forecastSummary.growthRate >= 0 ? '#EF4444' : '#10B981' },
+                    { label: 'Risk Level', value: forecastSummary.riskLevel, valueColor: RISK_COLORS[forecastSummary.riskLevel] || '#0D9488' },
+                    { label: 'Forecast Period', value: forecastSummary.period || 'N/A', valueColor: '#0F2D52' },
+                  ].map((item, i, arr) => (
+                    <div
+                      key={item.label}
+                      className="flex items-center justify-between py-3.5"
+                      style={{ borderBottom: i < arr.length - 1 ? '1px solid #F1F5F9' : 'none' }}
+                    >
+                      <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>{item.label}</span>
+                      <span className="text-[13px] font-bold" style={{ color: item.valueColor }}>{item.value}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Mini trend chart */}
+                {forecastChartData.length > 1 && (
+                  <div className="mt-3">
+                    <div className="w-full" style={{ height: 140 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={forecastChartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id="fcActualGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#2563EB" stopOpacity={0.1} />
+                              <stop offset="100%" stopColor="#2563EB" stopOpacity={0} />
+                            </linearGradient>
+                            <linearGradient id="fcProjGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#0D9488" stopOpacity={0.1} />
+                              <stop offset="100%" stopColor="#0D9488" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                          <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
+                          <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={35} tickMargin={2} />
+                          <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#E2E8F0', strokeWidth: 1 }} />
+                          <Area type="monotone" dataKey="actual" stroke="#2563EB" strokeWidth={2} fill="url(#fcActualGrad)" dot={false} name="Actual" connectNulls={false} />
+                          <Area type="monotone" dataKey="projected" stroke="#0D9488" strokeWidth={2} strokeDasharray="5 3" fill="url(#fcProjGrad)" dot={false} name="Forecasted" connectNulls={false} />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                    {/* Legend */}
+                    <div className="flex items-center justify-center gap-4 mt-1">
+                      <div className="flex items-center gap-1.5 text-[10px] font-medium" style={{ color: '#64748B' }}>
+                        <span className="w-3 h-0.5 rounded" style={{ background: '#2563EB' }} />
+                        Actual
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[10px] font-medium" style={{ color: '#64748B' }}>
+                        <span className="w-3 h-[2px] rounded" style={{ background: 'repeating-linear-gradient(to right, #0D9488 0px, #0D9488 3px, transparent 3px, transparent 5px)' }} />
+                        Forecasted
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
 
             {/* Recent Alerts */}
             <SectionCard
               title="Recent Alerts"
-              icon="ri-alarm-warning-line"
+              icon="ri-alarm-warning-fill"
               iconColor="#EF4444"
               description={`${recentAlerts.length} unresolved alert${recentAlerts.length !== 1 ? 's' : ''}`}
               action="View All Alerts"
@@ -1214,7 +1348,7 @@ export default function DashboardPage() {
                   })}
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-12 gap-2">
+                <div className="flex flex-col items-center justify-center py-16 gap-2">
                   <i className="ri-alarm-line text-xl" style={{ color: '#CBD5E1' }} />
                   <p className="text-xs" style={{ color: '#94A3B8' }}>No alerts at this time.</p>
                 </div>

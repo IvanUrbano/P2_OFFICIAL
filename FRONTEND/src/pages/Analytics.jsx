@@ -30,15 +30,17 @@ const OUTCOME_COLORS = {
   'NOT EVALUATED': '#94A3B8',
 };
 
-const AGE_GROUP_ORDER = ['0-14', '15-24', '25-44', '45-64', '65+'];
+const AGE_GROUP_ORDER = ['0-14', '15-24', '25-34', '35-44', '45-54', '55-64', '65+'];
 
 function categorizeAge(age) {
   const n = Number(age);
   if (isNaN(n) || n < 0) return 'Unknown';
   if (n <= 14) return '0-14';
   if (n <= 24) return '15-24';
-  if (n <= 44) return '25-44';
-  if (n <= 64) return '45-64';
+  if (n <= 34) return '25-34';
+  if (n <= 44) return '35-44';
+  if (n <= 54) return '45-54';
+  if (n <= 64) return '55-64';
   return '65+';
 }
 
@@ -57,7 +59,7 @@ const SUCCESS_OUTCOMES = ['CURED', 'TREATMENT COMPLETED'];
 
 /* ─── Helper Components ──────────────────────────────────────────────── */
 
-function ChartTooltip({ active, payload, label, light }) {
+function ChartTooltip({ active, payload, label }) {
   if (!active || !payload || !payload.length) return null;
   return (
     <div className="px-3 py-2.5 rounded-lg text-xs shadow-lg" style={{
@@ -109,10 +111,35 @@ function EmptyState() {
   );
 }
 
+/* ─── Filter Select (same as DashboardPage) ─── */
+function FilterSelect({ label, value, onChange, children, selectStyle }) {
+  return (
+    <div className="relative">
+      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none whitespace-nowrap" style={{ color: '#94A3B8' }}>{label}:</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-lg pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
+        style={{
+          background: '#ffffff',
+          color: '#0F2D52',
+          border: '1px solid #E2E8F0',
+          paddingLeft: `${(label.length * 6.5) + 24}px`,
+          ...selectStyle,
+        }}
+      >
+        {children}
+      </select>
+      <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
+    </div>
+  );
+}
+
 /* ─── Main Analytics Component ───────────────────────────────────────── */
 
 export default function Analytics() {
   const [loading, setLoading] = useState(true);
+  const [filtering, setFiltering] = useState(false);
   const [error, setError] = useState(null);
 
   /* Raw data from API */
@@ -173,6 +200,7 @@ export default function Analytics() {
 
   /* ── Apply filters ── */
   const handleApply = useCallback(() => {
+    setFiltering(true);
     setAYear(filterYear);
     setAMonth(filterMonth);
     setABarangay(filterBarangay);
@@ -181,6 +209,7 @@ export default function Analytics() {
     setAAgeGroup(filterAgeGroup);
     setABact(filterBact);
     setApplied(true);
+    setTimeout(() => setFiltering(false), 300);
   }, [filterYear, filterMonth, filterBarangay, filterOutcome, filterSex, filterAgeGroup, filterBact]);
 
   const handleClear = useCallback(() => {
@@ -213,8 +242,7 @@ export default function Analytics() {
       bacterio: () => { setFilterBact(''); setABact(''); },
     };
     if (setters[key]) setters[key]();
-    /* Re-apply with the remaining filters */
-    setTimeout(() => setApplied(true), 0);
+    setApplied(true);
   }, []);
 
   /* ── Derived barangay names ── */
@@ -464,21 +492,6 @@ export default function Analytics() {
 
   const totalSex = useMemo(() => sexData.reduce((s, r) => s + r.value, 0), [sexData]);
 
-  /* ── Age + Sex Cross-Tabulation ── */
-  const ageSexData = useMemo(() => {
-    const crossTab = {};
-    AGE_GROUP_ORDER.forEach((g) => { crossTab[g] = { group: g }; });
-    filteredCases.forEach((c) => {
-      const ageGroup = categorizeAge(c.age);
-      if (ageGroup === 'Unknown') return;
-      const sex = (c.sex || 'Unknown').trim();
-      const sexKey = sex.charAt(0).toUpperCase() + sex.slice(1).toLowerCase();
-      if (!crossTab[ageGroup]) crossTab[ageGroup] = { group: ageGroup };
-      crossTab[ageGroup][sexKey] = (crossTab[ageGroup][sexKey] || 0) + 1;
-    });
-    return AGE_GROUP_ORDER.map((g) => crossTab[g] || { group: g, Male: 0, Female: 0 });
-  }, [filteredCases]);
-
   /* ── Treatment Outcomes ── */
   const outcomeData = useMemo(() => {
     const byOutcome = {};
@@ -662,92 +675,49 @@ export default function Analytics() {
             }} className="text-xs font-semibold px-4 py-2" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
               Download CSV
             </button>
-            <button onClick={handleApply} className="text-xs font-semibold px-5 py-2" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
-              Apply Filters
-            </button>
           </div>
         </div>
 
         {/* Filter bar */}
         <div className="flex items-center justify-between px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Year */}
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Year:</span>
-              <select value={filterYear} onChange={(e) => setFilterYear(e.target.value)} className="rounded-lg pl-[42px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
-                <option value="">All</option>
-                {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
-
-            {/* Month */}
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Month:</span>
-              <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="rounded-lg pl-[52px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
-                <option value="">All</option>
-                {MONTHS.map((m, i) => <option key={m} value={i === 0 ? '' : String(i)}>{m}</option>)}
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
-
-            {/* Barangay */}
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Barangay:</span>
-              <select value={filterBarangay} onChange={(e) => setFilterBarangay(e.target.value)} className="rounded-lg pl-[74px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0', minWidth: 150 }}>
-                <option value="">All</option>
-                {barangayNames.map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
-
-            {/* Outcome */}
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Outcome:</span>
-              <select value={filterOutcome} onChange={(e) => setFilterOutcome(e.target.value)} className="rounded-lg pl-[63px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
-                <option value="">All</option>
-                {OUTCOMES.map((o) => <option key={o} value={o === 'All Outcomes' ? '' : o}>{o}</option>)}
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
-
-            {/* Sex */}
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Sex:</span>
-              <select value={filterSex} onChange={(e) => setFilterSex(e.target.value)} className="rounded-lg pl-[36px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
-                <option value="">All</option>
-                <option value="Male">Male</option>
-                <option value="Female">Female</option>
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
-
-            {/* Age Group */}
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Age:</span>
-              <select value={filterAgeGroup} onChange={(e) => setFilterAgeGroup(e.target.value)} className="rounded-lg pl-[38px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
-                <option value="">All</option>
-                {AGE_GROUP_ORDER.map((g) => <option key={g} value={g}>{g}</option>)}
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
-
-            {/* Bacteriological Status */}
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>Bacterio:</span>
-              <select value={filterBact} onChange={(e) => setFilterBact(e.target.value)} className="rounded-lg pl-[66px] pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
-                <option value="">All</option>
-                {(filterOptions.bacteriological_status || []).map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-              <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-            </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
+              <option value="">All Years</option>
+              {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
+            </FilterSelect>
+            <FilterSelect label="Month" value={filterMonth} onChange={setFilterMonth}>
+              {MONTHS.map((m, i) => <option key={m} value={i === 0 ? '' : String(i)}>{m}</option>)}
+            </FilterSelect>
+            <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 160 }}>
+              <option value="">All Barangays</option>
+              {barangayNames.map((n) => <option key={n} value={n}>{n}</option>)}
+            </FilterSelect>
+            <FilterSelect label="Outcome" value={filterOutcome} onChange={setFilterOutcome} selectStyle={{ maxWidth: 160 }}>
+              <option value="">All Outcomes</option>
+              {OUTCOMES.map((o) => <option key={o} value={o === 'All Outcomes' ? '' : o}>{o}</option>)}
+            </FilterSelect>
+            <FilterSelect label="Sex" value={filterSex} onChange={setFilterSex}>
+              <option value="">All</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+            </FilterSelect>
+            <FilterSelect label="Age" value={filterAgeGroup} onChange={setFilterAgeGroup}>
+              <option value="">All Ages</option>
+              {AGE_GROUP_ORDER.map((g) => <option key={g} value={g}>{g}</option>)}
+            </FilterSelect>
+            <FilterSelect label="Bacterio" value={filterBact} onChange={setFilterBact} selectStyle={{ maxWidth: 180 }}>
+              <option value="">All</option>
+              {(filterOptions.bacteriological_status || []).map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </FilterSelect>
           </div>
-
           <div className="flex items-center gap-1.5">
-            <button onClick={handleClear} className="text-xs font-medium px-3 py-[7px] shrink-0" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-              Clear all
+            <button onClick={handleClear} className="px-3 py-2 text-xs font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
+              Clear
+            </button>
+            <button onClick={handleApply} disabled={filtering} className="px-4 py-2 text-xs font-semibold disabled:opacity-60" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { if (!filtering) { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; } }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
+              {filtering ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Applying...</> : 'Apply Filters'}
             </button>
           </div>
         </div>
@@ -932,7 +902,7 @@ export default function Analytics() {
                 style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
-                Show Incidence
+                {showIncidence ? 'Show Cases' : 'Show Incidence'}
               </button>
             </div>
             <div className="px-5 pb-5">
@@ -1009,18 +979,17 @@ export default function Analytics() {
               <div className="px-5 pb-5">
                 {sexData.length > 0 ? (
                   <div className="flex items-center justify-center gap-6">
-                    <div className="w-[200px] h-[200px]">
+                    <div className="w-[180px] h-[180px]">
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie
                             data={sexData}
                             cx="50%"
                             cy="50%"
-                            innerRadius={50}
-                            outerRadius={85}
+                            innerRadius={45}
+                            outerRadius={80}
                             paddingAngle={3}
                             dataKey="value"
-                            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                           >
                             {sexData.map((entry) => (
                               <Cell key={entry.name} fill={entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#EC4899' : '#94A3B8'} />
@@ -1061,19 +1030,17 @@ export default function Analytics() {
               <div className="px-5 pb-5">
                 {outcomeData.length > 0 ? (
                   <div className="flex items-center justify-center gap-6">
-                    <div className="w-[200px] h-[200px]">
+                    <div className="w-[180px] h-[180px]">
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie
                             data={outcomeData}
                             cx="50%"
                             cy="50%"
-                            innerRadius={50}
-                            outerRadius={85}
+                            innerRadius={45}
+                            outerRadius={80}
                             paddingAngle={2}
                             dataKey="Cases"
-                            label={({ name, percent }) => `${percent > 0.08 ? (name?.length > 10 ? name.slice(0, 8) + '..' : name) : ''} ${(percent * 100).toFixed(0)}%`}
-                            labelLine={false}
                           >
                             {outcomeData.map((entry) => (
                               <Cell key={entry.name} fill={OUTCOME_COLORS[entry.name] || '#94A3B8'} />
@@ -1084,15 +1051,20 @@ export default function Analytics() {
                       </ResponsiveContainer>
                     </div>
                     <div className="space-y-1.5">
-                      {outcomeData.map((entry) => (
-                        <div key={entry.name} className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: OUTCOME_COLORS[entry.name] || '#94A3B8' }} />
-                          <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>
-                            {entry.name?.length > 16 ? entry.name.slice(0, 14) + '...' : entry.name}
-                          </span>
-                          <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{entry.Cases}</span>
-                        </div>
-                      ))}
+                      {outcomeData.map((entry) => {
+                        const total = outcomeData.reduce((s, e) => s + e.Cases, 0);
+                        const pct = total > 0 ? ((entry.Cases / total) * 100).toFixed(1) : '0.0';
+                        return (
+                          <div key={entry.name} className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: OUTCOME_COLORS[entry.name] || '#94A3B8' }} />
+                            <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>
+                              {entry.name?.length > 18 ? entry.name.slice(0, 16) + '...' : entry.name}
+                            </span>
+                            <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{entry.Cases.toLocaleString()}</span>
+                            <span className="text-[10px]" style={{ color: '#94A3B8' }}>({pct}%)</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ) : (
@@ -1112,9 +1084,9 @@ export default function Analytics() {
                 </div>
               </div>
               <div className="px-5 pb-5">
-                <div className="flex flex-col gap-4">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   {insights.map((insight, i) => (
-                    <div key={i} className="flex gap-3" style={{ borderBottom: i < insights.length - 1 ? '1px solid #F1F5F9' : 'none', paddingBottom: i < insights.length - 1 ? 16 : 0 }}>
+                    <div key={i} className="flex gap-3 p-4">
                       <div className="w-[3px] rounded-full shrink-0" style={{ background: insight.color }} />
                       <div className="flex flex-col gap-1">
                         <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: insight.color }}>{insight.category}</span>
