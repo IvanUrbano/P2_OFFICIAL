@@ -32,7 +32,13 @@ BACKEND/data/*-backup-*.geojson
 SESSION_NOTES.md
 
 # Scratch/debug utilities
-scratch_*.js
+scratch_*
+check_*
+_tmp_*
+test_insert.js
+BACKEND/_tmp_*.js
+BACKEND/check_*.js
+BACKEND/scratch_*.js
 
 # Terminal artifacts
 cls

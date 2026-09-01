@@ -77,7 +77,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     const barangaysResult = await client.query(
       'SELECT name, population FROM barangays ORDER BY name'
     );
-    const barangays = barangaysResult.rows;
+    let barangays = barangaysResult.rows;
 
     if (barangays.length === 0) {
       results.status = 'no_data';

@@ -79,7 +79,6 @@ export default function LoginPage() {
     e.preventDefault();
     const otp = String(Math.floor(100000 + Math.random() * 900000));
     setGeneratedOtp(otp);
-    console.log(`[OTP] Password reset code for ${resetEmail}: ${otp}`);
     setOtpTimer(60);
     setResetStep(2);
   };
@@ -87,7 +86,6 @@ export default function LoginPage() {
   const handleResendOtp = () => {
     const otp = String(Math.floor(100000 + Math.random() * 900000));
     setGeneratedOtp(otp);
-    console.log(`[OTP] Resent code for ${resetEmail}: ${otp}`);
     setOtpTimer(60);
     setOtpError('');
     setOtpCode('');

@@ -436,7 +436,7 @@ router.get('/dashboard/summary', async (req, res) => {
       FROM tb_cases
       ${whereClause}
     `, params);
-    console.log('[metrics]', result.rows[0]);
+    
     res.json({ summary: result.rows[0] });
   } catch (err) {
     console.error('Dashboard summary error:', err.message);
@@ -1249,7 +1249,7 @@ router.get('/alerts', async (req, res) => {
  * PUT /api/tb/alerts/:id/read
  * Mark an alert as read
  */
-router.put('/alerts/:id/read', async (req, res) => {
+router.put('/alerts/:id/read', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     await pool.query(
@@ -1302,7 +1302,7 @@ router.get('/alerts/counts', async (req, res) => {
  * PUT /api/tb/alerts/read-all
  * Mark all unread alerts/notifications as read
  */
-router.put('/alerts/read-all', async (req, res) => {
+router.put('/alerts/read-all', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE alerts SET is_read = TRUE, status = 'read', read_at = NOW() WHERE status = 'unread'`
@@ -1343,7 +1343,7 @@ router.get('/alerts/:id', async (req, res) => {
  * PUT /api/tb/alerts/:id/resolve
  * Mark an alert as resolved
  */
-router.put('/alerts/:id/resolve', async (req, res) => {
+router.put('/alerts/:id/resolve', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { resolved_by } = req.body || {};
@@ -2257,7 +2257,7 @@ router.get('/interventions/:id', async (req, res) => {
  * POST /api/tb/interventions
  * Create a new intervention
  */
-router.post('/interventions', async (req, res) => {
+router.post('/interventions', authenticateToken, async (req, res) => {
   try {
     const {
       title, description, intervention_type, barangay_name,
@@ -2293,7 +2293,7 @@ router.post('/interventions', async (req, res) => {
  * PUT /api/tb/interventions/:id
  * Update an intervention
  */
-router.put('/interventions/:id', async (req, res) => {
+router.put('/interventions/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -2345,7 +2345,7 @@ router.put('/interventions/:id', async (req, res) => {
  * POST /api/tb/interventions/:id/complete
  * Mark an intervention as completed
  */
-router.post('/interventions/:id/complete', async (req, res) => {
+router.post('/interventions/:id/complete', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     await pool.query(
@@ -2363,7 +2363,7 @@ router.post('/interventions/:id/complete', async (req, res) => {
  * DELETE /api/tb/interventions/:id
  * Delete an intervention
  */
-router.delete('/interventions/:id', async (req, res) => {
+router.delete('/interventions/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     await pool.query('DELETE FROM interventions WHERE id = $1', [id]);

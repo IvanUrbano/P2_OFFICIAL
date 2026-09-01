@@ -17,7 +17,8 @@ Frontend directory layout is **non-standard**: shared components live in `FRONTE
 | `npm run lint` | FRONTEND | ESLint (frontend only) |
 | `npm run build` | FRONTEND | Vite build → `FRONTEND/dist/` |
 
-No test suite exists. CI (`/.github/workflows/ci.yml`) only runs `npm run build` on the frontend — no backend checks or lint.
+Backend has 80\+ tests (run \
+ode --test BACKEND/test/\*.test.js BACKEND/test/tbinsight/\*.test.js\). CI (`/.github/workflows/ci.yml`) only runs `npm run build` on the frontend — no backend checks or lint.
 
 ## Database Setup
 
@@ -153,7 +154,7 @@ BACKEND/
 - **Date column**: `date_of_diagnosis` is the ARIMA time key
 - **Incidence formula**: (cases ÷ population) × 100,000
 - **Risk thresholds**: Tertiles on 3-year window (not absolute WHO thresholds)
-- **RF features (6)**: forecasted_count, trend, seasonality, density, neighbor_risk, historical_bias (Approach B feedback loop)
+- **RF features (8)**: forecasted_incidence, recent_trend, seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk, historical_bias (Approach B feedback loop)
 - **Historical bias**: AVG(forecast_error) per barangay from past runs; 0 on first run
 - **Neighbor risk**: Computed as average incidence of all other barangays, normalized to 0-1
 - **Risk scoring**: Weighted index — 45% incidence + 25% trend + 20% neighbor risk + 10% forecast error
