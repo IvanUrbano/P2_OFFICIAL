@@ -39,7 +39,7 @@ function Message({ kind, text }) {
       className="flex items-center gap-2 px-3 py-2 rounded-lg text-[12px] font-medium"
       style={{
         background: isError ? 'rgba(239,68,68,0.07)' : 'rgba(16,185,129,0.08)',
-        color: isError ? '#DC2626' : '#059669',
+         color: isError ? '#991B1B' : '#047857',
         border: `1px solid ${isError ? 'rgba(239,68,68,0.18)' : 'rgba(16,185,129,0.18)'}`,
       }}
     >
@@ -56,7 +56,7 @@ function RoleBadge({ role }) {
       className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wide"
       style={{
         background: isAdmin ? 'rgba(46,111,175,0.10)' : 'rgba(16,185,129,0.10)',
-        color: isAdmin ? '#2E6FAF' : '#059669',
+         color: isAdmin ? '#2E6FAF' : '#047857',
       }}
     >
       <i className={isAdmin ? 'ri-shield-star-line' : 'ri-user-star-line'} />
@@ -319,7 +319,7 @@ export default function Settings() {
 
         {sysError ? (
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-[12px] font-medium"
-            style={{ background: 'rgba(239,68,68,0.07)', color: '#DC2626', border: '1px solid rgba(239,68,68,0.18)' }}>
+             style={{ background: 'rgba(153,27,27,0.05)', color: '#991B1B', border: '1px solid rgba(153,27,27,0.12)' }}>
             <i className="ri-error-warning-line" />
             <span>Cannot reach the API server. Is the backend running?</span>
           </div>
@@ -334,14 +334,14 @@ export default function Settings() {
                 icon: 'ri-heart-pulse-line',
                 label: 'API Status',
                 value: sys.status === 'ok' ? 'Online' : 'Degraded',
-                color: sys.status === 'ok' ? '#059669' : '#D97706',
+                 color: sys.status === 'ok' ? '#047857' : '#92400E',
                 bg: sys.status === 'ok' ? 'rgba(16,185,129,0.08)' : 'rgba(217,119,6,0.08)',
               },
               {
                 icon: 'ri-database-2-line',
                 label: 'Database',
                 value: sys.database === 'connected' ? 'Connected' : 'Disconnected',
-                color: sys.database === 'connected' ? '#059669' : '#DC2626',
+                 color: sys.database === 'connected' ? '#047857' : '#991B1B',
                 bg: sys.database === 'connected' ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)',
               },
               { icon: 'ri-version-line', label: 'API Version', value: sys.version || '—', color: '#2E6FAF', bg: 'rgba(46,111,175,0.08)' },

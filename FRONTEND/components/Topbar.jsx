@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import Logo from './Logo';
+import API from '../src/api/axios';
 
 const NAV_ITEMS = [
   { icon: 'ri-pie-chart-fill', label: 'Dashboard', path: '/dashboard' },
@@ -11,7 +12,7 @@ const NAV_ITEMS = [
   { icon: 'ri-file-text-line', label: 'Reports', path: '/reports' },
   { icon: 'ri-notification-3-line', label: 'Alerts & Notifications', path: '/alert' },
   { icon: 'ri-server-line', label: 'Data Integration', path: '/data-integration' },
-  { icon: 'ri-building-2-line', label: 'Barangays', path: '/barangays' },
+  { icon: 'ri-first-aid-kit-line', label: 'Interventions', path: '/interventions' },
   { icon: 'ri-user-3-line', label: 'Users', path: '/users', adminOnly: true },
 ];
 
@@ -24,7 +25,7 @@ const NAV_ACCENT = {
   '/reports': '#EC4899',
   '/alert': '#EF4444',
   '/data-integration': '#06B6D4',
-  '/barangays': '#14B8A6',
+  '/interventions': '#14B8A6',
   '/users': '#6366F1',
 };
 
@@ -33,6 +34,10 @@ export default function Topbar({ user }) {
   const location = useLocation();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
+  const [bellOpen, setBellOpen] = useState(false);
+  const bellRef = useRef(null);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [recentNotifs, setRecentNotifs] = useState([]);
 
   const storedUser = user ?? (() => {
     const s = localStorage.getItem('user');
@@ -40,7 +45,7 @@ export default function Topbar({ user }) {
   })();
 
   const userRole = storedUser?.role || 'Admin';
-  const isAdmin = userRole === 'Admin';
+  const isAdmin = userRole === 'admin';
   const initials = storedUser?.username
     ? storedUser.username.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2)
     : 'AD';
@@ -55,9 +60,31 @@ export default function Topbar({ user }) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
         setDropdownOpen(false);
       }
+      if (bellRef.current && !bellRef.current.contains(e.target)) {
+        setBellOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Poll unread count + recent notifications
+  useEffect(() => {
+    const fetchBellData = async () => {
+      try {
+        const [countRes, notifRes] = await Promise.all([
+          API.get('/api/tb/alerts/unread-count'),
+          API.get('/api/tb/alerts', { params: { limit: 5, status: 'unread' } }),
+        ]);
+        setUnreadCount(countRes.data.count || 0);
+        setRecentNotifs(notifRes.data.alerts || []);
+      } catch {
+        // silent fail — bell is non-critical
+      }
+    };
+    fetchBellData();
+    const interval = setInterval(fetchBellData, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleLogout = () => {
@@ -87,7 +114,7 @@ export default function Topbar({ user }) {
           className="flex items-center gap-3 cursor-pointer shrink-0"
           onClick={() => navigate('/dashboard')}
         >
-          <Logo size={32} />
+          <Logo variant="icon" width={36} />
           <div className="flex items-center gap-2.5">
             <span className="text-lg font-extrabold tracking-tight" style={{ color: '#ffffff' }}>
               TBInsight
@@ -114,18 +141,122 @@ export default function Topbar({ user }) {
           <div className="hidden md:block w-px h-5" style={{ background: 'rgba(255,255,255,0.1)' }} />
 
           {/* Notification Bell */}
-          <button
-            onClick={() => navigate('/notifications')}
-            title="Notifications"
-            className="relative w-9 h-9 flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
-            style={{ background: 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
-          >
-            <i className="ri-notification-3-line text-base" />
-            <span
-              className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
-              style={{ background: '#EF4444', boxShadow: '0 0 6px #EF4444' }}
-            />
-          </button>
+          <div className="relative" ref={bellRef}>
+            <button
+              onClick={() => setBellOpen(!bellOpen)}
+              title="Notifications"
+              className="relative w-9 h-9 flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
+              style={{ background: bellOpen ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
+            >
+              <i className="ri-notification-3-line text-base" />
+              {unreadCount > 0 && (
+                <span
+                  className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full flex items-center justify-center text-[9px] font-bold"
+                  style={{
+                    background: '#EF4444',
+                    color: '#ffffff',
+                    padding: '0 4px',
+                    boxShadow: '0 0 6px rgba(239,68,68,0.5)',
+                    animation: 'bell-pulse 2s ease-in-out infinite',
+                  }}
+                >
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
+            </button>
+
+            {/* Bell Dropdown */}
+            {bellOpen && (
+              <div
+                className="absolute right-0 top-full mt-2 w-80 rounded-xl overflow-hidden z-[1200]"
+                style={{
+                  background: '#ffffff',
+                  border: '1px solid #E2E8F0',
+                  boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08)',
+                }}
+              >
+                <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid #E2E8F0' }}>
+                  <div>
+                    <p className="text-xs font-bold" style={{ color: '#0F2D52' }}>Notifications</p>
+                    {unreadCount > 0 && (
+                      <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>{unreadCount} unread</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => { navigate('/alert'); setBellOpen(false); }}
+                    className="text-[10px] font-semibold"
+                    style={{ color: '#0F2D52' }}
+                  >
+                    View All
+                  </button>
+                </div>
+
+                {recentNotifs.length === 0 ? (
+                  <div className="px-4 py-8 text-center">
+                    <i className="ri-notification-off-line text-xl" style={{ color: '#CBD5E1' }} />
+                    <p className="text-[11px] mt-2" style={{ color: '#94A3B8' }}>No new notifications</p>
+                  </div>
+                ) : (
+                  <div className="max-h-72 overflow-y-auto">
+                    {recentNotifs.map(n => {
+                      const severityColors = {
+                        critical: '#DC2626', high: '#EF4444', warning: '#D97706',
+                        medium: '#D97706', low: '#2E6FAF', info: '#6B7280', danger: '#DC2626',
+                      };
+                      const dotColor = severityColors[n.severity] || '#6B7280';
+                      const isAlert = n.type === 'alert';
+                      return (
+                        <div
+                          key={n.id}
+                          className="px-4 py-3 flex items-start gap-3 cursor-pointer transition-colors hover:bg-blue-50"
+                          style={{ borderBottom: '1px solid #F1F5F9' }}
+                          onClick={() => { navigate('/alert'); setBellOpen(false); }}
+                        >
+                          <span className="w-2 h-2 rounded-full mt-1.5 shrink-0" style={{ background: dotColor }} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              <p className="text-[11px] font-bold truncate" style={{ color: '#0F2D52' }}>{n.title || n.alert_type || 'Notification'}</p>
+                              <span
+                                className="shrink-0 inline-flex items-center rounded px-1 py-px text-[8px] font-bold uppercase"
+                                style={{
+                                  background: isAlert ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.1)',
+                                  color: isAlert ? '#EF4444' : '#2563EB',
+                                }}
+                              >
+                                {isAlert ? 'Alert' : 'Notif'}
+                              </span>
+                            </div>
+                            <p className="text-[10px] mt-0.5 line-clamp-2" style={{ color: '#64748B' }}>{n.message}</p>
+                            <p className="text-[9px] mt-1" style={{ color: '#94A3B8' }}>
+                              {n.created_at ? (() => {
+                                const d = new Date(n.created_at);
+                                const mins = Math.floor((new Date() - d) / 60000);
+                                if (mins < 1) return 'Just now';
+                                if (mins < 60) return `${mins}m ago`;
+                                const hrs = Math.floor(mins / 60);
+                                if (hrs < 24) return `${hrs}h ago`;
+                                return `${Math.floor(hrs / 24)}d ago`;
+                              })() : ''}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="px-4 py-2.5 text-center" style={{ borderTop: '1px solid #E2E8F0' }}>
+                  <button
+                    onClick={() => { navigate('/alert'); setBellOpen(false); }}
+                    className="text-[11px] font-semibold"
+                    style={{ color: '#0F2D52' }}
+                  >
+                    View All Notifications
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Settings */}
           <button

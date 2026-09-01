@@ -11,21 +11,21 @@ import API from '../api/axios';
 const COLORS = {
   primary: '#0F2D52',
   blue: '#2E6FAF',
-  cyan: '#4FD1C5',
-  red: '#EF4444',
-  green: '#10B981',
-  purple: '#7c3aed',
-  amber: '#F59E0B',
+  cyan: '#5F9EA0',
+  red: '#991B1B',
+  green: '#047857',
+  purple: '#6B7280',
+  amber: '#92400E',
   gray: '#94A3B8',
 };
 
 const OUTCOME_COLORS = {
-  'CURED': '#10B981',
-  'TREATMENT COMPLETED': '#3B82F6',
-  'ON TREATMENT': '#F59E0B',
-  'FAILED': '#EF4444',
-  'DIED': '#DC2626',
-  'LOST TO FOLLOW-UP': '#8B5CF6',
+  'CURED': '#047857',
+  'TREATMENT COMPLETED': '#2E6FAF',
+  'ON TREATMENT': '#92400E',
+  'FAILED': '#991B1B',
+  'DIED': '#7F1D1D',
+  'LOST TO FOLLOW-UP': '#6B7280',
   'EXCLUDED': '#64748B',
   'NOT EVALUATED': '#94A3B8',
 };
@@ -90,7 +90,7 @@ function TrendBadge({ current, previous, inverse }) {
   const isGood = inverse ? !isUp : isUp;
   return (
     <span className="inline-flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded"
-      style={{ background: isGood ? '#D1FAE5' : '#FEE2E2', color: isGood ? '#059669' : '#DC2626' }}>
+      style={{ background: isGood ? '#ECFDF5' : '#FEF2F2', color: isGood ? '#047857' : '#991B1B' }}>
       <i className={`${isUp ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line'} text-[10px]`} />
       {pct}%
     </span>
@@ -139,7 +139,6 @@ function FilterSelect({ label, value, onChange, children, selectStyle }) {
 
 export default function Analytics() {
   const [loading, setLoading] = useState(true);
-  const [filtering, setFiltering] = useState(false);
   const [error, setError] = useState(null);
 
   /* Raw data from API */
@@ -176,14 +175,18 @@ export default function Analytics() {
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [casesRes, brgyRes, riskRes, filterRes, fcRes] = await Promise.all([
-        API.get('/api/tb/cases?limit=99999'),
+      const [firstPageRes, brgyRes, riskRes, filterRes, fcRes] = await Promise.all([
+        API.get('/api/tb/cases?limit=1'),
         API.get('/api/tb/barangays'),
         API.get('/api/tb/gis/choropleth'),
         API.get('/api/tb/filter-options').catch(() => ({ data: {} })),
         API.get('/api/tb/forecasts').catch(() => ({ data: { forecasts: [] } })),
       ]);
-      setAllCases(casesRes.data.cases || []);
+      const totalCases = firstPageRes.data.pagination?.total || 0;
+      const allCasesRes = totalCases > 0
+        ? await API.get(`/api/tb/cases?limit=${totalCases}`)
+        : firstPageRes;
+      setAllCases(allCasesRes.data.cases || []);
       setBarangays(brgyRes.data.barangays || brgyRes.data || []);
       setRiskData(riskRes.data.choropleth || []);
       setFilterOptions(filterRes.data || {});
@@ -200,7 +203,6 @@ export default function Analytics() {
 
   /* ── Apply filters ── */
   const handleApply = useCallback(() => {
-    setFiltering(true);
     setAYear(filterYear);
     setAMonth(filterMonth);
     setABarangay(filterBarangay);
@@ -209,7 +211,6 @@ export default function Analytics() {
     setAAgeGroup(filterAgeGroup);
     setABact(filterBact);
     setApplied(true);
-    setTimeout(() => setFiltering(false), 300);
   }, [filterYear, filterMonth, filterBarangay, filterOutcome, filterSex, filterAgeGroup, filterBact]);
 
   const handleClear = useCallback(() => {
@@ -308,34 +309,36 @@ export default function Analytics() {
     const withOutcome = filteredCases.filter((c) => c.outcome_status && c.outcome_status !== 'NOT EVALUATED');
     const success = withOutcome.filter((c) => SUCCESS_OUTCOMES.includes(c.outcome_status.toUpperCase())).length;
     const successRate = withOutcome.length > 0 ? ((success / withOutcome.length) * 100).toFixed(1) : '0.0';
-    // Compute highRisk from forecasts (model_predictions) which always has risk_class
-    // Get the latest period's forecasts, count unique barangays with High/Very High risk
+    // High-Risk Barangays: filter by selected barangay if set, otherwise count all
     let highRisk = 0;
-    if (forecastsData.length > 0) {
-      const latestPeriod = forecastsData.reduce((max, r) => {
-        const p = r.period || r.forecast_period || '';
-        return p > max ? p : max;
-      }, '');
-      const highBarangays = new Set();
-      forecastsData.forEach((r) => {
-        const p = r.period || r.forecast_period || '';
-        if (p !== latestPeriod) return;
+    const highRiskSet = new Set();
+    if (aBarangay) {
+      // If a specific barangay is selected, check if it's high risk
+      const inForecasts = forecastsData.find((r) => {
         const rc = (r.risk_class || '').toLowerCase();
-        if (rc === 'high' || rc === 'very high') {
-          highBarangays.add(r.barangay_name);
-        }
+        return rc === 'high' && r.barangay_name === aBarangay;
       });
-      highRisk = highBarangays.size;
-    }
-    // Fallback to choropleth riskData if forecasts have no risk data
-    if (highRisk === 0 && riskData.length > 0) {
-      highRisk = riskData.filter((r) => {
+      const inRisk = riskData.find((r) => {
         const rc = (r.risk_class || '').toLowerCase();
-        return rc === 'high' || rc === 'very high';
-      }).length;
+        return rc === 'high' && r.barangay_name === aBarangay;
+      });
+      highRisk = (inForecasts || inRisk) ? 1 : 0;
+    } else {
+      // Count all high-risk barangays
+      forecastsData.forEach((r) => {
+        const rc = (r.risk_class || '').toLowerCase();
+        if (rc === 'high') highRiskSet.add(r.barangay_name);
+      });
+      if (highRiskSet.size === 0) {
+        riskData.forEach((r) => {
+          const rc = (r.risk_class || '').toLowerCase();
+          if (rc === 'high') highRiskSet.add(r.barangay_name);
+        });
+      }
+      highRisk = highRiskSet.size;
     }
     return { total, active, successRate, highRisk };
-  }, [filteredCases, riskData, forecastsData]);
+  }, [filteredCases, riskData, forecastsData, aBarangay]);
 
   /* ── Previous year metrics (for trend badges) ── */
   const previousMetrics = useMemo(() => {
@@ -527,7 +530,7 @@ export default function Analytics() {
       const top = barangayData[0];
       list.push({
         category: 'HOTSPOT',
-        color: '#DC2626',
+        color: '#991B1B',
         stat: top.Cases.toLocaleString(),
         unit: 'cases',
         text: `${top.name} has the highest number of reported TB cases.`,
@@ -540,7 +543,7 @@ export default function Analytics() {
       if (older > 0) {
         const pct = (((recent - older) / older) * 100).toFixed(0);
         if (pct > 5) list.push({ category: 'TREND', color: '#0D9488', stat: `+${pct}`, unit: '%', text: 'TB cases have increased compared to the earlier period.' });
-        else if (pct < -5) list.push({ category: 'TREND', color: '#059669', stat: `${pct}`, unit: '%', text: 'TB cases have decreased compared to the earlier period.' });
+        else if (pct < -5) list.push({ category: 'TREND', color: '#047857', stat: `${pct}`, unit: '%', text: 'TB cases have decreased compared to the earlier period.' });
         else list.push({ category: 'TREND', color: '#64748B', stat: '~0', unit: '%', text: 'TB cases have remained relatively stable across the selected period.' });
       }
     }
@@ -563,7 +566,7 @@ export default function Analytics() {
       const isBelow = rate < 85;
       list.push({
         category: 'TREATMENT',
-        color: isBelow ? '#DC2626' : '#059669',
+        color: isBelow ? '#991B1B' : '#047857',
         stat: metrics.successRate,
         unit: '%',
         text: isBelow ? 'Treatment success rate is currently below target.' : 'Treatment success rate meets the target threshold.',
@@ -573,7 +576,7 @@ export default function Analytics() {
     if (metrics.highRisk > 0) {
       list.push({
         category: 'HIGH RISK',
-        color: '#DC2626',
+        color: '#991B1B',
         stat: String(metrics.highRisk),
         unit: `barangay${metrics.highRisk > 1 ? 's' : ''}`,
         text: `${metrics.highRisk} barangay${metrics.highRisk > 1 ? 's are' : ' is'} currently classified as high risk.`,
@@ -595,7 +598,7 @@ export default function Analytics() {
       const top = facilityData[0];
       list.push({
         category: 'FACILITY LOAD',
-        color: '#7C3AED',
+         color: '#6B7280',
         stat: top.Cases.toLocaleString(),
         unit: 'cases',
         text: `${top.name} handles the most TB cases among health facilities.`,
@@ -607,7 +610,7 @@ export default function Analytics() {
       if (sorted.length > 0) {
         list.push({
           category: 'INCIDENCE',
-          color: '#D97706',
+           color: '#92400E',
           stat: sorted[0].Incidence.toLocaleString(),
           unit: 'per 100k',
           text: `${sorted[0].name} has the highest incidence rate among Pasig City barangays.`,
@@ -634,7 +637,7 @@ export default function Analytics() {
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: '#FEE2E2' }}>
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: '#FEF2F2' }}>
           <i className="ri-error-warning-line text-3xl" style={{ color: COLORS.red }} />
         </div>
         <span className="text-sm font-medium" style={{ color: '#64748B' }}>{error}</span>
@@ -662,9 +665,16 @@ export default function Analytics() {
             </span>
             <button onClick={() => {
               if (!filteredCases.length) return;
+              const escapeCSV = (val) => {
+                const s = String(val == null ? '' : val);
+                if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+                  return '"' + s.replace(/"/g, '""') + '"';
+                }
+                return s;
+              };
               const headers = ['Barangay', 'Sex', 'Age', 'Date of Diagnosis', 'Outcome', 'Bacteriological Status'];
               const rows = filteredCases.map((c) => [c.barangay_name, c.sex, c.age, c.date_of_diagnosis, c.outcome_status, c.bacteriological_status]);
-              const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+              const csv = [headers.map(escapeCSV).join(','), ...rows.map((r) => r.map(escapeCSV).join(','))].join('\n');
               const blob = new Blob([csv], { type: 'text/csv' });
               const url = URL.createObjectURL(blob);
               const a = document.createElement('a');
@@ -694,12 +704,15 @@ export default function Analytics() {
             </FilterSelect>
             <FilterSelect label="Outcome" value={filterOutcome} onChange={setFilterOutcome} selectStyle={{ maxWidth: 160 }}>
               <option value="">All Outcomes</option>
-              {OUTCOMES.map((o) => <option key={o} value={o === 'All Outcomes' ? '' : o}>{o}</option>)}
+              {(filterOptions.outcome_status || OUTCOMES.filter(o => o !== 'All Outcomes')).map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
             </FilterSelect>
             <FilterSelect label="Sex" value={filterSex} onChange={setFilterSex}>
               <option value="">All</option>
-              <option value="Male">Male</option>
-              <option value="Female">Female</option>
+              {(filterOptions.sex || ['Male', 'Female']).map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
             </FilterSelect>
             <FilterSelect label="Age" value={filterAgeGroup} onChange={setFilterAgeGroup}>
               <option value="">All Ages</option>
@@ -716,8 +729,8 @@ export default function Analytics() {
             <button onClick={handleClear} className="px-3 py-2 text-xs font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
               Clear
             </button>
-            <button onClick={handleApply} disabled={filtering} className="px-4 py-2 text-xs font-semibold disabled:opacity-60" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { if (!filtering) { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; } }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
-              {filtering ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Applying...</> : 'Apply Filters'}
+            <button onClick={handleApply} className="px-4 py-2 text-xs font-semibold" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
+              Apply Filters
             </button>
           </div>
         </div>
@@ -727,7 +740,7 @@ export default function Analytics() {
       {activeFilters.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
           {activeFilters.map((f) => (
-            <span key={f.key} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold" style={{ background: '#EFF6FF', color: '#0F2D52', border: '1px solid #DBEAFE' }}>
+            <span key={f.key} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold" style={{ background: '#F1F5F9', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
               {f.label}: <span className="font-bold">{f.value}</span>
               <button onClick={() => removeFilter(f.key)} className="inline-flex items-center justify-center w-4 h-4" style={{ color: '#94A3B8' }}>
                 ×
@@ -776,7 +789,7 @@ export default function Analytics() {
                     <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Active Cases</span>
                   </div>
                   {metrics.total > 0 && (
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEF3C7', color: '#D97706' }}>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FFFBEB', color: '#92400E' }}>
                       {((metrics.active / metrics.total) * 100).toFixed(1)}%
                     </span>
                   )}
@@ -796,7 +809,7 @@ export default function Analytics() {
                     <i className="ri-check-double-line text-sm" style={{ color: '#6B9E8A' }} />
                     <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Success</span>
                   </div>
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#D1FAE5', color: '#059669' }}>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#ECFDF5', color: '#047857' }}>
                     {metrics.successRate}%
                   </span>
                 </div>
@@ -815,8 +828,8 @@ export default function Analytics() {
                     <i className="ri-alarm-warning-line text-sm" style={{ color: '#C4886A' }} />
                     <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk Barangays</span>
                   </div>
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEE2E2', color: '#DC2626' }}>
-                    {metrics.highRisk}/30
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEF2F2', color: '#991B1B' }}>
+                    {metrics.highRisk}/{barangayNames.length || 30}
                   </span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
@@ -891,7 +904,7 @@ export default function Analytics() {
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
             <div className="flex items-center justify-between px-5 py-4">
               <div className="flex items-center gap-3">
-                <div className="w-1 h-8 rounded-full" style={{ background: showIncidence ? '#D97706' : '#0D9488' }} />
+                 <div className="w-1 h-8 rounded-full" style={{ background: showIncidence ? '#92400E' : '#0D9488' }} />
                 <div>
                   <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>TB Cases by Barangay</h3>
                   <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>{showIncidence ? 'Incidence rate per 100,000 population across Pasig City barangays.' : 'Distribution of reported TB cases across the 30 barangays of Pasig City.'}</p>
@@ -917,7 +930,7 @@ export default function Analytics() {
                       <Bar dataKey={showIncidence ? 'Incidence' : 'Cases'} radius={[0, 6, 6, 0]} barSize={16} name={showIncidence ? 'Per 100k' : 'Cases'}>
                         {barangayIncidenceData.map((entry, i) => (
                           <Cell key={i} fill={showIncidence
-                            ? (entry.Incidence > 100 ? '#DC2626' : entry.Incidence > 50 ? '#D97706' : '#059669')
+                             ? (entry.Incidence > 100 ? '#991B1B' : entry.Incidence > 50 ? '#92400E' : '#047857')
                             : (i === 0 ? '#0D9488' : i < 5 ? '#14B8A6' : '#99F6E4')
                           } />
                         ))}
@@ -936,7 +949,7 @@ export default function Analytics() {
             <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
               <div className="px-5 py-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-1 h-8 rounded-full" style={{ background: '#7C3AED' }} />
+                  <div className="w-1 h-8 rounded-full" style={{ background: '#6B7280' }} />
                   <div>
                     <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Cases by Health Facility</h3>
                     <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Top 15 health facilities handling TB cases in Pasig City.</p>
@@ -953,7 +966,7 @@ export default function Analytics() {
                       <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
                       <Bar dataKey="Cases" radius={[0, 6, 6, 0]} barSize={16} name="Cases">
                         {facilityData.map((entry, i) => (
-                          <Cell key={i} fill={i === 0 ? '#6D28D9' : i < 5 ? '#8B5CF6' : '#C4B5FD'} />
+                          <Cell key={i} fill={i === 0 ? '#374151' : i < 5 ? '#6B7280' : '#9CA3AF'} />
                         ))}
                       </Bar>
                     </ComposedChart>
@@ -992,7 +1005,7 @@ export default function Analytics() {
                             dataKey="value"
                           >
                             {sexData.map((entry) => (
-                              <Cell key={entry.name} fill={entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#EC4899' : '#94A3B8'} />
+                              <Cell key={entry.name} fill={entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#B48EAD' : '#94A3B8'} />
                             ))}
                           </Pie>
                           <Tooltip formatter={(value) => value.toLocaleString()} />
@@ -1002,7 +1015,7 @@ export default function Analytics() {
                     <div className="space-y-2">
                       {sexData.map((entry) => (
                         <div key={entry.name} className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#EC4899' : '#94A3B8' }} />
+                           <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#B48EAD' : '#94A3B8' }} />
                           <span className="text-xs font-semibold" style={{ color: '#475569' }}>{entry.name}</span>
                           <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>{entry.value.toLocaleString()}</span>
                           <span className="text-[10px]" style={{ color: '#94A3B8' }}>({totalSex > 0 ? ((entry.value / totalSex) * 100).toFixed(1) : 0}%)</span>
@@ -1020,7 +1033,7 @@ export default function Analytics() {
             <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
               <div className="px-5 py-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-1 h-8 rounded-full" style={{ background: '#059669' }} />
+                   <div className="w-1 h-8 rounded-full" style={{ background: '#047857' }} />
                   <div>
                     <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Treatment Outcomes</h3>
                     <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Distribution of treatment outcomes.</p>
@@ -1079,7 +1092,7 @@ export default function Analytics() {
             <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
               <div className="px-5 py-4">
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#7C3AED' }}>Summary</span>
+                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#6B7280' }}>Summary</span>
                   <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Key Insights</h3>
                 </div>
               </div>

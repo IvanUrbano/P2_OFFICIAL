@@ -610,10 +610,7 @@ export default function Reports() {
         </div>
 
         {/* Filters */}
-        <div className="px-6 py-4">
-          <p className="text-[10px] font-bold uppercase tracking-widest mb-3" style={{ color: '#94A3B8' }}>
-            {REPORT_TYPES.find(r => r.key === reportType)?.title} Report Options
-          </p>
+        <div className="px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
           <div className="flex items-center gap-2 flex-wrap">
             {reportType === 'monthly' && (
               <>
@@ -695,7 +692,7 @@ export default function Reports() {
       {/* ─── Error State ─── */}
       {error && !loading && (
         <div className="flex flex-col items-center justify-center py-16 gap-4" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
-          <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: '#FEE2E2' }}>
+           <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: '#FEF2F2' }}>
             <i className="ri-error-warning-line text-2xl" style={{ color: '#EF4444' }} />
           </div>
           <div className="text-center">

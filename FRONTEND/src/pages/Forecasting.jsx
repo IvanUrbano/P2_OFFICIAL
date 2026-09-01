@@ -20,7 +20,7 @@ const RISK_COLORS = {
   Low: '#10B981',
   Moderate: '#F59E0B',
   High: '#EF4444',
-  'Very High': '#DC2626',
+  'Very High': '#991B1B',
 };
 
 /* ─── Helper Components ──────────────────────────────────────────────── */
@@ -207,11 +207,11 @@ export default function Forecasting() {
       // Re-fetch fresh data
       const [freshForecasts, freshAvp, freshPipeline] = await Promise.all([
         API.get('/api/tb/forecasts'),
-        API.get('/api/tb/forecast/actual-vs-predicted'),
+        API.get('/api/tb/forecast/backtest'),
         API.get('/api/tb/pipeline/status').catch(() => ({ data: { latest_run: null } })),
       ]);
       setForecastsData(freshForecasts.data.forecasts || []);
-      setAvpData(freshAvp.data.data || []);
+      setBacktestData(freshAvp.data.data || []);
       setPipelineStatus(freshPipeline.data.latest_run || null);
     } catch (err) {
       console.error('Pipeline error:', err.response?.data?.error || err.message);
@@ -673,7 +673,7 @@ export default function Forecasting() {
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <div
           className="w-16 h-16 rounded-2xl flex items-center justify-center"
-          style={{ background: '#FEE2E2' }}
+             style={{ background: '#FEF2F2' }}
         >
           <i className="ri-error-warning-line text-3xl" style={{ color: '#EF4444' }} />
         </div>
@@ -799,7 +799,7 @@ export default function Forecasting() {
         <div className="flex flex-col items-center justify-center py-24 gap-4" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
           <div
             className="w-16 h-16 rounded-2xl flex items-center justify-center"
-            style={{ background: '#FEE2E2' }}
+            style={{ background: '#FEF2F2' }}
           >
             <i className="ri-error-warning-line text-3xl" style={{ color: '#EF4444' }} />
           </div>
@@ -994,13 +994,13 @@ export default function Forecasting() {
                       {forecastStartLabel && (
                         <ReferenceLine
                           x={forecastStartLabel}
-                          stroke="#D97706"
+                           stroke="#92400E"
                           strokeWidth={1.5}
                           strokeDasharray="6 4"
                           label={{
                             value: 'Forecast Start',
                             position: 'top',
-                            fill: '#D97706',
+                             fill: '#92400E',
                             fontSize: 10,
                             fontWeight: 700,
                           }}
@@ -1094,7 +1094,7 @@ export default function Forecasting() {
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
             <div className="px-5 py-4">
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#7C3AED' }}>Data</span>
+                 <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#6B7280' }}>Data</span>
                 <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Forecast Details</h3>
               </div>
             </div>
@@ -1166,14 +1166,14 @@ export default function Forecasting() {
                                     <div
                                       className="absolute top-0 h-full rounded-full"
                                       style={{
-                                        background: '#C4B5FD',
+                                         background: '#C4B5C0',
                                         left: `${barLeft}%`,
                                         width: `${Math.max(2, barWidth)}%`,
                                       }}
                                     />
                                     <div
                                       className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full border-2 border-white"
-                                      style={{ background: '#7C3AED', left: `${forecastPos}%`, transform: 'translate(-50%, -50%)' }}
+                                       style={{ background: '#6B7280', left: `${forecastPos}%`, transform: 'translate(-50%, -50%)' }}
                                     />
                                   </div>
                                   <span className="text-[11px] font-medium tabular-nums" style={{ color: '#94A3B8', minWidth: 28 }}>

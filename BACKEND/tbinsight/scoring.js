@@ -211,11 +211,8 @@ async function storeResults(client, period, forecasts, classifications, riskScor
   if (allPeriods.size === 0) allPeriods.add(period);
   const periodList = [...allPeriods].sort();
 
-  // Clear previous results for all forecast periods (idempotent re-runs)
-  await client.query(
-    'DELETE FROM model_predictions WHERE period = ANY($1::date[])',
-    [periodList]
-  );
+  // Clear ALL previous results (each pipeline run replaces all prior forecasts)
+  await client.query('DELETE FROM model_predictions');
   await client.query('DELETE FROM barangay_risk_scores WHERE period = $1', [period]);
   await client.query('DELETE FROM alerts WHERE period = $1', [period]);
 
@@ -239,7 +236,6 @@ async function storeResults(client, period, forecasts, classifications, riskScor
   for (const fc of forecasts) {
     const predPoints = fc.predictions || [];
     const risk = riskScores.find(r => r.barangay_name === fc.barangay_name);
-    const classResult = classifications.find(c => c.barangay_name === fc.barangay_name);
 
     for (const pt of predPoints) {
       if (!pt.month) continue;
@@ -252,7 +248,7 @@ async function storeResults(client, period, forecasts, classifications, riskScor
         pt.yhat,
         pt.yhat_lower,
         pt.yhat_upper,
-        classResult?.risk_class || null,
+        risk?.risk_class || null,
         risk?.incidence_per_100k || 0,
         actualCount,
         modelVersion,
@@ -306,15 +302,17 @@ async function storeResults(client, period, forecasts, classifications, riskScor
   for (const alert of alerts) {
     await client.query(
       `INSERT INTO alerts
-        (barangay_name, period, alert_type, severity, message, recommendation)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+        (type, title, status, alert_type, severity, message, recommendation,
+         barangay_name, period, source_module)
+       VALUES ('alert', $1, 'unread', $2, $3, $4, $5, $6, $7, 'analytics')`,
       [
-        alert.barangay_name,
-        alert.period,
+        alert.alert_type === 'high_risk_escalation' ? 'High-Risk Escalation Detected' : 'TB Alert',
         alert.alert_type,
         alert.severity,
         alert.message,
         alert.recommendation,
+        alert.barangay_name,
+        alert.period,
       ]
     );
   }

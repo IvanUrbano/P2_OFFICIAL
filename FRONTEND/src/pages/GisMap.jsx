@@ -1,4 +1,5 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import html2canvas from 'html2canvas';
@@ -16,14 +17,14 @@ const RISK_COLORS = {
 };
 
 const OUTCOME_COLORS = {
-  'CURED': '#10B981',
-  'TREATMENT COMPLETED': '#22C55E',
-  'ON TREATMENT': '#3B82F6',
-  'LOST TO FOLLOW-UP': '#F97316',
-  'DIED': '#EF4444',
+  'CURED': '#047857',
+  'TREATMENT COMPLETED': '#2E6FAF',
+  'ON TREATMENT': '#92400E',
+  'LOST TO FOLLOW-UP': '#6B7280',
+  'DIED': '#991B1B',
   'EXCLUDED': '#64748B',
-  'FAILED': '#EF4444',
-  'DEFAULTED': '#F97316',
+  'FAILED': '#991B1B',
+  'DEFAULTED': '#B45309',
   'NOT EVALUATED': '#94A3B8',
 };
 
@@ -62,7 +63,7 @@ function riskStyle(feature) {
 
 function highlightFeature(e) {
   const layer = e.target;
-  layer.setStyle({ weight: 1.5, fillOpacity: 0.8, color: '#00bfff' });
+         layer.setStyle({ weight: 1.5, fillOpacity: 0.8, color: '#4A6FA5' });
   layer.bringToFront();
 }
 
@@ -128,6 +129,7 @@ function buildLabels(map, features, layerRef) {
 }
 
 export default function GisMap() {
+  const navigate = useNavigate();
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const geojsonLayerRef = useRef(null);
@@ -142,6 +144,7 @@ export default function GisMap() {
   const [selectedBarangayName, setSelectedBarangayName] = useState(null);
   const [barangayDetail, setBarangayDetail] = useState(null);
   const [barangayDetailLoading, setBarangayDetailLoading] = useState(false);
+  const [barangayInterventionCount, setBarangayInterventionCount] = useState(0);
   const [hoveredBarangay, setHoveredBarangay] = useState(null);
   const [timelineMonth, setTimelineMonth] = useState(null);
   const [isAnimating, setIsAnimating] = useState(false);
@@ -294,7 +297,7 @@ export default function GisMap() {
       if (!layer.feature) return;
       const name = layer.feature.properties?.name;
       if (name === hoveredBarangay) {
-        layer.setStyle({ weight: 1.5, fillOpacity: 0.8, color: '#00bfff' });
+  layer.setStyle({ weight: 1.5, fillOpacity: 0.8, color: '#4A6FA5' });
         layer.bringToFront();
       } else {
         geojsonLayerRef.current.resetStyle(layer);
@@ -409,16 +412,22 @@ export default function GisMap() {
 
   // Fetch barangay detail data when a barangay is selected
   useEffect(() => {
-    if (!selectedBarangayName) { setBarangayDetail(null); return; }
+    if (!selectedBarangayName) { setBarangayDetail(null); setBarangayInterventionCount(0); return; }
     let cancelled = false;
     (async () => {
       setBarangayDetailLoading(true);
       try {
-        const res = await API.get(`/api/tb/dashboard/barangay/${encodeURIComponent(selectedBarangayName)}`);
-        if (!cancelled) setBarangayDetail(res.data);
+        const [detailRes, interventionsRes] = await Promise.all([
+          API.get(`/api/tb/dashboard/barangay/${encodeURIComponent(selectedBarangayName)}`),
+          API.get('/api/tb/interventions', { params: { barangay: selectedBarangayName, limit: 1 } }),
+        ]);
+        if (!cancelled) {
+          setBarangayDetail(detailRes.data);
+          setBarangayInterventionCount(interventionsRes.data.pagination?.total || 0);
+        }
       } catch (err) {
         console.error('Barangay detail fetch error:', err);
-        if (!cancelled) setBarangayDetail(null);
+        if (!cancelled) { setBarangayDetail(null); setBarangayInterventionCount(0); }
       } finally {
         if (!cancelled) setBarangayDetailLoading(false);
       }
@@ -830,7 +839,7 @@ export default function GisMap() {
             <div className="sticky top-0 z-10" style={{ background: '#0F2D52' }}>
               <div className="flex items-center justify-between px-6 py-4">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#93C5FD' }}>Barangay Inspector</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#93C5FD' }}>Barangay Profile</p>
                   <h2 className="text-base font-extrabold tracking-tight" style={{ color: '#ffffff' }}>{selectedBarangayName}</h2>
                 </div>
                 <button
@@ -923,13 +932,32 @@ export default function GisMap() {
                         <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Incidence / 100k</span>
                         <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.incidence_per_100k)}</p>
                       </div>
-                      <div className="rounded-lg p-3" style={{ background: '#EFF6FF', border: '1px solid #DBEAFE' }}>
+                       <div className="rounded-lg p-3" style={{ background: '#F1F5F9', border: '1px solid #E2E8F0' }}>
                         <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Active Cases</span>
                         <p className="text-xl font-extrabold mt-1" style={{ color: '#2563EB' }}>{activeCases}</p>
                       </div>
-                      <div className="rounded-lg p-3" style={{ background: successRate !== '—' && Number(successRate) >= 85 ? '#F0FDF4' : '#FFF7ED', border: `1px solid ${successRate !== '—' && Number(successRate) >= 85 ? '#BBF7D0' : '#FED7AA'}` }}>
+                       <div className="rounded-lg p-3" style={{ background: successRate !== '—' && Number(successRate) >= 85 ? '#F1F8F1' : '#FDF8F0', border: `1px solid ${successRate !== '—' && Number(successRate) >= 85 ? '#D4EDDA' : '#F5E6CC'}` }}>
                         <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Success Rate</span>
                         <p className="text-xl font-extrabold mt-1" style={{ color: successRate !== '—' && Number(successRate) >= 85 ? '#16A34A' : '#EA580C' }}>{successRate}%</p>
+                      </div>
+                       <div className="rounded-lg p-3 col-span-2" style={{ background: '#F0F5F4', border: '1px solid #D1D5DB' }}>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Active Interventions</span>
+                            <p className="text-xl font-extrabold mt-1" style={{ color: '#0D9488' }}>{barangayInterventionCount}</p>
+                          </div>
+                          {barangayInterventionCount === 0 && (
+                            <button
+                              onClick={() => navigate(`/interventions?barangay=${encodeURIComponent(selectedBarangayName)}`)}
+                              className="text-[10px] font-semibold px-2.5 py-1 rounded-md transition-colors"
+                               style={{ background: '#E2E8F0', color: '#374151' }}
+                              onMouseEnter={e => { e.currentTarget.style.background = '#99F6E4'; }}
+                              onMouseLeave={e => { e.currentTarget.style.background = '#CCFBF1'; }}
+                            >
+                              <i className="ri-add-line mr-0.5" />Create
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -947,7 +975,7 @@ export default function GisMap() {
                         const isUp = last > prev;
                         return delta !== null && prev > 0 ? (
                           <div className="flex items-center gap-1.5 mb-3">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: isUp ? '#FEF2F2' : '#F0FDF4', color: isUp ? '#EF4444' : '#16A34A' }}>
+                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: isUp ? '#FEF2F2' : '#ECFDF5', color: isUp ? '#991B1B' : '#047857' }}>
                               <i className={`ri-arrow-${isUp ? 'up' : 'down'}-line text-[10px]`} />
                               {delta}%
                             </span>
@@ -1031,7 +1059,7 @@ export default function GisMap() {
                               labelStyle={{ color: '#94A3B8', fontSize: 10 }}
                             />
                             <Bar dataKey="Male" fill="#3B82F6" radius={[0, 2, 2, 0]} barSize={10} />
-                            <Bar dataKey="Female" fill="#EC4899" radius={[0, 2, 2, 0]} barSize={10} />
+                             <Bar dataKey="Female" fill="#B48EAD" radius={[0, 2, 2, 0]} barSize={10} />
                           </BarChart>
                         </ResponsiveContainer>
                       </div>
@@ -1041,7 +1069,7 @@ export default function GisMap() {
                           <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>Male</span>
                         </div>
                         <div className="flex items-center gap-1.5">
-                          <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#EC4899' }} />
+                           <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#B48EAD' }} />
                           <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>Female</span>
                         </div>
                       </div>

@@ -28,17 +28,17 @@ const RISK_COLORS = {
   Moderate: '#F59E0B',
   Medium: '#F59E0B',
   High: '#EF4444',
-  'Very High': '#DC2626',
+  'Very High': '#991B1B',
   'No Data': '#94A3B8',
 };
 
 const OUTCOME_COLORS = {
-  'CURED': '#10B981',
-  'TREATMENT COMPLETED': '#3B82F6',
-  'ON TREATMENT': '#F59E0B',
-  'FAILED': '#EF4444',
-  'DIED': '#DC2626',
-  'LOST TO FOLLOW-UP': '#8B5CF6',
+  'CURED': '#047857',
+  'TREATMENT COMPLETED': '#2E6FAF',
+  'ON TREATMENT': '#92400E',
+  'FAILED': '#991B1B',
+  'DIED': '#7F1D1D',
+  'LOST TO FOLLOW-UP': '#6B7280',
   'EXCLUDED': '#64748B',
   'NOT EVALUATED': '#94A3B8',
 };
@@ -46,9 +46,9 @@ const OUTCOME_COLORS = {
 const OUTCOME_ORDER = ['CURED', 'TREATMENT COMPLETED', 'ON TREATMENT', 'FAILED', 'DIED', 'LOST TO FOLLOW-UP', 'EXCLUDED', 'NOT EVALUATED'];
 
 const GIS_RISK_COLORS = {
-  High: '#EF4444',
-  Medium: '#F97316',
-  Low: '#FBBF24',
+  High: '#991B1B',
+  Medium: '#B45309',
+  Low: '#854D0E',
   'No Data': '#64748B',
 };
 
@@ -430,7 +430,7 @@ export default function DashboardPage() {
     // Source 1: choropleth data (pipeline-computed risk scores)
     const fromChoropleth = riskData.filter((r) => {
       const rc = (r.risk_class || '').toLowerCase();
-      return rc === 'high' || rc === 'very high' || rc === 'medium';
+      return rc === 'high';
     }).length;
     if (fromChoropleth > 0) return fromChoropleth;
 
@@ -444,7 +444,7 @@ export default function DashboardPage() {
       forecastsData.forEach((r) => {
         if (r.period !== latestPeriod) return;
         const rc = (r.risk_class || '').toLowerCase();
-        if (rc === 'high' || rc === 'very high' || rc === 'medium') highSet.add(r.barangay_name);
+        if (rc === 'high') highSet.add(r.barangay_name);
       });
       if (highSet.size > 0) return highSet.size;
     }
@@ -460,16 +460,15 @@ export default function DashboardPage() {
       });
       const entries = Object.entries(casesByBrgy).map(([name, totalCases]) => {
         const pop = popMap[name] || 1;
-        return { name, incidence: (totalCases / pop) * 100000 };
+        return { name, incidence: ((totalCases * 12) / pop) * 100000 };
       }).filter((e) => e.incidence > 0);
       if (entries.length === 0) return 0;
       entries.sort((a, b) => a.incidence - b.incidence);
       const n = entries.length;
-      const lowMax = Math.floor(n / 3);
       const medMax = Math.floor((2 * n) / 3);
       let count = 0;
       entries.forEach((e, i) => {
-        if (i >= lowMax) count++;
+        if (i >= medMax) count++;
       });
       return count;
     }
@@ -755,8 +754,8 @@ export default function DashboardPage() {
       return {
         id: a.id,
         severity,
-        type: a.alert_type || 'Alert',
-        title: a.alert_type || 'Alert',
+        type: a.type || 'alert',
+        title: a.title || a.alert_type || 'Alert',
         message: a.message || '',
         barangay: a.barangay_name || '',
         time: timeLabel,
@@ -776,7 +775,7 @@ export default function DashboardPage() {
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: '#FEE2E2' }}>
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: '#FEF2F2' }}>
           <i className="ri-error-warning-line text-3xl" style={{ color: '#EF4444' }} />
         </div>
         <p className="text-sm font-medium" style={{ color: '#64748B' }}>{error}</p>
@@ -1038,7 +1037,7 @@ export default function DashboardPage() {
             <SectionCard
               title="Top High-Risk Barangays"
               icon="ri-list-ordered"
-              iconColor="#7C3AED"
+               iconColor="#6B7280"
               description="Barangays with the highest recorded TB burden and risk classification."
               action="View GIS Hotspots"
               actionTo="/gis-map"
@@ -1077,7 +1076,7 @@ export default function DashboardPage() {
             <SectionCard
               title="Demographics — Age Distribution"
               icon="ri-group-line"
-              iconColor="#8B5CF6"
+              iconColor="#6B7280"
               description="TB cases by age group."
             >
               {ageData.length > 0 ? (
@@ -1090,7 +1089,7 @@ export default function DashboardPage() {
                         <div key={item.age_group} className="flex items-center gap-3">
                           <span className="text-[11px] font-semibold w-10 shrink-0" style={{ color: '#64748B' }}>{item.age_group}</span>
                           <div className="flex-1 h-5 rounded-md" style={{ background: '#E2E8F0' }}>
-                            <div className="h-full rounded-md transition-all" style={{ width: `${pct}%`, background: '#8B5CF6' }} />
+                            <div className="h-full rounded-md transition-all" style={{ width: `${pct}%`, background: '#6B7280' }} />
                           </div>
                           <span className="text-[11px] font-bold w-10 text-right shrink-0" style={{ color: '#0F2D52' }}>{item.total.toLocaleString()}</span>
                         </div>
@@ -1134,7 +1133,7 @@ export default function DashboardPage() {
                           dataKey="value"
                         >
                           <Cell fill="#3B82F6" />
-                          <Cell fill="#EC4899" />
+                           <Cell fill="#B48EAD" />
                         </Pie>
                         <Tooltip formatter={(value) => value.toLocaleString()} />
                       </PieChart>
@@ -1143,7 +1142,7 @@ export default function DashboardPage() {
                   <div className="space-y-2">
                     {[
                       { label: 'Male', value: sexData.Male, color: '#3B82F6' },
-                      { label: 'Female', value: sexData.Female, color: '#EC4899' },
+                       { label: 'Female', value: sexData.Female, color: '#B48EAD' },
                     ].map((item) => {
                       const total = sexData.Male + sexData.Female;
                       const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : 0;
@@ -1315,8 +1314,8 @@ export default function DashboardPage() {
                 <div>
                   {recentAlerts.map((alert, idx) => {
                     const isCritical = alert.severity === 'CRITICAL' || alert.severity === 'HIGH';
-                    const badgeBg = isCritical ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
-                    const badgeColor = isCritical ? '#EF4444' : '#D97706';
+                    const badgeBg = isCritical ? 'rgba(153,27,27,0.08)' : 'rgba(146,64,14,0.08)';
+                    const badgeColor = isCritical ? '#991B1B' : '#92400E';
                     return (
                       <div
                         key={alert.id || idx}

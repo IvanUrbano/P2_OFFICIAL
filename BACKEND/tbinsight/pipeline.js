@@ -370,9 +370,9 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
         maxError,
       });
 
-      // Use RF classification result when available
-      const rfResult = classifyResults.find(c => c.barangay_name === name);
-      const finalClass = rfResult?.risk_class || riskClass;
+      // Use weighted risk score's tertile classification for barangay_risk_scores
+      // This ensures consistent Low/Medium/High distribution regardless of ML service availability
+      const finalClass = riskClass;
 
       return {
         barangay_name: name,
@@ -473,11 +473,12 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
 // ==================== HELPER FUNCTIONS ====================
 
 /**
- * Compute incidence per 100k from case count and population.
+ * Compute ANNUAL incidence per 100k from monthly case count and population.
+ * WHO standard is annual incidence per 100,000 population.
  */
-function _computeIncidence(cases, population) {
+function _computeIncidence(monthlyCases, population) {
   if (!population || population <= 0) return 0;
-  return (cases / population) * 100_000;
+  return ((monthlyCases * 12) / population) * 100_000;
 }
 
 /**

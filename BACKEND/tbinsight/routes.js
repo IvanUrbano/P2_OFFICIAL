@@ -7,6 +7,10 @@ const { rebuildAggregations } = require('./aggregateMonthly');
 const { seedAll, getBarangays, getHealthFacilities, findBarangay } = require('./barangays');
 const { runPipeline } = require('./pipeline');
 const { healthCheck: mlHealthCheck, evaluate: mlEvaluate, forecast: mlForecast } = require('./mlClient');
+const {
+  createNotification, getUnreadCount, evaluateAllAlerts,
+  evaluateCaseIncreaseAlerts,
+} = require('./alertEngine');
 
 const router = express.Router();
 
@@ -123,6 +127,25 @@ router.post('/import', authenticateToken, authorizeRoles('admin'), async (req, r
     let aggregations = null;
     if (result.importedCount > 0) {
       aggregations = await rebuildAggregations();
+    }
+
+    // Create notification for successful import
+    if (result.importedCount > 0) {
+      try {
+        await createNotification(pool, {
+          title: 'Records Imported Successfully',
+          message: `${result.importedCount} TB records were successfully imported from ${file.name}.`,
+          sourceModule: 'tb_records',
+          relatedRecordId: result.batchId,
+          relatedEntityType: 'batch',
+        });
+        // Auto-evaluate all alert types after import
+        const now = new Date();
+        const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+        await evaluateAllAlerts(pool, currentPeriod);
+      } catch (notifErr) {
+        console.error('Import notification error:', notifErr.message);
+      }
     }
 
     res.status(201).json({
@@ -300,7 +323,8 @@ router.get('/cases', async (req, res) => {
         c.bacteriological_status,
         c.date_started_treatment,
         c.outcome_status,
-        c.date_of_outcome
+        c.date_of_outcome,
+        c.imported_at
       FROM tb_cases c
       ${whereClause}
       ORDER BY c.date_of_diagnosis DESC
@@ -405,7 +429,7 @@ router.get('/dashboard/summary', async (req, res) => {
         SUM(CASE WHEN UPPER(outcome_status) = 'DIED' THEN 1 ELSE 0 END)::INTEGER as died_count,
         SUM(CASE WHEN UPPER(outcome_status) = 'LOST TO FOLLOW-UP' THEN 1 ELSE 0 END)::INTEGER as ltfu_count,
         SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER as successful_count,
-        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '')::INTEGER as total_outcomes,
+        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(outcome_status) != 'NOT EVALUATED')::INTEGER as total_outcomes,
         SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as current_month_cases,
         SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
                   AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as prev_month_cases
@@ -435,7 +459,7 @@ router.get('/dashboard/metrics', async (req, res) => {
         SUM(CASE WHEN outcome_status = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS on_treatment_count,
         SUM(CASE WHEN outcome_status = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
         SUM(CASE WHEN outcome_status IN ('CURED', 'TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful_count,
-        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '')::INTEGER AS total_outcomes,
+        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(outcome_status) != 'NOT EVALUATED')::INTEGER AS total_outcomes,
         SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER AS current_month_cases,
         SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
                   AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER AS prev_month_cases
@@ -854,38 +878,6 @@ router.get('/gis/geojson', async (req, res) => {
       };
     });
 
-    // Fallback: if risk data is missing OR uniform (all same class), compute from case data using tertiles
-    const riskClasses = new Set(features.map(f => f.properties.risk_class).filter(Boolean));
-    const hasMeaningfulRiskData = riskClasses.size > 1;
-    if (!hasMeaningfulRiskData) {
-      // Compute incidence per 100k for each barangay
-      const withIncidence = features.map(f => {
-        const pop = f.properties.population || 1;
-        const cases = f.properties.total_cases || 0;
-        const incidence = (cases / pop) * 100000;
-        return { ...f, _incidence: incidence };
-      });
-      // Sort by incidence to compute tertiles
-      withIncidence.sort((a, b) => a._incidence - b._incidence);
-      const n = withIncidence.length;
-      const lowMax = Math.floor(n / 3);
-      const medMax = Math.floor((2 * n) / 3);
-      withIncidence.forEach((f, i) => {
-        if (i < lowMax) {
-          f.properties.risk_class = 'Low';
-        } else if (i < medMax) {
-          f.properties.risk_class = 'Medium';
-        } else {
-          f.properties.risk_class = 'High';
-        }
-        f.properties.risk_score = Math.round((f._incidence / (withIncidence[n - 1]._incidence || 1)) * 100 * 100) / 100;
-        f.properties.incidence_per_100k = Math.round(f._incidence * 100) / 100;
-        delete f._incidence;
-      });
-      features.length = 0;
-      features.push(...withIncidence);
-    }
-
     // Build merged outline from all outer rings — used to fill gaps between barangays
     const outlineCoords = [];
     for (const feature of features) {
@@ -1006,51 +998,6 @@ router.get('/gis/choropleth', async (req, res) => {
       ORDER BY b.name
     `);
 
-    // Fallback: if risk data is missing or uniform, compute from case counts using tertiles
-    const riskClasses = new Set(result.rows.map(r => r.risk_class).filter(Boolean));
-    const hasMeaningfulRiskData = riskClasses.size > 1;
-
-    if (!hasMeaningfulRiskData) {
-      // Fetch total case counts per barangay
-      const caseResult = await pool.query(`
-        SELECT barangay_name, SUM(case_count)::INTEGER as total_cases
-        FROM monthly_case_summary
-        GROUP BY barangay_name
-      `);
-      const caseMap = {};
-      for (const row of caseResult.rows) caseMap[row.barangay_name] = row.total_cases;
-
-      // Compute incidence per 100k for each barangay
-      const withIncidence = result.rows.map(r => {
-        const pop = r.population || 1;
-        const cases = caseMap[r.name] || 0;
-        const incidence = (cases / pop) * 100000;
-        return { ...r, _incidence: incidence };
-      });
-
-      // Sort by incidence to compute tertiles
-      withIncidence.sort((a, b) => a._incidence - b._incidence);
-      const n = withIncidence.length;
-      const lowMax = Math.floor(n / 3);
-      const medMax = Math.floor((2 * n) / 3);
-
-      withIncidence.forEach((r, i) => {
-        if (i < lowMax) {
-          r.risk_class = 'Low';
-        } else if (i < medMax) {
-          r.risk_class = 'Medium';
-        } else {
-          r.risk_class = 'High';
-        }
-        r.risk_score = Math.round((r._incidence / (withIncidence[n - 1]._incidence || 1)) * 100 * 100) / 100;
-        r.incidence_per_100k = Math.round(r._incidence * 100) / 100;
-        delete r._incidence;
-      });
-
-      result.rows.length = 0;
-      result.rows.push(...withIncidence);
-    }
-
     res.json({ choropleth: result.rows });
   } catch (err) {
     console.error('Choropleth error:', err.message);
@@ -1169,20 +1116,131 @@ router.get('/predictions/risk', async (req, res) => {
 
 /**
  * GET /api/tb/alerts
- * Active alerts
+ * Alerts and notifications with filtering and pagination.
+ *
+ * Query params:
+ *   type     = alert | notification (default: all)
+ *   status   = unread | read | resolved (default: all)
+ *   severity = critical | high | medium | low | info (default: all)
+ *   barangay = barangay name (default: all)
+ *   source   = source_module value (default: all)
+ *   date     = today | 7d | 30d | custom (default: all)
+ *   from     = YYYY-MM-DD (custom date range start)
+ *   to       = YYYY-MM-DD (custom date range end)
+ *   page     = integer (default: 1)
+ *   limit    = integer (default: 50, max: 100)
  */
 router.get('/alerts', async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT id, barangay_name, period, alert_type, severity,
-             message, recommendation, is_read, created_at
-      FROM alerts
-      ORDER BY created_at DESC
-      LIMIT 100
-    `);
-    res.json({ alerts: result.rows });
+    // Seed sample data if alerts table is empty (wrapped in its own try/catch)
+    try {
+      const totalCheck = await pool.query('SELECT COUNT(*)::int AS count FROM alerts');
+      if (totalCheck.rows[0].count === 0) {
+        // Seed sample notifications
+        const sampleNotifs = [
+          { title: 'System Initialized', message: 'TBInsight surveillance system has been initialized and is ready for use.', source: 'data_integration' },
+          { title: 'Data Import Completed', message: 'TB case records have been successfully imported and validated.', source: 'tb_records' },
+          { title: 'Forecast Model Updated', message: 'ARIMA forecasting model has been retrained with the latest case data.', source: 'forecasting' },
+          { title: 'Risk Assessment Complete', message: 'Barangay risk classification has been updated based on current data.', source: 'analytics' },
+          { title: 'Report Generated', message: 'Monthly TB surveillance report has been generated and is available for review.', source: 'reports' },
+        ];
+        for (const n of sampleNotifs) {
+          await createNotification(pool, {
+            title: n.title,
+            message: n.message,
+            sourceModule: n.source,
+          });
+        }
+
+        // Try to evaluate real alerts using the latest period from the database
+        try {
+          const periodResult = await pool.query(`
+            SELECT MAX(month)::text AS latest FROM monthly_case_summary
+            UNION ALL
+            SELECT MAX(period)::text FROM barangay_risk_scores
+            UNION ALL
+            SELECT MAX(period)::text FROM model_predictions
+          `);
+          const periods = periodResult.rows.map(r => r.latest).filter(Boolean).sort().reverse();
+          if (periods.length > 0) {
+            const evalPeriod = periods[0].slice(0, 10); // keep full date "YYYY-MM-DD"
+            await evaluateAllAlerts(pool, evalPeriod);
+          }
+        } catch (e) {
+          console.error('Seed alert evaluation skipped:', e.message);
+        }
+      }
+    } catch (seedErr) {
+      console.error('Alert seed/evaluation skipped:', seedErr.message);
+    }
+
+    const { type, status, severity, barangay, source, date, from, to } = req.query;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+
+    const conditions = [];
+    const params = [];
+    let idx = 1;
+
+    if (type && ['alert', 'notification'].includes(type)) {
+      conditions.push(`type = $${idx++}`);
+      params.push(type);
+    }
+    if (status && ['unread', 'read', 'resolved'].includes(status)) {
+      conditions.push(`status = $${idx++}`);
+      params.push(status);
+    }
+    if (severity) {
+      conditions.push(`severity = $${idx++}`);
+      params.push(severity);
+    }
+    if (barangay) {
+      conditions.push(`barangay_name = $${idx++}`);
+      params.push(barangay);
+    }
+    if (source) {
+      conditions.push(`source_module = $${idx++}`);
+      params.push(source);
+    }
+    if (date === 'today') {
+      conditions.push(`created_at >= CURRENT_DATE`);
+    } else if (date === '7d') {
+      conditions.push(`created_at >= NOW() - INTERVAL '7 days'`);
+    } else if (date === '30d') {
+      conditions.push(`created_at >= NOW() - INTERVAL '30 days'`);
+    } else if (date === 'custom' && from && to) {
+      conditions.push(`created_at >= $${idx++}`);
+      params.push(from);
+      conditions.push(`created_at <= $${idx++}`);
+      params.push(to + ' 23:59:59');
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM alerts ${where}`,
+      params
+    );
+    const total = countResult.rows[0].total;
+
+    const result = await pool.query(
+      `SELECT id, type, title, alert_type, severity, message, recommendation,
+              barangay_name, period, source_module, status, related_record_id,
+              related_entity_type, is_read, read_at, resolved_at, resolved_by,
+              metadata, created_at
+       FROM alerts ${where}
+       ORDER BY created_at DESC
+       LIMIT $${idx++} OFFSET $${idx++}`,
+      [...params, limit, offset]
+    );
+
+    res.json({
+      alerts: result.rows,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
   } catch (err) {
-    console.error('Alerts error:', err.message);
+    console.error('Alerts fetch error:', err.message);
     res.status(500).json({ error: 'Server error fetching alerts.' });
   }
 });
@@ -1194,11 +1252,165 @@ router.get('/alerts', async (req, res) => {
 router.put('/alerts/:id/read', async (req, res) => {
   try {
     const { id } = req.params;
-    await pool.query('UPDATE alerts SET is_read = TRUE WHERE id = $1', [id]);
+    await pool.query(
+      `UPDATE alerts SET is_read = TRUE, status = 'read', read_at = NOW() WHERE id = $1`,
+      [id]
+    );
     res.json({ message: 'Alert marked as read.' });
   } catch (err) {
     console.error('Mark alert read error:', err.message);
     res.status(500).json({ error: 'Server error marking alert as read.' });
+  }
+});
+
+/**
+ * GET /api/tb/alerts/unread-count
+ * Returns count of unread alerts + notifications (for bell badge)
+ */
+router.get('/alerts/unread-count', async (req, res) => {
+  try {
+    const count = await getUnreadCount(pool);
+    res.json({ count });
+  } catch (err) {
+    console.error('Unread count error:', err.message);
+    res.status(500).json({ error: 'Server error fetching unread count.' });
+  }
+});
+
+/**
+ * GET /api/tb/alerts/counts
+ * Returns summary counts: critical, high, unread, today (for metric cards)
+ */
+router.get('/alerts/counts', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE severity = 'critical' AND status != 'resolved')::int AS critical,
+        COUNT(*) FILTER (WHERE severity = 'high' AND status != 'resolved')::int AS high,
+        COUNT(*) FILTER (WHERE status = 'unread')::int AS unread,
+        COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::int AS today
+      FROM alerts
+    `);
+    res.json(result.rows[0] || { critical: 0, high: 0, unread: 0, today: 0 });
+  } catch (err) {
+    console.error('Alert counts error:', err.message);
+    res.status(500).json({ error: 'Server error fetching alert counts.' });
+  }
+});
+
+/**
+ * PUT /api/tb/alerts/read-all
+ * Mark all unread alerts/notifications as read
+ */
+router.put('/alerts/read-all', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE alerts SET is_read = TRUE, status = 'read', read_at = NOW() WHERE status = 'unread'`
+    );
+    res.json({ message: 'All alerts marked as read.', count: result.rowCount });
+  } catch (err) {
+    console.error('Mark all read error:', err.message);
+    res.status(500).json({ error: 'Server error marking all alerts as read.' });
+  }
+});
+
+/**
+ * GET /api/tb/alerts/:id
+ * Get a single alert/notification detail
+ */
+router.get('/alerts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `SELECT id, type, title, alert_type, severity, message, recommendation,
+              barangay_name, period, source_module, status, related_record_id,
+              related_entity_type, is_read, read_at, resolved_at, resolved_by,
+              metadata, created_at
+       FROM alerts WHERE id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Alert not found.' });
+    }
+    res.json({ alert: result.rows[0] });
+  } catch (err) {
+    console.error('Alert detail error:', err.message);
+    res.status(500).json({ error: 'Server error fetching alert detail.' });
+  }
+});
+
+/**
+ * PUT /api/tb/alerts/:id/resolve
+ * Mark an alert as resolved
+ */
+router.put('/alerts/:id/resolve', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { resolved_by } = req.body || {};
+    await pool.query(
+      `UPDATE alerts SET status = 'resolved', resolved_at = NOW(), resolved_by = $1 WHERE id = $2`,
+      [resolved_by || 'system', id]
+    );
+    res.json({ message: 'Alert resolved.' });
+  } catch (err) {
+    console.error('Resolve alert error:', err.message);
+    res.status(500).json({ error: 'Server error resolving alert.' });
+  }
+});
+
+/**
+ * GET /api/tb/alerts/stale-check
+ * Returns the last evaluation time and whether alerts are stale (>24h old).
+ */
+router.get('/alerts/stale-check', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT MAX(created_at)::timestamptz AS last_alert_created FROM alerts WHERE type = 'alert'`
+    );
+    const lastCreated = result.rows[0]?.last_alert_created;
+    const isStale = !lastCreated || (Date.now() - new Date(lastCreated).getTime()) > 24 * 60 * 60 * 1000;
+    res.json({ lastEvaluated: lastCreated, isStale });
+  } catch (err) {
+    console.error('Stale check error:', err.message);
+    res.json({ lastEvaluated: null, isStale: true });
+  }
+});
+
+/**
+ * POST /api/tb/alerts/evaluate
+ * Trigger manual alert re-evaluation for a given period (admin only)
+ *
+ * Body: { period: "YYYY-MM-01" }
+ */
+router.post('/alerts/evaluate', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  try {
+    let { period } = req.body || {};
+
+    // Auto-detect latest period from database if not provided
+    if (!period) {
+      const periodResult = await pool.query(`
+        SELECT MAX(month)::text AS latest FROM monthly_case_summary
+        UNION ALL
+        SELECT MAX(period)::text FROM barangay_risk_scores
+        UNION ALL
+        SELECT MAX(period)::text FROM model_predictions
+      `);
+      const periods = periodResult.rows.map(r => r.latest).filter(Boolean).sort().reverse();
+      if (periods.length > 0) {
+        period = periods[0].slice(0, 7); // "YYYY-MM-DD" → "YYYY-MM"
+      } else {
+        return res.status(400).json({ error: 'No data found in database. Import data and run the pipeline first.' });
+      }
+    }
+
+    const periodDate = period.length === 7 ? period + '-01' : period;
+    const results = await evaluateAllAlerts(pool, periodDate);
+    const total = results.hotspots.length + results.caseIncrease.length +
+                  results.forecast.length + results.treatment.length;
+    res.json({ message: `Alert evaluation complete. ${total} alerts created.`, period: periodDate, results });
+  } catch (err) {
+    console.error('Alert evaluation error:', err.message);
+    res.status(500).json({ error: 'Server error during alert evaluation.' });
   }
 });
 
@@ -1291,6 +1503,29 @@ router.post('/pipeline', authenticateToken, authorizeRoles('admin'), async (req,
   try {
     const { period, thresholds, forecastHorizon, barangays } = req.body || {};
     const result = await runPipeline({ period, thresholds, forecastHorizon, barangays });
+
+    // Create notification for successful pipeline run
+    try {
+      const periodLabel = period || new Date().toISOString().slice(0, 7);
+      await createNotification(pool, {
+        title: 'Forecast Generated',
+        message: `A new forecast has been generated for ${periodLabel}.`,
+        sourceModule: 'forecasting',
+        relatedEntityType: 'pipeline',
+        metadata: { period: periodLabel, barangays: barangays || 'all' },
+      });
+    } catch (notifErr) {
+      console.error('Pipeline notification error:', notifErr.message);
+    }
+
+    // Auto-evaluate alerts after pipeline completes
+    try {
+      const evalPeriod = period || new Date().toISOString().slice(0, 7) + '-01';
+      await evaluateAllAlerts(pool, evalPeriod);
+    } catch (alertErr) {
+      console.error('Post-pipeline alert evaluation error:', alertErr.message);
+    }
+
     res.json({ message: 'Pipeline completed.', result });
   } catch (err) {
     console.error('Pipeline error:', err.message);
@@ -1820,7 +2055,7 @@ router.get('/reports/summary', async (req, res) => {
 
     const barangayDistribution = barangayDistRes.rows.map(r => {
       const pop = popMap[r.barangay_name] || 0;
-      const incidence = pop > 0 ? Number(((r.cases / pop) * 100000).toFixed(1)) : null;
+      const incidence = pop > 0 ? Number((((r.cases * 12) / pop) * 100000).toFixed(1)) : null;
       return {
         barangay: r.barangay_name,
         cases: r.cases,
@@ -1890,6 +2125,252 @@ router.get('/reports/summary', async (req, res) => {
   } catch (err) {
     console.error('Reports summary error:', err.message);
     res.status(500).json({ error: 'Server error generating report.' });
+  }
+});
+
+// ==================== INTERVENTIONS ====================
+
+/**
+ * GET /api/tb/interventions
+ * List interventions with filtering, search, and pagination.
+ *
+ * Query params: status, priority, barangay, type, assigned_to, search, page, limit
+ */
+router.get('/interventions', async (req, res) => {
+  try {
+    const { status, priority, barangay, type, assigned_to, search } = req.query;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const offset = (page - 1) * limit;
+
+    const conditions = [];
+    const params = [];
+    let idx = 1;
+
+    if (status && ['pending', 'in_progress', 'completed', 'overdue'].includes(status)) {
+      if (status === 'overdue') {
+        conditions.push(`status != 'completed' AND target_date < CURRENT_DATE`);
+      } else {
+        conditions.push(`status = $${idx++}`);
+        params.push(status);
+      }
+    }
+    if (priority && ['high', 'medium', 'low'].includes(priority)) {
+      conditions.push(`priority = $${idx++}`);
+      params.push(priority);
+    }
+    if (barangay) {
+      conditions.push(`barangay_name = $${idx++}`);
+      params.push(barangay);
+    }
+    if (type) {
+      conditions.push(`intervention_type = $${idx++}`);
+      params.push(type);
+    }
+    if (assigned_to) {
+      conditions.push(`assigned_to ILIKE $${idx++}`);
+      params.push(`%${assigned_to}%`);
+    }
+    if (search) {
+      conditions.push(`(title ILIKE $${idx} OR description ILIKE $${idx})`);
+      params.push(`%${search}%`);
+      idx++;
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM interventions ${where}`,
+      params
+    );
+    const total = countResult.rows[0].total;
+
+    const result = await pool.query(
+      `SELECT id, title, description, intervention_type, barangay_name, priority,
+              status, assigned_to, team, target_date, completed_at, created_by,
+              related_alert_id, metadata, created_at, updated_at
+       FROM interventions ${where}
+       ORDER BY
+         CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+         created_at DESC
+       LIMIT $${idx++} OFFSET $${idx++}`,
+      [...params, limit, offset]
+    );
+
+    res.json({
+      interventions: result.rows,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (err) {
+    console.error('Interventions fetch error:', err.message);
+    res.status(500).json({ error: 'Server error fetching interventions.' });
+  }
+});
+
+/**
+ * GET /api/tb/interventions/counts
+ * Summary counts: total, pending, in_progress, completed, overdue
+ */
+router.get('/interventions/counts', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+        COUNT(*) FILTER (WHERE status = 'in_progress')::int AS in_progress,
+        COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+        COUNT(*) FILTER (WHERE status != 'completed' AND target_date < CURRENT_DATE)::int AS overdue
+      FROM interventions
+    `);
+    res.json(result.rows[0] || { total: 0, pending: 0, in_progress: 0, completed: 0, overdue: 0 });
+  } catch (err) {
+    console.error('Intervention counts error:', err.message);
+    res.status(500).json({ error: 'Server error fetching intervention counts.' });
+  }
+});
+
+/**
+ * GET /api/tb/interventions/:id
+ * Get a single intervention detail
+ */
+router.get('/interventions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `SELECT id, title, description, intervention_type, barangay_name, priority,
+              status, assigned_to, team, target_date, completed_at, created_by,
+              related_alert_id, metadata, created_at, updated_at
+       FROM interventions WHERE id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Intervention not found.' });
+    }
+    res.json({ intervention: result.rows[0] });
+  } catch (err) {
+    console.error('Intervention detail error:', err.message);
+    res.status(500).json({ error: 'Server error fetching intervention detail.' });
+  }
+});
+
+/**
+ * POST /api/tb/interventions
+ * Create a new intervention
+ */
+router.post('/interventions', async (req, res) => {
+  try {
+    const {
+      title, description, intervention_type, barangay_name,
+      priority, assigned_to, team, target_date, created_by, related_alert_id, metadata,
+    } = req.body;
+
+    if (!title || !intervention_type || !barangay_name) {
+      return res.status(400).json({ error: 'Required: title, intervention_type, barangay_name' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO interventions
+        (title, description, intervention_type, barangay_name, priority,
+         assigned_to, team, target_date, created_by, related_alert_id, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id`,
+      [
+        title, description || null, intervention_type, barangay_name,
+        priority || 'medium', assigned_to || null, team || null,
+        target_date || null, created_by || null, related_alert_id || null,
+        metadata ? JSON.stringify(metadata) : null,
+      ]
+    );
+
+    res.status(201).json({ message: 'Intervention created.', id: result.rows[0].id });
+  } catch (err) {
+    console.error('Create intervention error:', err.message);
+    res.status(500).json({ error: 'Server error creating intervention.' });
+  }
+});
+
+/**
+ * PUT /api/tb/interventions/:id
+ * Update an intervention
+ */
+router.put('/interventions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      title, description, intervention_type, barangay_name,
+      priority, status, assigned_to, team, target_date, metadata,
+    } = req.body;
+
+    const fields = [];
+    const params = [];
+    let idx = 1;
+
+    if (title !== undefined) { fields.push(`title = $${idx++}`); params.push(title); }
+    if (description !== undefined) { fields.push(`description = $${idx++}`); params.push(description); }
+    if (intervention_type !== undefined) { fields.push(`intervention_type = $${idx++}`); params.push(intervention_type); }
+    if (barangay_name !== undefined) { fields.push(`barangay_name = $${idx++}`); params.push(barangay_name); }
+    if (priority !== undefined) { fields.push(`priority = $${idx++}`); params.push(priority); }
+    if (status !== undefined) {
+      fields.push(`status = $${idx++}`);
+      params.push(status);
+      if (status === 'completed') {
+        fields.push(`completed_at = NOW()`);
+      }
+    }
+    if (assigned_to !== undefined) { fields.push(`assigned_to = $${idx++}`); params.push(assigned_to); }
+    if (team !== undefined) { fields.push(`team = $${idx++}`); params.push(team); }
+    if (target_date !== undefined) { fields.push(`target_date = $${idx++}`); params.push(target_date); }
+    if (metadata !== undefined) { fields.push(`metadata = $${idx++}`); params.push(JSON.stringify(metadata)); }
+
+    if (fields.length === 0) {
+      return res.status(400).json({ error: 'No fields to update.' });
+    }
+
+    fields.push(`updated_at = NOW()`);
+    params.push(id);
+
+    await pool.query(
+      `UPDATE interventions SET ${fields.join(', ')} WHERE id = $${idx}`,
+      params
+    );
+
+    res.json({ message: 'Intervention updated.' });
+  } catch (err) {
+    console.error('Update intervention error:', err.message);
+    res.status(500).json({ error: 'Server error updating intervention.' });
+  }
+});
+
+/**
+ * POST /api/tb/interventions/:id/complete
+ * Mark an intervention as completed
+ */
+router.post('/interventions/:id/complete', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(
+      `UPDATE interventions SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+      [id]
+    );
+    res.json({ message: 'Intervention marked as completed.' });
+  } catch (err) {
+    console.error('Complete intervention error:', err.message);
+    res.status(500).json({ error: 'Server error completing intervention.' });
+  }
+});
+
+/**
+ * DELETE /api/tb/interventions/:id
+ * Delete an intervention
+ */
+router.delete('/interventions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM interventions WHERE id = $1', [id]);
+    res.json({ message: 'Intervention deleted.' });
+  } catch (err) {
+    console.error('Delete intervention error:', err.message);
+    res.status(500).json({ error: 'Server error deleting intervention.' });
   }
 });
 

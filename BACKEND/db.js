@@ -28,8 +28,8 @@ const execSql = async (sqlContent) => {
     // Split on ";\n" or ";" at end of line — avoids splitting on semicolons inside strings/comments
     const statements = sqlContent
       .split(/;\s*\n/)
-      .map(s => s.trim())
-      .filter(s => s.length > 0 && !s.startsWith('--'));
+      .map(s => s.split('\n').filter(line => !line.trim().startsWith('--')).join('\n').trim())
+      .filter(s => s.length > 0);
 
     for (const stmt of statements) {
       await client.query(stmt);
@@ -69,6 +69,26 @@ const initDb = async () => {
       console.log('✅ PostGIS migration completed successfully.');
     } else {
       console.log('⚠️ PostGIS migration not found, skipping.');
+    }
+
+    // Notifications: extend alerts table for unified alerts + notifications (idempotent)
+    const notifMigPath = path.join(__dirname, 'db', 'migrations', '004_notifications.sql');
+    if (fs.existsSync(notifMigPath)) {
+      const notifSql = fs.readFileSync(notifMigPath, 'utf8');
+      await execSql(notifSql);
+      console.log('✅ Notifications migration completed successfully.');
+    } else {
+      console.log('⚠️ Notifications migration not found, skipping.');
+    }
+
+    // Interventions: create interventions table for action planning (idempotent)
+    const intervMigPath = path.join(__dirname, 'db', 'migrations', '005_interventions.sql');
+    if (fs.existsSync(intervMigPath)) {
+      const intervSql = fs.readFileSync(intervMigPath, 'utf8');
+      await execSql(intervSql);
+      console.log('✅ Interventions migration completed successfully.');
+    } else {
+      console.log('⚠️ Interventions migration not found, skipping.');
     }
   } catch (err) {
     console.error('❌ Database initialization error:', err.message);

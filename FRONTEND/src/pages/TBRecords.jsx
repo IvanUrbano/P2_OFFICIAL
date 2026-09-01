@@ -13,13 +13,13 @@ function useDebounce(value, delay = 400) {
 
 /* ─── Status → accent color ─── */
 const statusColors = {
-  "ON TREATMENT": { bg: '#FEF3C7', text: '#D97706', dot: '#F59E0B' },
-  "TREATMENT COMPLETED": { bg: '#DBEAFE', text: '#2563EB', dot: '#3B82F6' },
-  "CURED": { bg: '#D1FAE5', text: '#059669', dot: '#10B981' },
-  "DIED": { bg: '#FEE2E2', text: '#DC2626', dot: '#EF4444' },
-  "LOST TO FOLLOW-UP": { bg: '#EDE9FE', text: '#7C3AED', dot: '#8B5CF6' },
+  "ON TREATMENT": { bg: '#FFFBEB', text: '#92400E', dot: '#B45309' },
+  "TREATMENT COMPLETED": { bg: '#EFF6FF', text: '#1E40AF', dot: '#2563EB' },
+  "CURED": { bg: '#ECFDF5', text: '#047857', dot: '#059669' },
+  "DIED": { bg: '#FEF2F2', text: '#991B1B', dot: '#B91C1C' },
+  "LOST TO FOLLOW-UP": { bg: '#F3F4F6', text: '#374151', dot: '#6B7280' },
   "EXCLUDED": { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' },
-  "PENDING": { bg: '#FEF3C7', text: '#D97706', dot: '#F59E0B' },
+  "PENDING": { bg: '#FFFBEB', text: '#92400E', dot: '#B45309' },
 };
 
 function StatusBadge({ status }) {
@@ -365,7 +365,7 @@ export default function TBRecords() {
                   <i className="ri-first-aid-kit-line text-sm" style={{ color: '#B8956A' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>On Treatment</span>
                 </div>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEF3C7', color: '#D97706' }}>
+                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FFFBEB', color: '#92400E' }}>
                   {metrics ? metrics.activeStatus : '---'}
                 </span>
               </div>
@@ -383,7 +383,7 @@ export default function TBRecords() {
                   <i className="ri-check-double-line text-sm" style={{ color: '#6B9E8A' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Cured</span>
                 </div>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#D1FAE5', color: '#059669' }}>
+                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#ECFDF5', color: '#047857' }}>
                   {metrics ? `${metrics.successRate}%` : '---'}
                 </span>
               </div>
@@ -401,7 +401,7 @@ export default function TBRecords() {
                   <i className="ri-emotion-sad-line text-sm" style={{ color: '#B07070' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Died</span>
                 </div>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEE2E2', color: '#DC2626' }}>
+                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEF2F2', color: '#991B1B' }}>
                   {metrics && metrics.totalCases > 0 ? `${Math.round((metrics.diedCount / metrics.totalCases) * 100)}%` : '---'}
                 </span>
               </div>
@@ -419,7 +419,7 @@ export default function TBRecords() {
                   <i className="ri-user-unfollow-line text-sm" style={{ color: '#8B7BA3' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Lost to Follow-up</span>
                 </div>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#EDE9FE', color: '#7C3AED' }}>
+                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#F3F4F6', color: '#374151' }}>
                   {metrics && metrics.totalCases > 0 ? `${Math.round((metrics.ltfuCount / metrics.totalCases) * 100)}%` : '---'}
                 </span>
               </div>
@@ -437,7 +437,7 @@ export default function TBRecords() {
                   <i className="ri-checkbox-circle-line text-sm" style={{ color: '#6B7FA3' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Completed</span>
                 </div>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#DBEAFE', color: '#2563EB' }}>
+                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#EFF6FF', color: '#1E40AF' }}>
                   {metrics && metrics.totalCases > 0 ? `${Math.round((metrics.treatmentCompletedCount / metrics.totalCases) * 100)}%` : '---'}
                 </span>
               </div>
@@ -501,7 +501,7 @@ export default function TBRecords() {
                 <span
                   key={f.key}
                   className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium"
-                  style={{ background: '#EFF6FF', color: '#334155' }}
+                   style={{ background: '#F1F5F9', color: '#334155' }}
                 >
                   {f.label}: {formatChipValue(f.key, f.value)}
                   <button
@@ -547,7 +547,7 @@ export default function TBRecords() {
                       {Array.from({ length: 9 }).map((_, j) => (
                         <td key={j} className={`${j === 0 ? 'pl-6' : 'px-3'} pr-3 py-3.5`} style={{ borderRight: j < 8 ? '1px solid #E2E8F0' : 'none' }}>
                           <div className="h-4 rounded animate-pulse" style={{
-                            background: 'linear-gradient(90deg, #EFF6FF 25%, #DBEAFE 50%, #EFF6FF 75%)',
+                             background: 'linear-gradient(90deg, #F1F5F9 25%, #E2E8F0 50%, #F1F5F9 75%)',
                             backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite',
                             width: j === 0 ? '60px' : j === 5 ? '140px' : j === 6 ? '120px' : j === 7 ? '90px' : j === 8 ? '32px' : '80px',
                           }} />

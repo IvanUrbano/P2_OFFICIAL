@@ -141,7 +141,7 @@ export default function DataIntegration() {
     return (
       <div className="flex flex-col gap-6">
         <div className="glass-card p-8 text-center">
-          <i className="ri-lock-2-line text-4xl" style={{ color: '#D97706' }} />
+           <i className="ri-lock-2-line text-4xl" style={{ color: '#92400E' }} />
           <p className="mt-3 text-sm font-bold" style={{ color: t.text }}>Admin access required</p>
           <p className="text-xs mt-1" style={{ color: t.textSecondary }}>
             Data import and import history are only available to admin users.
