@@ -1,1 +1,11 @@
-{"installCommand":"cd FRONTEND && npm install --no-package-lock","buildCommand":"cd FRONTEND && npm run build","outputDirectory":"FRONTEND/dist","rewrites":[{"source":"/(.*)","destination":"/index.html"}]}
+{
+  "buildCommand": "cd FRONTEND && npm run build",
+  "outputDirectory": "FRONTEND/dist",
+  "installCommand": "cd FRONTEND && npm install --no-package-lock",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
