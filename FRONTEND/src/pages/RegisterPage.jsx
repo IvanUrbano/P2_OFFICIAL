@@ -81,7 +81,7 @@ export default function RegisterPage() {
 
           {/* Error */}
           {error && (
-            <div className="mb-6 p-3 rounded-xl bg-danger/10 border border-danger/20 text-danger text-sm flex items-center gap-2 animate-slide-up">
+            <div className="mb-6 p-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm flex items-center gap-2 animate-slide-up">
               <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
               </svg>
@@ -108,7 +108,7 @@ export default function RegisterPage() {
                   onChange={handleChange}
                   required
                   placeholder="johndoe"
-                  className="w-full pl-11 pr-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-secondary/50 focus:ring-2 focus:ring-secondary/20 transition-all duration-300"
+                  className="w-full pl-11 pr-4 py-3 rounded-lg bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-secondary/50 focus:ring-2 focus:ring-secondary/20 transition-all duration-300"
                 />
               </div>
             </div>
@@ -130,7 +130,7 @@ export default function RegisterPage() {
                   onChange={handleChange}
                   required
                   placeholder="you@example.com"
-                  className="w-full pl-11 pr-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-secondary/50 focus:ring-2 focus:ring-secondary/20 transition-all duration-300"
+                  className="w-full pl-11 pr-4 py-3 rounded-lg bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-secondary/50 focus:ring-2 focus:ring-secondary/20 transition-all duration-300"
                 />
               </div>
             </div>
@@ -152,7 +152,7 @@ export default function RegisterPage() {
                   onChange={handleChange}
                   required
                   placeholder="Min. 6 characters"
-                  className="w-full pl-11 pr-12 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-secondary/50 focus:ring-2 focus:ring-secondary/20 transition-all duration-300"
+                  className="w-full pl-11 pr-12 py-3 rounded-lg bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-secondary/50 focus:ring-2 focus:ring-secondary/20 transition-all duration-300"
                 />
                 <button
                   type="button"
@@ -190,7 +190,7 @@ export default function RegisterPage() {
                   onChange={handleChange}
                   required
                   placeholder="Re-enter password"
-                  className="w-full pl-11 pr-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-secondary/50 focus:ring-2 focus:ring-secondary/20 transition-all duration-300"
+                  className="w-full pl-11 pr-4 py-3 rounded-lg bg-white/5 border border-white/10 text-white placeholder-white/25 focus:outline-none focus:border-secondary/50 focus:ring-2 focus:ring-secondary/20 transition-all duration-300"
                 />
               </div>
             </div>
@@ -199,7 +199,7 @@ export default function RegisterPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-secondary to-primary text-white font-semibold text-sm tracking-wide hover:from-secondary hover:to-primary-light shadow-lg shadow-secondary/25 hover:shadow-secondary/40 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-6 cursor-pointer"
+              className="w-full py-3 px-4 rounded-lg bg-gradient-to-r from-secondary to-primary text-white font-semibold text-sm tracking-wide hover:from-secondary hover:to-primary-light shadow-lg shadow-secondary/25 hover:shadow-secondary/40 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-6 cursor-pointer"
             >
               {loading ? (
                 <>

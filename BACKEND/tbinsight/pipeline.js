@@ -157,12 +157,76 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
       }
     }
 
+    // Fallback: if ML service is down or ARIMA failed, generate seasonal naive forecasts
+    if (forecastResults.length === 0 && forecastSeries.length > 0) {
+      console.log('🔄 ML service unavailable — generating seasonal naive fallback forecasts');
+      const barangayMap = {};
+      for (const row of forecastSeries) {
+        if (!barangayMap[row.barangay_name]) barangayMap[row.barangay_name] = [];
+        barangayMap[row.barangay_name].push(row);
+      }
+
+      for (const [bName, pts] of Object.entries(barangayMap)) {
+        const sorted = pts.sort((a, c) => a.month.localeCompare(c.month));
+        const predictions = [];
+
+        // Build a lookup: month index (0-11) -> case_count for the most recent year
+        const monthLookup = {};
+        for (const pt of sorted) {
+          const d = new Date(pt.month);
+          const monthIdx = d.getUTCMonth();
+          monthLookup[monthIdx] = pt.case_count;
+        }
+
+        // Compute simple trend from last 6 months vs previous 6 months
+        const last6 = sorted.slice(-6);
+        const prev6 = sorted.slice(-12, -6);
+        const avgRecent = last6.length > 0 ? last6.reduce((s, p) => s + p.case_count, 0) / last6.length : 0;
+        const avgPrev = prev6.length > 0 ? prev6.reduce((s, p) => s + p.case_count, 0) / prev6.length : 0;
+        const trendFactor = avgPrev > 0 ? avgRecent / avgPrev : 1;
+
+        for (let i = 1; i <= forecastHorizon; i++) {
+          const nextDate = new Date(results.period);
+          nextDate.setUTCMonth(nextDate.getUTCMonth() + (i - 1));
+          const nextPeriod = nextDate.toISOString().slice(0, 8) + '01';
+          const monthIdx = nextDate.getUTCMonth();
+
+          // Seasonal naive: use same month last year, adjusted by trend
+          const seasonalValue = monthLookup[monthIdx] != null ? monthLookup[monthIdx] : avgRecent;
+          const yhat = Math.max(0, Math.round(seasonalValue * trendFactor));
+
+          // CI widens with forecast horizon
+          const ciSpread = 0.15 + (i * 0.03);
+          predictions.push({
+            month: nextPeriod,
+            yhat,
+            yhat_lower: Math.max(0, Math.round(yhat * (1 - ciSpread))),
+            yhat_upper: Math.round(yhat * (1 + ciSpread)),
+          });
+        }
+        forecastResults.push({
+          barangay_name: bName,
+          method: 'seasonal-naive-fallback',
+          backtest_mae: 0,
+          predictions,
+        });
+      }
+      results.forecastsCount = forecastResults.length;
+      console.log(`🔄 Fallback: ${forecastResults.length} barangays forecasted with seasonal naive`);
+    }
+
     // ── Step 5: Compute RF features per barangay ──
 
     // 5a. Compute neighbor risks
     const barangayIncidences = barangays.map(b => {
       const fc = forecastResults.find(f => f.barangay_name === b.name);
-      const predictedCount = fc?.predictions?.[0]?.yhat || 0;
+      let predictedCount = fc?.predictions?.[0]?.yhat;
+      // Fallback: if ARIMA failed, use actual case count from latest month
+      if (predictedCount == null) {
+        const pts = seriesByBarangay[b.name] || [];
+        const sorted = pts.sort((a, c) => a.month.localeCompare(c.month));
+        predictedCount = sorted.length > 0 ? sorted[sorted.length - 1].case_count : 0;
+      }
       const inc = _computeIncidence(predictedCount, populationMap[b.name] || 1000);
       return { name: b.name, incidence_per_100k: inc };
     });
@@ -204,7 +268,13 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
       const name = b.name;
       const pop = populationMap[name] || 1000;
       const fc = forecastResults.find(f => f.barangay_name === name);
-      const predictedCount = fc?.predictions?.[0]?.yhat || 0;
+      let predictedCount = fc?.predictions?.[0]?.yhat;
+      // Fallback: if ARIMA failed, use actual case count from latest month
+      if (predictedCount == null) {
+        const pts = seriesByBarangay[name] || [];
+        const sorted = pts.sort((a, c) => a.month.localeCompare(c.month));
+        predictedCount = sorted.length > 0 ? sorted[sorted.length - 1].case_count : 0;
+      }
       const forecastedIncidence = _computeIncidence(predictedCount, pop);
       const slope = trendByBarangay[name]?.slope || 0;
       const seasonalityFlag = _detectSeasonality(seriesByBarangay[name] || []);
@@ -290,7 +360,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
       const neighbor = neighborRisks[name] || 0;
       const histErr = historicalBias[name] || 0;
 
-      const { riskScore, riskClass } = computeRiskScore({
+      const { riskScore, riskClass, normIncidence, normTrend, normError, neighborRisk } = computeRiskScore({
         incidence: inc,
         trend,
         neighborRisk: neighbor,
@@ -300,9 +370,9 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
         maxError,
       });
 
-      // Use RF classification result when available
-      const rfResult = classifyResults.find(c => c.barangay_name === name);
-      const finalClass = rfResult?.risk_class || riskClass;
+      // Use weighted risk score's tertile classification for barangay_risk_scores
+      // This ensures consistent Low/Medium/High distribution regardless of ML service availability
+      const finalClass = riskClass;
 
       return {
         barangay_name: name,
@@ -310,6 +380,10 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
         risk_class: finalClass,
         incidence_per_100k: Math.round(inc * 100) / 100,
         trend_direction: trendByBarangay[name]?.direction || 'Stable',
+        norm_incidence: normIncidence,
+        norm_trend: normTrend,
+        norm_neighbor_risk: neighborRisk,
+        norm_forecast_error: normError,
       };
     });
     results.riskScoresCount = riskScores.length;
@@ -340,6 +414,10 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     results.alertsCount = alerts.length;
 
     // ── Step 9: Store everything in a transaction ──
+    // Clean up old rows with non-1st-of-month dates (legacy data)
+    await client.query(
+      `DELETE FROM model_predictions WHERE period::date != date_trunc('month', period)::date`
+    );
     await client.query('BEGIN');
 
     await storeResults(
@@ -395,11 +473,12 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
 // ==================== HELPER FUNCTIONS ====================
 
 /**
- * Compute incidence per 100k from case count and population.
+ * Compute ANNUAL incidence per 100k from monthly case count and population.
+ * WHO standard is annual incidence per 100,000 population.
  */
-function _computeIncidence(cases, population) {
+function _computeIncidence(monthlyCases, population) {
   if (!population || population <= 0) return 0;
-  return (cases / population) * 100_000;
+  return ((monthlyCases * 12) / population) * 100_000;
 }
 
 /**
@@ -457,7 +536,8 @@ function _detectSeasonality(series) {
 function _nextMonth(dateStr) {
   const d = new Date(dateStr + 'T00:00:00Z');
   d.setUTCMonth(d.getUTCMonth() + 1);
-  return d.toISOString().slice(0, 10);
+  // Always normalize to 1st of month
+  return d.toISOString().slice(0, 8) + '01';
 }
 
 /**

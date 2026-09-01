@@ -53,18 +53,18 @@ def _seasonal_naive_forecast(series: pd.Series, forecast_horizon: int = 1) -> di
         # Not even one full season — use last value
         last_value = float(series.iloc[-1])
         return {
-            "forecasted_count": max(0, last_value),
-            "confidence_lower": max(0, last_value * 0.7),
-            "confidence_upper": last_value * 1.3,
+            "forecasted_count": [max(0, last_value)] * forecast_horizon,
+            "confidence_lower": [max(0, last_value * 0.7)] * forecast_horizon,
+            "confidence_upper": [last_value * 1.3] * forecast_horizon,
             "method": "seasonal_naive",
         }
 
     # Use value from same month last year
     last_season_value = float(series.iloc[-ARIMA_SEASONAL_PERIOD])
     return {
-        "forecasted_count": max(0, last_season_value),
-        "confidence_lower": max(0, last_season_value * 0.7),
-        "confidence_upper": last_season_value * 1.3,
+        "forecasted_count": [max(0, last_season_value)] * forecast_horizon,
+        "confidence_lower": [max(0, last_season_value * 0.7)] * forecast_horizon,
+        "confidence_upper": [last_season_value * 1.3] * forecast_horizon,
         "method": "seasonal_naive",
     }
 
@@ -80,15 +80,14 @@ def _exponential_smoothing_forecast(series: pd.Series, forecast_horizon: int = 1
         model = SimpleExpSmoothing(series.values.astype(float))
         fit = model.fit(optimized=True, use_brute=False)
         forecast = fit.forecast(forecast_horizon)
-        forecast_val = float(forecast[0])
 
         # Approximate confidence interval from residual std
         residuals = fit.resid
         std = float(np.std(residuals))
         return {
-            "forecasted_count": max(0, forecast_val),
-            "confidence_lower": max(0, forecast_val - 1.96 * std),
-            "confidence_upper": forecast_val + 1.96 * std,
+            "forecasted_count": [max(0, float(v)) for v in forecast],
+            "confidence_lower": [max(0, float(v) - 1.96 * std) for v in forecast],
+            "confidence_upper": [float(v) + 1.96 * std for v in forecast],
             "method": "exponential_smoothing",
         }
     except Exception as e:
@@ -116,14 +115,10 @@ def _arima_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
             alpha=0.05,  # 95% confidence interval
         )
 
-        forecast_val = float(forecast[0])
-        lower = float(conf_int[0][0])
-        upper = float(conf_int[0][1])
-
         return {
-            "forecasted_count": max(0, forecast_val),
-            "confidence_lower": max(0, lower),
-            "confidence_upper": upper,
+            "forecasted_count": [max(0, float(v)) for v in forecast],
+            "confidence_lower": [max(0, float(c[0])) for c in conf_int],
+            "confidence_upper": [float(c[1]) for c in conf_int],
             "method": "arima",
         }
     except Exception as e:
@@ -145,15 +140,13 @@ def forecast_barangay(
         forecast_horizon: Number of months to forecast
 
     Returns:
-        Dict with forecasted_count, confidence_lower, confidence_upper, method
+        Dict with per-month predictions list
     """
     if series.empty:
         return {
             "barangay_name": barangay_name,
             "period": "",
-            "forecasted_count": 0,
-            "confidence_lower": 0,
-            "confidence_upper": 0,
+            "predictions": [],
             "method": "zero_fallback",
         }
 
@@ -163,17 +156,27 @@ def forecast_barangay(
     else:
         result = _arima_forecast(series, forecast_horizon)
 
-    # Determine next period
+    # Build per-month predictions — always use 1st of month for consistency
     last_month = series.index[-1]
-    next_period = pd.Timestamp(last_month) + pd.DateOffset(months=forecast_horizon)
-    period_str = next_period.strftime("%Y-%m-%d")
+    last_month_start = pd.Timestamp(last_month).to_period('M').to_timestamp()
+    predictions = []
+    for i in range(forecast_horizon):
+        month_date = last_month_start + pd.DateOffset(months=i + 1)
+        month_str = month_date.strftime("%Y-%m-%d")
+        predictions.append({
+            "month": month_str,
+            "yhat": result["forecasted_count"][i] if i < len(result["forecasted_count"]) else 0,
+            "yhat_lower": result["confidence_lower"][i] if i < len(result["confidence_lower"]) else 0,
+            "yhat_upper": result["confidence_upper"][i] if i < len(result["confidence_upper"]) else 0,
+        })
+
+    # Last period (for backward compat)
+    last_period = last_month_start + pd.DateOffset(months=forecast_horizon)
 
     return {
         "barangay_name": barangay_name,
-        "period": period_str,
-        "forecasted_count": result["forecasted_count"],
-        "confidence_lower": result["confidence_lower"],
-        "confidence_upper": result["confidence_upper"],
+        "period": last_period.strftime("%Y-%m-%d"),
+        "predictions": predictions,
         "method": result["method"],
     }
 
@@ -213,8 +216,9 @@ def forecast_all(
 
         result = forecast_barangay(barangay_name, ts, forecast_horizon)
         results.append(result)
+        n_preds = len(result["predictions"])
         logger.info(
-            f"Forecast for {barangay_name}: {result['forecasted_count']:.1f} "
+            f"Forecast for {barangay_name}: {n_preds} months "
             f"({result['method']})"
         )
 

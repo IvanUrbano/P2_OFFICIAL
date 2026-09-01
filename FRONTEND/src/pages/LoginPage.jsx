@@ -2,11 +2,9 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import Logo from '../../components/Logo';
-import { useTheme } from '../theme';
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { t } = useTheme();
   const [formData, setFormData] = useState({ email: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -32,7 +30,6 @@ export default function LoginPage() {
     return () => { document.body.style.overflow = ''; };
   }, [showForgotModal]);
 
-  // OTP countdown timer
   useEffect(() => {
     if (resetStep !== 2 || otpTimer <= 0) return;
     const timer = setInterval(() => {
@@ -64,7 +61,6 @@ export default function LoginPage() {
     if (lockoutSeconds > 0) return;
     setLoading(true);
     setError('');
-
     try {
       const res = await API.post('/api/auth/login', formData);
       localStorage.setItem('token', res.data.token);
@@ -79,10 +75,8 @@ export default function LoginPage() {
     }
   };
 
-  // ── Forgot Password Handlers ──
   const handleResetRequest = (e) => {
     e.preventDefault();
-    // Generate a 6-digit OTP
     const otp = String(Math.floor(100000 + Math.random() * 900000));
     setGeneratedOtp(otp);
     console.log(`[OTP] Password reset code for ${resetEmail}: ${otp}`);
@@ -125,190 +119,119 @@ export default function LoginPage() {
     setResetStep(1);
   };
 
-  const features = [
-    'Real-time TB Monitoring',
-    'ARIMA Forecasting',
-    'GIS Hotspot Mapping',
-    'Analytics & Reports',
-  ];
-
   return (
-    <div className="h-screen w-full flex flex-col overflow-hidden" style={{ background: t.pageBg }}>
+    <div className="h-screen w-full flex overflow-hidden relative" style={{ background: '#f0f4f8' }}>
 
-      {/* ═══════ Main Content ═══════ */}
-      <div className="flex-1 flex min-h-0">
-
-        {/* ─── LEFT — Form Panel ─── */}
-        <div className="w-full lg:w-[480px] xl:w-[520px] flex flex-col justify-center px-8 sm:px-12 lg:px-16 relative z-20 flex-shrink-0 overflow-hidden"
-          style={{ background: t.cardSolid }}>
-
-          <div className="w-full max-w-sm mx-auto py-8">
-
-            {/* Logo + Brand */}
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-11 h-11 rounded-2xl flex items-center justify-center"
-                style={{ background: 'linear-gradient(135deg, #0F2D52, #2E6FAF)', boxShadow: '0 4px 16px rgba(15,45,82,0.2)' }}>
-                <Logo size={26} />
-              </div>
-              <div>
-                <span className="text-xl font-extrabold tracking-tight block" style={{ color: t.text }}>TBInsight</span>
-                <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: t.textMuted }}>Pasig City Health Office</span>
-              </div>
-            </div>
-
-            <div className="h-px w-full my-6" style={{ background: `linear-gradient(90deg, #0066FF, ${t.borderStrong})` }} />
-
-            <h1 className="text-[28px] font-extrabold tracking-tight mb-1.5" style={{ color: t.text }}>Welcome Back!</h1>
-            <p className="text-[15px] font-semibold mb-1" style={{ color: t.textSecondary }}>Log in to your account</p>
-            <p className="text-[13px] leading-relaxed mb-8" style={{ color: t.textMuted }}>
-              Access the TBInsight platform to monitor, analyze, and manage tuberculosis surveillance data, forecasting, hotspot mapping, and resource prioritization across Pasig City.
-            </p>
-
-            {error && (
-              <div className="mb-6 px-4 py-3.5 rounded-2xl text-sm flex items-center gap-3 border bg-red-50 border-red-200 text-red-600">
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 bg-red-100">
-                  <i className="ri-error-warning-line text-sm" />
-                </div>
-                <span>{error}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="space-y-5">
-              <div>
-                <label className="block text-[11px] font-bold mb-2 uppercase tracking-widest" style={{ color: t.textMuted }}>Email</label>
-                <div className="relative group">
-                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-0 rounded-full transition-all duration-300 group-focus-within:h-5"
-                    style={{ background: activeField === 'email' ? '#0066FF' : 'transparent' }} />
-                  <input type="email" name="email" value={formData.email} onChange={handleChange} required
-                    disabled={lockoutSeconds > 0 || loading} placeholder="you@example.com"
-                    onFocus={() => setActiveField('email')} onBlur={() => setActiveField(null)}
-                    className="w-full pl-5 pr-4 py-3.5 rounded-xl text-sm font-medium outline-none transition-all duration-300 disabled:opacity-40"
-                    style={{ background: activeField === 'email' ? t.inputBg : t.inputBg, border: `1.5px solid ${activeField === 'email' ? '#0066FF' : t.inputBorder}`, color: t.text }} />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold mb-2 uppercase tracking-widest" style={{ color: t.textMuted }}>Password</label>
-                <div className="relative group">
-                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-0 rounded-full transition-all duration-300 group-focus-within:h-5"
-                    style={{ background: activeField === 'password' ? '#0066FF' : 'transparent' }} />
-                  <input type={showPassword ? 'text' : 'password'} name="password" value={formData.password} onChange={handleChange} required
-                    disabled={lockoutSeconds > 0 || loading} placeholder="Enter your password"
-                    onFocus={() => setActiveField('password')} onBlur={() => setActiveField(null)}
-                    className="w-full pl-5 pr-12 py-3.5 rounded-xl text-sm font-medium outline-none transition-all duration-300 disabled:opacity-40"
-                    style={{ background: activeField === 'password' ? t.inputBg : t.inputBg, border: `1.5px solid ${activeField === 'password' ? '#0066FF' : t.inputBorder}`, color: t.text }} />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 transition-colors duration-200"
-                    style={{ color: '#cbd5e1' }}
-                    onMouseEnter={(e) => e.currentTarget.style.color = '#64748B'}
-                    onMouseLeave={(e) => e.currentTarget.style.color = '#cbd5e1'}>
-                    <i className={`${showPassword ? 'ri-eye-off-line' : 'ri-eye-line'} text-lg`} />
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-0.5">
-                <label className="flex items-center gap-2.5 cursor-pointer group">
-                  <div className="relative">
-                    <input type="checkbox" className="sr-only peer" />
-                    <div className="w-4 h-4 rounded border-2 transition-all duration-200 flex items-center justify-center peer-checked:border-[#0066FF] peer-checked:bg-[#0066FF]"
-                      style={{ borderColor: '#d1d5db' }}>
-                      <i className="ri-check-line text-[10px] text-white opacity-0 peer-checked:opacity-100 transition-opacity" />
-                    </div>
-                  </div>
-                  <span className="text-[13px] font-medium" style={{ color: '#64748B' }}>Remember me</span>
-                </label>
-                <button type="button" onClick={() => setShowForgotModal(true)}
-                  className="text-[13px] font-semibold transition-colors duration-200"
-                  style={{ color: '#0066FF' }}
-                  onMouseEnter={(e) => e.currentTarget.style.color = '#0052cc'}
-                  onMouseLeave={(e) => e.currentTarget.style.color = '#0066FF'}>
-                  Forgot password?
-                </button>
-              </div>
-
-              <button type="submit" disabled={loading || lockoutSeconds > 0}
-                className="w-full py-3.5 rounded-xl font-bold text-[15px] text-white transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ background: lockoutSeconds > 0 ? 'linear-gradient(135deg, #F59E0B, #D97706)' : 'linear-gradient(135deg, #0F2D52 0%, #2E6FAF 100%)', boxShadow: lockoutSeconds > 0 ? '0 4px 20px rgba(245,158,11,0.3)' : '0 4px 20px rgba(15,45,82,0.25)' }}
-                onMouseEnter={(e) => { if (!loading && lockoutSeconds <= 0) { e.currentTarget.style.boxShadow = '0 8px 30px rgba(15,45,82,0.35)'; e.currentTarget.style.transform = 'translateY(-1px)'; } }}
-                onMouseLeave={(e) => { e.currentTarget.style.boxShadow = lockoutSeconds > 0 ? '0 4px 20px rgba(245,158,11,0.3)' : '0 4px 20px rgba(15,45,82,0.25)'; e.currentTarget.style.transform = 'translateY(0)'; }}>
-                {lockoutSeconds > 0 ? (<><i className="ri-lock-line text-lg" /> Locked out ({formatLockoutTime(lockoutSeconds)})</>)
-                  : loading ? (<><i className="ri-loader-4-line text-lg animate-spin" /> Signing in...</>)
-                    : (<>Sign In <i className="ri-arrow-right-up-line text-lg" /></>)}
-              </button>
-            </form>
-
-            <p className="text-center text-[13px] mt-8" style={{ color: '#94A3B8' }}>
-              Don't have an account?{' '}
-              <a href="mailto:admin@pasigcity.gov.ph" className="font-semibold transition-colors" style={{ color: '#0066FF' }}
-                onMouseEnter={(e) => e.target.style.color = '#0052cc'}
-                onMouseLeave={(e) => e.target.style.color = '#0066FF'}>
-                Contact your system administrator
-              </a>
-            </p>
-            <div className="flex items-center justify-center gap-4 mt-3">
-              <div className="flex items-center gap-1.5">
-                <i className="ri-mail-line text-[11px]" style={{ color: t.textMuted }} />
-                <span className="text-[11px]" style={{ color: t.textMuted }}>admin@pasigcity.gov.ph</span>
-              </div>
-              <div className="w-px h-3" style={{ background: t.borderStrong }} />
-              <div className="flex items-center gap-1.5">
-                <i className="ri-phone-line text-[11px]" style={{ color: t.textMuted }} />
-                <span className="text-[11px]" style={{ color: t.textMuted }}>(02) 8XXX-XXXX</span>
-              </div>
-            </div>
-
-
-          </div>
-        </div>
-
-        {/* ─── RIGHT — Image Panel ─── */}
-        <div className="hidden lg:block flex-1 relative overflow-hidden">
-          <div className="absolute inset-0" style={{ background: 'linear-gradient(135deg, #0F2D52, #1a4a7a)' }} />
-          <img src="/images/healthcare-login.jpg" alt="Healthcare worker showing chest X-ray to patient" className="absolute inset-0 w-full h-full object-cover" />
-          <div className="absolute inset-0" style={{ background: 'linear-gradient(135deg, rgba(10,22,40,0.55) 0%, rgba(15,45,82,0.35) 50%, rgba(10,22,40,0.5) 100%)' }} />
-          <div className="absolute bottom-0 left-0 right-0" style={{ background: 'linear-gradient(to top, rgba(10,22,40,0.92) 0%, rgba(10,22,40,0.5) 45%, transparent 75%)', height: '85%' }} />
-          <div className="absolute top-8 right-8 z-20 px-5 py-3 rounded-2xl" style={{ background: 'rgba(255,255,255,0.08)', backdropFilter: 'blur(16px)', border: '1px solid rgba(255,255,255,0.1)' }}>
-            <div className="flex items-center gap-2.5">
-              <div className="w-2 h-2 rounded-full" style={{ background: '#00D8F6', boxShadow: '0 0 8px #00D8F6' }} />
-              <span className="text-xs font-semibold" style={{ color: 'rgba(255,255,255,0.8)' }}>Pasig City Health Office</span>
-            </div>
-          </div>
-          <div className="absolute bottom-0 left-0 right-0 z-20 px-10 pb-6">
-            <div className="max-w-lg">
-              <h2 className="text-[26px] font-extrabold text-white leading-tight mb-4">
-                Better Data. Better Decisions.<br /><span style={{ color: '#00D8F6' }}>A Healthier Pasig City.</span>
-              </h2>
-              <p className="text-[13px] leading-relaxed mb-6" style={{ color: 'rgba(255,255,255,0.6)' }}>
-                Real-time monitoring, forecasting, GIS hotspot mapping, and resource prioritization to support tuberculosis control and public health decision-making.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {features.map((feat, i) => (
-                  <div key={i} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold"
-                    style={{ background: 'rgba(0,216,246,0.1)', border: '1px solid rgba(0,216,246,0.15)', color: '#00D8F6' }}>
-                    <i className="ri-check-line text-[10px]" />{feat}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* ─── Full Background Image ─── */}
+      <div className="absolute inset-0 z-0">
+        <img src="/images/BACKGROUND.png" alt="" className="w-full h-full" style={{ objectFit: 'cover', objectPosition: 'left bottom' }} />
       </div>
 
-      {/* ═══════ Footer ═══════ */}
-      <div className="flex-shrink-0 w-full px-6 lg:px-10" style={{ background: '#0F2D52', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 py-3.5 max-w-[1800px] mx-auto">
-          <div className="flex items-center gap-3 text-center sm:text-left">
-            <i className="ri-shield-check-line text-sm flex-shrink-0" style={{ color: '#00D8F6' }} />
-            <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.4)' }}>
-              <span className="font-semibold" style={{ color: 'rgba(255,255,255,0.55)' }}>For authorized personnel only.</span>{' '}
-              All tuberculosis surveillance data and analytics are confidential and protected under applicable data privacy and public health regulations.
-            </p>
+      {/* ─── Form Content ─── */}
+      <div className="relative z-10 w-full flex items-center justify-center px-8">
+
+        {/* White Card */}
+        <div className="w-full max-w-[400px] p-8 rounded-2xl" style={{ background: 'rgba(255,255,255,0.35)', backdropFilter: 'blur(8px)', boxShadow: '0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08)' }}>
+
+          {/* Logo */}
+          <div className="mb-4">
+            <Logo width={100} />
           </div>
-          <div className="flex items-center gap-4 flex-shrink-0">
-            <span className="text-[11px] font-bold" style={{ color: 'rgba(255,255,255,0.5)' }}>Pasig City Health Office</span>
-            <div className="w-px h-3" style={{ background: 'rgba(255,255,255,0.12)' }} />
-            <span className="text-[10px] font-medium" style={{ color: 'rgba(255,255,255,0.3)' }}>TBInsight — GIS-Based Predictive Tuberculosis Hotspot and Resource Prioritization Dashboard</span>
+
+          <div className="mb-4">
+            <h2 className="text-xl font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Welcome Back</h2>
+            <p className="text-[13px] mt-1" style={{ color: '#94A3B8' }}>Sign in to access TBInsight</p>
+          </div>
+
+          {error && (
+            <div className="mb-3 px-3 py-2 rounded-lg text-[12px] flex items-center gap-2" style={{ background: '#FEF2F2', color: '#991B1B' }}>
+              <i className="ri-error-warning-line text-sm flex-shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Username */}
+            <div>
+              <input
+                type="text" name="email" value={formData.email} onChange={handleChange} required
+                disabled={lockoutSeconds > 0 || loading} placeholder="Username"
+                onFocus={() => setActiveField('email')} onBlur={() => setActiveField(null)}
+                autoComplete="off"
+                className="w-full py-2.5 text-[13px] font-medium outline-none disabled:opacity-40 placeholder-gray-400 login-input"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  borderBottom: `2px solid ${activeField === 'email' ? '#0F2D52' : '#E2E8F0'}`,
+                  borderRadius: 0,
+                  color: '#0F2D52',
+                  WebkitBoxShadow: 'none',
+                  transition: 'border-color 0.2s',
+                }}
+              />
+            </div>
+
+            {/* Password */}
+            <div>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'} name="password" value={formData.password} onChange={handleChange} required
+                  disabled={lockoutSeconds > 0 || loading} placeholder="Password"
+                  onFocus={() => setActiveField('password')} onBlur={() => setActiveField(null)}
+                  autoComplete="off"
+                  className="w-full py-2.5 pr-8 text-[13px] font-medium outline-none disabled:opacity-40 placeholder-gray-400 login-input"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    borderBottom: `2px solid ${activeField === 'password' ? '#0F2D52' : '#E2E8F0'}`,
+                    borderRadius: 0,
+                    color: '#0F2D52',
+                    WebkitBoxShadow: 'none',
+                    transition: 'border-color 0.2s',
+                  }}
+                />
+                <button type="button" onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-0 top-1/2 -translate-y-1/2 transition-colors"
+                  style={{ color: '#94A3B8' }}
+                  onMouseEnter={(e) => e.currentTarget.style.color = '#0F2D52'}
+                  onMouseLeave={(e) => e.currentTarget.style.color = '#94A3B8'}>
+                  <i className={`${showPassword ? 'ri-eye-off-line' : 'ri-eye-line'} text-[15px]`} />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-1">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" className="w-3.5 h-3.5 rounded accent-[#0F2D52]" />
+                <span className="text-[12px] font-medium" style={{ color: '#64748B' }}>Remember me</span>
+              </label>
+              <button type="button" onClick={() => setShowForgotModal(true)}
+                className="text-[12px] font-semibold transition-colors"
+                style={{ color: '#0F2D52' }}
+                onMouseEnter={(e) => e.currentTarget.style.color = '#174A7E'}
+                onMouseLeave={(e) => e.currentTarget.style.color = '#0F2D52'}>
+                Forgot Password?
+              </button>
+            </div>
+
+            <button type="submit" disabled={loading || lockoutSeconds > 0}
+              className="w-full py-3 rounded-lg font-bold text-[13px] transition-all duration-200 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{
+                background: lockoutSeconds > 0 ? '#F59E0B' : '#0F2D52',
+                color: '#ffffff',
+                boxShadow: '0 4px 14px rgba(15,45,82,0.25)',
+              }}
+              onMouseEnter={(e) => { if (!loading && lockoutSeconds <= 0) e.currentTarget.style.background = '#174A7E'; }}
+              onMouseLeave={(e) => { if (!loading && lockoutSeconds <= 0) e.currentTarget.style.background = '#0F2D52'; }}>
+              {lockoutSeconds > 0 ? (<><i className="ri-lock-line text-sm" /> Locked ({formatLockoutTime(lockoutSeconds)})</>)
+                : loading ? (<><i className="ri-loader-4-line text-sm animate-spin" /> Signing in...</>)
+                  : 'Sign In'}
+            </button>
+          </form>
+
+          <div className="mt-5 text-center">
+            <p className="text-[10px] font-semibold" style={{ color: '#94A3B8' }}><i className="ri-shield-check-line mr-1" />Authorized users only</p>
+            <p className="text-[9px] mt-1" style={{ color: '#CBD5E1' }}>&copy; 2026 TBInsight</p>
           </div>
         </div>
       </div>
@@ -318,161 +241,139 @@ export default function LoginPage() {
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4"
           style={{ background: 'rgba(10,22,40,0.6)', backdropFilter: 'blur(4px)' }}
           onClick={closeForgotModal}>
-          <div className="w-full max-w-[560px] max-h-[90vh] overflow-y-auto no-scrollbar relative"
-            style={{ background: t.cardSolid, borderRadius: '20px', boxShadow: '0 25px 60px rgba(0,0,0,0.25)' }}
+          <div className="w-full max-w-[480px] max-h-[90vh] overflow-y-auto no-scrollbar relative rounded-2xl"
+            style={{ background: '#ffffff', boxShadow: '0 25px 60px rgba(0,0,0,0.25)' }}
             onClick={(e) => e.stopPropagation()}>
-
-            {/* Close */}
             <button onClick={closeForgotModal}
-              className="absolute top-4 right-4 z-10 w-8 h-8 rounded-xl flex items-center justify-center transition-colors"
-              style={{ background: t.panel, color: t.textMuted }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = t.borderStrong; e.currentTarget.style.color = t.textSecondary; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = t.panel; e.currentTarget.style.color = t.textMuted; }}>
+              className="absolute top-4 right-4 z-10 w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
+              style={{ background: '#F1F5F9', color: '#94A3B8' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = '#E2E8F0'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = '#F1F5F9'; }}>
               <i className="ri-close-line text-base" />
             </button>
 
-            {/* Header */}
             <div className="px-8 pt-8 pb-4">
-              <h2 className="text-xl font-extrabold mb-1" style={{ color: t.text }}>Forgot Password?</h2>
-              <p className="text-[13px]" style={{ color: t.textMuted }}>Select your account role to see the appropriate reset process.</p>
+              <h2 className="text-xl font-extrabold mb-1" style={{ color: '#0F2D52' }}>Forgot Password?</h2>
+              <p className="text-[13px]" style={{ color: '#94A3B8' }}>Select your account role to see the appropriate reset process.</p>
             </div>
 
-            {/* Role Tabs */}
             <div className="px-8">
-              <div className="flex gap-2 p-1 rounded-xl" style={{ background: t.panel }}>
+              <div className="flex gap-2 p-1 rounded-lg" style={{ background: '#F1F5F9' }}>
                 {[
                   { id: 'staff', label: 'Staff', icon: 'ri-user-line' },
                   { id: 'admin', label: 'Administrator', icon: 'ri-shield-keyhole-line' },
                 ].map((role) => (
                   <button key={role.id} onClick={() => { setForgotRole(role.id); setResetStep(1); setResetEmail(''); setResetNewPassword(''); setOtpCode(''); setOtpError(''); }}
                     className="flex-1 py-2.5 rounded-lg text-[13px] font-semibold flex items-center justify-center gap-2 transition-all duration-200"
-                    style={{ background: forgotRole === role.id ? 'white' : 'transparent', color: forgotRole === role.id ? '#0F2D52' : '#94A3B8', boxShadow: forgotRole === role.id ? '0 2px 8px rgba(0,0,0,0.06)' : 'none' }}>
+                    style={{ background: forgotRole === role.id ? '#ffffff' : 'transparent', color: forgotRole === role.id ? '#0F2D52' : '#94A3B8', boxShadow: forgotRole === role.id ? '0 2px 8px rgba(0,0,0,0.06)' : 'none' }}>
                     <i className={`${role.icon} text-base`} />{role.label}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Content */}
             <div className="px-8 py-6">
-              <p className="text-[12px] font-bold uppercase tracking-wider mb-4" style={{ color: '#94A3B8' }}>
-                <i className="ri-lock-password-line mr-1" />
-                Password Recovery — {forgotRole === 'admin' ? 'Administrator' : 'Staff'}
+              <p className="text-[11px] font-bold uppercase tracking-wider mb-4" style={{ color: '#94A3B8' }}>
+                <i className="ri-lock-password-line mr-1" />Password Recovery — {forgotRole === 'admin' ? 'Administrator' : 'Staff'}
               </p>
 
-              {/* Step Indicators */}
               <div className="flex items-center gap-1.5 mb-5">
                 {['Enter Email', 'Verify OTP', 'New Password', 'Done'].map((label, i) => (
                   <div key={i} className="flex items-center gap-1.5 flex-1">
                     <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 transition-all duration-300"
-                      style={{
-                        background: resetStep > i + 1 ? '#10B981' : resetStep === i + 1 ? '#0066FF' : t.borderStrong,
-                        color: resetStep >= i + 1 ? 'white' : t.textMuted,
-                      }}>
+                      style={{ background: resetStep > i + 1 ? '#10B981' : resetStep === i + 1 ? '#0F2D52' : '#E2E8F0', color: resetStep >= i + 1 ? 'white' : '#94A3B8' }}>
                       {resetStep > i + 1 ? <i className="ri-check-line" /> : i + 1}
                     </div>
-                    {i < 3 && <div className="flex-1 h-[2px] rounded-full" style={{ background: resetStep > i + 1 ? '#10B981' : t.borderStrong }} />}
+                    {i < 3 && <div className="flex-1 h-[2px] rounded-full" style={{ background: resetStep > i + 1 ? '#10B981' : '#E2E8F0' }} />}
                   </div>
                 ))}
               </div>
 
-              {/* Step 1: Enter Email */}
               {resetStep === 1 && (
                 <form onSubmit={handleResetRequest} className="space-y-4">
                   <div>
-                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>Registered email address</label>
+                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: '#94A3B8' }}>Registered email address</label>
                     <input type="email" required value={resetEmail} onChange={(e) => setResetEmail(e.target.value)}
                       placeholder="you@pasigcity.gov.ph"
-                      className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all"
-                      style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text }}
-                      onFocus={(e) => { e.target.style.borderColor = '#0066FF'; }}
-                      onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
+                      className="w-full px-4 py-3 rounded-lg text-[13px] font-medium outline-none transition-all"
+                      style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', color: '#0F2D52' }}
+                      onFocus={(e) => { e.target.style.borderColor = '#0F2D52'; }}
+                      onBlur={(e) => { e.target.style.borderColor = '#E2E8F0'; }} />
                   </div>
                   <button type="submit"
-                    className="w-full py-3 rounded-xl font-bold text-[13px] text-white transition-all duration-200 flex items-center justify-center gap-2"
-                    style={{ background: 'linear-gradient(135deg, #0F2D52, #2E6FAF)', boxShadow: '0 4px 14px rgba(15,45,82,0.2)' }}
-                    onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-1px)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; }}>
+                    className="w-full py-3 rounded-lg font-bold text-[13px] text-white transition-all duration-200 flex items-center justify-center gap-2"
+                    style={{ background: '#0F2D52', boxShadow: '0 4px 14px rgba(15,45,82,0.2)' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = '#174A7E'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = '#0F2D52'; }}>
                     <i className="ri-mail-send-line text-base" /> Send OTP Code
                   </button>
                 </form>
               )}
 
-              {/* Step 2: OTP Verification */}
               {resetStep === 2 && (
                 <form onSubmit={handleVerifyOtp} className="space-y-4">
                   <div className="text-center mb-2">
-                    <div className="w-12 h-12 rounded-2xl mx-auto mb-3 flex items-center justify-center" style={{ background: 'rgba(0,102,255,0.08)' }}>
-                      <i className="ri-mail-check-line text-xl" style={{ color: '#0066FF' }} />
+                    <div className="w-12 h-12 rounded-2xl mx-auto mb-3 flex items-center justify-center" style={{ background: 'rgba(15,45,82,0.08)' }}>
+                      <i className="ri-mail-check-line text-xl" style={{ color: '#0F2D52' }} />
                     </div>
-                    <p className="text-[13px]" style={{ color: t.textSecondary }}>A 6-digit code has been sent to</p>
-                    <p className="text-[13px] font-bold" style={{ color: t.text }}>{resetEmail}</p>
-                    <p className="text-[11px] mt-1" style={{ color: t.textMuted }}>Check your console for the OTP code</p>
+                    <p className="text-[13px]" style={{ color: '#64748B' }}>A 6-digit code has been sent to</p>
+                    <p className="text-[13px] font-bold" style={{ color: '#0F2D52' }}>{resetEmail}</p>
+                    <p className="text-[11px] mt-1" style={{ color: '#94A3B8' }}>Check your console for the OTP code</p>
                   </div>
                   {otpError && (
-                    <div className="px-3 py-2 rounded-xl text-[12px] flex items-center gap-2 border bg-red-50 border-red-200 text-red-600">
-                      <i className="ri-error-warning-line text-sm" />
-                      {otpError}
+                     <div className="px-3 py-2 rounded-lg text-[12px] flex items-center gap-2 border" style={{ background: '#FEF2F2', borderColor: '#FECACA', color: '#991B1B' }}>
+                      <i className="ri-error-warning-line text-sm" />{otpError}
                     </div>
                   )}
                   <div>
-                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>Enter OTP code</label>
+                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: '#94A3B8' }}>Enter OTP code</label>
                     <input type="text" required maxLength={6} placeholder="000000" value={otpCode} onChange={(e) => { setOtpCode(e.target.value.replace(/\D/g, '')); setOtpError(''); }}
-                      className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all text-center tracking-[0.3em]"
-                      style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text, fontSize: '18px' }}
-                      onFocus={(e) => { e.target.style.borderColor = '#0066FF'; }}
-                      onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
+                      className="w-full px-4 py-3 rounded-lg text-[13px] font-medium outline-none transition-all text-center tracking-[0.3em]"
+                      style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', color: '#0F2D52', fontSize: '18px' }}
+                      onFocus={(e) => { e.target.style.borderColor = '#0F2D52'; }}
+                      onBlur={(e) => { e.target.style.borderColor = '#E2E8F0'; }} />
                   </div>
-                  <button type="submit"
-                    className="w-full py-3 rounded-xl font-bold text-[13px] text-white transition-all duration-200"
-                    style={{ background: 'linear-gradient(135deg, #0F2D52, #2E6FAF)' }}>
+                  <button type="submit" className="w-full py-3 rounded-lg font-bold text-[13px] text-white transition-all duration-200" style={{ background: '#0F2D52' }}>
                     Verify Code
                   </button>
-                  <p className="text-center text-[12px]" style={{ color: t.textMuted }}>
-                    {otpTimer > 0 ? (
-                      <>Resend code in <span className="font-bold" style={{ color: '#0066FF' }}>{otpTimer}s</span></>
-                    ) : (
-                      <button type="button" onClick={handleResendOtp} className="font-semibold" style={{ color: '#0066FF' }}>Resend OTP Code</button>
-                    )}
+                  <p className="text-center text-[12px]" style={{ color: '#94A3B8' }}>
+                    {otpTimer > 0 ? (<span>Resend code in <span className="font-bold" style={{ color: '#0F2D52' }}>{otpTimer}s</span></span>)
+                      : (<button type="button" onClick={handleResendOtp} className="font-semibold" style={{ color: '#0F2D52' }}>Resend OTP Code</button>)}
                   </p>
                 </form>
               )}
 
-              {/* Step 3: New Password */}
               {resetStep === 3 && (
                 <form onSubmit={handleResetConfirm} className="space-y-4">
                   <div className="text-center mb-2">
                     <div className="w-12 h-12 rounded-2xl mx-auto mb-3 flex items-center justify-center" style={{ background: 'rgba(16,185,129,0.08)' }}>
                       <i className="ri-lock-password-line text-xl" style={{ color: '#10B981' }} />
                     </div>
-                    <p className="text-[13px] font-bold" style={{ color: t.text }}>Create New Password</p>
+                    <p className="text-[13px] font-bold" style={{ color: '#0F2D52' }}>Create New Password</p>
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>New password</label>
+                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: '#94A3B8' }}>New password</label>
                     <input type="password" required minLength={6} value={resetNewPassword} onChange={(e) => setResetNewPassword(e.target.value)}
                       placeholder="Min. 6 characters"
-                      className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all"
-                      style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text }}
+                      className="w-full px-4 py-3 rounded-lg text-[13px] font-medium outline-none transition-all"
+                      style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', color: '#0F2D52' }}
                       onFocus={(e) => { e.target.style.borderColor = '#10B981'; }}
-                      onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
+                      onBlur={(e) => { e.target.style.borderColor = '#E2E8F0'; }} />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: t.textMuted }}>Confirm password</label>
+                    <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-widest" style={{ color: '#94A3B8' }}>Confirm password</label>
                     <input type="password" required minLength={6} placeholder="Re-enter password"
-                      className="w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all"
-                      style={{ background: t.inputBg, border: `1.5px solid ${t.inputBorder}`, color: t.text }}
+                      className="w-full px-4 py-3 rounded-lg text-[13px] font-medium outline-none transition-all"
+                      style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', color: '#0F2D52' }}
                       onFocus={(e) => { e.target.style.borderColor = '#10B981'; }}
-                      onBlur={(e) => { e.target.style.borderColor = t.inputBorder; }} />
+                      onBlur={(e) => { e.target.style.borderColor = '#E2E8F0'; }} />
                   </div>
-                  <button type="submit"
-                    className="w-full py-3 rounded-xl font-bold text-[13px] text-white transition-all duration-200"
-                    style={{ background: 'linear-gradient(135deg, #10B981, #059669)', boxShadow: '0 4px 14px rgba(16,185,129,0.25)' }}>
+                  <button type="submit" className="w-full py-3 rounded-lg font-bold text-[13px] text-white transition-all duration-200" style={{ background: '#10B981', boxShadow: '0 4px 14px rgba(16,185,129,0.25)' }}>
                     <i className="ri-check-line mr-1" /> Reset Password
                   </button>
                 </form>
               )}
 
-              {/* Step 4: Success */}
               {resetStep === 4 && (
                 <div className="text-center py-4">
                   <div className="w-14 h-14 rounded-2xl mx-auto mb-4 flex items-center justify-center" style={{ background: 'rgba(16,185,129,0.1)' }}>
@@ -480,9 +381,7 @@ export default function LoginPage() {
                   </div>
                   <h3 className="text-base font-bold mb-1" style={{ color: '#0F2D52' }}>Password Reset Successfully</h3>
                   <p className="text-[13px] mb-5" style={{ color: '#94A3B8' }}>Your password has been updated. You can now sign in with your new credentials.</p>
-                  <button onClick={closeForgotModal}
-                    className="px-6 py-2.5 rounded-xl font-bold text-[13px] text-white transition-all"
-                    style={{ background: 'linear-gradient(135deg, #0F2D52, #2E6FAF)' }}>
+                  <button onClick={closeForgotModal} className="px-6 py-2.5 rounded-lg font-bold text-[13px] text-white transition-all" style={{ background: '#0F2D52' }}>
                     <i className="ri-login-box-line mr-1" /> Back to Login
                   </button>
                 </div>

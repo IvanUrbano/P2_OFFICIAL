@@ -24,10 +24,12 @@ export default function Layout() {
   if (!user) return null;
 
   return (
-    <div className="h-screen relative overflow-hidden flex flex-col" style={{ background: 'linear-gradient(180deg, #B8D4FF 0%, #D6E8FF 10%, #EEF4FF 30%, #F4F6FA 55%)' }}>
-      <Topbar user={user} />
-      <main className="flex-1 px-10 py-6 overflow-y-auto">
-        <Outlet />
+    <div className="h-screen relative flex flex-col">
+      <div className="no-print"><Topbar user={user} /></div>
+      <main className="flex-1 min-h-0 overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
+        <div className="px-6 lg:px-10 pt-6 pb-6">
+          <Outlet />
+        </div>
       </main>
     </div>
   );
