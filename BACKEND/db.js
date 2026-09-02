@@ -90,6 +90,16 @@ const initDb = async () => {
     } else {
       console.log('⚠️ Interventions migration not found, skipping.');
     }
+
+    // STIS fields: add validation_status, itis_case_id, location_classification (idempotent)
+    const stisMigPath = path.join(__dirname, 'db', 'migrations', '006_add_stis_fields.sql');
+    if (fs.existsSync(stisMigPath)) {
+      const stisSql = fs.readFileSync(stisMigPath, 'utf8');
+      await execSql(stisSql);
+      console.log('✅ STIS fields migration completed successfully.');
+    } else {
+      console.log('⚠️ STIS fields migration not found, skipping.');
+    }
   } catch (err) {
     console.error('❌ Database initialization error:', err.message);
   }

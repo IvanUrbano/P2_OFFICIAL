@@ -62,15 +62,21 @@ router.get('/facilities', async (req, res) => {
  */
 router.get('/filter-options', async (req, res) => {
   try {
-    const [sexRes, bactRes, outcomeRes] = await Promise.all([
-      pool.query(`SELECT DISTINCT sex FROM tb_cases WHERE sex IS NOT NULL AND sex != '' ORDER BY sex`),
-      pool.query(`SELECT DISTINCT bacteriological_status FROM tb_cases WHERE bacteriological_status IS NOT NULL AND bacteriological_status != '' ORDER BY bacteriological_status`),
-      pool.query(`SELECT DISTINCT outcome_status FROM tb_cases WHERE outcome_status IS NOT NULL AND outcome_status != '' ORDER BY outcome_status`),
+    const [sexRes, bactRes, outcomeRes, validationRes, sourceTypeRes, locationRes] = await Promise.all([
+      pool.query(`SELECT DISTINCT TRIM(sex) as sex FROM tb_cases WHERE sex IS NOT NULL AND TRIM(sex) != '' ORDER BY sex`),
+      pool.query(`SELECT DISTINCT TRIM(bacteriological_status) as bacteriological_status FROM tb_cases WHERE bacteriological_status IS NOT NULL AND TRIM(bacteriological_status) != '' ORDER BY bacteriological_status`),
+      pool.query(`SELECT DISTINCT TRIM(outcome_status) as outcome_status FROM tb_cases WHERE outcome_status IS NOT NULL AND TRIM(outcome_status) != '' ORDER BY outcome_status`),
+      pool.query(`SELECT DISTINCT TRIM(validation_status) as validation_status FROM tb_cases WHERE validation_status IS NOT NULL AND TRIM(validation_status) != '' ORDER BY validation_status`),
+      pool.query(`SELECT DISTINCT TRIM(source_type) as source_type FROM tb_cases WHERE source_type IS NOT NULL AND TRIM(source_type) != '' ORDER BY source_type`),
+      pool.query(`SELECT DISTINCT TRIM(location_classification) as location_classification FROM tb_cases WHERE location_classification IS NOT NULL AND TRIM(location_classification) != '' ORDER BY location_classification`),
     ]);
     res.json({
       sex: sexRes.rows.map(r => r.sex),
       bacteriological_status: bactRes.rows.map(r => r.bacteriological_status),
       outcome_status: outcomeRes.rows.map(r => r.outcome_status),
+      validation_status: validationRes.rows.map(r => r.validation_status),
+      source_type: sourceTypeRes.rows.map(r => r.source_type),
+      location_classification: locationRes.rows.map(r => r.location_classification),
     });
   } catch (err) {
     console.error('Fetch filter options error:', err.message);
@@ -205,7 +211,7 @@ router.get('/import/:batchId/errors', authenticateToken, authorizeRoles('admin')
  * GET /api/tb/cases
  * List individual TB case records with filtering, search, and pagination
  * Query params: page, limit, search, barangay, year, month, outcome, facility,
- *               sex, bacteriological_status, validation_status
+ *               sex, bacteriological_status, validation_status, source_type, location_classification
  */
 router.get('/cases', async (req, res) => {
   try {
@@ -221,6 +227,8 @@ router.get('/cases', async (req, res) => {
       sex = '',
       bacteriological_status = '',
       validation_status = '',
+      source_type = '',
+      location_classification = '',
     } = req.query;
 
     const offset = (Math.max(1, Number(page)) - 1) * Number(limit);
@@ -230,20 +238,43 @@ router.get('/cases', async (req, res) => {
 
     if (search) {
       const term = search.trim();
+      const isNumeric = /^\d+$/.test(term);
       const paddedTerm = term.replace(/^0+/, '') || '0';
-      conditions.push(`(
-        c.id::text ILIKE $${paramIdx} OR
-        c.id = $${paramIdx + 1} OR
-        c.barangay_name ILIKE $${paramIdx} OR
-        c.screening_facility ILIKE $${paramIdx} OR
-        c.treatment_facility ILIKE $${paramIdx}
-      )`);
-      params.push(`%${term}%`, Number(paddedTerm));
-      paramIdx += 2;
+
+      const textClauses = [
+        `TRIM(c.barangay_name) ILIKE $${paramIdx}`,
+        `TRIM(c.screening_facility) ILIKE $${paramIdx}`,
+        `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
+        `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
+        `TRIM(c.source_type) ILIKE $${paramIdx}`,
+        `TRIM(c.validation_status) ILIKE $${paramIdx}`,
+        `TRIM(c.sex) ILIKE $${paramIdx}`,
+        `TRIM(c.bacteriological_status) ILIKE $${paramIdx}`,
+        `TRIM(c.outcome_status) ILIKE $${paramIdx}`,
+        `TRIM(c.source_of_patient) ILIKE $${paramIdx}`,
+        `TRIM(c.anatomical_site) ILIKE $${paramIdx}`,
+        `TRIM(c.registration_group) ILIKE $${paramIdx}`,
+        `TRIM(c.location_classification) ILIKE $${paramIdx}`,
+      ];
+
+      if (isNumeric) {
+        textClauses.unshift(
+          `c.id::text = $${paramIdx + 1}`,
+          `c.id = $${paramIdx + 2}`,
+          `c.age::text = $${paramIdx + 1}`
+        );
+        params.push(`${term}%`, term, Number(paddedTerm));
+        paramIdx += 3;
+      } else {
+        params.push(`${term}%`);
+        paramIdx += 1;
+      }
+
+      conditions.push(`(${textClauses.join(' OR ')})`);
     }
 
     if (barangay) {
-      conditions.push(`c.barangay_name = $${paramIdx}`);
+      conditions.push(`TRIM(c.barangay_name) = $${paramIdx}`);
       params.push(barangay);
       paramIdx++;
     }
@@ -261,36 +292,46 @@ router.get('/cases', async (req, res) => {
     }
 
     if (outcome) {
-      conditions.push(`c.outcome_status = $${paramIdx}`);
+      conditions.push(`UPPER(TRIM(c.outcome_status)) = UPPER($${paramIdx})`);
       params.push(outcome);
       paramIdx++;
     }
 
     if (facility) {
       const facilityTrimmed = facility.trim();
-      conditions.push(`c.screening_facility = $${paramIdx}`);
+      conditions.push(`TRIM(c.screening_facility) = $${paramIdx}`);
       params.push(facilityTrimmed);
       paramIdx++;
     }
 
     if (sex) {
-      conditions.push(`c.sex ILIKE $${paramIdx}`);
+      conditions.push(`TRIM(c.sex) ILIKE $${paramIdx}`);
       params.push(sex);
       paramIdx++;
     }
 
     if (bacteriological_status) {
-      conditions.push(`c.bacteriological_status ILIKE $${paramIdx}`);
+      conditions.push(`TRIM(c.bacteriological_status) ILIKE $${paramIdx}`);
       params.push(bacteriological_status);
       paramIdx++;
     }
 
     if (validation_status) {
-      if (validation_status === 'Validated') {
-        conditions.push(`c.batch_id IS NOT NULL`);
-      } else if (validation_status === 'Pending') {
-        conditions.push(`c.batch_id IS NULL`);
-      }
+      conditions.push(`TRIM(c.validation_status) = $${paramIdx}`);
+      params.push(validation_status);
+      paramIdx++;
+    }
+
+    if (source_type) {
+      conditions.push(`TRIM(c.source_type) = $${paramIdx}`);
+      params.push(source_type);
+      paramIdx++;
+    }
+
+    if (location_classification) {
+      conditions.push(`TRIM(c.location_classification) = $${paramIdx}`);
+      params.push(location_classification);
+      paramIdx++;
     }
 
     const whereClause = conditions.length > 0
@@ -324,7 +365,11 @@ router.get('/cases', async (req, res) => {
         c.date_started_treatment,
         c.outcome_status,
         c.date_of_outcome,
-        c.imported_at
+        c.imported_at,
+        c.validation_status,
+        c.itis_case_id,
+        c.source_type,
+        c.location_classification
       FROM tb_cases c
       ${whereClause}
       ORDER BY c.date_of_diagnosis DESC
@@ -352,7 +397,7 @@ router.get('/cases', async (req, res) => {
 /**
  * GET /api/tb/dashboard/summary
  * Key metrics: total cases, unique months, cases per barangay
- * Query params: year, month, barangay, outcome, facility, sex, bacteriological_status, validation_status
+ * Query params: year, month, barangay, outcome, facility, sex, bacteriological_status, validation_status, source_type, location_classification
  */
 router.get('/dashboard/summary', async (req, res) => {
   try {
@@ -365,6 +410,8 @@ router.get('/dashboard/summary', async (req, res) => {
       sex = '',
       bacteriological_status = '',
       validation_status = '',
+      source_type = '',
+      location_classification = '',
     } = req.query;
 
     const conditions = [];
@@ -382,36 +429,44 @@ router.get('/dashboard/summary', async (req, res) => {
       paramIdx++;
     }
     if (barangay) {
-      conditions.push(`barangay_name = $${paramIdx}`);
+      conditions.push(`TRIM(c.barangay_name) = $${paramIdx}`);
       params.push(barangay);
       paramIdx++;
     }
     if (outcome) {
-      conditions.push(`outcome_status = $${paramIdx}`);
+      conditions.push(`UPPER(TRIM(outcome_status)) = UPPER($${paramIdx})`);
       params.push(outcome);
       paramIdx++;
     }
     if (facility) {
-      conditions.push(`screening_facility = $${paramIdx}`);
+      conditions.push(`TRIM(screening_facility) = $${paramIdx}`);
       params.push(facility.trim());
       paramIdx++;
     }
     if (sex) {
-      conditions.push(`sex ILIKE $${paramIdx}`);
+      conditions.push(`TRIM(sex) ILIKE $${paramIdx}`);
       params.push(sex);
       paramIdx++;
     }
     if (bacteriological_status) {
-      conditions.push(`bacteriological_status ILIKE $${paramIdx}`);
+      conditions.push(`TRIM(bacteriological_status) ILIKE $${paramIdx}`);
       params.push(bacteriological_status);
       paramIdx++;
     }
     if (validation_status) {
-      if (validation_status === 'Validated') {
-        conditions.push(`batch_id IS NOT NULL`);
-      } else if (validation_status === 'Pending') {
-        conditions.push(`batch_id IS NULL`);
-      }
+      conditions.push(`TRIM(validation_status) = $${paramIdx}`);
+      params.push(validation_status);
+      paramIdx++;
+    }
+    if (source_type) {
+      conditions.push(`TRIM(source_type) = $${paramIdx}`);
+      params.push(source_type);
+      paramIdx++;
+    }
+    if (location_classification) {
+      conditions.push(`TRIM(location_classification) = $${paramIdx}`);
+      params.push(location_classification);
+      paramIdx++;
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -1859,7 +1914,7 @@ router.get('/reports/summary', async (req, res) => {
     let paramIdx = 3;
 
     if (barangay) {
-      conditions.push(`c.barangay_name = $${paramIdx}`);
+      conditions.push(`TRIM(c.barangay_name) = $${paramIdx}`);
       params.push(barangay);
       paramIdx++;
     }

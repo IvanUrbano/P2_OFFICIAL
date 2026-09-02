@@ -98,6 +98,10 @@ const ALL_OUTCOME_STATUSES = [
   "ON TREATMENT", "CURED", "TREATMENT COMPLETED",
   "DIED", "LOST TO FOLLOW-UP", "EXCLUDED", "NOT EVALUATED",
 ];
+const ALL_SEX_OPTIONS = ["Male", "Female"];
+const ALL_VALIDATION_STATUSES = ["Validated", "Not Validated"];
+const ALL_SOURCE_TYPES = ["DSTB", "MN"];
+const ALL_LOCATION_CLASSIFICATIONS = ["Pasig City", "Non-Pasig"];
 
 export default function TBRecords() {
   const [records, setRecords] = useState([]);
@@ -105,7 +109,6 @@ export default function TBRecords() {
   const [outcomeStatuses, setOutcomeStatuses] = useState([]);
   const [bacteriologicalStatuses, setBacteriologicalStatuses] = useState([]);
   const [sexStatuses, setSexStatuses] = useState([]);
-  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   const [metrics, setMetrics] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
@@ -118,12 +121,14 @@ export default function TBRecords() {
   const [selectedSex, setSelectedSex] = useState("");
   const [selectedBacteriologicalStatus, setSelectedBacteriologicalStatus] = useState("");
   const [selectedValidationStatus, setSelectedValidationStatus] = useState("");
+  const [selectedSourceType, setSelectedSourceType] = useState("");
+  const [selectedLocationClassification, setSelectedLocationClassification] = useState("");
   const [facilities, setFacilities] = useState([]);
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [pendingFilters, setPendingFilters] = useState({});
-  const recordsPerPage = 20;
+  const [pagination, setPagination] = useState({ limit: 20, total: 0, totalPages: 1 });
 
   /* ─── Derived active filter list ─── */
   const activeFilters = [
@@ -135,6 +140,8 @@ export default function TBRecords() {
     { key: 'sex', label: 'Sex', value: selectedSex },
     { key: 'bacteriological', label: 'Bacteriological', value: selectedBacteriologicalStatus },
     { key: 'validation', label: 'Validation', value: selectedValidationStatus },
+    { key: 'source', label: 'Source Type', value: selectedSourceType },
+    { key: 'location', label: 'Location', value: selectedLocationClassification },
   ].filter(f => f.value);
 
   const activeFilterCount = activeFilters.length;
@@ -149,6 +156,8 @@ export default function TBRecords() {
     sex: setSelectedSex,
     bacteriological: setSelectedBacteriologicalStatus,
     validation: setSelectedValidationStatus,
+    source: setSelectedSourceType,
+    location: setSelectedLocationClassification,
   };
 
   const removeFilter = (key) => {
@@ -160,6 +169,7 @@ export default function TBRecords() {
     setSearchTerm(""); setSelectedYear(""); setSelectedMonth("");
     setSelectedBarangay(""); setSelectedOutcomeStatus(""); setSelectedFacility("");
     setSelectedSex(""); setSelectedBacteriologicalStatus(""); setSelectedValidationStatus("");
+    setSelectedSourceType(""); setSelectedLocationClassification("");
     setCurrentPage(1);
   };
 
@@ -174,6 +184,8 @@ export default function TBRecords() {
       sex: selectedSex,
       bacteriological: selectedBacteriologicalStatus,
       validation: selectedValidationStatus,
+      source: selectedSourceType,
+      location: selectedLocationClassification,
     });
     setShowAdvancedFilters(true);
   };
@@ -191,12 +203,14 @@ export default function TBRecords() {
     setSelectedSex(pendingFilters.sex || "");
     setSelectedBacteriologicalStatus(pendingFilters.bacteriological || "");
     setSelectedValidationStatus(pendingFilters.validation || "");
+    setSelectedSourceType(pendingFilters.source || "");
+    setSelectedLocationClassification(pendingFilters.location || "");
     setCurrentPage(1);
     setShowAdvancedFilters(false);
   };
 
   const clearPendingFilters = () => {
-    setPendingFilters({ year: "", month: "", barangay: "", outcome: "", facility: "", sex: "", bacteriological: "", validation: "" });
+    setPendingFilters({ year: "", month: "", barangay: "", outcome: "", facility: "", sex: "", bacteriological: "", validation: "", source: "", location: "" });
   };
 
   /* ─── Format chip display ─── */
@@ -222,6 +236,8 @@ export default function TBRecords() {
       if (selectedSex) params.append("sex", selectedSex);
       if (selectedBacteriologicalStatus) params.append("bacteriological_status", selectedBacteriologicalStatus);
       if (selectedValidationStatus) params.append("validation_status", selectedValidationStatus);
+      if (selectedSourceType) params.append("source_type", selectedSourceType);
+      if (selectedLocationClassification) params.append("location_classification", selectedLocationClassification);
       const qs = params.toString();
       const res = await API.get(`/api/tb/dashboard/summary${qs ? `?${qs}` : ''}`);
       const s = res.data.summary;
@@ -248,7 +264,7 @@ export default function TBRecords() {
     } catch (err) {
       console.error("Failed to fetch metrics:", err);
     }
-  }, [selectedYear, selectedMonth, selectedBarangay, selectedOutcomeStatus, selectedFacility, selectedSex, selectedBacteriologicalStatus, selectedValidationStatus]);
+  }, [selectedYear, selectedMonth, selectedBarangay, selectedOutcomeStatus, selectedFacility, selectedSex, selectedBacteriologicalStatus, selectedValidationStatus, selectedSourceType, selectedLocationClassification]);
 
   useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
 
@@ -279,7 +295,7 @@ export default function TBRecords() {
     fetchFacilities();
   }, []);
 
-  /* ─── Fetch filter options (sex, bacteriological status, outcome status) ─── */
+  /* ─── Fetch filter options (sex, bacteriological status, outcome status, validation, location) ─── */
   useEffect(() => {
     const fetchFilterOptions = async () => {
       try {
@@ -288,15 +304,9 @@ export default function TBRecords() {
         setBacteriologicalStatuses((res.data.bacteriological_status || []).filter(Boolean).sort());
         setOutcomeStatuses((res.data.outcome_status || []).filter(Boolean).sort());
       } catch {
-        try {
-          const res = await API.get("/api/tb/cases?limit=9999");
-          const allCases = res.data.cases || [];
-          setSexStatuses([...new Set(allCases.map(r => r.sex).filter(Boolean))].sort());
-          setBacteriologicalStatuses([...new Set(allCases.map(r => r.bacteriological_status).filter(Boolean))].sort());
-          setOutcomeStatuses([...new Set(allCases.map(r => r.outcome_status).filter(Boolean))].sort());
-        } catch (err2) {
-          console.error("Failed to fetch filter options:", err2);
-        }
+        setSexStatuses(ALL_SEX_OPTIONS);
+        setBacteriologicalStatuses([]);
+        setOutcomeStatuses(ALL_OUTCOME_STATUSES);
       }
     };
     fetchFilterOptions();
@@ -310,7 +320,7 @@ export default function TBRecords() {
       try {
         const params = new URLSearchParams();
         params.append("page", currentPage);
-        params.append("limit", recordsPerPage);
+        params.append("limit", pagination.limit);
         if (debouncedSearch) params.append("search", debouncedSearch);
         if (selectedBarangay) params.append("barangay", selectedBarangay);
         if (selectedYear) params.append("year", selectedYear);
@@ -323,11 +333,13 @@ export default function TBRecords() {
         if (selectedSex) params.append("sex", selectedSex);
         if (selectedBacteriologicalStatus) params.append("bacteriological_status", selectedBacteriologicalStatus);
         if (selectedValidationStatus) params.append("validation_status", selectedValidationStatus);
+        if (selectedSourceType) params.append("source_type", selectedSourceType);
+        if (selectedLocationClassification) params.append("location_classification", selectedLocationClassification);
         const res = await API.get(`/api/tb/cases?${params.toString()}`);
         if (cancelled) return;
         const cases = res.data.cases || [];
         setRecords(cases);
-        setPagination(res.data.pagination || { page: 1, limit: 10, total: 0, totalPages: 1 });
+        setPagination(res.data.pagination || { limit: 20, total: 0, totalPages: 1 });
       } catch (err) {
         if (!cancelled) console.error("Failed to fetch cases:", err);
       } finally {
@@ -336,7 +348,7 @@ export default function TBRecords() {
     };
     fetchCases();
     return () => { cancelled = true; };
-  }, [currentPage, debouncedSearch, selectedYear, selectedMonth, selectedBarangay, selectedOutcomeStatus, selectedFacility, selectedSex, selectedBacteriologicalStatus, selectedValidationStatus]);
+  }, [currentPage, debouncedSearch, selectedYear, selectedMonth, selectedBarangay, selectedOutcomeStatus, selectedFacility, selectedSex, selectedBacteriologicalStatus, selectedValidationStatus, selectedSourceType, selectedLocationClassification, pagination.limit]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -601,7 +613,7 @@ export default function TBRecords() {
                   <i className="ri-loader-4-line text-xs animate-spin" /> Loading records...
                 </span>
               ) : (
-                <>Showing {pagination.total === 0 ? 0 : (currentPage - 1) * recordsPerPage + 1}–{Math.min(currentPage * recordsPerPage, pagination.total)} of {pagination.total} records</>
+                <>Showing {pagination.total === 0 ? 0 : (currentPage - 1) * pagination.limit + 1}–{Math.min(currentPage * pagination.limit, pagination.total)} of {pagination.total} records</>
               )}
             </p>
             <div className="flex items-center gap-1.5">
@@ -730,7 +742,23 @@ export default function TBRecords() {
                   <FilterSelect
                     label="Validation Status"
                     value={pendingFilters.validation || ""} onChange={(v) => updatePending('validation', v)}
-                    options={["Validated", "Pending"]} placeholder="All Statuses"
+                    options={ALL_VALIDATION_STATUSES} placeholder="All Statuses"
+                  />
+                </div>
+              </div>
+              <div style={{ borderTop: '1px solid #E2E8F0' }} />
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Classification</h3>
+                <div className="space-y-3">
+                  <FilterSelect
+                    label="Source Type"
+                    value={pendingFilters.source || ""} onChange={(v) => updatePending('source', v)}
+                    options={ALL_SOURCE_TYPES} placeholder="All Sources"
+                  />
+                  <FilterSelect
+                    label="Location"
+                    value={pendingFilters.location || ""} onChange={(v) => updatePending('location', v)}
+                    options={ALL_LOCATION_CLASSIFICATIONS} placeholder="All Locations"
                   />
                 </div>
               </div>
@@ -785,12 +813,10 @@ export default function TBRecords() {
               <div>
                 <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Case Summary</h3>
                 <div className="space-y-2.5">
-                  <DetailRow label="ITIS Case ID" value={selectedRecord.itis_case_id ?? null} />
-                  <DetailRow label="Source Type" value={selectedRecord.source_type ?? null} />
-                  <DetailRow label="Validation Status" value={selectedRecord.batch_id ? "Validated" : "Pending"} />
-                  <DetailRow label="Encoded By" value={selectedRecord.source_of_patient} />
+                  <DetailRow label="ITIS Case ID" value={selectedRecord.itis_case_id} />
+                  <DetailRow label="Source Type" value={selectedRecord.source_type} />
+                  <DetailRow label="Validation Status" value={selectedRecord.validation_status} />
                   <DetailRow label="Imported From" value={selectedRecord.screening_facility} />
-                  <DetailRow label="Created" value={formatDate(selectedRecord.date_of_diagnosis)} />
                 </div>
               </div>
               <div style={{ borderTop: '1px solid #E2E8F0' }} />
@@ -800,8 +826,7 @@ export default function TBRecords() {
                   <DetailRow label="Age" value={selectedRecord.age} />
                   <DetailRow label="Sex" value={selectedRecord.sex} />
                   <DetailRow label="Barangay" value={selectedRecord.barangay_name} />
-                  <DetailRow label="City" value="Pasig City" />
-                  <DetailRow label="Location Classification" value={selectedRecord.location_classification ?? null} />
+                  <DetailRow label="Location Classification" value={selectedRecord.location_classification} />
                   <DetailRow label="Source" value={selectedRecord.source_of_patient || "Walk-in"} />
                 </div>
               </div>

@@ -11,24 +11,11 @@ import API from '../api/axios';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
-const ALL_YEARS = ['2023', '2024', '2025', '2026'];
-
-const MONTH_OPTIONS = [
-  { value: '', label: 'All Months' },
-  { value: '1', label: 'January' }, { value: '2', label: 'February' },
-  { value: '3', label: 'March' }, { value: '4', label: 'April' },
-  { value: '5', label: 'May' }, { value: '6', label: 'June' },
-  { value: '7', label: 'July' }, { value: '8', label: 'August' },
-  { value: '9', label: 'September' }, { value: '10', label: 'October' },
-  { value: '11', label: 'November' }, { value: '12', label: 'December' },
-];
-
 const RISK_COLORS = {
   Low: '#10B981',
   Moderate: '#F59E0B',
   Medium: '#F59E0B',
   High: '#EF4444',
-  'Very High': '#991B1B',
   'No Data': '#94A3B8',
 };
 
@@ -54,7 +41,7 @@ const GIS_RISK_COLORS = {
 
 const PASIG_BOUNDS = L.latLngBounds([14.48, 121.02], [14.64, 121.13]);
 
-const RISK_PRIORITY = { 'Very High': 4, High: 3, Medium: 2, Moderate: 2, Low: 1, 'No Data': 0 };
+const RISK_PRIORITY = { High: 3, Medium: 2, Moderate: 2, Low: 1, 'No Data': 0 };
 
 function riskStyle(feature) {
   const risk = feature.properties?.risk_class || 'No Data';
@@ -68,7 +55,7 @@ function riskStyle(feature) {
 }
 
 /* ─── Mini GIS Map ─── */
-function MiniGisMap() {
+function MiniGisMap({ refreshKey }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const dataRef = useRef(null);
@@ -100,7 +87,7 @@ function MiniGisMap() {
 
     function buildLabels(features) {
       if (labelsRef.current) {
-        labelsRef.current.forEach(l => { try { map.removeLayer(l); } catch {} });
+        labelsRef.current.forEach(l => {         try { map.removeLayer(l); } catch (e) { void e; } });
       }
       labelsRef.current = [];
       const zoom = map.getZoom();
@@ -182,7 +169,7 @@ function MiniGisMap() {
       dataRef.current = null;
       labelsRef.current = null;
     };
-  }, []);
+  }, [refreshKey]);
 
   return (
     <div
@@ -262,26 +249,33 @@ function SkeletonCard() {
   );
 }
 
-function FilterSelect({ label, value, onChange, children }) {
-  return (
-    <div className="relative">
-      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>{label}:</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-        style={{
-          background: '#ffffff',
-          color: '#0F2D52',
-          border: '1px solid #E2E8F0',
-          paddingLeft: `${(label.length * 6.5) + 24}px`,
-        }}
-      >
-        {children}
-      </select>
-      <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-    </div>
-  );
+/* ─── Animated Number Hook ─── */
+function useAnimatedNumber(target, duration = 600, decimals = 0) {
+  const [display, setDisplay] = useState(0);
+  const rafRef = useRef(null);
+  const startRef = useRef(null);
+  const fromRef = useRef(0);
+
+  useEffect(() => {
+    fromRef.current = display;
+    startRef.current = null;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+
+    const factor = Math.pow(10, decimals);
+    const step = (ts) => {
+      if (!startRef.current) startRef.current = ts;
+      const elapsed = ts - startRef.current;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setDisplay(Math.round((fromRef.current + (target - fromRef.current) * eased) * factor) / factor);
+      if (progress < 1) rafRef.current = requestAnimationFrame(step);
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, duration, decimals]);
+
+  return display;
 }
 
 /* ─── Main Dashboard Component ──────────────────────────────────────── */
@@ -292,7 +286,7 @@ export default function DashboardPage() {
   /* ── State ── */
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [summary, setSummary] = useState(null);
+  const [lastUpdatedDate, setLastUpdatedDate] = useState(null);
   const [monthlyData, setMonthlyData] = useState([]);
   const [outcomesData, setOutcomesData] = useState([]);
   const [forecastsData, setForecastsData] = useState([]);
@@ -302,13 +296,9 @@ export default function DashboardPage() {
   const [pipelineStatus, setPipelineStatus] = useState(null);
   const [demographicsData, setDemographicsData] = useState([]);
 
-  /* ── Filter state ── */
-  const [filterYear, setFilterYear] = useState('');
-  const [filterMonth, setFilterMonth] = useState('');
-  const [filterBarangay, setFilterBarangay] = useState('');
-  const [appliedYear, setAppliedYear] = useState('');
-  const [appliedMonth, setAppliedMonth] = useState('');
-  const [appliedBarangay, setAppliedBarangay] = useState('');
+  /* ── Refresh state ── */
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshCount, setRefreshCount] = useState(0);
 
   /* ── Data fetching ── */
   const loadAll = useCallback(async () => {
@@ -326,7 +316,7 @@ export default function DashboardPage() {
           API.get('/api/tb/pipeline/status').catch(() => ({ data: { latest_run: null } })),
           API.get('/api/tb/dashboard/demographics').catch(() => ({ data: { demographics: [] } })),
         ]);
-      setSummary(summaryRes.data.summary || {});
+      setLastUpdatedDate(summaryRes.data.summary?.latest_date || null);
       setMonthlyData(monthlyRes.data.monthly || []);
       setOutcomesData(outcomesRes.data.outcomes || []);
       setForecastsData(forecastsRes.data.forecasts || []);
@@ -343,78 +333,35 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  /* ── Filter handlers ── */
-  const handleApply = useCallback(() => {
-    setAppliedYear(filterYear);
-    setAppliedMonth(filterMonth);
-    setAppliedBarangay(filterBarangay);
-  }, [filterYear, filterMonth, filterBarangay]);
-
-  const handleClear = useCallback(() => {
-    setFilterYear(''); setFilterMonth(''); setFilterBarangay('');
-    setAppliedYear(''); setAppliedMonth(''); setAppliedBarangay('');
-  }, []);
-
-  /* ── Re-fetch filter-dependent endpoints when filters change ── */
-  const refetchFiltered = useCallback(async () => {
-    if (loading) return;
-    const params = {};
-    if (appliedYear) params.year = appliedYear;
-    if (appliedMonth) params.month = appliedMonth;
-    if (appliedBarangay) params.barangay = appliedBarangay;
-    const qs = new URLSearchParams(params).toString();
-    const suffix = qs ? `?${qs}` : '';
-    const [outcomesRes, demoRes] = await Promise.all([
-      API.get(`/api/tb/dashboard/outcomes${suffix}`).catch(() => ({ data: { outcomes: [] } })),
-      API.get(`/api/tb/dashboard/demographics${suffix}`).catch(() => ({ data: { demographics: [] } })),
-    ]);
-    setOutcomesData(outcomesRes.data.outcomes || []);
-    setDemographicsData(demoRes.data.demographics || []);
-  }, [appliedYear, appliedMonth, appliedBarangay, loading]);
-
-  useEffect(() => { refetchFiltered(); }, [refetchFiltered]);
-
-  /* ── Barangay names ── */
-  const barangayNames = useMemo(
-    () => barangays.map((b) => b.barangay_name || b.name).filter(Boolean).sort(),
-    [barangays]
-  );
-
-  /* ── Filtered monthly data ── */
-  const filteredMonthly = useMemo(() => {
-    return monthlyData.filter((r) => {
-      if (!r.month) return false;
-      const d = new Date(r.month);
-      if (appliedYear && d.getFullYear() !== Number(appliedYear)) return false;
-      if (appliedMonth && (d.getMonth() + 1) !== Number(appliedMonth)) return false;
-      if (appliedBarangay && r.barangay_name !== appliedBarangay) return false;
-      return true;
-    });
-  }, [monthlyData, appliedYear, appliedMonth, appliedBarangay]);
-
-  /* ── Filtered outcomes ── */
-  const filteredOutcomes = outcomesData;
+  /* ── Refresh handler ── */
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    setRefreshCount((c) => c + 1);
+    await loadAll();
+    setRefreshing(false);
+  }, [loadAll]);
 
   /* ── 1. Total TB Cases ── */
   const totalCases = useMemo(() => {
-    const uniqueMonths = new Set(filteredMonthly.map((r) => r.month)).size;
-    const total = filteredMonthly.reduce((s, r) => s + Number(r.case_count || 0), 0);
+    const uniqueMonths = new Set(monthlyData.map((r) => r.month)).size;
+    const total = monthlyData.reduce((s, r) => s + Number(r.case_count || 0), 0);
     return { total, months: uniqueMonths };
-  }, [filteredMonthly]);
+  }, [monthlyData]);
 
   /* ── 2. Active Cases (ON TREATMENT) ── */
   const activeCases = useMemo(() => {
-    return filteredOutcomes
+    return outcomesData
       .filter((r) => (r.outcome_status || '').toUpperCase() === 'ON TREATMENT')
       .reduce((s, r) => s + Number(r.total || 0), 0);
-  }, [filteredOutcomes]);
+  }, [outcomesData]);
 
   /* ── 3. Treatment Success Rate ── */
   const successRate = useMemo(() => {
     const byStatus = {};
-    filteredOutcomes.forEach((r) => {
+    outcomesData.forEach((r) => {
       const st = (r.outcome_status || 'Unknown').toUpperCase();
       byStatus[st] = (byStatus[st] || 0) + Number(r.total || 0);
     });
@@ -423,7 +370,7 @@ export default function DashboardPage() {
     const success = (byStatus['CURED'] || 0) + (byStatus['TREATMENT COMPLETED'] || 0);
     const evaluated = total - (byStatus['NOT EVALUATED'] || 0);
     return { rate: ((success / (evaluated || 1)) * 100).toFixed(1), evaluated };
-  }, [filteredOutcomes]);
+  }, [outcomesData]);
 
   /* ── 4. High-Risk Barangays ── */
   const highRiskCount = useMemo(() => {
@@ -450,11 +397,11 @@ export default function DashboardPage() {
     }
 
     // Source 3: compute from monthly case counts + barangay population (tertiles)
-    if (filteredMonthly.length > 0 && barangays.length > 0) {
+    if (monthlyData.length > 0 && barangays.length > 0) {
       const popMap = {};
       barangays.forEach((b) => { popMap[b.barangay_name || b.name] = b.population || 0; });
       const casesByBrgy = {};
-      filteredMonthly.forEach((r) => {
+      monthlyData.forEach((r) => {
         if (!r.barangay_name) return;
         casesByBrgy[r.barangay_name] = (casesByBrgy[r.barangay_name] || 0) + Number(r.case_count || 0);
       });
@@ -474,7 +421,7 @@ export default function DashboardPage() {
     }
 
     return 0;
-  }, [forecastsData, riskData, filteredMonthly, barangays]);
+  }, [forecastsData, riskData, monthlyData, barangays]);
 
   /* ── 5. Forecasted Cases ── */
   const forecastSummary = useMemo(() => {
@@ -526,7 +473,8 @@ export default function DashboardPage() {
       .slice(-12)
       .map(([month, cases]) => {
         const d = new Date(month);
-        return { label: d.toLocaleDateString('en-US', { month: 'short' }), actual: cases, projected: null, month };
+        const hasMultipleYears = Object.keys(byMonth).some((m) => m.slice(0, 4) !== month.slice(0, 4));
+        return { label: d.toLocaleDateString('en-US', hasMultipleYears ? { month: 'short', year: '2-digit' } : { month: 'short' }), actual: cases, projected: null, month };
       });
 
     // Forecast: aggregate forecastsData by period
@@ -539,7 +487,9 @@ export default function DashboardPage() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([period, cases]) => {
         const d = new Date(period);
-        return { label: d.toLocaleDateString('en-US', { month: 'short' }), actual: null, projected: cases, month: period };
+        const allPeriods = [...Object.keys(byMonth), ...Object.keys(byPeriod)];
+        const hasMultipleYears = allPeriods.some((m) => m.slice(0, 4) !== period.slice(0, 4));
+        return { label: d.toLocaleDateString('en-US', hasMultipleYears ? { month: 'short', year: '2-digit' } : { month: 'short' }), actual: null, projected: cases, month: period };
       });
 
     // Merge: keep all historical, add forecast entries that don't overlap
@@ -554,7 +504,7 @@ export default function DashboardPage() {
   /* ── 6. Case Fatality Rate (CFR) ── */
   const caseFatalityRate = useMemo(() => {
     const byStatus = {};
-    filteredOutcomes.forEach((r) => {
+    outcomesData.forEach((r) => {
       const st = (r.outcome_status || 'Unknown').toUpperCase();
       byStatus[st] = (byStatus[st] || 0) + Number(r.total || 0);
     });
@@ -566,12 +516,12 @@ export default function DashboardPage() {
       died,
       evaluated,
     };
-  }, [filteredOutcomes]);
+  }, [outcomesData]);
 
   /* ── 7. Month-over-Month Comparison ── */
   const monthOverMonth = useMemo(() => {
-    if (filteredMonthly.length === 0) return { current: 0, previous: 0, change: 0, activeCurrent: 0, activePrevious: 0, activeChange: 0 };
-    const sorted = [...filteredMonthly].sort((a, b) => a.month.localeCompare(b.month));
+    if (monthlyData.length === 0) return { current: 0, previous: 0, change: 0 };
+    const sorted = [...monthlyData].sort((a, b) => a.month.localeCompare(b.month));
     const allMonths = [...new Set(sorted.map(r => r.month))].sort();
     const latestMonth = allMonths[allMonths.length - 1];
     const prevMonth = allMonths.length >= 2 ? allMonths[allMonths.length - 2] : null;
@@ -581,36 +531,33 @@ export default function DashboardPage() {
     const change = previousCases > 0 ? ((currentCases - previousCases) / previousCases) * 100 : 0;
 
     return { current: currentCases, previous: previousCases, change, month: latestMonth };
-  }, [filteredMonthly]);
-
-  /* ── 8. Filtered Demographics ── */
-  const filteredDemographics = demographicsData;
+  }, [monthlyData]);
 
   const sexData = useMemo(() => {
     const totals = { Male: 0, Female: 0 };
-    filteredDemographics.forEach((r) => {
+    demographicsData.forEach((r) => {
       const sex = r.sex || 'Unknown';
       if (sex in totals) totals[sex] += r.total || 0;
     });
     return totals;
-  }, [filteredDemographics]);
+  }, [demographicsData]);
 
   const ageData = useMemo(() => {
     const ageOrder = ['0-14', '15-24', '25-34', '35-44', '45-54', '55-64', '65+', 'Unknown'];
     const totals = {};
-    filteredDemographics.forEach((r) => {
+    demographicsData.forEach((r) => {
       const age = r.age_group || 'Unknown';
       totals[age] = (totals[age] || 0) + (r.total || 0);
     });
     return ageOrder
       .filter((age) => totals[age] > 0)
       .map((age) => ({ age_group: age, total: totals[age] }));
-  }, [filteredDemographics]);
+  }, [demographicsData]);
 
   /* ── TB Cases Trend chart data ── */
   const trendChartData = useMemo(() => {
     const byMonth = {};
-    filteredMonthly.forEach((r) => {
+    monthlyData.forEach((r) => {
       if (!byMonth[r.month]) byMonth[r.month] = 0;
       byMonth[r.month] += Number(r.case_count || 0);
     });
@@ -620,45 +567,14 @@ export default function DashboardPage() {
         const d = new Date(month);
         return { label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }), cases, month };
       });
-  }, [filteredMonthly]);
-
-  /* ── Barangay Risk Overview chart data ── */
-  const riskOverview = useMemo(() => {
-    const counts = { Low: 0, Moderate: 0, High: 0, 'Very High': 0 };
-    // Use forecasts first
-    if (forecastsData.length > 0) {
-      const latestPeriod = forecastsData.reduce((max, r) => (r.period > max ? r.period : max), '');
-      const seen = new Set();
-      forecastsData.forEach((r) => {
-        if (r.period !== latestPeriod || seen.has(r.barangay_name)) return;
-        seen.add(r.barangay_name);
-        const rc = r.risk_class || 'Low';
-        if (rc === 'Medium') counts.Moderate++;
-        else if (counts[rc] !== undefined) counts[rc]++;
-        else counts.Low++;
-      });
-    } else {
-      riskData.forEach((r) => {
-        const rc = r.risk_class || 'No Data';
-        if (rc === 'Medium') counts.Moderate++;
-        else if (rc === 'High' || rc === 'Very High') counts[rc] = (counts[rc] || 0) + 1;
-        else if (rc === 'Low') counts.Low++;
-      });
-    }
-    return [
-      { level: 'Low', count: counts.Low, color: RISK_COLORS.Low },
-      { level: 'Moderate', count: counts.Moderate, color: RISK_COLORS.Moderate },
-      { level: 'High', count: counts.High, color: RISK_COLORS.High },
-      { level: 'Very High', count: counts['Very High'], color: RISK_COLORS['Very High'] },
-    ];
-  }, [forecastsData, riskData]);
+  }, [monthlyData]);
 
   /* ── Top Priority Barangays ── */
   const topBarangays = useMemo(() => {
-    if (!filteredMonthly.length && !forecastsData.length) return [];
+    if (!monthlyData.length && !forecastsData.length) return [];
     // Combine case counts with risk scores
     const byBarangay = {};
-    filteredMonthly.forEach((r) => {
+    monthlyData.forEach((r) => {
       if (!r.barangay_name) return;
       if (!byBarangay[r.barangay_name]) byBarangay[r.barangay_name] = { name: r.barangay_name, cases: 0 };
       byBarangay[r.barangay_name].cases += Number(r.case_count || 0);
@@ -716,19 +632,19 @@ export default function DashboardPage() {
       })
       .slice(0, 5)
       .map((b, i) => ({ rank: i + 1, ...b }));
-  }, [filteredMonthly, forecastsData, riskData, barangays]);
+  }, [monthlyData, forecastsData, riskData, barangays]);
 
   /* ── Treatment Outcomes chart data ── */
   const outcomeChartData = useMemo(() => {
     const byStatus = {};
-    filteredOutcomes.forEach((r) => {
+    outcomesData.forEach((r) => {
       const st = r.outcome_status || 'Unknown';
       byStatus[st] = (byStatus[st] || 0) + Number(r.total || 0);
     });
     return OUTCOME_ORDER
       .filter((st) => byStatus[st])
       .map((st) => ({ outcome: st, count: byStatus[st], color: OUTCOME_COLORS[st] || '#94A3B8' }));
-  }, [filteredOutcomes]);
+  }, [outcomesData]);
 
   /* ── Recent Alerts ── */
   const recentAlerts = useMemo(() => {
@@ -766,9 +682,33 @@ export default function DashboardPage() {
   /* ── Last Updated ── */
   const lastUpdated = useMemo(() => {
     if (pipelineStatus?.trained_at) return new Date(pipelineStatus.trained_at);
-    if (summary?.latest_date) return new Date(summary.latest_date);
+    if (lastUpdatedDate) return new Date(lastUpdatedDate);
     return null;
-  }, [pipelineStatus, summary]);
+  }, [pipelineStatus, lastUpdatedDate]);
+
+  /* ── Relative time since last update ── */
+  const lastUpdatedRelative = (() => {
+    if (!lastUpdated) return '';
+    const diffMs = Date.now() - lastUpdated.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHrs = Math.floor(diffMins / 60);
+    if (diffHrs < 24) return `${diffHrs}h ago`;
+    const diffDays = Math.floor(diffHrs / 24);
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 30) return `${diffDays} days ago`;
+    const diffMonths = Math.floor(diffDays / 30);
+    return `${diffMonths}mo ago`;
+  })();
+
+  /* ── Animated KPI numbers ── */
+  const animatedTotalCases = useAnimatedNumber(totalCases.total);
+  const animatedActiveCases = useAnimatedNumber(activeCases);
+  const animatedSuccessRate = useAnimatedNumber(Number(successRate.rate), 600, 1);
+  const animatedFatalityRate = useAnimatedNumber(Number(caseFatalityRate.rate), 600, 1);
+  const animatedHighRisk = useAnimatedNumber(highRiskCount);
+  const animatedForecasted = useAnimatedNumber(forecastSummary.total);
 
   /* ────────── Render ────────── */
 
@@ -792,7 +732,6 @@ export default function DashboardPage() {
         {/* Header skeleton */}
         <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07)' }}>
           <div className="px-6 py-3.5"><SkeletonBlock className="h-5 w-48" /><SkeletonBlock className="h-3 w-96 mt-2" /></div>
-          <div className="px-6 py-3 flex gap-2" style={{ background: '#F8FAFC' }}><SkeletonBlock className="h-8 w-24" /><SkeletonBlock className="h-8 w-24" /><SkeletonBlock className="h-8 w-32" /></div>
         </div>
         {/* Metrics skeleton */}
         <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
@@ -812,7 +751,17 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 relative">
+
+      {/* ─── Refresh Overlay ─── */}
+      {refreshing && (
+        <div className="absolute inset-0 z-50 flex items-start justify-center pt-32 rounded-xl" style={{ background: 'rgba(255,255,255,0.6)', backdropFilter: 'blur(1px)' }}>
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-lg" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+            <i className="ri-refresh-line text-sm animate-spin" style={{ color: '#0F2D52' }} />
+            <span className="text-xs font-semibold" style={{ color: '#0F2D52' }}>Refreshing data...</span>
+          </div>
+        </div>
+      )}
 
       {/* ─── 1. Page Header ─── */}
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
@@ -828,33 +777,27 @@ export default function DashboardPage() {
             {lastUpdated && (
               <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
                 <i className="ri-time-line mr-1" />
-                Last Updated: {lastUpdated.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                Last Updated: {lastUpdated.toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                {lastUpdatedRelative && <span className="ml-1.5 font-semibold" style={{ color: '#6B7FA3' }}>({lastUpdatedRelative})</span>}
               </span>
             )}
-          </div>
-        </div>
-
-        {/* ─── 2. Global Filters ─── */}
-        <div className="flex items-center justify-between px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
-          <div className="flex items-center gap-2 flex-wrap">
-            <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
-              <option value="">All Years</option>
-              {ALL_YEARS.map((yr) => <option key={yr} value={yr}>{yr}</option>)}
-            </FilterSelect>
-            <FilterSelect label="Month" value={filterMonth} onChange={setFilterMonth}>
-              {MONTH_OPTIONS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-            </FilterSelect>
-            <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay}>
-              <option value="">All Barangays</option>
-              {barangayNames.map((name) => <option key={name} value={name}>{name}</option>)}
-            </FilterSelect>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <button onClick={handleClear} className="px-3 py-2 text-xs font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-              Clear
-            </button>
-            <button onClick={handleApply} className="px-4 py-2 text-xs font-semibold" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
-              Apply Filters
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold rounded-md transition"
+              style={{
+                background: '#F3F4F6',
+                color: '#0F2D52',
+                border: '1px solid #E2E8F0',
+                opacity: refreshing ? 0.6 : 1,
+                cursor: refreshing ? 'not-allowed' : 'pointer',
+              }}
+              onMouseEnter={e => { if (!refreshing) { e.currentTarget.style.background = '#E5E7EB'; } }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
+              title="Refresh dashboard data"
+            >
+              <i className={`ri-refresh-line text-sm ${refreshing ? 'animate-spin' : ''}`} />
+              Refresh
             </button>
           </div>
         </div>
@@ -868,7 +811,7 @@ export default function DashboardPage() {
           </div>
           <div className="text-center">
             <p className="text-sm font-semibold" style={{ color: '#475569' }}>No Data Available</p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>No TB records match the selected filters. Try adjusting your filters and apply again.</p>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>No TB records found in the database. Import TB records to populate the dashboard.</p>
           </div>
         </div>
       ) : (
@@ -883,7 +826,7 @@ export default function DashboardPage() {
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Total TB Cases</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{totalCases.total.toLocaleString()}</p>
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedTotalCases.toLocaleString()}</p>
                 <div className="flex items-center gap-1.5 mt-1">
                   <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>{totalCases.months} months recorded</span>
                   {monthOverMonth.previous > 0 && (
@@ -903,7 +846,7 @@ export default function DashboardPage() {
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Active TB Cases</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{activeCases.toLocaleString()}</p>
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedActiveCases.toLocaleString()}</p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Cases currently on treatment</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
@@ -915,7 +858,7 @@ export default function DashboardPage() {
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Success Rate</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{successRate.rate}%</p>
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedSuccessRate}%</p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{successRate.evaluated.toLocaleString()} evaluated</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
@@ -927,7 +870,7 @@ export default function DashboardPage() {
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Fatality Rate</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{caseFatalityRate.rate}%</p>
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedFatalityRate}%</p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{caseFatalityRate.died} deaths / {caseFatalityRate.evaluated} evaluated</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
@@ -939,28 +882,19 @@ export default function DashboardPage() {
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{highRiskCount}/30</p>
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedHighRisk}/30</p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Barangays requiring attention</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
               {/* Forecasted Cases */}
               <div className="flex flex-col px-5 py-5 relative">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <i className="ri-line-chart-line text-sm" style={{ color: '#6B9E9E' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Forecasted</span>
-                   </div>
-                  <button
-                    onClick={() => navigate('/forecasting')}
-                    className="flex items-center gap-1 text-[11px] font-semibold transition hover:underline"
-                    style={{ color: '#0F2D52' }}
-                  >
-                    View Forecast <i className="ri-arrow-right-s-line text-sm" />
-                  </button>
+                <div className="flex items-center gap-2">
+                  <i className="ri-line-chart-line text-sm" style={{ color: '#6B9E9E' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Forecasted</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{forecastSummary.total.toLocaleString()}</p>
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedForecasted.toLocaleString()}</p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{forecastSummary.period ? `${forecastSummary.period} forecast` : 'No forecast available'}</span>
               </div>
             </div>
@@ -971,7 +905,6 @@ export default function DashboardPage() {
             {/* TB Cases Trend */}
             <SectionCard
               title="TB Cases Trend"
-              icon="ri-line-chart-line"
               iconColor="#6B7FA3"
               description="Monthly tuberculosis cases based on recorded TB data."
               action="View Analytics"
@@ -998,7 +931,7 @@ export default function DashboardPage() {
               ) : (
                 <div className="flex flex-col items-center justify-center py-16 gap-3">
                   <i className="ri-line-chart-line text-2xl" style={{ color: '#CBD5E1' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>No trend data available for the selected filters.</p>
+                  <p className="text-xs" style={{ color: '#94A3B8' }}>No trend data available.</p>
                 </div>
               )}
             </SectionCard>
@@ -1006,14 +939,13 @@ export default function DashboardPage() {
             {/* Barangay Risk Overview — GIS Map */}
             <SectionCard
               title="Barangay Risk Overview"
-              icon="ri-map-pin-line"
               iconColor="#EF4444"
               description="Current risk classification across Pasig City barangays."
               action="View GIS Hotspots"
               actionTo="/gis-map"
             >
               <div className="relative rounded-lg overflow-hidden">
-                <MiniGisMap />
+                <MiniGisMap refreshKey={refreshCount} />
               </div>
               {/* Risk legend */}
               <div className="flex items-center justify-center gap-4 mt-3">
@@ -1036,8 +968,7 @@ export default function DashboardPage() {
             {/* Top High-Risk Barangays */}
             <SectionCard
               title="Top High-Risk Barangays"
-              icon="ri-list-ordered"
-               iconColor="#6B7280"
+              iconColor="#6B7280"
               description="Barangays with the highest recorded TB burden and risk classification."
               action="View GIS Hotspots"
               actionTo="/gis-map"
@@ -1075,7 +1006,6 @@ export default function DashboardPage() {
             {/* Age Group Distribution */}
             <SectionCard
               title="Demographics — Age Distribution"
-              icon="ri-group-line"
               iconColor="#6B7280"
               description="TB cases by age group."
             >
@@ -1111,7 +1041,6 @@ export default function DashboardPage() {
             {/* Sex Distribution */}
             <SectionCard
               title="Demographics — Sex Distribution"
-              icon="ri-men-line"
               iconColor="#3B82F6"
               description="Male vs female TB case distribution."
             >
@@ -1168,7 +1097,6 @@ export default function DashboardPage() {
             {/* Treatment Outcomes */}
             <SectionCard
               title="Treatment Outcomes"
-              icon="ri-pie-chart-2-line"
               iconColor="#10B981"
               description="Distribution of recorded TB treatment outcomes."
               action="View Analytics"
@@ -1304,7 +1232,6 @@ export default function DashboardPage() {
             {/* Recent Alerts */}
             <SectionCard
               title="Recent Alerts"
-              icon="ri-alarm-warning-fill"
               iconColor="#EF4444"
               description={`${recentAlerts.length} unresolved alert${recentAlerts.length !== 1 ? 's' : ''}`}
               action="View All Alerts"
