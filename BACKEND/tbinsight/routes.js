@@ -215,6 +215,7 @@ router.get('/import/:batchId/errors', authenticateToken, authorizeRoles('admin')
  */
 router.get('/cases', async (req, res) => {
   try {
+    const allowedSortFields = ['id', 'barangay_name', 'age', 'date_of_diagnosis', 'screening_facility', 'source_type'];
     const {
       page = 1,
       limit = 10,
@@ -229,9 +230,13 @@ router.get('/cases', async (req, res) => {
       validation_status = '',
       source_type = '',
       location_classification = '',
+      sortField = 'date_of_diagnosis',
+      sortDirection = 'desc',
     } = req.query;
 
-    const offset = (Math.max(1, Number(page)) - 1) * Number(limit);
+    const safePage = Math.max(1, parseInt(page) || 1);
+    const safeLimit = Math.min(100, Math.max(1, parseInt(limit) || 20));
+    const offset = (safePage - 1) * safeLimit;
     const conditions = [];
     const params = [];
     let paramIdx = 1;
@@ -275,7 +280,7 @@ router.get('/cases', async (req, res) => {
 
     if (barangay) {
       conditions.push(`TRIM(c.barangay_name) = $${paramIdx}`);
-      params.push(barangay);
+      params.push(barangay.trim());
       paramIdx++;
     }
 
@@ -293,50 +298,52 @@ router.get('/cases', async (req, res) => {
 
     if (outcome) {
       conditions.push(`UPPER(TRIM(c.outcome_status)) = UPPER($${paramIdx})`);
-      params.push(outcome);
+      params.push(outcome.trim());
       paramIdx++;
     }
 
     if (facility) {
-      const facilityTrimmed = facility.trim();
-      conditions.push(`TRIM(c.screening_facility) = $${paramIdx}`);
-      params.push(facilityTrimmed);
+      conditions.push(`(TRIM(c.screening_facility) = $${paramIdx} OR TRIM(c.treatment_facility) = $${paramIdx})`);
+      params.push(facility.trim());
       paramIdx++;
     }
 
     if (sex) {
       conditions.push(`TRIM(c.sex) ILIKE $${paramIdx}`);
-      params.push(sex);
+      params.push(sex.trim());
       paramIdx++;
     }
 
     if (bacteriological_status) {
       conditions.push(`TRIM(c.bacteriological_status) ILIKE $${paramIdx}`);
-      params.push(bacteriological_status);
+      params.push(bacteriological_status.trim());
       paramIdx++;
     }
 
     if (validation_status) {
       conditions.push(`TRIM(c.validation_status) = $${paramIdx}`);
-      params.push(validation_status);
+      params.push(validation_status.trim());
       paramIdx++;
     }
 
     if (source_type) {
       conditions.push(`TRIM(c.source_type) = $${paramIdx}`);
-      params.push(source_type);
+      params.push(source_type.trim());
       paramIdx++;
     }
 
     if (location_classification) {
       conditions.push(`TRIM(c.location_classification) = $${paramIdx}`);
-      params.push(location_classification);
+      params.push(location_classification.trim());
       paramIdx++;
     }
 
     const whereClause = conditions.length > 0
       ? 'WHERE ' + conditions.join(' AND ')
       : '';
+
+    const safeSortField = allowedSortFields.includes(sortField) ? sortField : 'date_of_diagnosis';
+    const safeSortDir = sortDirection === 'asc' ? 'ASC' : 'DESC';
 
     // Count total
     const countResult = await pool.query(
@@ -372,23 +379,164 @@ router.get('/cases', async (req, res) => {
         c.location_classification
       FROM tb_cases c
       ${whereClause}
-      ORDER BY c.date_of_diagnosis DESC
+      ORDER BY c.${safeSortField} ${safeSortDir}
       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
-      [...params, Number(limit), offset]
+      [...params, safeLimit, offset]
     );
 
     res.json({
       cases: dataResult.rows,
       pagination: {
-        page: Number(page),
-        limit: Number(limit),
+        page: safePage,
+        limit: safeLimit,
         total,
-        totalPages: Math.ceil(total / Number(limit)),
+        totalPages: Math.ceil(total / safeLimit),
       },
     });
   } catch (err) {
     console.error('Cases list error:', err.message);
     res.status(500).json({ error: 'Server error fetching cases.' });
+  }
+});
+
+/**
+ * GET /api/tb/cases/export
+ * Export filtered cases as CSV (no pagination)
+ */
+router.get('/cases/export', async (req, res) => {
+  try {
+    const {
+      search = '',
+      barangay = '',
+      year = '',
+      month = '',
+      outcome = '',
+      facility = '',
+      sex = '',
+      bacteriological_status = '',
+      validation_status = '',
+      source_type = '',
+      location_classification = '',
+    } = req.query;
+
+    const conditions = [];
+    const params = [];
+    let paramIdx = 1;
+
+    if (search) {
+      const term = search.trim();
+      const isNumeric = /^\d+$/.test(term);
+      const paddedTerm = term.replace(/^0+/, '') || '0';
+
+      const textClauses = [
+        `TRIM(c.barangay_name) ILIKE $${paramIdx}`,
+        `TRIM(c.screening_facility) ILIKE $${paramIdx}`,
+        `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
+        `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
+        `TRIM(c.source_type) ILIKE $${paramIdx}`,
+        `TRIM(c.validation_status) ILIKE $${paramIdx}`,
+        `TRIM(c.sex) ILIKE $${paramIdx}`,
+        `TRIM(c.bacteriological_status) ILIKE $${paramIdx}`,
+        `TRIM(c.outcome_status) ILIKE $${paramIdx}`,
+        `TRIM(c.source_of_patient) ILIKE $${paramIdx}`,
+        `TRIM(c.anatomical_site) ILIKE $${paramIdx}`,
+        `TRIM(c.registration_group) ILIKE $${paramIdx}`,
+        `TRIM(c.location_classification) ILIKE $${paramIdx}`,
+      ];
+
+      if (isNumeric) {
+        textClauses.unshift(
+          `c.id::text = $${paramIdx + 1}`,
+          `c.id = $${paramIdx + 2}`,
+          `c.age::text = $${paramIdx + 1}`
+        );
+        params.push(`${term}%`, term, Number(paddedTerm));
+        paramIdx += 3;
+      } else {
+        params.push(`${term}%`);
+        paramIdx += 1;
+      }
+
+      conditions.push(`(${textClauses.join(' OR ')})`);
+    }
+
+    if (barangay) { conditions.push(`TRIM(c.barangay_name) = $${paramIdx}`); params.push(barangay.trim()); paramIdx++; }
+    if (year) { conditions.push(`EXTRACT(YEAR FROM c.date_of_diagnosis) = $${paramIdx}`); params.push(Number(year)); paramIdx++; }
+    if (month) { conditions.push(`EXTRACT(MONTH FROM c.date_of_diagnosis) = $${paramIdx}`); params.push(Number(month)); paramIdx++; }
+    if (outcome) { conditions.push(`UPPER(TRIM(c.outcome_status)) = UPPER($${paramIdx})`); params.push(outcome.trim()); paramIdx++; }
+    if (facility) { conditions.push(`(TRIM(c.screening_facility) = $${paramIdx} OR TRIM(c.treatment_facility) = $${paramIdx})`); params.push(facility.trim()); paramIdx++; }
+    if (sex) { conditions.push(`TRIM(c.sex) ILIKE $${paramIdx}`); params.push(sex.trim()); paramIdx++; }
+    if (bacteriological_status) { conditions.push(`TRIM(c.bacteriological_status) ILIKE $${paramIdx}`); params.push(bacteriological_status.trim()); paramIdx++; }
+    if (validation_status) { conditions.push(`TRIM(c.validation_status) = $${paramIdx}`); params.push(validation_status.trim()); paramIdx++; }
+    if (source_type) { conditions.push(`TRIM(c.source_type) = $${paramIdx}`); params.push(source_type.trim()); paramIdx++; }
+    if (location_classification) { conditions.push(`TRIM(c.location_classification) = $${paramIdx}`); params.push(location_classification.trim()); paramIdx++; }
+
+    const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+
+    const result = await pool.query(
+      `SELECT
+        c.id,
+        c.itis_case_id,
+        c.barangay_name,
+        c.age,
+        c.sex,
+        c.date_of_diagnosis,
+        c.date_of_screening,
+        c.date_of_notification,
+        c.screening_facility,
+        c.treatment_facility,
+        c.source_type,
+        c.source_of_patient,
+        c.anatomical_site,
+        c.registration_group,
+        c.bacteriological_status,
+        c.date_started_treatment,
+        c.outcome_status,
+        c.date_of_outcome,
+        c.validation_status,
+        c.location_classification
+      FROM tb_cases c
+      ${whereClause}
+      ORDER BY c.date_of_diagnosis DESC
+      LIMIT 10000`,
+      params
+    );
+
+    const headers = ['Case ID', 'ITIS Case ID', 'Barangay', 'Age', 'Sex', 'Diagnosis Date', 'Screening Date', 'Notification Date', 'Screening Facility', 'Treatment Facility', 'Source', 'Source of Patient', 'Anatomical Site', 'Registration Group', 'Bacteriologic Status', 'Treatment Start Date', 'Status', 'Outcome Date', 'Validation', 'Location'];
+    const csvRows = [headers.join(',')];
+
+    for (const row of result.rows) {
+      const values = [
+        row.id,
+        row.itis_case_id || '',
+        `"${(row.barangay_name || '').replace(/"/g, '""')}"`,
+        row.age || '',
+        row.sex || '',
+        row.date_of_diagnosis ? new Date(row.date_of_diagnosis).toISOString().split('T')[0] : '',
+        row.date_of_screening ? new Date(row.date_of_screening).toISOString().split('T')[0] : '',
+        row.date_of_notification ? new Date(row.date_of_notification).toISOString().split('T')[0] : '',
+        `"${(row.screening_facility || '').replace(/"/g, '""')}"`,
+        `"${(row.treatment_facility || '').replace(/"/g, '""')}"`,
+        row.source_type || '',
+        row.source_of_patient || '',
+        row.anatomical_site || '',
+        row.registration_group || '',
+        row.bacteriological_status || '',
+        row.date_started_treatment ? new Date(row.date_started_treatment).toISOString().split('T')[0] : '',
+        row.outcome_status || '',
+        row.date_of_outcome ? new Date(row.date_of_outcome).toISOString().split('T')[0] : '',
+        row.validation_status || '',
+        row.location_classification || '',
+      ];
+      csvRows.push(values.join(','));
+    }
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="tb_records_export.csv"');
+    res.send(csvRows.join('\n'));
+  } catch (err) {
+    console.error('Cases export error:', err.message);
+    res.status(500).json({ error: 'Server error exporting cases.' });
   }
 });
 
@@ -435,37 +583,37 @@ router.get('/dashboard/summary', async (req, res) => {
     }
     if (outcome) {
       conditions.push(`UPPER(TRIM(outcome_status)) = UPPER($${paramIdx})`);
-      params.push(outcome);
+      params.push(outcome.trim());
       paramIdx++;
     }
     if (facility) {
-      conditions.push(`TRIM(screening_facility) = $${paramIdx}`);
+      conditions.push(`(TRIM(screening_facility) = $${paramIdx} OR TRIM(treatment_facility) = $${paramIdx})`);
       params.push(facility.trim());
       paramIdx++;
     }
     if (sex) {
       conditions.push(`TRIM(sex) ILIKE $${paramIdx}`);
-      params.push(sex);
+      params.push(sex.trim());
       paramIdx++;
     }
     if (bacteriological_status) {
       conditions.push(`TRIM(bacteriological_status) ILIKE $${paramIdx}`);
-      params.push(bacteriological_status);
+      params.push(bacteriological_status.trim());
       paramIdx++;
     }
     if (validation_status) {
       conditions.push(`TRIM(validation_status) = $${paramIdx}`);
-      params.push(validation_status);
+      params.push(validation_status.trim());
       paramIdx++;
     }
     if (source_type) {
       conditions.push(`TRIM(source_type) = $${paramIdx}`);
-      params.push(source_type);
+      params.push(source_type.trim());
       paramIdx++;
     }
     if (location_classification) {
       conditions.push(`TRIM(location_classification) = $${paramIdx}`);
-      params.push(location_classification);
+      params.push(location_classification.trim());
       paramIdx++;
     }
 
@@ -556,15 +704,22 @@ router.get('/dashboard/metrics', async (req, res) => {
  */
 router.get('/dashboard/monthly', async (req, res) => {
   try {
+    const { year } = req.query;
+    let yearFilter = '';
+    const params = [];
+    if (year) {
+      yearFilter = `AND EXTRACT(YEAR FROM date_of_diagnosis) = $1`;
+      params.push(parseInt(year));
+    }
     const result = await pool.query(`
       SELECT barangay_name,
              DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
              COUNT(*)::INTEGER AS case_count
       FROM tb_cases
-      WHERE date_of_diagnosis IS NOT NULL
+      WHERE date_of_diagnosis IS NOT NULL ${yearFilter}
       GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
       ORDER BY month, barangay_name
-    `);
+    `, params);
     res.json({ monthly: result.rows });
   } catch (err) {
     console.error('Dashboard monthly error:', err.message);
@@ -747,7 +902,7 @@ router.get('/dashboard/demographics', async (req, res) => {
     let idx = 1;
     if (year) { conditions.push(`EXTRACT(YEAR FROM date_of_diagnosis) = $${idx}`); params.push(Number(year)); idx++; }
     if (month) { conditions.push(`EXTRACT(MONTH FROM date_of_diagnosis) = $${idx}`); params.push(Number(month)); idx++; }
-    if (barangay) { conditions.push(`barangay_name = $${idx}`); params.push(barangay); idx++; }
+    if (barangay) { conditions.push(`TRIM(barangay_name) = $${idx}`); params.push(barangay); idx++; }
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
     const result = await pool.query(`
       SELECT barangay_name, sex,
@@ -786,7 +941,7 @@ router.get('/dashboard/outcomes', async (req, res) => {
     let idx = 1;
     if (year) { conditions.push(`EXTRACT(YEAR FROM date_of_diagnosis) = $${idx}`); params.push(Number(year)); idx++; }
     if (month) { conditions.push(`EXTRACT(MONTH FROM date_of_diagnosis) = $${idx}`); params.push(Number(month)); idx++; }
-    if (barangay) { conditions.push(`barangay_name = $${idx}`); params.push(barangay); idx++; }
+    if (barangay) { conditions.push(`TRIM(barangay_name) = $${idx}`); params.push(barangay); idx++; }
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
     const result = await pool.query(`
       SELECT barangay_name, COALESCE(outcome_status, 'Unknown') AS outcome_status, COUNT(*)::INTEGER as total
@@ -849,6 +1004,10 @@ router.get('/dashboard/bacteriological', async (req, res) => {
  */
 router.get('/gis/geojson', async (req, res) => {
   try {
+    const { year } = req.query;
+    const yearInt = year ? parseInt(year, 10) : null;
+    const isValidYear = yearInt && !isNaN(yearInt) && yearInt >= 2000 && yearInt <= 2099;
+
     // Fetch barangays with geometry from PostGIS
     const geoResult = await pool.query(`
       SELECT
@@ -862,39 +1021,54 @@ router.get('/gis/geojson', async (req, res) => {
       ORDER BY name
     `);
 
-    // Fetch latest risk scores
-    const riskResult = await pool.query(`
-      SELECT
-        barangay_name,
-        COALESCE(risk_score, 0) as risk_score,
-        COALESCE(risk_class, 'No Data') as risk_class,
-        COALESCE(incidence_per_100k, 0) as incidence_per_100k,
-        COALESCE(trend_direction, 'Stable') as trend_direction,
-        COALESCE(norm_incidence, 0) as norm_incidence,
-        COALESCE(norm_trend, 0) as norm_trend,
-        COALESCE(norm_neighbor_risk, 0) as norm_neighbor_risk,
-        COALESCE(norm_forecast_error, 0) as norm_forecast_error
-      FROM barangay_risk_scores
-      WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)
-    `);
+    // Fetch risk scores — filtered by year if provided, otherwise latest period
+    const riskQuery = isValidYear
+      ? `SELECT barangay_name, COALESCE(risk_score, 0) as risk_score,
+           COALESCE(risk_class, 'No Data') as risk_class,
+           COALESCE(incidence_per_100k, 0) as incidence_per_100k,
+           COALESCE(trend_direction, 'Stable') as trend_direction,
+           COALESCE(norm_incidence, 0) as norm_incidence,
+           COALESCE(norm_trend, 0) as norm_trend,
+           COALESCE(norm_neighbor_risk, 0) as norm_neighbor_risk,
+           COALESCE(norm_forecast_error, 0) as norm_forecast_error
+         FROM barangay_risk_scores
+         WHERE period = (SELECT MAX(period) FROM barangay_risk_scores WHERE EXTRACT(YEAR FROM period) = $1)`
+      : `SELECT barangay_name, COALESCE(risk_score, 0) as risk_score,
+           COALESCE(risk_class, 'No Data') as risk_class,
+           COALESCE(incidence_per_100k, 0) as incidence_per_100k,
+           COALESCE(trend_direction, 'Stable') as trend_direction,
+           COALESCE(norm_incidence, 0) as norm_incidence,
+           COALESCE(norm_trend, 0) as norm_trend,
+           COALESCE(norm_neighbor_risk, 0) as norm_neighbor_risk,
+           COALESCE(norm_forecast_error, 0) as norm_forecast_error
+         FROM barangay_risk_scores
+         WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)`;
+    const riskResult = await pool.query(riskQuery, isValidYear ? [yearInt] : []);
 
-    // Fetch forecast data
-    const forecastResult = await pool.query(`
-      SELECT
-        barangay_name,
-        COALESCE(forecasted_count, 0) as forecasted_count,
-        COALESCE(confidence_lower, 0) as confidence_lower,
-        COALESCE(confidence_upper, 0) as confidence_upper
-      FROM model_predictions
-      WHERE period = (SELECT MAX(period) FROM model_predictions)
-    `);
+    // Fetch forecast data — filtered by year if provided, otherwise latest period
+    const forecastQuery = isValidYear
+      ? `SELECT barangay_name, COALESCE(forecasted_count, 0) as forecasted_count,
+           COALESCE(confidence_lower, 0) as confidence_lower,
+           COALESCE(confidence_upper, 0) as confidence_upper
+         FROM model_predictions
+         WHERE period = (SELECT MAX(period) FROM model_predictions WHERE EXTRACT(YEAR FROM period) = $1)`
+      : `SELECT barangay_name, COALESCE(forecasted_count, 0) as forecasted_count,
+           COALESCE(confidence_lower, 0) as confidence_lower,
+           COALESCE(confidence_upper, 0) as confidence_upper
+         FROM model_predictions
+         WHERE period = (SELECT MAX(period) FROM model_predictions)`;
+    const forecastResult = await pool.query(forecastQuery, isValidYear ? [yearInt] : []);
 
-    // Fetch case counts
-    const caseResult = await pool.query(`
-      SELECT barangay_name, SUM(case_count)::INTEGER as total_cases
-      FROM monthly_case_summary
-      GROUP BY barangay_name
-    `);
+    // Fetch case counts — filtered by year if provided, otherwise all time
+    const caseQuery = isValidYear
+      ? `SELECT barangay_name, SUM(case_count)::INTEGER as total_cases
+         FROM monthly_case_summary
+         WHERE EXTRACT(YEAR FROM month) = $1
+         GROUP BY barangay_name`
+      : `SELECT barangay_name, SUM(case_count)::INTEGER as total_cases
+         FROM monthly_case_summary
+         GROUP BY barangay_name`;
+    const caseResult = await pool.query(caseQuery, isValidYear ? [yearInt] : []);
 
     // Build lookup maps
     const riskMap = {};
@@ -957,6 +1131,24 @@ router.get('/gis/geojson', async (req, res) => {
   } catch (err) {
     console.error('GeoJSON error:', err.message);
     res.status(500).json({ error: 'Server error generating GeoJSON.' });
+  }
+});
+
+/**
+ * GET /api/tb/gis/years
+ * Returns distinct years available in monthly_case_summary for the year filter dropdown.
+ */
+router.get('/gis/years', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT EXTRACT(YEAR FROM month)::INTEGER AS year
+      FROM monthly_case_summary
+      ORDER BY year DESC
+    `);
+    res.json({ years: result.rows.map(r => r.year) });
+  } catch (err) {
+    console.error('GIS years error:', err.message);
+    res.status(500).json({ error: 'Server error fetching available years.' });
   }
 });
 
@@ -1251,7 +1443,7 @@ router.get('/alerts', async (req, res) => {
       params.push(severity);
     }
     if (barangay) {
-      conditions.push(`barangay_name = $${idx++}`);
+      conditions.push(`TRIM(barangay_name) = $${idx++}`);
       params.push(barangay);
     }
     if (source) {
@@ -2215,7 +2407,7 @@ router.get('/interventions', async (req, res) => {
       params.push(priority);
     }
     if (barangay) {
-      conditions.push(`barangay_name = $${idx++}`);
+      conditions.push(`TRIM(barangay_name) = $${idx++}`);
       params.push(barangay);
     }
     if (type) {
