@@ -462,4 +462,27 @@ body {
   #printable-report tr { page-break-inside: avoid; }
   #printable-report thead { display: table-header-group; }
   @page { margin: 1.5cm; size: A4; }
+
+  /* GIS Page Print Styles */
+  .leaflet-control-zoom,
+  .leaflet-control-attribution,
+  .leaflet-tooltip,
+  .leaflet-popup { display: none !important; }
+
+  /* Hide fullscreen exit button and floating overlays during print */
+  .fixed { display: none !important; }
+
+  /* Ensure map container prints with proper size */
+  .leaflet-container { width: 100% !important; height: auto !important; min-height: 500px !important; }
+
+  /* Preserve dark theme colors in print */
+  .dark-tiles { filter: invert(1) hue-rotate(180deg) brightness(0.65) contrast(1.2) saturate(0.6) !important; }
+
+  /* Hide header toolbar buttons during print */
+  .gis-toolbar { display: none !important; }
+
+  /* Show page title */
+  .gis-print-title { display: block !important; text-align: center; margin-bottom: 16px; }
+  .gis-print-title h1 { font-size: 24px; font-weight: 800; color: #0F2D52; margin: 0; }
+  .gis-print-title p { font-size: 12px; color: #64748B; margin: 4px 0 0; }
 }

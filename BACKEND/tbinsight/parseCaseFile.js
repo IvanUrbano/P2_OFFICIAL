@@ -58,6 +58,8 @@ function matchHeader(normalized) {
   if (normalized.includes('registration')) return 'registration_group';
   if (normalized.includes('bacteriological')) return 'bacteriological_status';
   if (normalized.includes('validation')) return 'validation_status';
+  if (normalized.includes('itis') && normalized.includes('case')) return 'itis_case_id';
+  if (normalized.includes('source') && normalized.includes('type')) return 'source_type';
   if (normalized.includes('outcome')) return 'outcome_status';
 
   return null;
@@ -362,7 +364,7 @@ function parseCaseFile(fileBuffer, filename, validBarangays = new Set()) {
     const validation = validateRow(mappedRow, validBarangays);
 
     mappedRow.row_number = rowNum;
-    mappedRow.validation_status = validation.valid ? 'Validated' : 'Error';
+    mappedRow.validation_status = validation.valid ? 'Validated' : 'Not Validated';
     mappedRow._errors = validation.errors;
     mappedRow._warnings = validation.warnings;
 

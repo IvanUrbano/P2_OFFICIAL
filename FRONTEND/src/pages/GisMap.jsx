@@ -2,7 +2,6 @@
 import { useNavigate } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import html2canvas from 'html2canvas';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -40,6 +39,7 @@ function FilterSelect({ label, value, onChange, children, selectStyle }) {
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        aria-label={label}
         className="rounded-lg py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
         style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52', paddingLeft: `${label.length * 6.5 + 26}px`, paddingRight: '28px', maxWidth: 160, ...selectStyle }}
       >
@@ -75,11 +75,16 @@ function formatNum(n) {
   return n != null ? Number(n).toLocaleString() : '\u2014';
 }
 
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function DetailRow({ label, value }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>{label}</span>
-      <span className="text-[12px] font-bold" style={{ color: '#0F2D52' }}>{value || '\u2014'}</span>
+      <span className="text-[12px] font-bold" style={{ color: '#0F2D52' }}>{value != null ? value : '\u2014'}</span>
     </div>
   );
 }
@@ -135,8 +140,10 @@ export default function GisMap() {
   const geojsonLayerRef = useRef(null);
   const outlineLayerRef = useRef(null);
   const labelsRef = useRef([]);
+  const animationIntervalRef = useRef(null);
   const [data, setData] = useState(null);
   const [monthlyByBarangay, setMonthlyByBarangay] = useState({});
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filterBarangay, setFilterBarangay] = useState('');
   const [filterRiskLevel, setFilterRiskLevel] = useState('');
@@ -148,41 +155,88 @@ export default function GisMap() {
   const [hoveredBarangay, setHoveredBarangay] = useState(null);
   const [timelineMonth, setTimelineMonth] = useState(null);
   const [isAnimating, setIsAnimating] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [filterYear, setFilterYear] = useState('');
+  const [availableYears, setAvailableYears] = useState([]);
+  const closeButtonRef = useRef(null);
 
+  // Auto-focus close button when modal opens and handle Escape key
   useEffect(() => {
-    let cancelled = false;
+    if (!selectedBarangayName) return;
+    closeButtonRef.current?.focus();
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') setSelectedBarangayName(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedBarangayName]);
+
+  // Fetch available years for year filter
+  useEffect(() => {
+    const controller = new AbortController();
     (async () => {
       try {
-        const res = await API.get('/api/tb/gis/geojson');
-        if (!cancelled) setData(res.data);
-      } catch (err) {
-        if (!cancelled) setError(err.message || 'Failed to load map data');
+        const res = await API.get('/api/tb/gis/years', { signal: controller.signal });
+        setAvailableYears(res.data.years || []);
+      } catch {
+        // silently ignore
       }
     })();
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, []);
 
+  // Shared fetch helpers (used by both useEffects and handleRefresh)
+  const fetchGeoData = useCallback(async (signal) => {
+    const params = filterYear ? { year: filterYear } : {};
+    const res = await API.get('/api/tb/gis/geojson', { params, signal });
+    return res.data;
+  }, [filterYear]);
+
+  const fetchMonthlyData = useCallback(async (signal) => {
+    const params = filterYear ? { year: filterYear } : {};
+    const res = await API.get('/api/tb/dashboard/monthly', { params, signal });
+    const rows = res.data.monthly || [];
+    const grouped = {};
+    rows.forEach(r => {
+      const name = r.barangay_name;
+      if (!grouped[name]) grouped[name] = [];
+      grouped[name].push({ month: r.month, case_count: r.case_count });
+    });
+    Object.values(grouped).forEach(arr => arr.sort((a, b) => a.month.localeCompare(b.month)));
+    return grouped;
+  }, [filterYear]);
+
+  // Fetch GeoJSON data (re-fetches when year changes)
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     (async () => {
+      if (data) setRefreshing(true);
       try {
-        const res = await API.get('/api/tb/dashboard/monthly');
-        const rows = res.data.monthly || [];
-        const grouped = {};
-        rows.forEach(r => {
-          const name = r.barangay_name;
-          if (!grouped[name]) grouped[name] = [];
-          grouped[name].push({ month: r.month, case_count: r.case_count });
-        });
-        Object.values(grouped).forEach(arr => arr.sort((a, b) => a.month.localeCompare(b.month)));
-        if (!cancelled) setMonthlyByBarangay(grouped);
+        const geoData = await fetchGeoData(controller.signal);
+        setError(null); setData(geoData); setLoading(false);
       } catch (err) {
-        console.error('Monthly data fetch error:', err);
+        if (err.name !== 'CanceledError' && err.name !== 'AbortError') {
+          setError(err.message || 'Failed to load map data'); setLoading(false);
+        }
+      } finally {
+        if (!controller.signal.aborted) setRefreshing(false);
       }
     })();
-    return () => { cancelled = true; };
-  }, []);
+    return () => controller.abort();
+  }, [fetchGeoData]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const grouped = await fetchMonthlyData(controller.signal);
+        setMonthlyByBarangay(grouped);
+      } catch {
+        // silently ignore
+      }
+    })();
+    return () => controller.abort();
+  }, [fetchMonthlyData]);
 
   useEffect(() => {
     if (!mapRef.current || mapInstance.current) return;
@@ -208,7 +262,7 @@ export default function GisMap() {
     L.control.zoom({ position: 'bottomleft' }).addTo(map);
     requestAnimationFrame(() => { map.invalidateSize(); });
     return () => { map.remove(); mapInstance.current = null; };
-  }, []);
+  }, [loading]);
 
   // Filtered features based on active filters
   const filteredFeatures = React.useMemo(() => {
@@ -223,7 +277,73 @@ export default function GisMap() {
     return features;
   }, [data, filterBarangay, filterRiskLevel]);
 
-  const hasActiveFilters = filterBarangay || filterRiskLevel;
+  // Risk ranking data (extracted from IIFE for performance)
+  const riskRankingData = React.useMemo(() => {
+    if (!data?.features) return null;
+    const groups = { High: [], Medium: [], Low: [], 'No Data': [] };
+    data.features.forEach(f => {
+      const p = f.properties;
+      if (!p || !p.name) return;
+      const cls = p.risk_class || 'No Data';
+      if (groups[cls]) groups[cls].push(p);
+    });
+    Object.keys(groups).forEach(k => {
+      groups[k].sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0));
+    });
+    const allBarangays = [...groups.High, ...groups.Medium, ...groups.Low, ...groups['No Data']];
+    const maxScore = Math.max(...allBarangays.map(b => b.risk_score || 0), 1);
+    const mid = Math.ceil(allBarangays.length / 2);
+    const leftHalf = allBarangays.slice(0, mid);
+    const rightHalf = allBarangays.slice(mid);
+    const sections = [
+      { key: 'High', label: 'High Risk', subtitle: 'Immediate Action Required', color: '#EF4444', items: groups.High },
+      { key: 'Medium', label: 'Moderate Risk', subtitle: 'Close Monitoring Recommended', color: '#F97316', items: groups.Medium },
+      { key: 'Low', label: 'Low Risk', subtitle: 'Routine Surveillance', color: '#FBBF24', items: groups.Low },
+    ].filter(s => s.items.length > 0);
+    return { groups, allBarangays, maxScore, sections, leftHalf, rightHalf };
+  }, [data]);
+
+  // Modal content data (extracted from IIFE for performance)
+  const modalData = React.useMemo(() => {
+    if (!selectedBarangayName || barangayDetailLoading) return null;
+    const geoProps = data?.features?.find(f => f.properties?.name === selectedBarangayName)?.properties || {};
+    const b = barangayDetail?.barangay || {};
+    const outcomes = barangayDetail?.outcomes || [];
+    const demographics = barangayDetail?.demographics || [];
+    const monthlyKey = Object.keys(monthlyByBarangay).find(
+      k => k.toLowerCase() === selectedBarangayName?.toLowerCase()
+    );
+    const monthly = barangayDetail?.monthly?.length > 0
+      ? barangayDetail.monthly
+      : (monthlyByBarangay[monthlyKey] || monthlyByBarangay[selectedBarangayName] || []);
+    const merged = { ...geoProps, ...b };
+    const riskColor = RISK_COLORS[merged.risk_class] || '#64748B';
+    const totalOutcomeCases = outcomes.reduce((s, o) => s + (o.total || 0), 0);
+    const activeCases = outcomes.find(o => o.outcome_status === 'ON TREATMENT')?.total || 0;
+    const successCases = outcomes.filter(o => ['CURED', 'TREATMENT COMPLETED'].includes(o.outcome_status)).reduce((s, o) => s + o.total, 0);
+    const evaluatedCases = outcomes.filter(o => o.outcome_status !== 'NOT EVALUATED').reduce((s, o) => s + o.total, 0);
+    const successRate = evaluatedCases > 0 ? ((successCases / evaluatedCases) * 100).toFixed(1) : '—';
+    const trendChartData = monthly.slice(-12).map(m => ({
+      label: m.month ? new Date(m.month.includes('T') ? m.month : m.month + 'T00:00:00').toLocaleString('default', { month: 'short', year: '2-digit' }) : '',
+      cases: Number(m.case_count ?? 0),
+    }));
+    const ageGroups = {};
+    demographics.forEach(d => {
+      if (!ageGroups[d.age_group]) ageGroups[d.age_group] = { Male: 0, Female: 0 };
+      ageGroups[d.age_group][d.sex] = (d.total || 0);
+    });
+    const demoChartData = Object.entries(ageGroups)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([age, counts]) => ({ name: age, Male: counts.Male, Female: counts.Female }));
+    const outcomeChartData = outcomes.map(o => ({
+      name: o.outcome_status?.length > 16 ? o.outcome_status.slice(0, 14) + '...' : o.outcome_status,
+      value: o.total,
+      color: OUTCOME_COLORS[o.outcome_status] || '#64748B',
+    }));
+    return { merged, riskColor, totalOutcomeCases, activeCases, successRate, trendChartData, demoChartData, outcomeChartData };
+  }, [selectedBarangayName, barangayDetail, barangayDetailLoading, monthlyByBarangay, data]);
+
+  const hasActiveFilters = filterBarangay || filterRiskLevel || filterYear;
 
   // Click-to-zoom on barangay polygon
   const handlePolygonClick = useCallback((feature, layer) => {
@@ -257,10 +377,10 @@ export default function GisMap() {
         const trendArrow = p.trend_direction === 'Increasing' ? '\u2191' : p.trend_direction === 'Decreasing' ? '\u2193' : '\u2192';
         const tooltipHtml = `
           <div style="font-family: Inter, sans-serif; min-width: 180px; padding: 2px;">
-            <div style="font-size: 13px; font-weight: 700; color: #0F2D52; margin-bottom: 4px;">${p.name || 'Unknown'}</div>
+            <div style="font-size: 13px; font-weight: 700; color: #0F2D52; margin-bottom: 4px;">${escapeHtml(p.name) || 'Unknown'}</div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
               <span style="font-size: 10px; color: #94A3B8;">Risk</span>
-              <span style="font-size: 10px; font-weight: 700; color: ${riskColor};">${p.risk_class || 'No Data'}</span>
+              <span style="font-size: 10px; font-weight: 700; color: ${riskColor};">${escapeHtml(p.risk_class) || 'No Data'}</span>
             </div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
               <span style="font-size: 10px; color: #94A3B8;">Score</span>
@@ -268,7 +388,7 @@ export default function GisMap() {
             </div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
               <span style="font-size: 10px; color: #94A3B8;">Trend</span>
-              <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${trendArrow} ${p.trend_direction || 'Stable'}</span>
+              <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${trendArrow} ${escapeHtml(p.trend_direction) || 'Stable'}</span>
             </div>
             <div style="display: flex; justify-content: space-between;">
               <span style="font-size: 10px; color: #94A3B8;">Cases</span>
@@ -297,7 +417,7 @@ export default function GisMap() {
       if (!layer.feature) return;
       const name = layer.feature.properties?.name;
       if (name === hoveredBarangay) {
-  layer.setStyle({ weight: 1.5, fillOpacity: 0.8, color: '#4A6FA5' });
+        layer.setStyle({ weight: 1.5, fillOpacity: 0.8, color: '#4A6FA5' });
         layer.bringToFront();
       } else {
         geojsonLayerRef.current.resetStyle(layer);
@@ -413,26 +533,25 @@ export default function GisMap() {
   // Fetch barangay detail data when a barangay is selected
   useEffect(() => {
     if (!selectedBarangayName) { setBarangayDetail(null); setBarangayInterventionCount(0); return; }
-    let cancelled = false;
+    const controller = new AbortController();
     (async () => {
       setBarangayDetailLoading(true);
       try {
         const [detailRes, interventionsRes] = await Promise.all([
-          API.get(`/api/tb/dashboard/barangay/${encodeURIComponent(selectedBarangayName)}`),
-          API.get('/api/tb/interventions', { params: { barangay: selectedBarangayName, limit: 1 } }),
+          API.get(`/api/tb/dashboard/barangay/${encodeURIComponent(selectedBarangayName)}`, { signal: controller.signal }),
+          API.get('/api/tb/interventions', { params: { barangay: selectedBarangayName, limit: 1 }, signal: controller.signal }),
         ]);
-        if (!cancelled) {
-          setBarangayDetail(detailRes.data);
-          setBarangayInterventionCount(interventionsRes.data.pagination?.total || 0);
-        }
+        setBarangayDetail(detailRes.data);
+        setBarangayInterventionCount(interventionsRes.data.pagination?.total || 0);
       } catch (err) {
-        console.error('Barangay detail fetch error:', err);
-        if (!cancelled) { setBarangayDetail(null); setBarangayInterventionCount(0); }
+        if (err.name !== 'CanceledError' && err.name !== 'AbortError') {
+          setBarangayDetail(null); setBarangayInterventionCount(0);
+        }
       } finally {
-        if (!cancelled) setBarangayDetailLoading(false);
+        if (!controller.signal.aborted) setBarangayDetailLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, [selectedBarangayName]);
 
   // Build timeline data: { 'YYYY-MM': { barangayName: caseCount } }
@@ -443,22 +562,38 @@ export default function GisMap() {
     return [...allMonths].sort();
   }, [data, monthlyByBarangay]);
 
-  // Export map as PNG
-  const handleExportMap = useCallback(async () => {
-    if (!mapRef.current) return;
-    setExporting(true);
-    try {
-      const canvas = await html2canvas(mapRef.current, { useCORS: true, scale: 2, backgroundColor: '#0a1128' });
-      const link = document.createElement('a');
-      link.download = `gis-hotspot-map-${new Date().toISOString().slice(0, 10)}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-    } catch (err) {
-      console.error('Export failed:', err);
-    } finally {
-      setExporting(false);
-    }
+  // Export map as PDF via browser print
+  const handleExportMap = useCallback(() => {
+    window.print();
   }, []);
+
+  // Stop animation and reset timeline when year filter changes
+  useEffect(() => {
+    if (animationIntervalRef.current) {
+      clearInterval(animationIntervalRef.current);
+      animationIntervalRef.current = null;
+    }
+    setIsAnimating(false);
+    setTimelineMonth(null);
+  }, [filterYear]);
+
+  // Refresh map data
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const [geoData, grouped] = await Promise.all([
+        fetchGeoData(),
+        fetchMonthlyData(),
+      ]);
+      setData(geoData);
+      setError(null);
+      setMonthlyByBarangay(grouped);
+    } catch {
+      // silently ignore
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchGeoData, fetchMonthlyData]);
 
   // Timeline animation
   const animateTimeline = useCallback(() => {
@@ -468,6 +603,7 @@ export default function GisMap() {
     const interval = setInterval(() => {
       if (idx >= timelineMonths.length) {
         clearInterval(interval);
+        animationIntervalRef.current = null;
         setIsAnimating(false);
         setTimelineMonth(null);
         return;
@@ -475,8 +611,46 @@ export default function GisMap() {
       setTimelineMonth(timelineMonths[idx]);
       idx++;
     }, 800);
-    return () => clearInterval(interval);
+    animationIntervalRef.current = interval;
   }, [timelineMonths]);
+
+  // Clean up animation interval on unmount
+  useEffect(() => {
+    return () => {
+      if (animationIntervalRef.current) {
+        clearInterval(animationIntervalRef.current);
+        animationIntervalRef.current = null;
+      }
+    };
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-5">
+        <div className="rounded-xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.10), 0 1px 4px rgba(15, 45, 82, 0.06)' }}>
+          <div className="px-5 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
+            <div className="h-5 w-48 rounded mb-2" style={{ background: '#E2E8F0' }} />
+            <div className="h-3 w-72 rounded" style={{ background: '#F1F5F9' }} />
+          </div>
+          <div style={{ height: 450, background: '#F1F5F9' }} className="flex items-center justify-center">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#DBEAFE', borderTopColor: '#2563EB' }} />
+              <p className="text-xs font-medium" style={{ color: '#94A3B8' }}>Loading map data...</p>
+            </div>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.12), 0 2px 8px rgba(15, 45, 82, 0.08)' }}>
+          {[1, 2, 3, 4].map(i => (
+            <div key={i} className="flex flex-col px-5 py-5 relative">
+              <div className="h-3 w-20 rounded mb-3" style={{ background: '#E2E8F0' }} />
+              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+              <div className="h-8 w-16 rounded" style={{ background: '#F1F5F9' }} />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   if (error) {
     return (
@@ -493,6 +667,12 @@ export default function GisMap() {
   return (
     <div className="flex flex-col gap-5">
 
+      {/* Print-only title */}
+      <div className="gis-print-title hidden">
+        <h1>GIS Hotspot Mapping — TB Surveillance</h1>
+        <p>Pasig City Health Department | Generated {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+      </div>
+
       {/* ── Header + Map (connected) ── */}
       <div
         className={isFullscreen ? '' : 'rounded-xl overflow-hidden'}
@@ -503,7 +683,7 @@ export default function GisMap() {
       >
         {/* Header Toolbar — hidden in fullscreen */}
         {!isFullscreen && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
+        <div className="gis-toolbar flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
           {/* Left — Title */}
           <div className="shrink-0">
             <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>GIS Hotspot Mapping</h1>
@@ -512,21 +692,27 @@ export default function GisMap() {
 
           {/* Right — Filters + Actions */}
           <div className="flex flex-wrap items-center gap-1.5">
-            <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 180 }}>
+            <FilterSelect label="Barangay" value={filterBarangay} onChange={(v) => { setFilterBarangay(v); setSelectedBarangayName(null); }} selectStyle={{ maxWidth: 180 }}>
               <option value="">All</option>
               {barangayNames.map((b) => <option key={b} value={b}>{b}</option>)}
             </FilterSelect>
 
-            <FilterSelect label="Risk" value={filterRiskLevel} onChange={setFilterRiskLevel}>
+            <FilterSelect label="Risk" value={filterRiskLevel} onChange={(v) => { setFilterRiskLevel(v); setSelectedBarangayName(null); }}>
               <option value="">All</option>
               <option value="High">High Risk</option>
               <option value="Medium">Moderate</option>
               <option value="Low">Low Risk</option>
             </FilterSelect>
 
+            <FilterSelect label="Year" value={filterYear} onChange={(v) => { setFilterYear(v); setSelectedBarangayName(null); }}>
+              <option value="">All Years</option>
+              {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
+            </FilterSelect>
+
             {hasActiveFilters && (
               <button
-                onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); }}
+                onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); setFilterYear(''); setSelectedBarangayName(null); }}
+                aria-label="Clear all filters"
                 className="text-xs font-medium px-3 py-2"
                 style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
@@ -537,18 +723,32 @@ export default function GisMap() {
             )}
 
             <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              aria-label="Refresh map data"
+              className="text-xs font-semibold px-3 py-2"
+              style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s', opacity: refreshing ? 0.7 : 1 }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
+            >
+              <i className={`ri-refresh-line text-xs mr-1 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Refreshing...' : 'Refresh'}
+            </button>
+
+            <button
               onClick={handleExportMap}
-              disabled={exporting}
+              aria-label="Export map as PDF"
               className="text-xs font-semibold px-3.5 py-2"
-              style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s', opacity: exporting ? 0.7 : 1 }}
+              style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s' }}
               onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
               onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
             >
-              {exporting ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Exporting...</> : 'Export Map'}
+              Export Map
             </button>
 
             <button
               onClick={toggleFullscreen}
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
               className="text-xs font-semibold w-8 h-8 flex items-center justify-center"
               style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
               onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
@@ -576,6 +776,7 @@ export default function GisMap() {
         {isFullscreen && (
           <button
             onClick={toggleFullscreen}
+            aria-label="Exit fullscreen"
             className="absolute top-4 left-4 z-[1001] w-8 h-8 flex items-center justify-center text-xs font-medium"
             style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
             onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
@@ -594,13 +795,14 @@ export default function GisMap() {
               style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)' }}
             >
               <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>
-                {new Date(timelineMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                {new Date(timelineMonth.includes('T') ? timelineMonth : timelineMonth + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
               </span>
             </div>
           )}
           {timelineMonths.length > 0 && !isFullscreen && (
             <button
-              onClick={isAnimating ? () => { setIsAnimating(false); setTimelineMonth(null); } : animateTimeline}
+              onClick={isAnimating ? () => { if (animationIntervalRef.current) { clearInterval(animationIntervalRef.current); animationIntervalRef.current = null; } setIsAnimating(false); setTimelineMonth(null); } : animateTimeline}
+              aria-label={isAnimating ? 'Stop timeline animation' : 'Play timeline animation'}
               className="rounded-lg px-3 py-1.5 text-xs font-semibold"
               style={{
                 background: isAnimating ? '#EF4444' : 'rgba(255,255,255,0.92)',
@@ -702,28 +904,8 @@ export default function GisMap() {
       )}
 
       {/* ── Risk Distribution ── */}
-      {!isFullscreen && data?.features && (() => {
-        const groups = { High: [], Medium: [], Low: [], 'No Data': [] };
-        data.features.forEach(f => {
-          const p = f.properties;
-          if (!p || !p.name) return;
-          const cls = p.risk_class || 'No Data';
-          if (groups[cls]) groups[cls].push(p);
-        });
-        Object.keys(groups).forEach(k => {
-          groups[k].sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0));
-        });
-
-        const allBarangays = [...groups.High, ...groups.Medium, ...groups.Low, ...groups['No Data']];
-        const maxScore = Math.max(...allBarangays.map(b => b.risk_score || 0), 1);
-
-        const sections = [
-          { key: 'High', label: 'High Risk', subtitle: 'Immediate Action Required', color: '#EF4444', items: groups.High },
-          { key: 'Medium', label: 'Moderate Risk', subtitle: 'Close Monitoring Recommended', color: '#F97316', items: groups.Medium },
-          { key: 'Low', label: 'Low Risk', subtitle: 'Routine Surveillance', color: '#FBBF24', items: groups.Low },
-        ].filter(s => s.items.length > 0);
-
-        let globalRank = 0;
+      {!isFullscreen && riskRankingData && (() => {
+        const { allBarangays, maxScore, sections, leftHalf, rightHalf } = riskRankingData;
 
         return (
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E8ECF1', boxShadow: '0 4px 24px rgba(15,45,82,0.06)' }}>
@@ -737,7 +919,7 @@ export default function GisMap() {
                 </div>
                 <div className="text-right shrink-0">
                   <span className="text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{allBarangays.length}</span>
-                  <span className="text-sm font-semibold" style={{ color: '#94A3B8' }}>/30</span>
+                  <span className="text-sm font-semibold" style={{ color: '#94A3B8' }}>/{allBarangays.length}</span>
                   <p className="text-[10px] font-semibold uppercase tracking-wide mt-0.5" style={{ color: '#94A3B8' }}>of Pasig Barangays</p>
                 </div>
               </div>
@@ -751,72 +933,89 @@ export default function GisMap() {
               </div>
             </div>
 
-            {/* Table */}
+            {/* Table — 2-Column Layout */}
             <div className="overflow-x-auto">
-              {/* Column Headers */}
-              <div className="grid items-center px-6 py-2.5 text-[10px] font-bold uppercase tracking-wider" style={{ gridTemplateColumns: '32px 150px 1fr 70px 110px 90px', background:'#0F2D52', color: '#ffffff', borderBottom: '1px solid #0F2D52' }}>
-                <span>Rank</span>
-                <span>Barangay</span>
-                <span></span>
-                <span className="text-right">Score</span>
-                <span className="text-right">per 100k</span>
-                <span className="text-right">Actions</span>
-              </div>
-
-              {/* Grouped Rows */}
-              {sections.map(sec => (
-                <div key={sec.key}>
-                  <div className="px-6 py-2.5 flex items-center gap-2" style={{ background: `${sec.color}08`, borderBottom: '1px solid #F1F5F9' }}>
-                    <span className="w-2 h-2 rounded-full" style={{ background: sec.color }} />
-                    <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: sec.color }}>{sec.label}</span>
-                    <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>— {sec.subtitle}</span>
-                    <span className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: `${sec.color}15`, color: sec.color }}>{sec.items.length}</span>
-                  </div>
-                   {sec.items.map((b) => {
-                    globalRank++;
-                    const pct = Math.max(((b.risk_score || 0) / maxScore) * 100, 4);
-                    const isHovered = hoveredBarangay === b.name;
-                    return (
-                      <div
-                        key={b.name}
-                        className="grid items-center px-6 py-3.5 transition"
-                        style={{
-                          gridTemplateColumns: '32px 150px 1fr 70px 110px 90px',
-                          borderBottom: '1px solid #F1F5F9',
-                          background: isHovered ? `${sec.color}10` : undefined,
-                        }}
-                        onMouseEnter={() => setHoveredBarangay(b.name)}
-                        onMouseLeave={() => setHoveredBarangay(null)}
-                      >
-                        <span className="text-sm font-bold" style={{ color: '#CBD5E1' }}>{String(globalRank).padStart(2, '0')}</span>
-                        <div className="flex items-center gap-2.5 min-w-0 pr-2">
-                          <div className="w-1 h-8 rounded-full shrink-0" style={{ background: sec.color }} />
-                          <div className="min-w-0">
-                            <p className="text-sm font-bold truncate" style={{ color: '#0F2D52' }}>{b.name}</p>
-                            <p className="text-[11px] truncate" style={{ color: '#94A3B8' }}>{formatNum(b.total_cases)} active cases</p>
-                          </div>
-                        </div>
-                        <div className="px-2">
-                          <div className="h-2 rounded-full w-full" style={{ background: '#F1F5F9' }}>
-                            <div className="h-2 rounded-full transition-all" style={{ width: `${pct}%`, background: sec.color }} />
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-sm font-extrabold" style={{ color: sec.color }}>{formatNum(b.risk_score)}</span>
-                          <p className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>score</p>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-sm font-bold" style={{ color: '#475569' }}>{formatNum(b.incidence_per_100k)}</span>
-                          <p className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>per 100k</p>
-                        </div>
-                        <div className="flex items-center gap-1.5 justify-end">
-                          <button className="px-3 py-1.5 text-[11px] font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onClick={() => { setSelectedBarangayName(b.name); }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>Details</button>
-                        </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+                {/* Helper to render a column */}
+                {[leftHalf, rightHalf].map((halfItems, colIdx) => {
+                  let colRank = colIdx === 0 ? 0 : leftHalf.length;
+                  const halfSections = sections.map(sec => ({
+                    ...sec,
+                    items: sec.items.filter(item => halfItems.includes(item)),
+                  })).filter(sec => sec.items.length > 0);
+                  return (
+                    <div key={colIdx} style={{ borderRight: colIdx === 0 ? '1px solid #E8ECF1' : 'none' }}>
+                      {/* Column Header */}
+                      <div className="grid items-center px-4 py-2.5 text-[10px] font-bold uppercase tracking-wider" style={{ gridTemplateColumns: '32px 140px 1fr 60px 90px 70px', background: '#0F2D52', color: '#ffffff', borderBottom: '1px solid #0F2D52' }}>
+                        <span>Rank</span>
+                        <span>Barangay</span>
+                        <span></span>
+                        <span className="text-right">Score</span>
+                        <span className="text-right">per 100k</span>
+                        <span className="text-right">Actions</span>
                       </div>
-                    );
-                  })}
-                </div>
-              ))}
+                      {/* Grouped Rows */}
+                      {halfSections.map(sec => {
+                        const sectionStartRank = colRank;
+                        colRank += sec.items.length;
+                        return (
+                        <div key={sec.key}>
+                          <div className="px-4 py-2 flex items-center gap-2" style={{ background: `${sec.color}08`, borderBottom: '1px solid #F1F5F9' }}>
+                            <span className="w-2 h-2 rounded-full" style={{ background: sec.color }} />
+                            <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: sec.color }}>{sec.label}</span>
+                            <span className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>— {sec.subtitle}</span>
+                            <span className="ml-auto px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: `${sec.color}15`, color: sec.color }}>{sec.items.length}</span>
+                          </div>
+                          {sec.items.map((b, localIdx) => {
+                            const rank = sectionStartRank + localIdx + 1;
+                            const pct = Math.max(((b.risk_score || 0) / maxScore) * 100, 4);
+                            const isHovered = hoveredBarangay === b.name;
+                            return (
+                              <div
+                                key={b.name}
+                                className="grid items-center px-4 py-3 transition"
+                                style={{
+                                  gridTemplateColumns: '32px 140px 1fr 60px 90px 70px',
+                                  borderBottom: '1px solid #F1F5F9',
+                                  background: isHovered ? `${sec.color}10` : undefined,
+                                }}
+                                onMouseEnter={() => setHoveredBarangay(b.name)}
+                                onMouseLeave={() => setHoveredBarangay(null)}
+                              >
+                                <span className="text-sm font-bold" style={{ color: '#CBD5E1' }}>{String(rank).padStart(2, '0')}</span>
+                                <div className="flex items-center gap-2 min-w-0 pr-1">
+                                  <div className="w-1 h-7 rounded-full shrink-0" style={{ background: sec.color }} />
+                                  <div className="min-w-0">
+                                    <p className="text-[13px] font-bold truncate" style={{ color: '#0F2D52' }}>{b.name}</p>
+                                    <p className="text-[10px] truncate" style={{ color: '#94A3B8' }}>{formatNum(b.total_cases)} active</p>
+                                  </div>
+                                </div>
+                                <div className="px-1.5">
+                                  <div className="h-1.5 rounded-full w-full" style={{ background: '#F1F5F9' }}>
+                                    <div className="h-1.5 rounded-full transition-all" style={{ width: `${pct}%`, background: sec.color }} />
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <span className="text-[13px] font-extrabold" style={{ color: sec.color }}>{formatNum(b.risk_score)}</span>
+                                  <p className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>score</p>
+                                </div>
+                                <div className="text-right">
+                                  <span className="text-[13px] font-bold" style={{ color: '#475569' }}>{formatNum(b.incidence_per_100k)}</span>
+                                  <p className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>per 100k</p>
+                                </div>
+                                <div className="flex items-center justify-end">
+                                  <button className="px-1.5 py-1 flex items-center justify-center" aria-label={`View details for ${b.name}`} style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onClick={() => { setSelectedBarangayName(b.name); }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}><i className="ri-arrow-right-line text-xs" /></button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         );
@@ -830,6 +1029,9 @@ export default function GisMap() {
           {/* Panel */}
           <div
             className="relative w-full max-w-lg h-full overflow-y-auto bg-white"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${selectedBarangayName} barangay profile`}
             style={{
               boxShadow: '-8px 0 40px rgba(15, 45, 82, 0.12)',
               animation: 'slide-in-right 0.3s ease-out both',
@@ -843,12 +1045,13 @@ export default function GisMap() {
                   <h2 className="text-base font-extrabold tracking-tight" style={{ color: '#ffffff' }}>{selectedBarangayName}</h2>
                 </div>
                 <button
+                  ref={closeButtonRef}
                   onClick={() => setSelectedBarangayName(null)}
                   aria-label="Close modal"
-                  className="inline-flex h-8 w-8 items-center justify-center text-xs font-medium"
-                  style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                  onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
+                  className="inline-flex h-7 w-7 items-center justify-center text-[11px] font-medium shrink-0"
+                  style={{ background: 'rgba(255,255,255,0.1)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3, transition: 'background 0.15s' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.2)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; }}
                 >
                   ✕
                 </button>
@@ -866,48 +1069,8 @@ export default function GisMap() {
             )}
 
             {/* Content */}
-            {!barangayDetailLoading && (() => {
-              const geoProps = data?.features?.find(f => f.properties?.name === selectedBarangayName)?.properties || {};
-              const b = barangayDetail?.barangay || {};
-              const outcomes = barangayDetail?.outcomes || [];
-              const demographics = barangayDetail?.demographics || [];
-              const monthlyKey = Object.keys(monthlyByBarangay).find(
-                k => k.toLowerCase() === selectedBarangayName?.toLowerCase()
-              );
-              const monthly = barangayDetail?.monthly?.length > 0
-                ? barangayDetail.monthly
-                : (monthlyByBarangay[monthlyKey] || monthlyByBarangay[selectedBarangayName] || []);
-              const merged = { ...geoProps, ...b };
-              const riskColor = RISK_COLORS[merged.risk_class] || '#64748B';
-              const totalOutcomeCases = outcomes.reduce((s, o) => s + (o.total || 0), 0);
-              const totalMale = demographics.filter(d => d.sex === 'Male').reduce((s, d) => s + (d.total || 0), 0);
-              const totalFemale = demographics.filter(d => d.sex === 'Female').reduce((s, d) => s + (d.total || 0), 0);
-
-              // Analytics tab data
-              const activeCases = outcomes.find(o => o.outcome_status === 'ON TREATMENT')?.total || 0;
-              const successCases = outcomes.filter(o => ['CURED', 'TREATMENT COMPLETED'].includes(o.outcome_status)).reduce((s, o) => s + o.total, 0);
-              const evaluatedCases = outcomes.filter(o => o.outcome_status !== 'NOT EVALUATED').reduce((s, o) => s + o.total, 0);
-              const successRate = evaluatedCases > 0 ? ((successCases / evaluatedCases) * 100).toFixed(1) : '—';
-
-              const trendChartData = monthly.slice(-12).map(m => ({
-                label: m.month ? new Date(m.month).toLocaleString('default', { month: 'short', year: '2-digit' }) : '',
-                cases: Number(m.case_count ?? 0),
-              }));
-
-              const ageGroups = {};
-              demographics.forEach(d => {
-                if (!ageGroups[d.age_group]) ageGroups[d.age_group] = { Male: 0, Female: 0 };
-                ageGroups[d.age_group][d.sex] = (d.total || 0);
-              });
-              const demoChartData = Object.entries(ageGroups)
-                .sort((a, b) => a[0].localeCompare(b[0]))
-                .map(([age, counts]) => ({ name: age, Male: counts.Male, Female: counts.Female }));
-
-              const outcomeChartData = outcomes.map(o => ({
-                name: o.outcome_status?.length > 16 ? o.outcome_status.slice(0, 14) + '...' : o.outcome_status,
-                value: o.total,
-                color: OUTCOME_COLORS[o.outcome_status] || '#64748B',
-              }));
+            {!barangayDetailLoading && modalData && (() => {
+              const { merged, riskColor, totalOutcomeCases, activeCases, successRate, trendChartData, demoChartData, outcomeChartData } = modalData;
 
               // ── Unified View ──
               return (
