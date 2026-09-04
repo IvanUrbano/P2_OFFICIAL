@@ -4,8 +4,6 @@ const path = require('path');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-const SCHEMA = 'pasig_clone';
-
 // Execute multi-statement SQL by splitting on semicolons
 const execSql = async (sqlContent) => {
   const client = await pool.connect();
@@ -28,9 +26,9 @@ async function initSchema() {
   if (fs.existsSync(initSqlPath)) {
     const sql = fs.readFileSync(initSqlPath, 'utf8');
     await execSql(sql);
-    console.log(`[${SCHEMA}] Schema and tables initialized from init.sql`);
+    console.log('[pasig-clone] Tables initialized from init.sql');
   } else {
-    console.warn(`[${SCHEMA}] init.sql not found, skipping schema initialization`);
+    console.warn('[pasig-clone] init.sql not found, skipping schema initialization');
   }
 }
 
@@ -38,7 +36,7 @@ async function initSchema() {
 
 function insertBatch(filename, uploadedBy, totalRows, dstbCount, mnCount) {
   return pool.query(
-    `INSERT INTO ${SCHEMA}.import_batches (filename, uploaded_by, total_rows, dstb_count, mn_count)
+    `INSERT INTO import_batches (filename, uploaded_by, total_rows, dstb_count, mn_count)
      VALUES ($1, $2, $3, $4, $5) RETURNING id`,
     [filename, uploadedBy, totalRows, dstbCount, mnCount]
   );
@@ -46,7 +44,7 @@ function insertBatch(filename, uploadedBy, totalRows, dstbCount, mnCount) {
 
 function insertRawCase(batchId, sheetName, sourceType, rowNumber, csvData) {
   return pool.query(
-    `INSERT INTO ${SCHEMA}.raw_tb_cases (batch_id, sheet_name, source_type, row_number, csv_data)
+    `INSERT INTO raw_tb_cases (batch_id, sheet_name, source_type, row_number, csv_data)
      VALUES ($1, $2, $3, $4, $5)`,
     [batchId, sheetName, sourceType, rowNumber, csvData]
   );
@@ -54,7 +52,7 @@ function insertRawCase(batchId, sheetName, sourceType, rowNumber, csvData) {
 
 function insertValidatedCase(batchId, record) {
   return pool.query(
-    `INSERT INTO ${SCHEMA}.validated_tb_cases
+    `INSERT INTO validated_tb_cases
      (batch_id, source_type, barangay_name, date_of_diagnosis, date_of_notification,
       age, sex, city, screening_facility, treatment_facility, source_of_patient,
       anatomical_site, registration_group, bacteriological_status, date_started_treatment,
@@ -76,7 +74,7 @@ function insertValidatedCase(batchId, record) {
 
 function updateBatchValidation(batchId, validCount, errorCount) {
   return pool.query(
-    `UPDATE ${SCHEMA}.import_batches
+    `UPDATE import_batches
      SET status = 'validated', valid_count = $1, error_count = $2, validated_at = NOW()
      WHERE id = $3`,
     [validCount, errorCount, batchId]
@@ -85,42 +83,42 @@ function updateBatchValidation(batchId, validCount, errorCount) {
 
 function updateBatchSent(batchId) {
   return pool.query(
-    `UPDATE ${SCHEMA}.import_batches SET status = 'sent', sent_at = NOW() WHERE id = $1`,
+    `UPDATE import_batches SET status = 'sent', sent_at = NOW() WHERE id = $1`,
     [batchId]
   );
 }
 
 function getBatch(batchId) {
-  return pool.query(`SELECT * FROM ${SCHEMA}.import_batches WHERE id = $1`, [batchId]);
+  return pool.query(`SELECT * FROM import_batches WHERE id = $1`, [batchId]);
 }
 
 function getRawCases(batchId) {
   return pool.query(
-    `SELECT * FROM ${SCHEMA}.raw_tb_cases WHERE batch_id = $1 ORDER BY row_number`,
+    `SELECT * FROM raw_tb_cases WHERE batch_id = $1 ORDER BY row_number`,
     [batchId]
   );
 }
 
 function getValidatedCases(batchId) {
   return pool.query(
-    `SELECT * FROM ${SCHEMA}.validated_tb_cases WHERE batch_id = $1 AND is_valid = true`,
+    `SELECT * FROM validated_tb_cases WHERE batch_id = $1 AND is_valid = true`,
     [batchId]
   );
 }
 
 function getPendingCases() {
   return pool.query(
-    `SELECT * FROM ${SCHEMA}.validated_tb_cases WHERE is_valid = true ORDER BY id`
+    `SELECT * FROM validated_tb_cases WHERE is_valid = true ORDER BY id`
   );
 }
 
 function getAllCases() {
-  return pool.query(`SELECT * FROM ${SCHEMA}.validated_tb_cases ORDER BY id DESC`);
+  return pool.query(`SELECT * FROM validated_tb_cases ORDER BY id DESC`);
 }
 
 function logWebhook(batchId, payload, status, responseCode, responseBody) {
   return pool.query(
-    `INSERT INTO ${SCHEMA}.webhook_logs (batch_id, payload, status, response_code, response_body)
+    `INSERT INTO webhook_logs (batch_id, payload, status, response_code, response_body)
      VALUES ($1, $2, $3, $4, $5)`,
     [batchId, JSON.stringify(payload), status, responseCode, responseBody]
   );
@@ -128,7 +126,7 @@ function logWebhook(batchId, payload, status, responseCode, responseBody) {
 
 function logWebhookError(batchId, payload, errorMessage) {
   return pool.query(
-    `INSERT INTO ${SCHEMA}.webhook_logs (batch_id, payload, status, error_message)
+    `INSERT INTO webhook_logs (batch_id, payload, status, error_message)
      VALUES ($1, $2, 'failed', $3)`,
     [batchId, JSON.stringify(payload), errorMessage]
   );
@@ -137,8 +135,8 @@ function logWebhookError(batchId, payload, errorMessage) {
 function getWebhookLogs() {
   return pool.query(
     `SELECT wl.*, ib.filename
-     FROM ${SCHEMA}.webhook_logs wl
-     LEFT JOIN ${SCHEMA}.import_batches ib ON wl.batch_id = ib.id
+     FROM webhook_logs wl
+     LEFT JOIN import_batches ib ON wl.batch_id = ib.id
      ORDER BY wl.sent_at DESC
      LIMIT 50`
   );
@@ -146,7 +144,7 @@ function getWebhookLogs() {
 
 function getBatches() {
   return pool.query(
-    `SELECT * FROM ${SCHEMA}.import_batches ORDER BY created_at DESC LIMIT 50`
+    `SELECT * FROM import_batches ORDER BY created_at DESC LIMIT 50`
   );
 }
 

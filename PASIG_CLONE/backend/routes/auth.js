@@ -15,7 +15,7 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
     }
 
     const existing = await db.pool.query(
-      'SELECT id FROM pasig_clone.users WHERE username = $1 OR email = $2',
+      'SELECT id FROM users WHERE username = $1 OR email = $2',
       [username, email]
     );
     if (existing.rows.length > 0) {
@@ -24,7 +24,7 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const result = await db.pool.query(
-      `INSERT INTO pasig_clone.users (username, email, password, role)
+      `INSERT INTO users (username, email, password, role)
        VALUES ($1, $2, $3, $4) RETURNING id, username, email, role, created_at`,
       [username, email, hashedPassword, role || 'staff']
     );
@@ -45,7 +45,7 @@ router.post('/login', async (req, res) => {
     }
 
     const result = await db.pool.query(
-      'SELECT * FROM pasig_clone.users WHERE username = $1',
+      'SELECT * FROM users WHERE username = $1',
       [username]
     );
 
@@ -90,7 +90,7 @@ router.post('/login', async (req, res) => {
 router.get('/profile', authenticate, async (req, res) => {
   try {
     const result = await db.pool.query(
-      'SELECT id, username, email, role, created_at FROM pasig_clone.users WHERE id = $1',
+      'SELECT id, username, email, role, created_at FROM users WHERE id = $1',
       [req.user.id]
     );
 

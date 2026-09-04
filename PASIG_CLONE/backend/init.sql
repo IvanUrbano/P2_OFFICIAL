@@ -1,15 +1,13 @@
 -- ==========================================
 -- Pasig Clone Database Schema
 -- ==========================================
--- Creates the pasig_clone schema and all required tables.
+-- Creates all required tables.
 -- Runs on server startup (idempotent: IF NOT EXISTS).
+-- NOTE: Uses a SEPARATE database from TBInsight.
 -- ==========================================
 
--- Create separate schema
-CREATE SCHEMA IF NOT EXISTS pasig_clone;
-
 -- Users table
-CREATE TABLE IF NOT EXISTS pasig_clone.users (
+CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
     email TEXT UNIQUE NOT NULL,
@@ -19,10 +17,10 @@ CREATE TABLE IF NOT EXISTS pasig_clone.users (
 );
 
 -- Import batches
-CREATE TABLE IF NOT EXISTS pasig_clone.import_batches (
+CREATE TABLE IF NOT EXISTS import_batches (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     filename TEXT NOT NULL,
-    uploaded_by INTEGER REFERENCES pasig_clone.users(id),
+    uploaded_by INTEGER REFERENCES users(id),
     status TEXT DEFAULT 'uploaded' CHECK (status IN ('uploaded', 'validated', 'sent', 'failed')),
     total_rows INTEGER DEFAULT 0,
     dstb_count INTEGER DEFAULT 0,
@@ -35,9 +33,9 @@ CREATE TABLE IF NOT EXISTS pasig_clone.import_batches (
 );
 
 -- Raw TB cases (from CSV)
-CREATE TABLE IF NOT EXISTS pasig_clone.raw_tb_cases (
+CREATE TABLE IF NOT EXISTS raw_tb_cases (
     id BIGSERIAL PRIMARY KEY,
-    batch_id UUID REFERENCES pasig_clone.import_batches(id),
+    batch_id UUID REFERENCES import_batches(id),
     sheet_name TEXT NOT NULL,
     source_type TEXT NOT NULL,
     row_number INTEGER,
@@ -46,9 +44,9 @@ CREATE TABLE IF NOT EXISTS pasig_clone.raw_tb_cases (
 );
 
 -- Validated TB cases (after validation)
-CREATE TABLE IF NOT EXISTS pasig_clone.validated_tb_cases (
+CREATE TABLE IF NOT EXISTS validated_tb_cases (
     id BIGSERIAL PRIMARY KEY,
-    batch_id UUID REFERENCES pasig_clone.import_batches(id),
+    batch_id UUID REFERENCES import_batches(id),
     source_type TEXT NOT NULL,
 
     -- Common fields (both sheets)
@@ -85,9 +83,9 @@ CREATE TABLE IF NOT EXISTS pasig_clone.validated_tb_cases (
 );
 
 -- Webhook logs
-CREATE TABLE IF NOT EXISTS pasig_clone.webhook_logs (
+CREATE TABLE IF NOT EXISTS webhook_logs (
     id SERIAL PRIMARY KEY,
-    batch_id UUID REFERENCES pasig_clone.import_batches(id),
+    batch_id UUID REFERENCES import_batches(id),
     payload JSONB,
     status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed', 'acknowledged')),
     response_code INTEGER,
@@ -98,6 +96,6 @@ CREATE TABLE IF NOT EXISTS pasig_clone.webhook_logs (
 );
 
 -- Indexes
-CREATE INDEX IF NOT EXISTS idx_raw_cases_batch ON pasig_clone.raw_tb_cases(batch_id);
-CREATE INDEX IF NOT EXISTS idx_validated_cases_batch ON pasig_clone.validated_tb_cases(batch_id);
-CREATE INDEX IF NOT EXISTS idx_webhook_logs_batch ON pasig_clone.webhook_logs(batch_id);
+CREATE INDEX IF NOT EXISTS idx_raw_cases_batch ON raw_tb_cases(batch_id);
+CREATE INDEX IF NOT EXISTS idx_validated_cases_batch ON validated_tb_cases(batch_id);
+CREATE INDEX IF NOT EXISTS idx_webhook_logs_batch ON webhook_logs(batch_id);
