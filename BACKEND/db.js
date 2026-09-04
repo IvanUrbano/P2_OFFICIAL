@@ -100,6 +100,16 @@ const initDb = async () => {
     } else {
       console.log('⚠️ STIS fields migration not found, skipping.');
     }
+
+    // Webhook logs: track incoming webhooks from Pasig Clone (idempotent)
+    const webhookMigPath = path.join(__dirname, 'db', 'migrations', '007_webhook_logs.sql');
+    if (fs.existsSync(webhookMigPath)) {
+      const webhookSql = fs.readFileSync(webhookMigPath, 'utf8');
+      await execSql(webhookSql);
+      console.log('✅ Webhook logs migration completed successfully.');
+    } else {
+      console.log('⚠️ Webhook logs migration not found, skipping.');
+    }
   } catch (err) {
     console.error('❌ Database initialization error:', err.message);
   }

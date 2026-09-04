@@ -1,0 +1,45 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const cookieParser = require('cookie-parser');
+const config = require('./config');
+const { initSchema } = require('./db/pasigSchema');
+
+const authRoutes = require('./routes/auth');
+const csvImportRoutes = require('./routes/csvImport');
+const validationRoutes = require('./routes/validation');
+const webhookRoutes = require('./routes/webhook');
+
+const app = express();
+
+app.use(cors({
+  origin: ['http://localhost:5174', config.frontendUrl],
+  credentials: true,
+}));
+app.use(express.json());
+app.use(cookieParser());
+
+app.use('/api/auth', authRoutes);
+app.use('/api/data', csvImportRoutes);
+app.use('/api/data', validationRoutes);
+app.use('/api/webhook', webhookRoutes);
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', service: 'pasig-clone', timestamp: new Date().toISOString() });
+});
+
+async function start() {
+  try {
+    await initSchema();
+    app.listen(config.port, () => {
+      console.log(`Pasig Clone backend running on port ${config.port}`);
+    });
+  } catch (err) {
+    console.error('Failed to start:', err);
+    process.exit(1);
+  }
+}
+
+start();
+
+module.exports = app;

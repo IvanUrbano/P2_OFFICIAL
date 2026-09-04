@@ -10,6 +10,7 @@ const pool = require('./db');
 // Import routes
 const authRoutes = require('./routes/auth');
 const tbInsightRoutes = require('./tbinsight/routes');
+const webhookRoutes = require('./tbinsight/webhook');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -18,6 +19,7 @@ const PORT = process.env.PORT || 5000;
 const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:5174',
+  'http://localhost:5001',
   'http://localhost:3000',
   process.env.FRONTEND_URL, // e.g. https://p2-official.vercel.app
 ].filter(Boolean);
@@ -56,6 +58,7 @@ app.use(fileUpload({
 // ==================== ROUTES ====================
 app.use('/api/auth', authRoutes);
 app.use('/api/tb', tbInsightRoutes);
+app.use('/api/webhook', webhookRoutes);
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {

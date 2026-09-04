@@ -289,10 +289,23 @@ function validateRow(row, validBarangays) {
   return { valid: errors.length === 0, errors, warnings };
 }
 
+// ==================== SHEET TYPE DETECTION ====================
+
+/**
+ * Detect source_type from sheet name.
+ * MN sheets contain "MN" or "MICROSCOPIC" in the name; everything else is DSTB.
+ */
+function detectSheetType(sheetName) {
+  const name = sheetName.toUpperCase().trim();
+  if (name.includes('MN') || name.includes('MICROSCOPIC')) return 'MN';
+  return 'DSTB';
+}
+
 // ==================== MAIN PARSER ====================
 
 /**
  * Parse a CSV or Excel file buffer into structured case records.
+ * Supports multi-sheet Excel files (DSTB + MN sheets).
  * Uses keyword-based header matching — works with mangled headers,
  * leading/trailing spaces, column reordering, and both 18-col and
  * 19-col formats.
@@ -304,18 +317,6 @@ function validateRow(row, validBarangays) {
  */
 function parseCaseFile(fileBuffer, filename, validBarangays = new Set()) {
   const workbook = XLSX.read(fileBuffer, { type: 'buffer', cellDates: true });
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-
-  // Extract raw headers — preserve original text (spaces, etc.)
-  // because sheet_to_json uses these exact strings as object keys
-  const rawHeaders = XLSX.utils.sheet_to_json(sheet, { header: 1 })[0] || [];
-
-  // Build column map via keyword matching (keys are raw, untrimmed)
-  const columnMap = buildColumnMap(rawHeaders);
-
-  // Parse all data rows (keys are the trimmed header strings)
-  const rawData = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
   const rows = [];
   const allErrors = [];
@@ -323,64 +324,91 @@ function parseCaseFile(fileBuffer, filename, validBarangays = new Set()) {
   let validCount = 0;
   let errorCount = 0;
 
-  rawData.forEach((rawRow, index) => {
-    const rowNum = index + 2; // +2 = row 1 header + 0-based index
+  // Process ALL sheets (multi-sheet support)
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const source_type = detectSheetType(sheetName);
 
-    // Map raw row → internal field names
-    const mappedRow = {};
-    for (const [csvCol, field] of Object.entries(columnMap)) {
-      const val = rawRow[csvCol];
-      if (val !== undefined && val !== null) {
-        mappedRow[field] = val instanceof Date ? val : String(val).trim();
+    // Extract raw headers — preserve original text (spaces, etc.)
+    // because sheet_to_json uses these exact strings as object keys
+    const rawHeaders = XLSX.utils.sheet_to_json(sheet, { header: 1 })[0] || [];
+
+    // Build column map via keyword matching (keys are raw, untrimmed)
+    const columnMap = buildColumnMap(rawHeaders);
+
+    // Parse all data rows (keys are the trimmed header strings)
+    const rawData = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+    rawData.forEach((rawRow, index) => {
+      const rowNum = index + 2; // +2 = row 1 header + 0-based index
+
+      // Map raw row → internal field names
+      const mappedRow = {};
+      for (const [csvCol, field] of Object.entries(columnMap)) {
+        const val = rawRow[csvCol];
+        if (val !== undefined && val !== null) {
+          mappedRow[field] = val instanceof Date ? val : String(val).trim();
+        }
       }
-    }
 
-    // Parse dates
-    mappedRow.date_of_screening = parseDate(mappedRow.date_of_screening);
-    mappedRow.date_of_diagnosis = parseDate(mappedRow.date_of_diagnosis);
-    mappedRow.date_of_notification = parseDate(mappedRow.date_of_notification);
-    mappedRow.date_started_treatment = parseDate(mappedRow.date_started_treatment);
-    mappedRow.date_of_outcome = parseDate(mappedRow.date_of_outcome);
-    mappedRow.record_created_at = mappedRow.record_created_at
-      ? new Date(mappedRow.record_created_at).toISOString()
-      : null;
+      // Set source_type and sheet_name
+      mappedRow.source_type = source_type;
+      mappedRow.sheet_name = sheetName;
 
-    // Parse age
-    if (mappedRow.age !== null && mappedRow.age !== undefined && mappedRow.age !== '') {
-      mappedRow.age = parseInt(mappedRow.age);
-    } else {
-      mappedRow.age = null;
-    }
+      // Set validation_status based on source_type
+      if (source_type === 'DSTB') {
+        mappedRow.validation_status = mappedRow.validation_status || null;
+      } else {
+        mappedRow.validation_status = null; // MN records don't have this
+      }
 
-    // Normalize sex (M → Male, F → Female)
-    mappedRow.sex = normalizeSex(mappedRow.sex);
+      // Parse dates
+      mappedRow.date_of_screening = parseDate(mappedRow.date_of_screening);
+      mappedRow.date_of_diagnosis = parseDate(mappedRow.date_of_diagnosis);
+      mappedRow.date_of_notification = parseDate(mappedRow.date_of_notification);
+      mappedRow.date_started_treatment = parseDate(mappedRow.date_started_treatment);
+      mappedRow.date_of_outcome = parseDate(mappedRow.date_of_outcome);
+      mappedRow.record_created_at = mappedRow.record_created_at
+        ? new Date(mappedRow.record_created_at).toISOString()
+        : null;
 
-    // Trim barangay name
-    if (mappedRow.barangay_name) {
-      mappedRow.barangay_name = mappedRow.barangay_name.trim();
-    }
+      // Parse age
+      if (mappedRow.age !== null && mappedRow.age !== undefined && mappedRow.age !== '') {
+        mappedRow.age = parseInt(mappedRow.age);
+      } else {
+        mappedRow.age = null;
+      }
 
-    // Validate
-    const validation = validateRow(mappedRow, validBarangays);
+      // Normalize sex (M → Male, F → Female)
+      mappedRow.sex = normalizeSex(mappedRow.sex);
 
-    mappedRow.row_number = rowNum;
-    mappedRow.validation_status = validation.valid ? 'Validated' : 'Not Validated';
-    mappedRow._errors = validation.errors;
-    mappedRow._warnings = validation.warnings;
+      // Trim barangay name
+      if (mappedRow.barangay_name) {
+        mappedRow.barangay_name = mappedRow.barangay_name.trim();
+      }
 
-    if (validation.valid) {
-      validCount++;
-    } else {
-      errorCount++;
-      allErrors.push({ row: rowNum, errors: validation.errors });
-    }
+      // Validate
+      const validation = validateRow(mappedRow, validBarangays);
 
-    if (validation.warnings.length > 0) {
-      allWarnings.push({ row: rowNum, warnings: validation.warnings });
-    }
+      mappedRow.row_number = rowNum;
+      mappedRow.validation_status = validation.valid ? 'Validated' : 'Not Validated';
+      mappedRow._errors = validation.errors;
+      mappedRow._warnings = validation.warnings;
 
-    rows.push(mappedRow);
-  });
+      if (validation.valid) {
+        validCount++;
+      } else {
+        errorCount++;
+        allErrors.push({ row: rowNum, source_type, errors: validation.errors });
+      }
+
+      if (validation.warnings.length > 0) {
+        allWarnings.push({ row: rowNum, source_type, warnings: validation.warnings });
+      }
+
+      rows.push(mappedRow);
+    });
+  }
 
   return {
     rows,
@@ -399,6 +427,7 @@ module.exports = {
   normalizeSex,
   matchHeader,
   buildColumnMap,
+  detectSheetType,
   VALID_SEX,
   VALID_ANATOMICAL_SITES,
   VALID_OUTCOME_STATUSES,
