@@ -67,12 +67,14 @@
 └─────────────────────────────────────────────────────────────────────────────┘
                                      │
                                      │ POST /api/webhook/pasig-clone
+<!-- SECURITY TODO: X-Webhook-Secret header is insecure (sends raw password).
+     Future: remove it and rely on X-Webhook-Signature (HMAC) only. -->
                                      │ Header: X-Webhook-Secret: <secret>
                                      │ Header: X-Webhook-Signature: sha256=<hmac>
                                      ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  P2_OFFICIAL SYSTEM (Existing)                                              │
-│  Port: 5000 (backend), 5173 (frontend)                                     │
+│  Port: 3000 (backend), 5173 (frontend)                                     │
 │  Database: PostgreSQL (schema: public)                                     │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -1016,8 +1018,10 @@ async function sendWebhook(batchId) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Webhook-Secret': secret,
-        'X-Webhook-Signature': `sha256=${signature}`,
+      // SECURITY TODO: X-Webhook-Secret is insecure (sends raw password).
+      // Future: remove it and rely on X-Webhook-Signature (HMAC) only.
+      'X-Webhook-Secret': secret,
+      'X-Webhook-Signature': `sha256=${signature}`,
       },
       body: JSON.stringify(payload),
     });
@@ -2196,6 +2200,8 @@ describe('Webhook Endpoint', () => {
 
     const response = await request(app)
       .post('/api/webhook/pasig-clone')
+      // SECURITY TODO: X-Webhook-Secret is insecure (sends raw password).
+      // Future: remove it and rely on X-Webhook-Signature (HMAC) only.
       .set('X-Webhook-Secret', process.env.WEBHOOK_SECRET)
       .set('X-Webhook-Signature', generateSignature(payload))
       .send(payload);

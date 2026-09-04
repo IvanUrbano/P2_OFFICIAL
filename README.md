@@ -17,7 +17,7 @@ This repository contains two independent systems with **separate databases**, in
 
 | System | Purpose | Port | Frontend |
 |---|---|---|---|
-| **TBInsight** | Surveillance dashboard, GIS mapping, ML forecasting, alerts | Backend: 5000, Frontend: 5173, ML: 8001 | React 19 + Vite 8 |
+| **TBInsight** | Surveillance dashboard, GIS mapping, ML forecasting, alerts | Backend: 3000, Frontend: 5173, ML: 8001 | React 19 + Vite 8 |
 | **Pasig Clone** | Data ingestion from DOH TB-DOTS Excel exports, validation, webhook integration | Backend: 5001, Frontend: 5174 | React 18 + Vite 5 |
 
 ### Integration Flow
@@ -40,11 +40,13 @@ This repository contains two independent systems with **separate databases**, in
 │  5. Send webhook to TBInsight with HMAC-SHA256 signature           │
 └──────────────────────────┬──────────────────────────────────────────┘
                            │ POST /api/webhook/pasig-clone
+<!-- SECURITY TODO: X-Webhook-Secret header is insecure (sends raw password).
+     Future: remove it and rely on X-Webhook-Signature (HMAC) only. -->
                            │ Header: X-Webhook-Secret: <secret>
                            │ Header: X-Webhook-Signature: sha256=<hmac>
                            ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  TBINSIGHT SYSTEM (Port 5000 / 5173)                               │
+│  TBINSIGHT SYSTEM (Port 3000 / 5173)                               │
 │  Database: neondb (separate Neon database)                         │
 │                                                                     │
 │  1. Verify HMAC signature                                           │
@@ -281,7 +283,7 @@ VITE_API_URL=http://localhost:5000
 npm run dev
 
 # Or start them separately:
-npm run dev:backend    # Backend on port 5000
+npm run dev:backend    # Backend on port 3000
 npm run dev:frontend   # Frontend on port 5173
 ```
 
