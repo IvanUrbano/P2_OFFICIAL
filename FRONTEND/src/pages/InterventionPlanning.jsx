@@ -65,9 +65,7 @@ function FilterSelect({ label, value, onChange, children }) {
   );
 }
 
-function SkeletonBlock({ className }) {
-  return <div className={`animate-pulse rounded-lg ${className}`} style={{ background: '#E2E8F0' }} />;
-}
+import SkeletonBlock from '../../components/SkeletonBlock';
 
 function formatDate(dateStr) {
   if (!dateStr) return 'N/A';
@@ -566,13 +564,14 @@ export default function InterventionPlanning() {
                       </td>
                       <td className="px-4 py-3">
                         <button
+                          aria-label="View intervention"
                           onClick={() => handleViewDetail(item)}
-                          className="text-xs font-semibold px-3 py-1.5"
-                          style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s' }}
-                          onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}
+                          className="inline-flex items-center justify-center h-6 w-6 text-sm"
+                          style={{ color: '#64748B', borderRadius: 4, transition: 'color 0.15s' }}
+                          onMouseEnter={e => { e.currentTarget.style.color = '#0F2D52'; }}
+                          onMouseLeave={e => { e.currentTarget.style.color = '#64748B'; }}
                         >
-                          View
+                          <i className="ri-eye-line" />
                         </button>
                       </td>
                     </tr>
@@ -638,7 +637,7 @@ export default function InterventionPlanning() {
                     <p className="text-sm font-bold" style={{ color: '#ffffff' }}>{selectedIntervention.title}</p>
                     <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.6)' }}>Intervention Detail</p>
                   </div>
-                  <button onClick={() => setSelectedIntervention(null)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.1)', color: '#CBD5E1' }}>
+                  <button onClick={() => setSelectedIntervention(null)} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
                     <i className="ri-close-line text-base" />
                   </button>
                 </div>
@@ -774,7 +773,7 @@ export default function InterventionPlanning() {
                 <p className="text-sm font-bold" style={{ color: '#ffffff' }}>{showEditModal ? 'Edit Intervention' : 'New Intervention'}</p>
                 <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.6)' }}>{showEditModal ? 'Update intervention details' : 'Create a new TB intervention'}</p>
               </div>
-              <button onClick={() => { setShowCreateModal(false); setShowEditModal(false); }} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.1)', color: '#CBD5E1' }}>
+              <button onClick={() => { setShowCreateModal(false); setShowEditModal(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
                 <i className="ri-close-line text-base" />
               </button>
             </div>

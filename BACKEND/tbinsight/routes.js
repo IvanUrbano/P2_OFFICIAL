@@ -1379,10 +1379,23 @@ router.get('/predictions/risk', async (req, res) => {
  */
 router.get('/alerts', async (req, res) => {
   try {
-    // Seed sample data if alerts table is empty (wrapped in its own try/catch)
+    // Clean up stale per-barangay alerts from old evaluation runs
+    // These were created before the grouping fix and need to be removed
     try {
-      const totalCheck = await pool.query('SELECT COUNT(*)::int AS count FROM alerts');
-      if (totalCheck.rows[0].count === 0) {
+      await pool.query(
+        `DELETE FROM alerts
+         WHERE alert_type IN ('case_increase', 'high_risk_hotspot', 'forecast_exceeds_threshold', 'high_risk_escalation')
+           AND barangay_name IS NOT NULL
+           AND status != 'resolved'`
+      );
+    } catch (cleanupErr) {
+      console.error('Stale alert cleanup skipped:', cleanupErr.message);
+    }
+
+    // Seed sample data if no notifications exist yet (wrapped in its own try/catch)
+    try {
+      const notifCheck = await pool.query("SELECT COUNT(*)::int AS count FROM alerts WHERE type = 'notification'");
+      if (notifCheck.rows[0].count === 0) {
         // Seed sample notifications
         const sampleNotifs = [
           { title: 'System Initialized', message: 'TBInsight surveillance system has been initialized and is ready for use.', source: 'data_integration' },
@@ -2126,6 +2139,7 @@ router.get('/reports/summary', async (req, res) => {
       forecastRes,
       populationRes,
       casesRes,
+      facilityRes,
     ] = await Promise.all([
       // Summary: total cases, active cases, success rate
       pool.query(`
@@ -2194,17 +2208,17 @@ router.get('/reports/summary', async (req, res) => {
           COUNT(*)::INTEGER AS cases
         FROM tb_cases c
         WHERE date_of_diagnosis >= $1 AND date_of_diagnosis <= $2
-        ${barangay ? 'AND barangay_name = $' + (paramIdx) : ''}
+        ${barangay ? 'AND TRIM(barangay_name) = $3' : ''}
         GROUP BY month
         ORDER BY month
       `, barangay ? [startDate, endDate, barangay] : [startDate, endDate]),
 
       // Barangay distribution (city-wide only)
       barangay ? Promise.resolve({ rows: [] }) : pool.query(`
-        SELECT barangay_name, COUNT(*)::INTEGER AS cases
+        SELECT TRIM(barangay_name) AS barangay_name, COUNT(*)::INTEGER AS cases
         FROM tb_cases c
         WHERE date_of_diagnosis >= $1 AND date_of_diagnosis <= $2
-        GROUP BY barangay_name
+        GROUP BY TRIM(barangay_name)
         ORDER BY cases DESC
       `, [startDate, endDate]),
 
@@ -2239,6 +2253,21 @@ router.get('/reports/summary', async (req, res) => {
         FROM tb_cases c
         ${whereClause}
         ORDER BY c.date_of_diagnosis DESC
+      `, params),
+
+      // Facility performance
+      pool.query(`
+        SELECT
+          TRIM(screening_facility) AS facility,
+          COUNT(*)::INTEGER AS total_cases,
+          SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful,
+          COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != ''
+            AND UPPER(outcome_status) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated
+        FROM tb_cases c
+        ${whereClause}
+        AND screening_facility IS NOT NULL AND screening_facility != ''
+        GROUP BY TRIM(screening_facility)
+        ORDER BY total_cases DESC
       `, params),
     ]);
 
@@ -2279,7 +2308,7 @@ router.get('/reports/summary', async (req, res) => {
       sites[r.anatomical_site] = (sites[r.anatomical_site] || 0) + r.count;
     });
     const caseProfile = {
-      newCases: regGroups['New'] || regGroups['NEW'] || 0,
+      newCases: regGroups['New'] || regGroups['NEW'] || regGroups['new'] || 0,
       relapse: (regGroups['Relapse'] || 0) + (regGroups['RECAPTURE'] || 0) + (regGroups['Recapture'] || 0),
       pulmonary: sites['Pulmonary'] || sites['PULMONARY'] || 0,
       extraPulmonary: Object.entries(sites).filter(([k]) => !k.toLowerCase().includes('pulmonary')).reduce((s, [, v]) => s + v, 0),
@@ -2368,6 +2397,7 @@ router.get('/reports/summary', async (req, res) => {
       recommendations,
       cases: casesRes.rows,
       population: populationRes.rows,
+      facilityPerformance: facilityRes.rows,
     });
   } catch (err) {
     console.error('Reports summary error:', err.message);

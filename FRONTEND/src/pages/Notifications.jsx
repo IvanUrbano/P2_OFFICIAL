@@ -1,43 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
-
-const MODULE_LABELS = {
-  gis: 'GIS Hotspots',
-  analytics: 'Analytics',
-  forecasting: 'Forecasting',
-  reports: 'Reports',
-  tb_records: 'TB Records',
-  data_integration: 'Data Integration',
-};
-
-const MODULE_ROUTES = {
-  gis: '/gis-map',
-  analytics: '/analytics',
-  forecasting: '/forecasting',
-  reports: '/reports',
-  tb_records: '/records',
-  data_integration: '/data-integration',
-};
-
-function timeAgo(dateStr) {
-  if (!dateStr) return 'N/A';
-  const d = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now - d;
-  const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return 'Just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 7) return `${days}d ago`;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function SkeletonBlock({ className }) {
-  return <div className={`animate-pulse rounded-lg ${className}`} style={{ background: '#E2E8F0' }} />;
-}
+import timeAgo from '../utils/timeAgo';
+import { MODULE_LABELS, MODULE_ROUTES } from '../utils/alertConstants';
+import FilterSelect from '../../components/FilterSelect';
+import SkeletonBlock from '../../components/SkeletonBlock';
 
 export default function Notifications() {
   const navigate = useNavigate();
@@ -50,45 +17,71 @@ export default function Notifications() {
   const [filterDate, setFilterDate] = useState('all');
   const [selectedNotif, setSelectedNotif] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ total: 0, totalPages: 1 });
+  const abortRef = useRef(null);
 
   const fetchNotifications = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     setError(null);
     try {
-      const params = { type: 'notification', limit: 100 };
+      const params = { type: 'notification', page, limit: 20 };
       if (filterStatus !== 'all') params.status = filterStatus;
       if (filterSource) params.source = filterSource;
       if (filterDate !== 'all') params.date = filterDate;
 
-      const res = await API.get('/api/tb/alerts', { params });
+      const res = await API.get('/api/tb/alerts', { params, signal: controller.signal });
       setNotifications(res.data.alerts || []);
+      setPagination(res.data.pagination || { total: 0, totalPages: 1 });
     } catch (err) {
-      console.error('Notifications fetch error:', err);
+      if (err.name === 'CanceledError' || err.name === 'AbortError') return;
       setError('Alerts and notifications could not be retrieved. Please try again.');
     } finally {
       setLoading(false);
     }
-  }, [filterStatus, filterSource, filterDate]);
+  }, [page, filterStatus, filterSource, filterDate]);
 
   useEffect(() => { fetchNotifications(); }, [fetchNotifications]);
 
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!selectedNotif) return;
+    const onKey = (e) => { if (e.key === 'Escape') setSelectedNotif(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedNotif]);
+
   const handleViewDetail = async (notif) => {
+    const controller = new AbortController();
     setDetailLoading(true);
     try {
-      const res = await API.get(`/api/tb/alerts/${notif.id}`);
+      const res = await API.get(`/api/tb/alerts/${notif.id}`, { signal: controller.signal });
       setSelectedNotif(res.data.alert);
       if (notif.status === 'unread') {
         await API.put(`/api/tb/alerts/${notif.id}/read`);
         setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, status: 'read' } : n));
       }
-    } catch (err) {
-      console.error('Detail fetch error:', err);
+    } catch {
+      // ignore
     } finally {
       setDetailLoading(false);
     }
   };
 
   const unreadCount = notifications.filter(n => n.status === 'unread').length;
+
+  const handleMarkAllRead = async () => {
+    try {
+      await API.put('/api/tb/alerts/read-all');
+      setNotifications(prev => prev.map(n => n.status === 'unread' ? { ...n, status: 'read' } : n));
+    } catch {
+      // ignore
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -101,9 +94,21 @@ export default function Notifications() {
             <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>System notifications and activity updates.</p>
           </div>
           {unreadCount > 0 && (
-            <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold" style={{ background: 'rgba(15,45,82,0.08)', color: '#0F2D52' }}>
-              {unreadCount} unread
-            </span>
+            <div className="flex items-center gap-3 shrink-0">
+              <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold" style={{ background: 'rgba(15,45,82,0.08)', color: '#0F2D52' }}>
+                {unreadCount} unread
+              </span>
+              <button
+                onClick={handleMarkAllRead}
+                className="px-4 py-2 text-xs font-semibold"
+                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
+              >
+                <i className="ri-check-double-line mr-1" />
+                Mark All Read
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -135,7 +140,7 @@ export default function Notifications() {
             <p className="text-sm font-bold" style={{ color: '#475569' }}>Unable to Load Notifications</p>
             <p className="text-xs mt-1 max-w-md" style={{ color: '#94A3B8' }}>{error}</p>
           </div>
-          <button onClick={fetchNotifications} className="px-3 py-1.5 text-xs font-semibold" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 }}>
+          <button onClick={fetchNotifications} className="px-3 py-1.5 text-xs font-semibold" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}>
             Retry
           </button>
         </div>
@@ -144,23 +149,13 @@ export default function Notifications() {
       {/* ─── Filter Bar ─── */}
       {!loading && !error && (
         <div className="rounded-xl px-4 py-3 flex items-center gap-2 flex-wrap" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-          <select
-            value={filterStatus}
-            onChange={e => setFilterStatus(e.target.value)}
-            className="rounded-lg px-3 py-1.5 text-xs font-medium outline-none cursor-pointer"
-            style={{ background: '#F8FAFC', color: '#374151', border: '1px solid #E2E8F0' }}
-          >
+          <FilterSelect label="Status" value={filterStatus} onChange={v => { setFilterStatus(v); setPage(1); }}>
             <option value="all">All Status</option>
             <option value="unread">Unread</option>
             <option value="read">Read</option>
-          </select>
+          </FilterSelect>
 
-          <select
-            value={filterSource}
-            onChange={e => setFilterSource(e.target.value)}
-            className="rounded-lg px-3 py-1.5 text-xs font-medium outline-none cursor-pointer"
-            style={{ background: '#F8FAFC', color: '#374151', border: '1px solid #E2E8F0' }}
-          >
+          <FilterSelect label="Source" value={filterSource} onChange={v => { setFilterSource(v); setPage(1); }}>
             <option value="">All Sources</option>
             <option value="tb_records">TB Records</option>
             <option value="forecasting">Forecasting</option>
@@ -168,19 +163,14 @@ export default function Notifications() {
             <option value="data_integration">Data Integration</option>
             <option value="analytics">Analytics</option>
             <option value="gis">GIS Hotspots</option>
-          </select>
+          </FilterSelect>
 
-          <select
-            value={filterDate}
-            onChange={e => setFilterDate(e.target.value)}
-            className="rounded-lg px-3 py-1.5 text-xs font-medium outline-none cursor-pointer"
-            style={{ background: '#F8FAFC', color: '#374151', border: '1px solid #E2E8F0' }}
-          >
+          <FilterSelect label="Date" value={filterDate} onChange={v => { setFilterDate(v); setPage(1); }}>
             <option value="all">All Dates</option>
             <option value="today">Today</option>
             <option value="7d">Last 7 Days</option>
             <option value="30d">Last 30 Days</option>
-          </select>
+          </FilterSelect>
         </div>
       )}
 
@@ -188,15 +178,32 @@ export default function Notifications() {
       {!loading && !error && notifications.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 gap-4" style={{ background: '#ffffff', borderRadius: 12, border: '1px solid #E2E8F0' }}>
           <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: '#F1F5F9' }}>
-            <i className="ri-notification-off-line text-2xl" style={{ color: '#CBD5E1' }} />
+            {(filterStatus !== 'all' || filterSource || filterDate !== 'all')
+              ? <i className="ri-search-line text-2xl" style={{ color: '#CBD5E1' }} />
+              : <i className="ri-notification-off-line text-2xl" style={{ color: '#CBD5E1' }} />
+            }
           </div>
           <div className="text-center">
-            <p className="text-sm font-bold" style={{ color: '#475569' }}>No Notifications</p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>No system notifications at this time. You're all caught up!</p>
+            <p className="text-sm font-bold" style={{ color: '#475569' }}>
+              {filterStatus !== 'all' || filterSource || filterDate !== 'all'
+                ? 'No Matching Notifications'
+                : 'No Notifications'}
+            </p>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
+              {filterStatus !== 'all' || filterSource || filterDate !== 'all'
+                ? 'No notifications match the selected filters.'
+                : 'No system notifications at this time. You\'re all caught up!'}
+            </p>
           </div>
-          <button onClick={() => navigate('/alert')} className="px-3 py-1.5 text-xs font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}>
-            View All Alerts & Notifications
-          </button>
+          {(filterStatus !== 'all' || filterSource || filterDate !== 'all') ? (
+            <button onClick={() => { setFilterStatus('all'); setFilterSource(''); setFilterDate('all'); setPage(1); }} className="px-3 py-1.5 text-xs font-semibold" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 }}>
+              Clear Filters
+            </button>
+          ) : (
+            <button onClick={() => navigate('/alert')} className="px-3 py-1.5 text-xs font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}>
+              View All Alerts & Notifications
+            </button>
+          )}
         </div>
       )}
 
@@ -251,6 +258,36 @@ export default function Notifications() {
         </div>
       )}
 
+      {/* ─── Pagination ─── */}
+      {!loading && !error && notifications.length > 0 && pagination.totalPages > 1 && (
+        <div className="flex items-center justify-between px-4 py-3 rounded-xl" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+          <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+            Showing {(page - 1) * 20 + 1}\u2013{Math.min(page * 20, pagination.total)} of {pagination.total}
+          </span>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="px-2.5 py-1 text-[11px] font-semibold rounded"
+              style={{ background: page === 1 ? '#F3F4F6' : '#0F2D52', color: page === 1 ? '#CBD5E1' : '#ffffff', cursor: page === 1 ? 'not-allowed' : 'pointer' }}
+            >
+              Prev
+            </button>
+            <span className="text-[11px] font-medium px-2" style={{ color: '#64748B' }}>
+              {page} / {pagination.totalPages}
+            </span>
+            <button
+              onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+              disabled={page >= pagination.totalPages}
+              className="px-2.5 py-1 text-[11px] font-semibold rounded"
+              style={{ background: page >= pagination.totalPages ? '#F3F4F6' : '#0F2D52', color: page >= pagination.totalPages ? '#CBD5E1' : '#ffffff', cursor: page >= pagination.totalPages ? 'not-allowed' : 'pointer' }}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ─── Detail Modal ─── */}
       {(selectedNotif || detailLoading) && (
         <div className="fixed inset-0 z-[1100] flex justify-end" onClick={() => setSelectedNotif(null)}>
@@ -273,7 +310,7 @@ export default function Notifications() {
                     <p className="text-sm font-bold" style={{ color: '#ffffff' }}>{selectedNotif.title || 'Notification'}</p>
                     <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.6)' }}>Notification Detail</p>
                   </div>
-                  <button onClick={() => setSelectedNotif(null)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.1)', color: '#CBD5E1' }}>
+                  <button onClick={() => setSelectedNotif(null)} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
                     <i className="ri-close-line text-base" />
                   </button>
                 </div>
@@ -315,13 +352,6 @@ export default function Notifications() {
                       View Related Module
                     </button>
                   )}
-                  <button
-                    onClick={() => setSelectedNotif(null)}
-                    className="ml-auto px-3 py-1.5 text-xs font-medium"
-                    style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}
-                  >
-                    Close
-                  </button>
                 </div>
               </>
             )}

@@ -809,11 +809,11 @@ export default function TBRecords() {
               <div className="flex items-center justify-between px-6 py-4">
                 <h2 className="text-sm font-extrabold tracking-tight" style={{ color: '#ffffff' }}>FILTERS</h2>
                 <button onClick={() => setShowAdvancedFilters(false)} aria-label="Close filters"
-                  className="inline-flex h-8 w-8 items-center justify-center text-xs font-medium"
-                  style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                  onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-                  ✕
+                  className="inline-flex h-8 w-8 items-center justify-center shrink-0"
+                  style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
+                  <i className="ri-close-line text-base" />
                 </button>
               </div>
             </div>
@@ -931,11 +931,11 @@ export default function TBRecords() {
               <div className="flex items-center justify-between px-6 py-4">
                 <h2 className="text-base font-extrabold tracking-tight" style={{ color: '#ffffff' }}>RECORD DETAILS</h2>
                 <button onClick={() => setSelectedRecord(null)} aria-label="Close modal"
-                  className="inline-flex h-8 w-8 items-center justify-center text-xs font-medium"
-                  style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                  onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-                  ✕
+                  className="inline-flex h-8 w-8 items-center justify-center shrink-0"
+                  style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
+                  <i className="ri-close-line text-base" />
                 </button>
               </div>
             </div>

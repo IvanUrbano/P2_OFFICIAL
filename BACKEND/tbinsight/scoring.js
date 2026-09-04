@@ -148,6 +148,9 @@ function generateAlerts({ forecasts, classifications, barangayList, prevRiskClas
     classByName[c.barangay_name] = c;
   }
 
+  const escalated = [];
+  const highRisk = [];
+
   for (const b of barangayList) {
     const name = b.name;
     const currentClass = classByName[name]?.risk_class;
@@ -155,34 +158,46 @@ function generateAlerts({ forecasts, classifications, barangayList, prevRiskClas
 
     if (!currentClass) continue;
 
-    // Alert 1: High-risk escalation (was Medium, now High)
+    // Escalation: was Medium, now High
     if (currentClass === 'High' && prevClass && prevClass !== 'High') {
-      alerts.push({
-        barangay_name: name,
-        period,
-        alert_type: 'high_risk_escalation',
-        severity: 'warning',
-        message: `${name} is projected to enter High risk in ${period}. ` +
-                 `Previous classification: ${prevClass}.`,
-        recommendation: `Consider increasing resource allocation and surveillance in ${name}. ` +
-                        `Review TB case management and contact tracing activities.`,
-      });
+      escalated.push({ name, prevClass });
     }
 
-    // Alert 2: Critical surge (>30% increase) — based on incidence trend
-    const classification = classByName[name];
-    if (classification && classification.risk_class === 'High') {
-      alerts.push({
-        barangay_name: name,
-        period,
-        alert_type: 'high_risk_escalation',
-        severity: 'danger',
-        message: `${name} — Forecasted to remain in High risk band. ` +
-                 `Incidence: ${classification.incidence_per_100k?.toFixed(1) || 'N/A'} per 100k.`,
-        recommendation: `Immediate intervention recommended. Deploy additional DOTS workers, ` +
-                        `increase case finding frequency, and ensure drug supply adequacy.`,
-      });
+    // Critical surge: currently High risk
+    if (currentClass === 'High') {
+      const classification = classByName[name];
+      highRisk.push({ name, incidence: classification.incidence_per_100k });
     }
+  }
+
+  // Group escalation alerts into a single summary
+  if (escalated.length > 0) {
+    const topList = escalated.slice(0, 5).map(e => `${e.name} (was ${e.prevClass})`).join('; ');
+    const suffix = escalated.length > 5 ? ` and ${escalated.length - 5} more` : '';
+    alerts.push({
+      barangay_name: null,
+      period,
+      alert_type: 'high_risk_escalation',
+      severity: 'warning',
+      message: `${escalated.length} barangay${escalated.length > 1 ? 's' : ''} escalated to High risk in ${period}: ${topList}${suffix}.`,
+      recommendation: `Consider increasing resource allocation and surveillance in affected barangays. Review TB case management and contact tracing activities.`,
+    });
+  }
+
+  // Group high-risk alerts into a single summary
+  if (highRisk.length > 0) {
+    const topList = highRisk.slice(0, 5).map(h =>
+      `${h.name} (${h.incidence?.toFixed(1) || 'N/A'}/100k)`
+    ).join('; ');
+    const suffix = highRisk.length > 5 ? ` and ${highRisk.length - 5} more` : '';
+    alerts.push({
+      barangay_name: null,
+      period,
+      alert_type: 'high_risk_escalation',
+      severity: 'danger',
+      message: `${highRisk.length} barangay${highRisk.length > 1 ? 's' : ''} forecasted to remain in High risk band: ${topList}${suffix}.`,
+      recommendation: `Immediate intervention recommended. Deploy additional DOTS workers, increase case finding frequency, and ensure drug supply adequacy.`,
+    });
   }
 
   return alerts;
@@ -214,7 +229,7 @@ async function storeResults(client, period, forecasts, classifications, riskScor
   // Clear ALL previous results (each pipeline run replaces all prior forecasts)
   await client.query('DELETE FROM model_predictions');
   await client.query('DELETE FROM barangay_risk_scores WHERE period = $1', [period]);
-  await client.query('DELETE FROM alerts WHERE period = $1', [period]);
+  await client.query("DELETE FROM alerts WHERE alert_type = 'high_risk_escalation' AND status != 'resolved'");
 
   // Batch-fetch actual counts per barangay per period from monthly_case_summary
   let actualCountsByPeriod = {};

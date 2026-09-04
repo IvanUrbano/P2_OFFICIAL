@@ -1004,7 +1004,7 @@ export default function GisMap() {
                                   <p className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>per 100k</p>
                                 </div>
                                 <div className="flex items-center justify-end">
-                                  <button className="px-1.5 py-1 flex items-center justify-center" aria-label={`View details for ${b.name}`} style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onClick={() => { setSelectedBarangayName(b.name); }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}><i className="ri-arrow-right-line text-xs" /></button>
+                                  <button className="px-1.5 py-1 flex items-center justify-center" aria-label={`View details for ${b.name}`} style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onClick={() => { setSelectedBarangayName(b.name); }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}><i className="ri-eye-line text-xs" /></button>
                                 </div>
                               </div>
                             );
@@ -1048,12 +1048,12 @@ export default function GisMap() {
                   ref={closeButtonRef}
                   onClick={() => setSelectedBarangayName(null)}
                   aria-label="Close modal"
-                  className="inline-flex h-7 w-7 items-center justify-center text-[11px] font-medium shrink-0"
-                  style={{ background: 'rgba(255,255,255,0.1)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3, transition: 'background 0.15s' }}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.2)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; }}
+                  className="inline-flex h-8 w-8 items-center justify-center shrink-0"
+                  style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}
                 >
-                  ✕
+                  <i className="ri-close-line text-base" />
                 </button>
               </div>
             </div>

@@ -236,9 +236,7 @@ function SectionCard({ title, iconColor, description, action, actionTo, children
   );
 }
 
-function SkeletonBlock({ className }) {
-  return <div className={`animate-pulse rounded-lg ${className}`} style={{ background: '#E2E8F0' }} />;
-}
+import SkeletonBlock from '../../components/SkeletonBlock';
 
 function SkeletonCard() {
   return (

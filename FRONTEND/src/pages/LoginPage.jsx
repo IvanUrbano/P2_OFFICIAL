@@ -244,9 +244,9 @@ export default function LoginPage() {
             onClick={(e) => e.stopPropagation()}>
             <button onClick={closeForgotModal}
               className="absolute top-4 right-4 z-10 w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
-              style={{ background: '#F1F5F9', color: '#94A3B8' }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = '#E2E8F0'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = '#F1F5F9'; }}>
+              style={{ background: 'rgba(0,0,0,0.08)', color: '#64748B', border: '1px solid rgba(0,0,0,0.1)' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,0,0,0.15)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,0,0,0.08)'; }}>
               <i className="ri-close-line text-base" />
             </button>
 
