@@ -83,7 +83,6 @@ async function sendWebhook(batchId) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Webhook-Secret': secret,
         'X-Webhook-Signature': signature,
       },
       body: JSON.stringify(payload),

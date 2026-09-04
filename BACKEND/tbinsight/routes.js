@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { parseCaseFile } = require('./parseCaseFile');
 const { importCases, getImportHistory, getBatchErrors, getBatchSummary } = require('./importCases');
 const { rebuildAggregations } = require('./aggregateMonthly');
@@ -13,16 +13,6 @@ const {
 } = require('./alertEngine');
 
 const router = express.Router();
-
-// Middleware to authorize user roles
-const authorizeRoles = (...roles) => {
-  return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Access denied. Unauthorized role.' });
-    }
-    next();
-  };
-};
 
 // ==================== REFERENCE DATA ====================
 
@@ -1379,19 +1369,6 @@ router.get('/predictions/risk', async (req, res) => {
  */
 router.get('/alerts', async (req, res) => {
   try {
-    // Clean up stale per-barangay alerts from old evaluation runs
-    // These were created before the grouping fix and need to be removed
-    try {
-      await pool.query(
-        `DELETE FROM alerts
-         WHERE alert_type IN ('case_increase', 'high_risk_hotspot', 'forecast_exceeds_threshold', 'high_risk_escalation')
-           AND barangay_name IS NOT NULL
-           AND status != 'resolved'`
-      );
-    } catch (cleanupErr) {
-      console.error('Stale alert cleanup skipped:', cleanupErr.message);
-    }
-
     // Seed sample data if no notifications exist yet (wrapped in its own try/catch)
     try {
       const notifCheck = await pool.query("SELECT COUNT(*)::int AS count FROM alerts WHERE type = 'notification'");
@@ -1946,6 +1923,7 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
         const incidence = (targetMonth.case_count / pop) * 100_000;
 
         trainRows.push({
+          month: targetMonth.month,
           barangay_name: name,
           features: {
             forecasted_incidence: forecastedIncidence,
@@ -1963,12 +1941,7 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
     }
 
     // Sort train rows by time (so walk-forward works correctly)
-    // Each row's time position is determined by its position in the sorted months list
-    trainRows.sort((a, b) => {
-      // Use incidence as a proxy for time ordering — not ideal but workable
-      // Better: use the month from the original data
-      return 0; // The rows are already in order from the loop above
-    });
+    trainRows.sort((a, b) => a.month.localeCompare(b.month));
 
     // Call Python /evaluate
     const result = await mlEvaluate(series, trainRows, thresholds, minTrain);

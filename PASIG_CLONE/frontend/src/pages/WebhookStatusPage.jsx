@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axios from '../api/axios';
 
@@ -11,18 +11,18 @@ export default function WebhookStatusPage() {
   const [logs, setLogs] = useState([]);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    fetchLogs();
-  }, []);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       const response = await axios.get('/api/webhook/logs');
       setLogs(response.data);
     } catch (err) {
-      console.error('Failed to fetch logs:', err);
+      if (import.meta.env.DEV) console.error('Failed to fetch logs:', err);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
 
   const sendWebhook = async () => {
     if (!batchId) {

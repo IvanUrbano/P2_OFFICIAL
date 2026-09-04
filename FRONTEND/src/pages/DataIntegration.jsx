@@ -67,7 +67,7 @@ export default function DataIntegration() {
         const res = await API.get('/api/tb/import-history');
         setImports(res.data.imports || []);
       } catch (err) {
-        console.error('Failed to fetch import history:', err);
+        if (import.meta.env.DEV) console.error('Failed to fetch import history:', err);
         setHistoryError('Could not load import history. Make sure the backend is running.');
       } finally {
         setHistoryLoading(false);
@@ -116,7 +116,7 @@ export default function DataIntegration() {
       setBatchSummary(res.data.summary || null);
       setBatchErrors(res.data.errors || []);
     } catch (err) {
-      console.error('Failed to fetch batch errors:', err);
+      if (import.meta.env.DEV) console.error('Failed to fetch batch errors:', err);
     } finally {
       setBatchLoading(false);
     }

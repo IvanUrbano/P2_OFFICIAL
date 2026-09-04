@@ -212,7 +212,7 @@ export default function TBRecords() {
       document.body.removeChild(link);
       setTimeout(() => URL.revokeObjectURL(objectUrl), 100);
     } catch (err) {
-      console.error("Export failed:", err);
+      if (import.meta.env.DEV) console.error("Export failed:", err);
       alert("Export failed. Please try again.");
     } finally {
       setExporting(false);
@@ -315,7 +315,7 @@ export default function TBRecords() {
         activeStatus: (s.on_treatment_count || 0) > 0 ? 'Ongoing' : 'None',
       });
     } catch (err) {
-      console.error("Failed to fetch metrics:", err);
+      if (import.meta.env.DEV) console.error("Failed to fetch metrics:", err);
     }
   }, [buildFilterParams]);
 
@@ -329,7 +329,7 @@ export default function TBRecords() {
         const res = await API.get("/api/tb/barangays", { signal: controller.signal });
         setBarangays(res.data.barangays.map(b => b.barangay_name || b.name).filter(Boolean).sort());
       } catch (err) {
-        if (err.name !== 'CanceledError') console.error("Failed to fetch barangays:", err);
+        if (err.name !== 'CanceledError' && import.meta.env.DEV) console.error("Failed to fetch barangays:", err);
       }
     };
     fetchBarangays();
@@ -345,7 +345,7 @@ export default function TBRecords() {
         const names = (res.data.facilities || []).map(f => (f.name || f.facility_name || '').trim()).filter(Boolean).sort();
         setFacilities([...new Set(names)]);
       } catch (err) {
-        if (err.name !== 'CanceledError') console.error("Failed to fetch facilities:", err);
+        if (err.name !== 'CanceledError' && import.meta.env.DEV) console.error("Failed to fetch facilities:", err);
       }
     };
     fetchFacilities();
@@ -398,7 +398,7 @@ export default function TBRecords() {
         setPagination(res.data.pagination || { limit: 20, total: 0, totalPages: 1 });
       } catch (err) {
         if (!cancelled) {
-          console.error("Failed to fetch cases:", err);
+          if (import.meta.env.DEV) console.error("Failed to fetch cases:", err);
           setError("Failed to load records. Please try again.");
         }
       } finally {

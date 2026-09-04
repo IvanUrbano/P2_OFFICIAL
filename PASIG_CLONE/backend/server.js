@@ -16,7 +16,7 @@ app.use(cors({
   origin: ['http://localhost:5174', config.frontendUrl],
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
 app.use('/api/auth', authRoutes);

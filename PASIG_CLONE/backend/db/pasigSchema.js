@@ -4,13 +4,23 @@ const path = require('path');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-// Execute multi-statement SQL by splitting on semicolons
+pool.on('error', (err) => {
+  console.error('[pasig-clone] Unexpected pool error:', err.message);
+});
+
+// Execute multi-statement SQL by splitting on statement boundaries
 const execSql = async (sqlContent) => {
   const client = await pool.connect();
   try {
-    const statements = sqlContent
-      .split(/;\s*\n/)
-      .map(s => s.split('\n').filter(line => !line.trim().startsWith('--')).join('\n').trim())
+    // Remove SQL comments, then split on semicolons
+    const cleaned = sqlContent
+      .split('\n')
+      .filter(line => !line.trim().startsWith('--'))
+      .join('\n');
+
+    const statements = cleaned
+      .split(';')
+      .map(s => s.trim())
       .filter(s => s.length > 0);
 
     for (const stmt of statements) {

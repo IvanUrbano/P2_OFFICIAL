@@ -10,13 +10,16 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
   try {
     const { username, email, password, role } = req.body;
 
-    if (!username || !email || !password) {
+    const cleanUsername = username?.trim().toLowerCase();
+    const cleanEmail = email?.trim().toLowerCase();
+
+    if (!cleanUsername || !cleanEmail || !password) {
       return res.status(400).json({ error: 'Username, email, and password are required' });
     }
 
     const existing = await db.pool.query(
       'SELECT id FROM users WHERE username = $1 OR email = $2',
-      [username, email]
+      [cleanUsername, cleanEmail]
     );
     if (existing.rows.length > 0) {
       return res.status(409).json({ error: 'Username or email already exists' });
@@ -26,7 +29,7 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
     const result = await db.pool.query(
       `INSERT INTO users (username, email, password_hash, role)
        VALUES ($1, $2, $3, $4) RETURNING id, username, email, role, created_at`,
-      [username, email, hashedPassword, role || 'staff']
+      [cleanUsername, cleanEmail, hashedPassword, role || 'staff']
     );
 
     res.status(201).json({ user: result.rows[0] });
@@ -40,13 +43,15 @@ router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
 
-    if (!username || !password) {
+    const cleanUsername = username?.trim().toLowerCase();
+
+    if (!cleanUsername || !password) {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
     const result = await db.pool.query(
       'SELECT * FROM users WHERE username = $1',
-      [username]
+      [cleanUsername]
     );
 
     if (result.rows.length === 0) {

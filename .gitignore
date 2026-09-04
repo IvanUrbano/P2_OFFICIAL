@@ -8,6 +8,9 @@ node_modules/
 BACKEND/.env
 BACKEND/.env.*
 !BACKEND/.env.example
+PASIG_CLONE/backend/.env
+PASIG_CLONE/backend/.env.*
+!PASIG_CLONE/backend/.env.example
 
 # Python
 __pycache__/

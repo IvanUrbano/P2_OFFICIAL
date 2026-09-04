@@ -11,6 +11,7 @@ const pool = require('./db');
 const authRoutes = require('./routes/auth');
 const tbInsightRoutes = require('./tbinsight/routes');
 const webhookRoutes = require('./tbinsight/webhook');
+const { apiLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -33,7 +34,6 @@ app.use(cors({
     if (!origin) return callback(null, true);
 
     const isAllowed =
-      origin.startsWith('http://localhost:') ||
       allowedOrigins.includes(origin) ||
       vercelPreviewPattern.test(origin);
 
@@ -46,7 +46,7 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(fileUpload({
@@ -56,8 +56,8 @@ app.use(fileUpload({
 }));
 
 // ==================== ROUTES ====================
-app.use('/api/auth', authRoutes);
-app.use('/api/tb', tbInsightRoutes);
+app.use('/api/auth', apiLimiter, authRoutes);
+app.use('/api/tb', apiLimiter, tbInsightRoutes);
 app.use('/api/webhook', webhookRoutes);
 
 // Health check endpoint

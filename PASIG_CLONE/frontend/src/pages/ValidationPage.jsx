@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import axios from '../api/axios';
 
@@ -11,13 +11,7 @@ export default function ValidationPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    if (batchId) {
-      validateBatch();
-    }
-  }, [batchId]);
-
-  const validateBatch = async () => {
+  const validateBatch = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -29,7 +23,13 @@ export default function ValidationPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [batchId]);
+
+  useEffect(() => {
+    if (batchId) {
+      validateBatch();
+    }
+  }, [batchId, validateBatch]);
 
   if (!batchId) {
     return (

@@ -5,11 +5,12 @@ require('dotenv').config();
 
 // Use DATABASE_URL if available (Render production), otherwise fall back to discrete local settings
 const isProduction = process.env.NODE_ENV === 'production' || process.env.DATABASE_URL;
+const isNeon = process.env.DATABASE_URL && process.env.DATABASE_URL.includes('neon.tech');
 
 const poolConfig = process.env.DATABASE_URL
   ? {
     connectionString: process.env.DATABASE_URL,
-    ssl: isProduction ? { rejectUnauthorized: false } : false,
+    ssl: isNeon ? { rejectUnauthorized: false } : false,
   }
   : {
     user: process.env.DB_USER,
