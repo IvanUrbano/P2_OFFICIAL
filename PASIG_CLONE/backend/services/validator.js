@@ -1,22 +1,28 @@
 const db = require('../db/pasigSchema');
 
-const VALID_BARANGAYS = [
-  'bagong ilog', 'bambang', 'buting', 'caniogan', 'dela paz',
-  'kalawaan', 'kapasigan', 'kapitolyo', 'malinao', 'manggahan',
-  'maybunga', 'oranbo', 'palatiw', 'pinagbuhatan', 'pineda',
-  'rosario', 'sagad', 'san antonio', 'san joaquin', 'san jose',
-  'san miguel', 'san nicolas', 'santa cruz', 'santa lucia',
-  'santa rosa', 'santo tomas', 'santolan', 'sumilang', 'ugong',
-];
-
 const VALID_SEX = ['male', 'female'];
 const VALID_OUTCOME = [
   'cured', 'treatment completed', 'died', 'treatment failed',
   'lost to follow-up', 'not evaluated', 'on treatment',
 ];
 
+async function getValidBarangays() {
+  // For Pasig Clone, we validate against the known 30 Pasig barangays.
+  // In production, this could query a barangays reference table.
+  // For now, use the hardcoded list as the authoritative source.
+  return new Set([
+    'bagong ilog', 'bambang', 'buting', 'caniogan', 'dela paz',
+    'kalawaan', 'kapasigan', 'kapitolyo', 'malinao', 'manggahan',
+    'maybunga', 'oranbo', 'palatiw', 'pinagbuhatan', 'pineda',
+    'rosario', 'sagad', 'san antonio', 'san joaquin', 'san jose',
+    'san miguel', 'san nicolas', 'santa cruz', 'santa lucia',
+    'santa rosa', 'santo tomas', 'santolan', 'sumilang', 'ugong',
+  ]);
+}
+
 async function validateBatch(batchId) {
   const records = await db.getRawCases(batchId);
+  const validBarangays = await getValidBarangays();
 
   const results = {
     total: records.rows.length,
@@ -29,7 +35,7 @@ async function validateBatch(batchId) {
 
   for (const record of records.rows) {
     const csvData = record.csv_data;
-    const validation = validateRecord(csvData, record.source_type);
+    const validation = validateRecord(csvData, record.source_type, validBarangays);
 
     results.validatedRecords.push({
       raw_id: record.id,
@@ -68,14 +74,22 @@ async function validateBatch(batchId) {
   return results;
 }
 
-function validateRecord(csvData, sourceType) {
+function validateRecord(csvData, sourceType, validBarangays) {
   const errors = [];
   const warnings = [];
 
+  // Determine if this is a Pasig City record based on city field
+  const normalizedCity = (csvData.city || '').trim().toLowerCase();
+  const isPasig = normalizedCity === 'pasig city' || normalizedCity === 'pasig';
+
   if (!csvData.barangay_name || csvData.barangay_name.trim() === '') {
     errors.push('Barangay is required');
-  } else if (!VALID_BARANGAYS.includes(csvData.barangay_name.trim().toLowerCase())) {
+  } else if (isPasig && !validBarangays.has(csvData.barangay_name.trim().toLowerCase())) {
+    // Only reject unknown barangays for Pasig City records
     errors.push(`Unknown barangay: "${csvData.barangay_name}"`);
+  } else if (!isPasig) {
+    // Non-Pasig records: retain but warn — excluded from Pasig analytics
+    warnings.push(`Non-Pasig record: city="${csvData.city}", barangay="${csvData.barangay_name}"`);
   }
 
   if (!csvData.date_of_diagnosis) {
@@ -92,12 +106,6 @@ function validateRecord(csvData, sourceType) {
     const age = parseInt(csvData.age);
     if (isNaN(age) || age < 0 || age > 120) {
       errors.push(`Invalid age: "${csvData.age}"`);
-    }
-  }
-
-  if (csvData.city && csvData.city.trim() !== '') {
-    if (!csvData.city.toLowerCase().includes('pasig')) {
-      warnings.push(`City is "${csvData.city}", expected "Pasig"`);
     }
   }
 
@@ -126,5 +134,5 @@ function validateRecord(csvData, sourceType) {
 module.exports = {
   validateBatch,
   validateRecord,
-  VALID_BARANGAYS,
+  getValidBarangays,
 };

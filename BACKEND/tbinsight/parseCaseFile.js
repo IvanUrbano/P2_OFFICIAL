@@ -58,7 +58,7 @@ function matchHeader(normalized) {
   if (normalized.includes('registration')) return 'registration_group';
   if (normalized.includes('bacteriological')) return 'bacteriological_status';
   if (normalized.includes('validation')) return 'validation_status';
-  if (normalized.includes('itis') && normalized.includes('case')) return 'itis_case_id';
+  if (normalized.includes('itis') && normalized.includes('lite')) return 'itis_case_id';
   if (normalized.includes('source') && normalized.includes('type')) return 'source_type';
   if (normalized.includes('outcome')) return 'outcome_status';
 
@@ -297,8 +297,9 @@ function validateRow(row, validBarangays) {
  */
 function detectSheetType(sheetName) {
   const name = sheetName.toUpperCase().trim();
-  if (name.includes('MN') || name.includes('MICROSCOPIC')) return 'MN';
-  return 'DSTB';
+  if (name === 'DSTB' || name.includes('DSTB') || name.includes('B-MODE')) return 'DSTB';
+  if (name === 'MN' || name === 'M-N' || name.includes('MICROSCOPIC')) return 'MN';
+  return null; // Unknown sheet — skip
 }
 
 // ==================== MAIN PARSER ====================
@@ -328,6 +329,8 @@ function parseCaseFile(fileBuffer, filename, validBarangays = new Set()) {
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
     const source_type = detectSheetType(sheetName);
+
+    if (!source_type) continue; // Skip unknown sheets
 
     // Extract raw headers — preserve original text (spaces, etc.)
     // because sheet_to_json uses these exact strings as object keys

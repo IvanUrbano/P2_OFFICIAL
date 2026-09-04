@@ -6,7 +6,7 @@ const {
   detectSheetType,
   buildColumnMap,
 } = require('../services/multiSheetParser');
-const { validateRecord, VALID_BARANGAYS } = require('../services/validator');
+const { validateRecord, getValidBarangays } = require('../services/validator');
 
 // ==================== parseDate ====================
 describe('parseDate', () => {
@@ -102,6 +102,7 @@ describe('detectSheetType', () => {
   it('returns null for unknown sheets', () => {
     assert.equal(detectSheetType('Sheet1'), null);
     assert.equal(detectSheetType('Data'), null);
+    assert.equal(detectSheetType('MAIN DATA'), null);
   });
 });
 
@@ -144,6 +145,16 @@ describe('buildColumnMap', () => {
 
 // ==================== validateRecord ====================
 describe('validateRecord', () => {
+  const validBarangays = new Set([
+    'san antonio', 'bambang', 'pinagbuhatan', 'dela paz',
+    'bagong ilog', 'buting', 'caniogan', 'kalawaan', 'kapasigan',
+    'kapitolyo', 'malinao', 'manggahan', 'maybunga', 'oranbo',
+    'palatiw', 'pineda', 'rosario', 'sagad', 'san joaquin',
+    'san jose', 'san miguel', 'san nicolas', 'santa cruz',
+    'santa lucia', 'santa rosa', 'santo tomas', 'santolan',
+    'sumilang', 'ugong',
+  ]);
+
   const validRecord = {
     barangay_name: 'San Antonio',
     date_of_diagnosis: '2025-02-06',
@@ -153,71 +164,75 @@ describe('validateRecord', () => {
   };
 
   it('passes for a valid record', () => {
-    const result = validateRecord(validRecord, 'DSTB');
+    const result = validateRecord(validRecord, 'DSTB', validBarangays);
     assert.equal(result.valid, true);
     assert.equal(result.errors.length, 0);
   });
 
   it('requires barangay_name', () => {
-    const result = validateRecord({ ...validRecord, barangay_name: '' }, 'DSTB');
+    const result = validateRecord({ ...validRecord, barangay_name: '' }, 'DSTB', validBarangays);
     assert.equal(result.valid, false);
     assert.ok(result.errors.some(e => e.includes('Barangay is required')));
   });
 
-  it('rejects unknown barangay', () => {
-    const result = validateRecord({ ...validRecord, barangay_name: 'Unknown' }, 'DSTB');
+  it('rejects unknown barangay for Pasig City records', () => {
+    const result = validateRecord({ ...validRecord, barangay_name: 'Unknown' }, 'DSTB', validBarangays);
     assert.equal(result.valid, false);
     assert.ok(result.errors.some(e => e.includes('Unknown barangay')));
   });
 
   it('requires date_of_diagnosis', () => {
-    const result = validateRecord({ ...validRecord, date_of_diagnosis: null }, 'DSTB');
+    const result = validateRecord({ ...validRecord, date_of_diagnosis: null }, 'DSTB', validBarangays);
     assert.equal(result.valid, false);
     assert.ok(result.errors.some(e => e.includes('Date of Diagnosis is required')));
   });
 
   it('requires sex', () => {
-    const result = validateRecord({ ...validRecord, sex: '' }, 'DSTB');
+    const result = validateRecord({ ...validRecord, sex: '' }, 'DSTB', validBarangays);
     assert.equal(result.valid, false);
     assert.ok(result.errors.some(e => e.includes('Sex is required')));
   });
 
   it('rejects invalid sex', () => {
-    const result = validateRecord({ ...validRecord, sex: 'X' }, 'DSTB');
+    const result = validateRecord({ ...validRecord, sex: 'X' }, 'DSTB', validBarangays);
     assert.equal(result.valid, false);
     assert.ok(result.errors.some(e => e.includes('Invalid sex')));
   });
 
   it('rejects age out of range', () => {
-    const result = validateRecord({ ...validRecord, age: 200 }, 'DSTB');
+    const result = validateRecord({ ...validRecord, age: 200 }, 'DSTB', validBarangays);
     assert.equal(result.valid, false);
     assert.ok(result.errors.some(e => e.includes('Invalid age')));
   });
 
   it('warns about non-Pasig city', () => {
-    const result = validateRecord({ ...validRecord, city: 'Manila' }, 'DSTB');
+    const result = validateRecord({ ...validRecord, city: 'Manila' }, 'DSTB', validBarangays);
     assert.equal(result.valid, true);
-    assert.ok(result.warnings.some(w => w.includes('expected "Pasig"')));
+    assert.ok(result.warnings.some(w => w.includes('Non-Pasig')));
   });
 
   it('warns about MN record missing ITIS Case ID', () => {
-    const result = validateRecord({ ...validRecord, itis_case_id: '' }, 'MN');
+    const result = validateRecord({ ...validRecord, itis_case_id: '' }, 'MN', validBarangays);
     assert.equal(result.valid, true);
     assert.ok(result.warnings.some(w => w.includes('MN record missing ITIS Case ID')));
   });
 });
 
-// ==================== VALID_BARANGAYS ====================
-describe('VALID_BARANGAYS', () => {
-  it('contains all Pasig barangays', () => {
-    assert.ok(VALID_BARANGAYS.length >= 28, `Expected at least 28 barangays, got ${VALID_BARANGAYS.length}`);
+// ==================== getValidBarangays ====================
+describe('getValidBarangays', () => {
+  it('returns a Set with Pasig barangays', async () => {
+    const barangays = await getValidBarangays();
+    assert.ok(barangays instanceof Set);
+    assert.ok(barangays.size >= 28, `Expected at least 28 barangays, got ${barangays.size}`);
   });
 
-  it('includes San Antonio', () => {
-    assert.ok(VALID_BARANGAYS.includes('san antonio'));
+  it('includes San Antonio', async () => {
+    const barangays = await getValidBarangays();
+    assert.ok(barangays.has('san antonio'));
   });
 
-  it('includes Pinagbuhatan', () => {
-    assert.ok(VALID_BARANGAYS.includes('pinagbuhatan'));
+  it('includes Pinagbuhatan', async () => {
+    const barangays = await getValidBarangays();
+    assert.ok(barangays.has('pinagbuhatan'));
   });
 });

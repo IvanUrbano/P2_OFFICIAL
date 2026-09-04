@@ -24,7 +24,7 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const result = await db.pool.query(
-      `INSERT INTO users (username, email, password, role)
+      `INSERT INTO users (username, email, password_hash, role)
        VALUES ($1, $2, $3, $4) RETURNING id, username, email, role, created_at`,
       [username, email, hashedPassword, role || 'staff']
     );
@@ -54,7 +54,7 @@ router.post('/login', async (req, res) => {
     }
 
     const user = result.rows[0];
-    const valid = await bcrypt.compare(password, user.password);
+    const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }

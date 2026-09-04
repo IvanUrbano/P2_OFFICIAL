@@ -50,7 +50,7 @@ function buildColumnMap(rawHeaders, sourceType) {
       map[i] = 'outcome_status';
     } else if (normalized.includes('validation') && sourceType === 'DSTB') {
       map[i] = 'validation_status';
-    } else if ((normalized.includes('itis') || normalized.includes('lite')) && normalized.includes('case')) {
+    } else if (normalized.includes('itis') && normalized.includes('lite')) {
       map[i] = 'itis_case_id';
     }
   }
@@ -100,10 +100,10 @@ function normalizeSex(val) {
 }
 
 function detectSheetType(sheetName) {
-  const name = sheetName.toUpperCase();
-  if (name.includes('DSTB') || name.includes('B-MODE')) return 'DSTB';
-  if (name.includes('MN') || name.includes('M-N') || name.includes('MICROSCOPIC')) return 'MN';
-  return null;
+  const name = sheetName.toUpperCase().trim();
+  if (name === 'DSTB' || name.includes('DSTB') || name.includes('B-MODE')) return 'DSTB';
+  if (name === 'MN' || name === 'M-N' || name.includes('MICROSCOPIC')) return 'MN';
+  return null; // Unknown sheet — skip
 }
 
 async function parseMultiSheetExcel(fileBuffer, filename) {

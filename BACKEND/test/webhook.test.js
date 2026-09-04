@@ -77,6 +77,7 @@ function generateSignature(payload) {
 /* ─── Helper: build valid payload ─── */
 function buildPayload(overrides = {}) {
   return {
+    schema_version: '1.0',
     source: 'pasig-clone',
     batch_id: '550e8400-e29b-41d4-a716-446655440000',
     timestamp: new Date().toISOString(),
@@ -134,7 +135,7 @@ describe('Webhook Endpoint', () => {
       .send(buildPayload());
 
     assert.equal(res.status, 401);
-    assert.equal(res.body.error, 'Invalid signature');
+    assert.equal(res.body.error, 'Missing webhook credentials');
   });
 
   it('rejects request with wrong secret', async () => {
@@ -166,7 +167,7 @@ describe('Webhook Endpoint', () => {
     app.use(express.json());
     app.use('/api/webhook', webhook);
 
-    const payload = { source: 'pasig-clone', sheets: 'not-an-array' };
+    const payload = { schema_version: '1.0', source: 'pasig-clone', sheets: 'not-an-array' };
     const res = await request(app)
       .post('/api/webhook/pasig-clone')
       .set('X-Webhook-Secret', TEST_SECRET)
@@ -283,5 +284,35 @@ describe('Webhook Endpoint', () => {
     assert.equal(res.body.importedCount, 0);
     assert.equal(res.body.errorCount, 1);
     assert.ok(res.body.errors.length > 0);
+  });
+
+  it('returns success for duplicate webhook (idempotent)', async () => {
+    // Mock: batch already processed in webhook_logs
+    mockQueryFn = async (sql, params) => {
+      if (sql.includes('SELECT name FROM barangays')) {
+        return { rows: [{ name: 'san antonio' }] };
+      }
+      if (sql.includes("SELECT id FROM webhook_logs WHERE batch_id") && sql.includes("processed")) {
+        return { rows: [{ id: 1 }] }; // Already processed
+      }
+      return { rows: [] };
+    };
+
+    clearWebhookCache();
+    const webhook = require('../tbinsight/webhook');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/webhook', webhook);
+
+    const payload = buildPayload();
+    const res = await request(app)
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Secret', TEST_SECRET)
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.success, true);
+    assert.ok(res.body.message.includes('already processed'));
   });
 });

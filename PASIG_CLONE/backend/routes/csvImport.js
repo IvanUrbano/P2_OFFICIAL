@@ -7,7 +7,7 @@ const { authorizeRoles } = require('../middleware/auth');
 
 router.use(fileUpload());
 
-router.post('/csv', authorizeRoles('admin', 'staff'), async (req, res) => {
+router.post('/import', authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
     if (!req.files || !req.files.file) {
       return res.status(400).json({ error: 'No file uploaded' });

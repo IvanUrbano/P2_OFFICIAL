@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
     email TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
     role TEXT DEFAULT 'staff' CHECK (role IN ('admin', 'staff')),
     created_at TIMESTAMP DEFAULT NOW()
 );

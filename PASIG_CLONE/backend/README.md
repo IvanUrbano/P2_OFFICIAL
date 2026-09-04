@@ -13,13 +13,41 @@ npm start
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/import` | Upload Excel file (multipart/form-data) |
-| GET | `/api/cases` | List all imported cases |
-| GET | `/api/cases/pending` | List cases not yet sent via webhook |
-| POST | `/api/webhook/send` | Send pending cases to TBInsight |
-| GET | `/api/stats` | Get import statistics |
+### Authentication (`/api/auth/*`)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/register` | admin | Create new user |
+| POST | `/login` | none | Login, get JWT |
+| GET | `/profile` | any | Current user info |
+| POST | `/logout` | none | Clear cookie |
+
+### Data (`/api/data/*`)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/import` | staff+ | Upload Excel (DSTB + MN sheets) |
+| GET | `/batches` | staff+ | List all import batches |
+| GET | `/batches/:id` | staff+ | Batch details with raw records |
+
+### Validation (`/api/data/*`)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/validate/:batchId` | staff+ | Validate batch, store in validated_tb_cases |
+
+### Webhook (`/api/webhook/*`)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/send` | admin | Send validated batch to TBInsight |
+| GET | `/logs` | admin | Webhook delivery history |
+
+### Health
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/api/health` | none | Health check |
 
 ## Excel Format
 

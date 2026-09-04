@@ -20,3 +20,7 @@ CREATE TABLE IF NOT EXISTS webhook_logs (
 
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_source ON webhook_logs(source);
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_received ON webhook_logs(received_at);
+
+-- Idempotency: prevent duplicate webhook processing
+CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_logs_source_batch
+  ON webhook_logs(source, batch_id) WHERE batch_id IS NOT NULL;

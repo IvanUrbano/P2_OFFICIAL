@@ -54,6 +54,7 @@ async function sendWebhook(batchId) {
   const mnRecords = recordsResult.rows.filter(r => r.source_type === 'MN');
 
   const payload = {
+    schema_version: '1.0',
     source: 'pasig-clone',
     batch_id: batchId,
     timestamp: new Date().toISOString(),
@@ -91,7 +92,10 @@ async function sendWebhook(batchId) {
     const responseBody = await response.text();
 
     await db.logWebhook(batchId, payload, response.ok ? 'sent' : 'failed', response.status, responseBody);
-    await db.updateBatchSent(batchId);
+
+    if (response.ok) {
+      await db.updateBatchSent(batchId);
+    }
 
     return {
       success: response.ok,

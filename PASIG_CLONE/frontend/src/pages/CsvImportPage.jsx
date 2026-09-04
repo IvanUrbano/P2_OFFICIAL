@@ -22,7 +22,7 @@ export default function CsvImportPage() {
     formData.append('file', file);
 
     try {
-      const response = await axios.post('/api/data/csv', formData, {
+      const response = await axios.post('/api/data/import', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setResult(response.data);

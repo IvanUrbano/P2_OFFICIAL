@@ -1,6 +1,6 @@
 # TBInsight & Pasig Clone — TB Data Integration Platform
 
-> A two-system tuberculosis data platform for Pasig City: **TBInsight** provides surveillance, GIS mapping, and AI-powered forecasting, while **Pasig Clone** handles data ingestion from DOH TB-DOTS registries and integrates with TBInsight via webhooks.
+> A two-system tuberculosis data platform for Pasig City: **TBInsight** provides surveillance, GIS mapping, and statistical forecasting (ARIMA) with risk classification (Random Forest), while **Pasig Clone** handles data ingestion from DOH TB-DOTS registries and integrates with TBInsight via webhooks.
 
 ![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react)
 ![Express](https://img.shields.io/badge/Express-5-000000?style=flat&logo=express)
@@ -137,7 +137,7 @@ This repository contains two independent systems with **separate databases**, in
 
 #### Backend
 - **Express 4** — REST API framework
-- **PostgreSQL** — Same database as TBInsight (separate `pasig_clone` schema)
+- **PostgreSQL** — Separate PostgreSQL database (pasig_clone_db)
 - **JWT** — Authentication (httpOnly cookies + Bearer tokens)
 - **bcryptjs** — Password hashing
 - **ExcelJS** — Multi-sheet Excel parsing
@@ -524,7 +524,7 @@ curl -X POST http://localhost:5000/api/tb/barangays/seed
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| POST | `/csv` | staff+ | Upload Excel (DSTB + MN sheets) |
+| POST | `/import` | staff+ | Upload Excel (DSTB + MN sheets) |
 | GET | `/batches` | staff+ | List all import batches |
 | GET | `/batches/:id` | staff+ | Batch details with raw records |
 
@@ -700,7 +700,7 @@ Pasig Clone Frontend (Render)  Pasig Clone Backend (Render)
 pasig-clone-frontend.onrender  →  pasig-clone-backend.onrender
      │                              │
      │   React 18 SPA               │   Express 4 API
-     │   Vite 5 Build               │   PostgreSQL (same DB)
+     │   Vite 5 Build               │   PostgreSQL (pasig_clone_db)
      │   Tailwind v4                │   JWT + HMAC Auth
 ```
 
@@ -731,13 +731,13 @@ pasig-clone-frontend.onrender  →  pasig-clone-backend.onrender
 - **Service**: `pasig-clone-backend` (Node.js, free tier)
 - **Build**: `cd PASIG_CLONE/backend && npm install`
 - **Start**: `cd PASIG_CLONE/backend && node server.js`
-- **Env vars**: `DATABASE_URL` (points to `pasig_clone_db` — separate database), `JWT_SECRET`, `WEBHOOK_SECRET`, `TBINSIGHT_WEBHOOK_URL`
+- **Env vars**: `DATABASE_URL` (points to `pasig_clone_db` — separate database), `JWT_SECRET`, `WEBHOOK_SECRET` (must match TBInsight's value — set manually, not generated), `TBINSIGHT_WEBHOOK_URL`
 
 ### Render (Pasig Clone Frontend)
 
 - **Service**: `pasig-clone-frontend` (Node.js, free tier)
 - **Build**: `cd PASIG_CLONE/frontend && npm install && npm run build`
-- **Start**: `cd PASIG_CLONE/frontend && npm run preview`
+- **Start**: `cd PASIG_CLONE/frontend && npm run preview -- --host 0.0.0.0`
 - **Env vars**: `VITE_API_URL` (points to Pasig Clone backend)
 
 ### CI/CD
@@ -772,7 +772,8 @@ tb-system/
 │   │   └── webhook.js                    # Webhook endpoint (Pasig Clone)
 │   ├── middleware/
 │   │   ├── auth.js                       # JWT verification
-│   │   └── rateLimiter.js                # Login rate limiting
+│   │   ├── rateLimiter.js                # Login rate limiting
+│   │   └── webhookAuth.js                # HMAC webhook verification
 │   ├── data/
 │   │   ├── pasig-barangays.geojson
 │   │   └── pasig-health-facilities.csv
