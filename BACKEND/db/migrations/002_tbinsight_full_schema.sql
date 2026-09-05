@@ -1,10 +1,14 @@
 -- ==========================================
 -- TBInsight - Full Schema Migration
--- 9 tables across 4 layers
+-- 21 tables across 4 layers + PostGIS
 -- ==========================================
 -- Run: psql -U <user> -d tb_system -f BACKEND/db/migrations/002_tbinsight_full_schema.sql
--- Safe to re-run (CREATE TABLE IF NOT EXISTS)
+-- Safe to re-run (CREATE TABLE IF NOT EXISTS, ALTER TABLE ADD COLUMN IF NOT EXISTS)
 -- ==========================================
+
+-- ==================== POSTGIS EXTENSION ====================
+
+CREATE EXTENSION IF NOT EXISTS postgis;
 
 -- ==================== LAYER 0: REFERENCE DATA ====================
 
@@ -24,6 +28,17 @@ CREATE TABLE IF NOT EXISTS health_facilities (
   facility_type TEXT,
   UNIQUE(name, barangay_name)
 );
+
+-- barangays_geom: PostGIS polygons for GIS map rendering
+CREATE TABLE IF NOT EXISTS barangays_geom (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  population INTEGER DEFAULT 0,
+  geom GEOMETRY(MULTIPOLYGON, 4326) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_barangays_geom_geom
+  ON barangays_geom USING GIST (geom);
 
 -- ==================== LAYER 1: RAW IMPORT ====================
 
@@ -172,7 +187,7 @@ ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS norm_trend DOUBLE PREC
 ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS norm_neighbor_risk DOUBLE PRECISION;
 ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS norm_forecast_error DOUBLE PRECISION;
 
--- alerts: generated alerts + recommendations
+-- alerts: unified alerts + notifications
 CREATE TABLE IF NOT EXISTS alerts (
   id BIGSERIAL PRIMARY KEY,
   barangay_name TEXT NOT NULL REFERENCES barangays(name) ON DELETE CASCADE,
@@ -182,7 +197,18 @@ CREATE TABLE IF NOT EXISTS alerts (
   message TEXT NOT NULL,
   recommendation TEXT,
   is_read BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  -- Notification extension columns
+  type TEXT DEFAULT 'alert',
+  title TEXT,
+  source_module TEXT DEFAULT 'analytics',
+  status TEXT DEFAULT 'unread',
+  related_record_id TEXT,
+  related_entity_type TEXT,
+  metadata JSONB,
+  read_at TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ,
+  resolved_by TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_alerts_barangay ON alerts(barangay_name);
@@ -198,3 +224,29 @@ CREATE TABLE IF NOT EXISTS model_metadata (
   metrics JSONB,
   config JSONB
 );
+
+-- ==================== INTERVENTIONS ====================
+
+-- interventions: TB intervention action planning
+CREATE TABLE IF NOT EXISTS interventions (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  intervention_type TEXT NOT NULL,
+  barangay_name TEXT NOT NULL,
+  priority TEXT DEFAULT 'medium' CHECK (priority IN ('high', 'medium', 'low')),
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed')),
+  assigned_to TEXT,
+  team TEXT,
+  target_date DATE,
+  completed_at TIMESTAMPTZ,
+  created_by TEXT,
+  related_alert_id BIGINT REFERENCES alerts(id) ON DELETE SET NULL,
+  metadata JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_interventions_status ON interventions(status);
+CREATE INDEX IF NOT EXISTS idx_interventions_barangay ON interventions(barangay_name);
+CREATE INDEX IF NOT EXISTS idx_interventions_priority ON interventions(priority);

@@ -36,7 +36,7 @@ function matchHeader(normalized) {
   // --- Simple exact matches ---
   if (normalized === 'age') return 'age';
   if (normalized === 'sex') return 'sex';
-  if (normalized === 'city') return 'city';
+  if (normalized.includes('city') || normalized.includes('municipality')) return 'city';
   if (normalized.includes('barangay')) return 'barangay_name';
 
   // --- Facility fields (contain "treatment"/"screening" + "health"/"facility") ---
@@ -234,7 +234,12 @@ function validateRow(row, validBarangays) {
   if (!row.barangay_name || row.barangay_name.trim() === '') {
     errors.push('Barangay is required');
   } else if (!validBarangays.has(row.barangay_name.trim().toLowerCase())) {
-    errors.push(`Unknown barangay: "${row.barangay_name}"`);
+    const isPasig = row.city && VALID_CITIES.includes(row.city.trim().toLowerCase());
+    if (isPasig) {
+      errors.push(`Unknown barangay: "${row.barangay_name}"`);
+    } else {
+      warnings.push(`Non-Pasig record: unknown barangay "${row.barangay_name}"`);
+    }
   }
 
   // Required: date_of_diagnosis
@@ -292,14 +297,25 @@ function validateRow(row, validBarangays) {
 // ==================== SHEET TYPE DETECTION ====================
 
 /**
- * Detect source_type from sheet name.
- * MN sheets contain "MN" or "MICROSCOPIC" in the name; everything else is DSTB.
+ * Detect source_type from sheet name or headers.
+ * MN sheets contain "MN" or "MICROSCOPIC" in the name; DSTB for "DSTB" or "B-MODE".
+ * For CSV files (sheet name is "Sheet1"), fall back to header detection.
+ * For multi-sheet Excel files, unknown sheets are skipped (return null).
  */
-function detectSheetType(sheetName) {
+function detectSheetType(sheetName, headers = []) {
   const name = sheetName.toUpperCase().trim();
   if (name === 'DSTB' || name.includes('DSTB') || name.includes('B-MODE')) return 'DSTB';
   if (name === 'MN' || name === 'M-N' || name.includes('MICROSCOPIC')) return 'MN';
-  return null; // Unknown sheet — skip
+
+  // Fallback: check headers for MN-specific columns (itis_case_id present = MN)
+  const headerStr = headers.map(h => String(h || '').toLowerCase()).join(' ');
+  if (headerStr.includes('itis') && headerStr.includes('lite')) return 'MN';
+
+  // Single-sheet CSV files have default name "Sheet1" — treat as DSTB
+  if (name === 'SHEET1') return 'DSTB';
+
+  // Unknown multi-sheet — skip
+  return null;
 }
 
 // ==================== MAIN PARSER ====================
@@ -328,13 +344,14 @@ function parseCaseFile(fileBuffer, filename, validBarangays = new Set()) {
   // Process ALL sheets (multi-sheet support)
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
-    const source_type = detectSheetType(sheetName);
-
-    if (!source_type) continue; // Skip unknown sheets
 
     // Extract raw headers — preserve original text (spaces, etc.)
     // because sheet_to_json uses these exact strings as object keys
     const rawHeaders = XLSX.utils.sheet_to_json(sheet, { header: 1 })[0] || [];
+
+    const source_type = detectSheetType(sheetName, rawHeaders);
+
+    if (!source_type) continue; // Skip unknown sheets
 
     // Build column map via keyword matching (keys are raw, untrimmed)
     const columnMap = buildColumnMap(rawHeaders);
@@ -358,12 +375,8 @@ function parseCaseFile(fileBuffer, filename, validBarangays = new Set()) {
       mappedRow.source_type = source_type;
       mappedRow.sheet_name = sheetName;
 
-      // Set validation_status based on source_type
-      if (source_type === 'DSTB') {
-        mappedRow.validation_status = mappedRow.validation_status || null;
-      } else {
-        mappedRow.validation_status = null; // MN records don't have this
-      }
+      // Preserve original source validation_status (DSTB records have this from the Excel file)
+      mappedRow.source_validation_status = source_type === 'DSTB' ? (mappedRow.validation_status || null) : null;
 
       // Parse dates
       mappedRow.date_of_screening = parseDate(mappedRow.date_of_screening);
@@ -394,7 +407,8 @@ function parseCaseFile(fileBuffer, filename, validBarangays = new Set()) {
       const validation = validateRow(mappedRow, validBarangays);
 
       mappedRow.row_number = rowNum;
-      mappedRow.validation_status = validation.valid ? 'Validated' : 'Not Validated';
+      mappedRow.record_validation_status = validation.valid ? 'Validated' : 'Not Validated';
+      mappedRow.validation_status = mappedRow.record_validation_status;
       mappedRow._errors = validation.errors;
       mappedRow._warnings = validation.warnings;
 

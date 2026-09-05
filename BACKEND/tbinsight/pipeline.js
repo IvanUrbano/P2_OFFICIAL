@@ -109,6 +109,9 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
       return results;
     }
 
+    // Release client before long-running ML calls to free pool connections
+    client.release();
+
     // Determine forecast period (next month from latest)
     const months = [...new Set(monthlyRows.map(r => r.month.toISOString().slice(0, 10)))].sort();
     const latestMonth = months[months.length - 1];
@@ -235,7 +238,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     // 5b. Compute historical bias from past predictions
     let historicalBias = {};
     try {
-      const pastPreds = await client.query(
+      const pastPreds = await pool.query(
         `SELECT barangay_name, actual_count, forecasted_count
          FROM model_predictions
          WHERE actual_count IS NOT NULL
@@ -391,7 +394,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     // ── Step 8: Generate alerts ──
     let prevRiskClasses = {};
     try {
-      const prev = await client.query(
+      const prev = await pool.query(
         `SELECT barangay_name, risk_class FROM barangay_risk_scores
          WHERE period = (SELECT MAX(period) FROM barangay_risk_scores WHERE period < $1)
          AND period IS NOT NULL`,
@@ -414,14 +417,17 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     results.alertsCount = alerts.length;
 
     // ── Step 9: Store everything in a transaction ──
+    // Re-acquire client for transaction
+    const txClient = await pool.connect();
+    try {
     // Clean up old rows with non-1st-of-month dates (legacy data)
-    await client.query(
+    await txClient.query(
       `DELETE FROM model_predictions WHERE period::date != date_trunc('month', period)::date`
     );
-    await client.query('BEGIN');
+    await txClient.query('BEGIN');
 
     await storeResults(
-      client,
+      txClient,
       results.period,
       forecastResults,
       classifyResults,
@@ -431,7 +437,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     );
 
     // Record pipeline run in model_metadata
-    await client.query(
+    await txClient.query(
       `INSERT INTO model_metadata (run_type, model_version, training_months, metrics, config)
        VALUES ($1, $2, $3, $4, $5)`,
       [
@@ -451,7 +457,10 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
       ]
     );
 
-    await client.query('COMMIT');
+    await txClient.query('COMMIT');
+    } finally {
+      txClient.release();
+    }
 
     results.status = 'completed';
     results.barangaysProcessed = barangays.length;
@@ -460,13 +469,10 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
 
     return results;
   } catch (err) {
-    await client.query('ROLLBACK');
     results.status = 'error';
     results.errors.push(err.message);
     console.error('❌ Pipeline failed:', err.message);
     throw err;
-  } finally {
-    client.release();
   }
 }
 

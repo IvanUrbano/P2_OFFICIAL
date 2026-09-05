@@ -20,7 +20,17 @@ router.post('/import', authorizeRoles('admin', 'staff'), async (req, res) => {
       return res.status(400).json({ error: 'File too large. Maximum size is 50MB.' });
     }
 
+    // Validate file extension — only .xlsx and .xls are supported
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!['xlsx', 'xls'].includes(ext)) {
+      return res.status(400).json({ error: 'Unsupported file type. Only .xlsx and .xls files are accepted.' });
+    }
+
     const parsed = parseMultiSheetExcel(file.data, file.name);
+
+    const warnings = [];
+    if (parsed.dstbCount === 0) warnings.push('Required DSTB sheet missing');
+    if (parsed.mnCount === 0) warnings.push('Required MN sheet missing');
 
     const batchResult = await db.insertBatch(
       file.name,
@@ -52,6 +62,7 @@ router.post('/import', authorizeRoles('admin', 'staff'), async (req, res) => {
         sourceType: s.source_type,
         recordCount: s.record_count,
       })),
+      warnings: warnings.length > 0 ? warnings : undefined,
     });
   } catch (error) {
     console.error('CSV import error:', error);

@@ -133,7 +133,7 @@ export default function Alert() {
       try {
         const staleRes = await API.get('/api/tb/alerts/stale-check', { signal: controller.signal });
         if (staleRes.data.isStale && isAdmin) {
-          await API.post('/api/tb/alerts/evaluate', null, { signal: controller.signal });
+          await API.post('/api/tb/alerts/evaluate', {}, { signal: controller.signal });
           fetchAlerts();
         }
       } catch {

@@ -78,32 +78,56 @@ async function sendWebhook(batchId) {
   const signature = signPayload(payload, secret);
   const webhookUrl = config.webhook.url;
 
-  try {
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Webhook-Signature': signature,
-      },
-      body: JSON.stringify(payload),
-    });
+  const MAX_RETRIES = 2;
+  const TIMEOUT_MS = 30000;
 
-    const responseBody = await response.text();
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-    await db.logWebhook(batchId, payload, response.ok ? 'sent' : 'failed', response.status, responseBody);
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Webhook-Signature': signature,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
 
-    if (response.ok) {
-      await db.updateBatchSent(batchId);
+      clearTimeout(timeout);
+      const responseBody = await response.text();
+
+      await db.logWebhook(batchId, payload, response.ok ? 'sent' : 'failed', response.status, responseBody);
+
+      if (response.ok) {
+        await db.updateBatchSent(batchId);
+        return { success: true, status: response.status, message: 'Webhook sent successfully' };
+      }
+
+      // 4xx errors — don't retry (permanent failure)
+      if (response.status >= 400 && response.status < 500) {
+        return { success: false, status: response.status, message: 'Webhook failed (client error)' };
+      }
+
+      // 5xx errors — retry if attempts remain
+      if (attempt < MAX_RETRIES) {
+        console.log(`Webhook retry ${attempt}/${MAX_RETRIES} after ${response.status}`);
+        continue;
+      }
+
+      return { success: false, status: response.status, message: 'Webhook failed after retries' };
+    } catch (error) {
+      // Network/timeout errors — retry if attempts remain
+      if (attempt < MAX_RETRIES) {
+        console.log(`Webhook retry ${attempt}/${MAX_RETRIES} after error: ${error.message}`);
+        continue;
+      }
+
+      await db.logWebhookError(batchId, payload, error.message);
+      return { success: false, status: 0, message: `Webhook failed: ${error.message}` };
     }
-
-    return {
-      success: response.ok,
-      status: response.status,
-      message: response.ok ? 'Webhook sent successfully' : 'Webhook failed',
-    };
-  } catch (error) {
-    await db.logWebhookError(batchId, payload, error.message);
-    throw error;
   }
 }
 

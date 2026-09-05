@@ -534,7 +534,7 @@ function buildColumnMap(rawHeaders, sourceType) {
       map[header] = 'validation_status';
     }
     // MN-specific
-    else if ((normalized.includes('itis') || normalized.includes('lite')) && normalized.includes('case')) {
+    else if (normalized.includes('itis') && normalized.includes('lite')) {
       map[header] = 'itis_case_id';
     }
   }
@@ -1170,7 +1170,7 @@ JWT_EXPIRES_IN=7d
 
 # Webhook
 WEBHOOK_SECRET=shared_secret_with_p2_official
-TBINSIGHT_WEBHOOK_URL=http://localhost:5000/api/webhook/pasig-clone
+TBINSIGHT_WEBHOOK_URL=http://localhost:3000/api/webhook/pasig-clone
 
 # Frontend URL
 FRONTEND_URL=http://localhost:5174
@@ -1804,7 +1804,7 @@ function buildColumnMap(rawHeaders, sourceType) {
       map[header] = 'validation_status';
     }
     // MN-specific: ITIS Lite Case No.
-    else if ((normalized.includes('itis') || normalized.includes('lite')) && normalized.includes('case')) {
+    else if (normalized.includes('itis') && normalized.includes('lite')) {
       map[header] = 'itis_case_id';
     }
   }
@@ -2173,13 +2173,24 @@ describe('Multi-Sheet Parser', () => {
 // File: P2_OFFICIAL/BACKEND/test/webhook.test.js
 
 const request = require('supertest');
+const crypto = require('crypto');
 const app = require('../server');
+
+const TEST_SECRET = process.env.WEBHOOK_SECRET || 'test-webhook-secret';
+
+function generateSignature(payload) {
+  const signature = crypto
+    .createHmac('sha256', TEST_SECRET)
+    .update(JSON.stringify(payload))
+    .digest('hex');
+  return `sha256=${signature}`;
+}
 
 describe('Webhook Endpoint', () => {
   test('POST /api/webhook/pasig-clone should receive valid payload', async () => {
     const payload = {
       source: 'pasig-clone',
-      batch_id: 'test-batch-id',
+      batch_id: '550e8400-e29b-41d4-a716-446655440000',
       timestamp: new Date().toISOString(),
       sheets: [
         {
@@ -2331,10 +2342,34 @@ WEBHOOK_SECRET=<same_as_pasig_clone>
 - [x] Update server.js to mount webhook route
 
 ### Week 5: Testing & Integration
-- [x] Unit tests for parser and validator (34 tests)
-- [x] Integration tests for webhook flow (6 tests)
+- [x] Unit tests for parser and validator (34 tests — PASIG_CLONE/backend/test/multiSheetParser.test.js)
+- [x] Integration tests for webhook flow (7 tests — BACKEND/test/webhook.test.js)
+- [x] Auth & middleware tests (50 tests — BACKEND/test/auth.test.js + middleware.test.js)
+- [x] TBInsight pipeline & route tests (115 tests — BACKEND/test/tbinsight/*.test.js + routes.test.js)
+- [x] Total: 207 tests across 7 test files
 - [x] End-to-end testing
 - [x] Fix bugs and issues
+
+### Week 5b: Pre-Deployment Fixes
+- [x] Fix validation response mismatch (item 9) — backend/frontend structures match
+- [x] Fix P2 parser unknown-sheet handling (item 10) — skip unknown sheets (return null)
+- [x] Preserve original DSTB validation_status (item 11) — source_validation_status + record_validation_status
+- [x] Add schema_version to webhook payload (item 12) — sender includes "1.0", receiver validates
+- [x] Webhook idempotency (item 13) — app-level check + unique index + 23505 catch
+- [x] Validation idempotency (item 14) — DELETE before re-insert
+- [x] Webhook error handling after commit (item 15) — rebuildAggregations in try/catch
+- [x] Webhook timeout and retry (item 16) — 30s timeout, 2 retries for 5xx/network
+- [x] Validate env vars at startup (item 17) — DATABASE_URL, JWT_SECRET, WEBHOOK_SECRET checked
+- [x] Import naming (item 18) — /api/data/import consistent
+- [x] Excel-only file extension check (item 19) — backend validates .xlsx/.xls only
+- [x] Comprehensive webhook tests (item 20) — 18 tests, all passing
+
+### Week 5c: Verification Fixes (Items 21–25)
+- [x] Fix GeoJSON corruption (item 21) — removed stray `g` character at end of pasig-barangays.geojson; 30 barangays verified across all 4 sources
+- [x] Fix City/Municipality header mapping (item 22) — parseCaseFile.js now uses `includes('city')` instead of `=== 'city'`; matches multiSheetParser.js behavior
+- [x] Add missing DSTB/MN sheet warning (item 23) — csvImport.js returns `warnings` array when DSTB or MN sheet is missing (soft warning, import still succeeds)
+- [x] Fix VITE_API_URL fallback (item 24) — frontend axios.js fallback changed from port 5000 to 3000; .env.production.example URL corrected to tb-system-backend.onrender.com
+- [x] Fix Render PORT for Pasig Clone frontend (item 25) — added `--port $PORT` to vite preview start command in render.yaml
 
 ### Week 6: Deployment
 - [ ] Deploy Pasig Clone to Render
@@ -2351,6 +2386,7 @@ WEBHOOK_SECRET=<same_as_pasig_clone>
 |---------|------|--------|---------|
 | 1.0 | 2026-09-04 | System | Initial implementation plan |
 | 2.0 | 2026-09-04 | System | Updated checklist — Weeks 1-5 complete, separate databases architecture |
+| 3.0 | 2026-09-06 | System | Week 5c verification fixes — GeoJSON, City/Municipality header, missing sheet warning, VITE_API_URL, Render PORT |
 
 ---
 

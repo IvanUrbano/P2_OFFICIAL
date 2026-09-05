@@ -158,12 +158,20 @@ function getBatches() {
   );
 }
 
+function deleteValidatedCases(batchId) {
+  return pool.query(
+    `DELETE FROM validated_tb_cases WHERE batch_id = $1`,
+    [batchId]
+  );
+}
+
 module.exports = {
   pool,
   initSchema,
   insertBatch,
   insertRawCase,
   insertValidatedCase,
+  deleteValidatedCases,
   updateBatchValidation,
   updateBatchSent,
   getBatch,

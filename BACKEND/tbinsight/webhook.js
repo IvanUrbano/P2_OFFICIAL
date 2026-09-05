@@ -121,8 +121,17 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
     }
 
     await client.query('COMMIT');
+    client.release();
 
-    if (importedCount > 0) await rebuildAggregations();
+    // Rebuild aggregations separately — data is already committed
+    if (importedCount > 0) {
+      try {
+        await rebuildAggregations();
+      } catch (aggErr) {
+        console.error('Aggregation rebuild failed after commit:', aggErr.message);
+        // Don't return 500 — data was imported successfully
+      }
+    }
 
     // Log webhook — handle duplicate-key violation gracefully
     try {

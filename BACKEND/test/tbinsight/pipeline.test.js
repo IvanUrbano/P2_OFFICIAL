@@ -161,9 +161,9 @@ describe('generateAlerts', () => {
       period: '2024-07-01',
     });
     assert.ok(alerts.length > 0, 'Should generate at least one alert');
-    const escalation = alerts.find(a => a.alert_type === 'high_risk_escalation');
+    const escalation = alerts.find(a => a.alert_type === 'high_risk_escalation' && a.severity === 'warning');
     assert.ok(escalation, 'Should have high_risk_escalation alert');
-    assert.strictEqual(escalation.barangay_name, 'TestBgy');
+    assert.strictEqual(escalation.barangay_name, null);
     assert.strictEqual(escalation.severity, 'warning');
   });
 

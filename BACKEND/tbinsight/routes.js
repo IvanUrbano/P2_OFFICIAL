@@ -4,7 +4,7 @@ const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { parseCaseFile } = require('./parseCaseFile');
 const { importCases, getImportHistory, getBatchErrors, getBatchSummary } = require('./importCases');
 const { rebuildAggregations } = require('./aggregateMonthly');
-const { seedAll, getBarangays, getHealthFacilities, findBarangay } = require('./barangays');
+const { seedAll, seedBarangaysGeom, getBarangays, getHealthFacilities, findBarangay } = require('./barangays');
 const { runPipeline } = require('./pipeline');
 const { healthCheck: mlHealthCheck, evaluate: mlEvaluate, forecast: mlForecast } = require('./mlClient');
 const {
@@ -85,6 +85,21 @@ router.post('/barangays/seed', authenticateToken, authorizeRoles('admin'), async
   } catch (err) {
     console.error('Seed error:', err.message);
     res.status(500).json({ error: 'Server error seeding reference data.' });
+  }
+});
+
+/**
+ * POST /api/tb/barangays/seed-geom
+ * Seed barangays_geom with PostGIS polygons from GeoJSON (admin only)
+ * Required for GIS map rendering
+ */
+router.post('/barangays/seed-geom', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const result = await seedBarangaysGeom();
+    res.json({ message: 'Barangay geometries seeded successfully.', result });
+  } catch (err) {
+    console.error('Geom seed error:', err.message);
+    res.status(500).json({ error: 'Server error seeding barangay geometries.' });
   }
 });
 
@@ -645,7 +660,7 @@ router.get('/dashboard/summary', async (req, res) => {
  */
 router.get('/dashboard/metrics', async (req, res) => {
   try {
-    // Core query: all data from tb_cases (guaranteed to exist)
+    // Core query: Pasig City data from tb_cases
     const result = await pool.query(`
       SELECT
         COUNT(*)::INTEGER AS total_cases,
@@ -695,10 +710,10 @@ router.get('/dashboard/metrics', async (req, res) => {
 router.get('/dashboard/monthly', async (req, res) => {
   try {
     const { year } = req.query;
-    let yearFilter = '';
+    let filters = 'WHERE date_of_diagnosis IS NOT NULL';
     const params = [];
     if (year) {
-      yearFilter = `AND EXTRACT(YEAR FROM date_of_diagnosis) = $1`;
+      filters += ` AND EXTRACT(YEAR FROM date_of_diagnosis) = $1`;
       params.push(parseInt(year));
     }
     const result = await pool.query(`
@@ -706,7 +721,7 @@ router.get('/dashboard/monthly', async (req, res) => {
              DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
              COUNT(*)::INTEGER AS case_count
       FROM tb_cases
-      WHERE date_of_diagnosis IS NOT NULL ${yearFilter}
+      ${filters}
       GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
       ORDER BY month, barangay_name
     `, params);
@@ -1552,6 +1567,26 @@ router.put('/alerts/read-all', authenticateToken, async (req, res) => {
 });
 
 /**
+ * GET /api/tb/alerts/stale-check
+ * Check if alerts need re-evaluation
+ *
+ * Returns the last evaluation time and whether alerts are stale (>24h old).
+ */
+router.get('/alerts/stale-check', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT MAX(created_at)::timestamptz AS last_alert_created FROM alerts WHERE type = 'alert'`
+    );
+    const lastCreated = result.rows[0]?.last_alert_created;
+    const isStale = !lastCreated || (Date.now() - new Date(lastCreated).getTime()) > 24 * 60 * 60 * 1000;
+    res.json({ lastEvaluated: lastCreated, isStale });
+  } catch (err) {
+    console.error('Stale check error:', err.message);
+    res.json({ lastEvaluated: null, isStale: true });
+  }
+});
+
+/**
  * GET /api/tb/alerts/:id
  * Get a single alert/notification detail
  */
@@ -1592,24 +1627,6 @@ router.put('/alerts/:id/resolve', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Resolve alert error:', err.message);
     res.status(500).json({ error: 'Server error resolving alert.' });
-  }
-});
-
-/**
- * GET /api/tb/alerts/stale-check
- * Returns the last evaluation time and whether alerts are stale (>24h old).
- */
-router.get('/alerts/stale-check', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT MAX(created_at)::timestamptz AS last_alert_created FROM alerts WHERE type = 'alert'`
-    );
-    const lastCreated = result.rows[0]?.last_alert_created;
-    const isStale = !lastCreated || (Date.now() - new Date(lastCreated).getTime()) > 24 * 60 * 60 * 1000;
-    res.json({ lastEvaluated: lastCreated, isStale });
-  } catch (err) {
-    console.error('Stale check error:', err.message);
-    res.json({ lastEvaluated: null, isStale: true });
   }
 });
 
@@ -2086,7 +2103,7 @@ router.get('/reports/summary', async (req, res) => {
 
     coverage = barangay || 'City-wide';
 
-    // Build base WHERE clause
+    // Build base WHERE clause (Pasig City only)
     const conditions = [`c.date_of_diagnosis >= $1`, `c.date_of_diagnosis <= $2`];
     const params = [startDate, endDate];
     let paramIdx = 3;
@@ -2099,21 +2116,8 @@ router.get('/reports/summary', async (req, res) => {
 
     const whereClause = 'WHERE ' + conditions.join(' AND ');
 
-    // Run all queries in parallel
-    const [
-      summaryRes,
-      outcomesRes,
-      sexRes,
-      ageRes,
-      caseProfileRes,
-      trendRes,
-      barangayDistRes,
-      riskRes,
-      forecastRes,
-      populationRes,
-      casesRes,
-      facilityRes,
-    ] = await Promise.all([
+    // Run queries in 2 batches to stay within pool limit (max 20, but be safe)
+    const [summaryRes, outcomesRes, sexRes, ageRes, caseProfileRes, trendRes] = await Promise.all([
       // Summary: total cases, active cases, success rate
       pool.query(`
         SELECT
@@ -2185,7 +2189,9 @@ router.get('/reports/summary', async (req, res) => {
         GROUP BY month
         ORDER BY month
       `, barangay ? [startDate, endDate, barangay] : [startDate, endDate]),
+    ]);
 
+    const [barangayDistRes, riskRes, forecastRes, populationRes, casesRes, facilityRes] = await Promise.all([
       // Barangay distribution (city-wide only)
       barangay ? Promise.resolve({ rows: [] }) : pool.query(`
         SELECT TRIM(barangay_name) AS barangay_name, COUNT(*)::INTEGER AS cases

@@ -54,7 +54,7 @@ services:
       - key: TBINSIGHT_WEBHOOK_URL
         value: https://tb-system-backend.onrender.com/api/webhook/pasig-clone
       - key: FRONTEND_URL
-        value: https://pasig-clone-frontend.onrender.app
+        value: https://pasig-clone-frontend.onrender.com
         sync: false
 
   # ==================== Pasig Clone Frontend ====================
@@ -64,10 +64,10 @@ services:
     plan: free
     rootDir: PASIG_CLONE/frontend
     buildCommand: npm install && npm run build
-    startCommand: npm run preview -- --host 0.0.0.0
+    startCommand: npm run preview -- --host 0.0.0.0 --port $PORT
     envVars:
       - key: VITE_API_URL
-        value: https://pasig-clone-backend.onrender.app
+        value: https://pasig-clone-backend.onrender.com
         sync: false
 
 databases: []

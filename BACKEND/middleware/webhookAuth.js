@@ -2,25 +2,27 @@ const crypto = require('crypto');
 
 /**
  * Middleware to verify webhook HMAC-SHA256 signature.
- * Checks that the secret matches WEBHOOK_SECRET and the signature is valid.
+ * The sender signs the payload with WEBHOOK_SECRET and sends the signature
+ * in the X-Webhook-Signature header. The server verifies using its own
+ * WEBHOOK_SECRET env var — the secret is NOT sent in the request.
  */
 function verifyWebhookSignature(req, res, next) {
   const signature = req.headers['x-webhook-signature'];
-  const secret = req.headers['x-webhook-secret'];
 
-  if (!signature || !secret) {
-    return res.status(401).json({ error: 'Missing webhook credentials' });
+  if (!signature) {
+    return res.status(401).json({ error: 'Missing X-Webhook-Signature header' });
   }
 
-  // Verify secret matches server's configured secret
+  // Use server's configured WEBHOOK_SECRET to verify
   const serverSecret = process.env.WEBHOOK_SECRET;
-  if (!serverSecret || secret !== serverSecret) {
-    return res.status(401).json({ error: 'Invalid webhook secret' });
+  if (!serverSecret) {
+    console.error('WEBHOOK_SECRET env var not configured');
+    return res.status(500).json({ error: 'Webhook secret not configured' });
   }
 
   // Verify HMAC signature with length check
   const expectedSignature = crypto
-    .createHmac('sha256', secret)
+    .createHmac('sha256', serverSecret)
     .update(JSON.stringify(req.body))
     .digest('hex');
 

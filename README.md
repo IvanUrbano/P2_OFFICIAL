@@ -37,12 +37,9 @@ This repository contains two independent systems with **separate databases**, in
 │  2. Store raw records in import_batches + raw_tb_cases              │
 │  3. Validate (barangay, sex, age, dates, facilities)               │
 │  4. Store validated records in validated_tb_cases                   │
-│  5. Send webhook to TBInsight with HMAC-SHA256 signature           │
+│  5. Send webhook to TBInsight with HMAC-SHA256 signed payload       │
 └──────────────────────────┬──────────────────────────────────────────┘
                            │ POST /api/webhook/pasig-clone
-<!-- SECURITY TODO: X-Webhook-Secret header is insecure (sends raw password).
-     Future: remove it and rely on X-Webhook-Signature (HMAC) only. -->
-                           │ Header: X-Webhook-Secret: <secret>
                            │ Header: X-Webhook-Signature: sha256=<hmac>
                            ▼
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -50,13 +47,22 @@ This repository contains two independent systems with **separate databases**, in
 │  Database: neondb (separate Neon database)                         │
 │                                                                     │
 │  1. Verify HMAC signature                                           │
-│  2. Validate each record                                            │
+│  2. Validate payload schema, required fields, and per-record data  │
+│     integrity before insertion                                      │
 │  3. Insert into tb_cases with source_type (DSTB/MN)                │
+│     (bypasses tb_cases_raw — data pre-validated by Pasig Clone)    │
 │  4. Rebuild aggregations (5 L3 summary tables)                     │
 │  5. Log to webhook_logs                                             │
 │  6. Dashboard + ML Pipeline reads L3 + L4 for analytics            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+### Validation Responsibilities
+
+| System | Validation Layer |
+|---|---|
+| **Pasig Clone** | Business/data rules: barangay validation, sex/age/date checks, DSTB/MN-specific rules |
+| **TBInsight** | HMAC authentication, payload/schema validation, duplicate/idempotency checks, per-record field validation, database integrity |
 
 ---
 
@@ -71,13 +77,13 @@ This repository contains two independent systems with **separate databases**, in
 | **GIS Hotspot Mapping** | Leaflet + PostGIS choropleth with polygon boundaries, risk overlays, barangay tooltips, dark mode tiles, spatial queries |
 | **Analytics** | Demographics (age/sex), treatment outcomes, facility analysis, bacteriological status breakdowns |
 | **Forecasting** | ARIMA time series forecasting with 12-month horizon, actual vs predicted charts, backtest results |
-| **Risk Classification** | Random Forest with 8 engineered features, tertile/Jenks thresholds, probability outputs |
+| **Risk Classification** | Random Forest ML predictor (8 features) + weighted risk scoring (0–100) with Low/Medium/High classification |
 | **Reports** | Summary reports with PDF generation (jsPDF), CSV/Excel export, print-optimized styles |
 | **Alerts & Notifications** | Rule-based alert engine (escalation, surge, hotspot, forecast), unified alerts+notifications, mark read/resolve |
 | **Data Integration** | CSV/Excel upload with flexible 18-column parser, batch tracking, validation errors, auto-aggregation |
 | **Intervention Planning** | CRUD for interventions, status tracking, counts by barangay |
-| **User Management** | Admin-only registration, role-based access (admin/staff), profile management |
-| **Authentication** | JWT in httpOnly cookies + localStorage, bcrypt hashing, login rate limiting |
+| **User Management** | Admin-only registration, role-based access (admin/staff), profile management (independent auth domain — separate from Pasig Clone) |
+| **Authentication** | JWT stored in httpOnly cookie + localStorage (Bearer header fallback), bcrypt hashing, login rate limiting |
 | **Dark Mode** | Light/dark theme toggle with localStorage persistence, CSS variable overrides |
 | **Print Support** | A4 print styles, hidden controls during print, GIS map print layout |
 | **ML Pipeline** | End-to-end: CSV import → aggregation → ARIMA forecast → RF classification → risk scoring → alerts |
@@ -90,8 +96,8 @@ This repository contains two independent systems with **separate databases**, in
 | **Multi-Sheet Excel Import** | Parse DOH TB-DOTS exports with DSTB and MN sheets, auto-detect sheet type |
 | **Batch Tracking** | Import batches with status tracking (uploaded → validated → sent) |
 | **Data Validation** | Validate against 30 Pasig barangays, sex/age/date checks, DSTB/MN-specific rules |
-| **JWT Authentication** | Login/register with role-based access (admin/staff), httpOnly cookies |
-| **Webhook Integration** | Send validated batches to TBInsight with HMAC-SHA256 signed payloads |
+| **JWT Authentication** | Login/register with role-based access (admin/staff), httpOnly cookie + localStorage (independent auth domain — separate from TBInsight) |
+| **Webhook Integration** | Send validated batches to TBInsight with HMAC-SHA256 signed payloads (X-Webhook-Signature header) |
 | **Webhook History** | Track webhook delivery status and response codes |
 
 ---
@@ -150,7 +156,7 @@ This repository contains two independent systems with **separate databases**, in
 ### Deployment
 - **Vercel** — TBInsight frontend hosting (SPA with rewrites)
 - **Render** — Backend + ML service + Pasig Clone hosting (free tier)
-- **GitHub Actions** — CI/CD (frontend build on push/PR)
+- **GitHub Actions** — CI (frontend build on push/PR)
 
 ---
 
@@ -165,7 +171,7 @@ This repository contains two independent systems with **separate databases**, in
 └──────────────────────────┬──────────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────────┐
-│  L1 — Raw Import                                               │
+│  L1 — Raw Import (Direct CSV/Excel only)                         │
 │  tb_cases_raw (verbatim CSV rows for traceability)             │
 └──────────────────────────┬──────────────────────────────────────┘
                            │  parseCaseFile → importCases
@@ -191,20 +197,29 @@ This repository contains two independent systems with **separate databases**, in
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+> **Note:** Webhook records from Pasig Clone enter directly into L2 (`tb_cases`), bypassing L1, because they have already been validated by Pasig Clone. L1 is used only for direct CSV/Excel imports through TBInsight.
+
 ### Data Flow
 
 ```
-CSV Import (TBInsight direct or Pasig Clone webhook)
-  → parseCaseFile (validate, normalize, 18+ columns, source_type tagging)
-  → importCases / webhook insert (tb_cases_raw + tb_cases)
+Direct CSV Import (TBInsight):
+  CSV/Excel → parseCaseFile (validate, normalize)
+  → importCases (tb_cases_raw + tb_cases)
   → rebuildAggregations (5 L3 summary tables)
-  → Pipeline:
-      → Query L3 + L0 → Build time series
-      → ARIMA forecast (12-month horizon)
-      → Compute 8 RF features
-      → RF classification (High/Medium/Low)
-      → Risk scoring (weighted index)
-      → Store L4 + Generate alerts
+
+Webhook Import (Pasig Clone → TBInsight):
+  Excel → Pasig Clone (parse, validate, store in validated_tb_cases)
+  → HMAC-signed webhook → TBInsight
+  → validate + insert directly into tb_cases (bypasses tb_cases_raw)
+  → rebuildAggregations (5 L3 summary tables)
+
+Pipeline (both paths):
+  → Query L3 + L0 → Build time series
+  → ARIMA forecast (12-month horizon)
+  → Compute 8 RF features
+  → RF classification (High/Medium/Low)
+  → Risk scoring (weighted index)
+  → Store L4 + Generate alerts
   → Dashboard reads L3 + L4 → React renders
 ```
 
@@ -249,7 +264,7 @@ DB_PORT=5432
 # DATABASE_URL=postgresql://user:pass@host:5432/dbname
 
 # Server
-PORT=5000
+PORT=3000
 NODE_ENV=development
 
 # Authentication
@@ -273,7 +288,7 @@ WEBHOOK_SECRET=shared_secret_with_pasig_clone
 Create `FRONTEND/.env`:
 
 ```env
-VITE_API_URL=http://localhost:5000
+VITE_API_URL=http://localhost:3000
 ```
 
 #### Running TBInsight
@@ -316,7 +331,7 @@ JWT_SECRET=your_jwt_secret_here
 JWT_EXPIRES_IN=7d
 
 # Webhook (TBInsight integration)
-TBINSIGHT_WEBHOOK_URL=http://localhost:5000/api/webhook/pasig-clone
+TBINSIGHT_WEBHOOK_URL=http://localhost:3000/api/webhook/pasig-clone
 WEBHOOK_SECRET=shared_secret_with_tbinsight
 
 # CORS
@@ -345,13 +360,13 @@ npm run dev
 
 The database is auto-initialized on backend startup. Tables are created idempotently via `CREATE TABLE IF NOT EXISTS`.
 
-- **TBInsight** creates 14 tables in the `public` schema
-- **Pasig Clone** creates 5 tables in the `pasig_clone` schema
+- **TBInsight** creates 16 tables in the `public` schema
+- **Pasig Clone** creates 5 tables in the `public` schema
 - **Webhook logs** table is created in `public` schema by migration 007
 
 To manually seed reference data (30 Pasig barangays):
 ```bash
-curl -X POST http://localhost:5000/api/tb/barangays/seed
+curl -X POST http://localhost:3000/api/tb/barangays/seed
 ```
 
 ---
@@ -379,7 +394,7 @@ curl -X POST http://localhost:5000/api/tb/barangays/seed
 | **L4** | `barangay_risk_scores` | Weighted risk scores (0-100) |
 | **L4** | `alerts` | Generated alerts + notifications |
 | **L4** | `model_metadata` | Pipeline run tracking |
-| **WH** | `webhook_logs` | Incoming webhook tracking from Pasig Clone |
+| **WH** | `webhook_logs` | Incoming webhook receipt history from Pasig Clone |
 
 #### Pasig Clone Database — `pasig_clone_db` (5 tables, `public` schema)
 
@@ -389,7 +404,7 @@ curl -X POST http://localhost:5000/api/tb/barangays/seed
 | `import_batches` | Import batch tracking with status and counts |
 | `raw_tb_cases` | Raw parsed records from Excel (JSONB storage) |
 | `validated_tb_cases` | Validated records ready for webhook delivery |
-| `webhook_logs` | Webhook delivery history |
+| `webhook_logs` | Outgoing webhook delivery history to TBInsight |
 
 ### STIS Integration Fields (Migration 006)
 
@@ -511,7 +526,7 @@ curl -X POST http://localhost:5000/api/tb/barangays/seed
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| POST | `/pasig-clone` | HMAC | Receive webhook from Pasig Clone |
+| POST | `/pasig-clone` | HMAC-SHA256 | Receive webhook from Pasig Clone (X-Webhook-Signature header) |
 
 ### Pasig Clone — Authentication (`/api/auth/*`) — 4 Endpoints
 
@@ -587,7 +602,7 @@ curl -X POST http://localhost:5000/api/tb/barangays/seed
 
 ### ARIMA Forecasting
 
-- **Seasonal period**: 12 (monthly, annual seasonality)
+- **Seasonal period**: 12 months (yearly seasonality in monthly data)
 - **Minimum history**: 24 months
 - **Fallback chain**: ARIMA → Exponential Smoothing → Seasonal Naive
 - **Configuration**: `auto_arima(seasonal=True, stepwise=True, max_order=8)`
@@ -595,22 +610,26 @@ curl -X POST http://localhost:5000/api/tb/barangays/seed
 
 ### Random Forest Classification
 
+The RF model is an ML-based risk predictor. It outputs a predicted class (Low/Medium/High) and class probabilities. The RF prediction is stored in `model_predictions` but does **not** determine the final operational classification.
+
 **8 Engineered Features:**
 
 | # | Feature | Description |
 |---|---|---|
-| 1 | `forecasted_incidence` | Annualized incidence per 100k |
-| 2 | `recent_trend` | Linear regression slope (12-month window) |
+| 1 | `forecasted_incidence` | `(monthlyForecast × 12 / population) × 100,000` — annualized incidence estimate derived from the ARIMA monthly forecast |
+| 2 | `recent_trend` | Linear regression slope over 12-month window |
 | 3 | `seasonality_flag` | 1 if autocorrelation at lag 12 > 0.3 |
 | 4 | `lag_1m` | Case count 1 month ago |
 | 5 | `lag_2m` | Case count 2 months ago |
 | 6 | `lag_3m` | Case count 3 months ago |
-| 7 | `neighbor_risk` | Average incidence of other barangays, normalized [0,1] |
-| 8 | `historical_bias` | AVG(\|actual - forecasted\|) from past predictions |
+| 7 | `neighbor_risk` | Average incidence of **all other** barangays (not just geographic neighbors), normalized [0,1] |
+| 8 | `historical_forecast_error` | Mean Absolute Error: AVG(\|actual - forecasted\|) from past predictions per barangay |
 
 **Configuration**: `n_estimators=300, max_depth=8, class_weight="balanced"`
 
-### Risk Scoring Formula
+### Weighted Risk Scoring
+
+A separate deterministic formula produces the **operational risk classification** used in dashboards and alerts:
 
 ```
 risk_score = 0.45 × normalized_incidence
@@ -622,6 +641,8 @@ Score × 100 → [0, 100]
 Classification: Low (≤33), Medium (≤66), High (>66)
 ```
 
+The final Low/Medium/High classification in `barangay_risk_scores` comes from weighted score cutoffs (≤33 Low, ≤66 Medium, >66 High), not from the RF classifier. The RF model serves as a supporting ML predictor for comparison and analysis.
+
 ### Alert Rules
 
 | Alert Type | Condition | Source |
@@ -629,14 +650,14 @@ Classification: Low (≤33), Medium (≤66), High (>66)
 | `case_increase` | ≥20% month-over-month increase | analytics |
 | `high_risk_escalation` | Medium → High risk transition | analytics |
 | `high_risk_hotspot` | High risk classification | gis |
-| `forecast_exceeds_threshold` | Forecasted incidence > 4,200/100k | forecasting |
+| `forecast_exceeds_threshold` | Forecasted annualized incidence > 4,200 per 100,000 population (system-defined research threshold) | forecasting |
 | `low_treatment_success` | Success rate < 85% | analytics |
 
 ---
 
 ## Testing
 
-### TBInsight Backend Tests (~120 tests)
+### TBInsight Backend Tests (~152 tests)
 
 ```bash
 cd BACKEND
@@ -647,10 +668,10 @@ npm test
 |---|---|---|
 | `test/auth.test.js` | 36 | Login, register, logout, profile, user management |
 | `test/middleware.test.js` | 11 | JWT validation, token formats, security |
-| `test/tbinsight/parseCaseFile.test.js` | 21 | Header matching, column mapping, validation |
+| `test/tbinsight/parseCaseFile.test.js` | 23 | Header matching, column mapping, validation, City/Municipality |
 | `test/tbinsight/pipeline.test.js` | 19 | Risk scoring, alert generation, features |
 | `test/tbinsight/routes.test.js` | ~33 | All major API endpoints |
-| `test/webhook.test.js` | 6 | Webhook endpoint, HMAC verification, payload validation |
+| `test/webhook.test.js` | 18 | Webhook endpoint, HMAC, idempotency, ITIS Lite, date parsing, error handling |
 
 ### Pasig Clone Backend Tests (34 tests)
 
@@ -691,19 +712,19 @@ npm run lint
 ### Architecture
 
 ```
-TBInsight Frontend (Vercel)     TBInsight Backend (Render)      ML Service (Render)
-p2-official.vercel.app       →  p2-official.onrender.com      →  localhost:8001
-     │                              │                              │
-     │   React 19 SPA               │   Express 5 API              │   FastAPI
-     │   Vite 8 Build               │   PostgreSQL                  │   ARIMA + RF
-     │   Tailwind v4                │   JWT Auth                    │   scikit-learn
+TBInsight Frontend (Vercel)        TBInsight Backend (Render)         ML Service (Render)
+p2-official.vercel.app          →  tb-system-backend.onrender.com  →  tb-system-ml.onrender.com
+     │                                 │                                 │
+     │   React 19 SPA                  │   Express 5 API                 │   FastAPI
+     │   Vite 8 Build                  │   PostgreSQL                     │   ARIMA + RF
+     │   Tailwind v4                   │   JWT Auth                       │   scikit-learn
 
-Pasig Clone Frontend (Render)  Pasig Clone Backend (Render)
-pasig-clone-frontend.onrender  →  pasig-clone-backend.onrender
-     │                              │
-     │   React 18 SPA               │   Express 4 API
-     │   Vite 5 Build               │   PostgreSQL (pasig_clone_db)
-     │   Tailwind v4                │   JWT + HMAC Auth
+Pasig Clone Frontend (Render)     Pasig Clone Backend (Render)
+pasig-clone-frontend.onrender.com →  pasig-clone-backend.onrender.com
+     │                                 │
+     │   React 18 SPA                  │   Express 4 API
+     │   Vite 5 Build                  │   PostgreSQL (pasig_clone_db)
+     │   Tailwind v4                   │   JWT + HMAC Auth
 ```
 
 ### Vercel (TBInsight Frontend)
@@ -733,21 +754,23 @@ pasig-clone-frontend.onrender  →  pasig-clone-backend.onrender
 - **Service**: `pasig-clone-backend` (Node.js, free tier)
 - **Build**: `cd PASIG_CLONE/backend && npm install`
 - **Start**: `cd PASIG_CLONE/backend && node server.js`
-- **Env vars**: `DATABASE_URL` (points to `pasig_clone_db` — separate database), `JWT_SECRET`, `WEBHOOK_SECRET` (must match TBInsight's value — set manually, not generated), `TBINSIGHT_WEBHOOK_URL`
+- **PORT**: Respects Render's `$PORT` env var (falls back to 5001 in development)
+- **Env vars**: `DATABASE_URL` (points to `pasig_clone_db` — separate database), `JWT_SECRET`, `WEBHOOK_SECRET` (must match TBInsight's value — set manually, not generated), `TBINSIGHT_WEBHOOK_URL=https://tb-system-backend.onrender.com/api/webhook/pasig-clone`
 
 ### Render (Pasig Clone Frontend)
 
 - **Service**: `pasig-clone-frontend` (Node.js, free tier)
 - **Build**: `cd PASIG_CLONE/frontend && npm install && npm run build`
-- **Start**: `cd PASIG_CLONE/frontend && npm run preview -- --host 0.0.0.0`
-- **Env vars**: `VITE_API_URL` (points to Pasig Clone backend)
+- **Start**: `cd PASIG_CLONE/frontend && npm run preview -- --host 0.0.0.0 --port $PORT`
+- **Env vars**: `VITE_API_URL=https://pasig-clone-backend.onrender.com`
 
-### CI/CD
+### Continuous Integration (CI)
 
 - **GitHub Actions** (`.github/workflows/ci.yml`)
 - **Trigger**: Push to `main`, PR to `main`
 - **Steps**: Checkout → Node.js 22 → Install → Build frontend
 - **Runner**: `ubuntu-latest`
+- **Note**: CI pipeline covers frontend build verification only; backend and ML tests are run locally
 
 ---
 
@@ -814,7 +837,7 @@ tb-system/
 ├── PASIG_CLONE/                          # Pasig Clone System
 │   ├── backend/
 │   │   ├── server.js                     # Express app (port 5001)
-│   │   ├── init.sql                      # 5 tables in pasig_clone schema
+│   │   ├── init.sql                      # 5 tables in public schema
 │   │   ├── config/index.js               # Config (port, db, jwt, webhook)
 │   │   ├── db/
 │   │   │   └── pasigSchema.js            # Schema init + CRUD helpers

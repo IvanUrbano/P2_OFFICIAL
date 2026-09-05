@@ -12,7 +12,7 @@ async function getValidBarangays() {
   // For now, use the hardcoded list as the authoritative source.
   return new Set([
     'bagong ilog', 'bambang', 'buting', 'caniogan', 'dela paz',
-    'kalawaan', 'kapasigan', 'kapitolyo', 'malinao', 'manggahan',
+    'kalawaan', 'kapasigan', 'kapasigan extension', 'kapitolyo', 'malinao', 'manggahan',
     'maybunga', 'oranbo', 'palatiw', 'pinagbuhatan', 'pineda',
     'rosario', 'sagad', 'san antonio', 'san joaquin', 'san jose',
     'san miguel', 'san nicolas', 'santa cruz', 'santa lucia',
@@ -64,6 +64,9 @@ async function validateBatch(batchId) {
   }
 
   await db.updateBatchValidation(batchId, results.valid, results.invalid);
+
+  // Idempotency: delete existing validated records for this batch before re-inserting
+  await db.deleteValidatedCases(batchId);
 
   for (const record of results.validatedRecords) {
     if (record.is_valid) {

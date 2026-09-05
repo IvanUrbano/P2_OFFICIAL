@@ -24,7 +24,7 @@ function getAgeGroup(age) {
 async function rebuildAllAggregations(client) {
   const counts = {};
 
-  // 1. Monthly case summary
+  // 1. Monthly case summary (Pasig City only)
   await client.query('DELETE FROM monthly_case_summary');
   const monthlyResult = await client.query(`
     INSERT INTO monthly_case_summary (barangay_name, month, case_count)
