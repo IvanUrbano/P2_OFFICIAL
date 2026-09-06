@@ -17,6 +17,21 @@ const THRESHOLDS = {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
+ * Delete all non-resolved alerts of a given type for a specific period.
+ * This ensures stale alerts are cleaned up before re-evaluation.
+ */
+async function deleteStaleAlerts(poolOrClient, { alertType, period }) {
+  const result = await poolOrClient.query(
+    `DELETE FROM alerts
+     WHERE alert_type = $1
+       AND period = $2
+       AND status != 'resolved'`,
+    [alertType, period]
+  );
+  return result.rowCount;
+}
+
+/**
  * Check if an identical unresolved alert already exists.
  * Returns the existing alert id if found, null otherwise.
  */
@@ -58,13 +73,14 @@ async function insertAlert(poolOrClient, { alertType, severity, message, recomme
  * Create a notification row (type = 'notification').
  */
 async function createNotification(poolOrClient, { title, message, sourceModule, relatedRecordId, relatedEntityType, metadata }) {
+  const period = new Date().toISOString().slice(0, 7) + '-01'; // Current month as default
   const result = await poolOrClient.query(
     `INSERT INTO alerts (type, title, alert_type, severity, message,
-       source_module, related_record_id, related_entity_type, status, metadata)
-     VALUES ('notification', $1, 'system_notification', 'info', $2, $3, $4, $5, 'unread', $6)
+       source_module, related_record_id, related_entity_type, status, period, metadata)
+     VALUES ('notification', $1, 'system_notification', 'info', $2, $3, $4, $5, 'unread', $6, $7)
      RETURNING id`,
     [title, message, sourceModule || null, relatedRecordId || null,
-     relatedEntityType || null, metadata ? JSON.stringify(metadata) : null]
+     relatedEntityType || null, period, metadata ? JSON.stringify(metadata) : null]
   );
   return result.rows[0].id;
 }
@@ -84,9 +100,12 @@ async function getUnreadCount(poolOrClient) {
 /**
  * High-Risk Hotspot Detected
  * Checks barangay_risk_scores for barangays classified as High.
+ * Creates a single summary alert listing all high-risk barangays.
  */
 async function evaluateHotspotAlerts(poolOrClient, period) {
   const created = [];
+  await deleteStaleAlerts(poolOrClient, { alertType: 'high_risk_hotspot', period });
+
   const result = await poolOrClient.query(
     `SELECT barangay_name, risk_score, incidence_per_100k
      FROM barangay_risk_scores
@@ -94,29 +113,40 @@ async function evaluateHotspotAlerts(poolOrClient, period) {
     [period]
   );
 
-  for (const row of result.rows) {
-    const severity = row.risk_score >= 80 ? 'critical' : 'high';
-    const id = await insertAlert(poolOrClient, {
-      alertType: 'high_risk_hotspot',
-      severity,
-      title: 'High-Risk Hotspot Detected',
-      message: `Barangay ${row.barangay_name} has been classified as a high-risk TB hotspot. Risk score: ${row.risk_score?.toFixed(1)}. Incidence: ${row.incidence_per_100k?.toFixed(1)} per 100k.`,
-      recommendation: `Increase surveillance and resource allocation in ${row.barangay_name}. Review TB case management and contact tracing activities.`,
-      barangayName: row.barangay_name,
-      period,
-      sourceModule: 'gis',
-    });
-    if (id) created.push(id);
-  }
+  if (result.rows.length === 0) return created;
+
+  const sorted = result.rows.sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0));
+  const maxScore = Math.max(...sorted.map(r => r.risk_score || 0));
+  const severity = maxScore >= 80 ? 'critical' : 'high';
+
+  const topList = sorted.slice(0, 5).map(r =>
+    `${r.barangay_name} (score: ${r.risk_score?.toFixed(1)}, incidence: ${r.incidence_per_100k?.toFixed(1)}/100k)`
+  ).join('; ');
+  const suffix = sorted.length > 5 ? ` and ${sorted.length - 5} more` : '';
+
+  const id = await insertAlert(poolOrClient, {
+    alertType: 'high_risk_hotspot',
+    severity,
+    title: sorted.length === 1 ? 'High-Risk Hotspot Detected' : `${sorted.length} High-Risk Hotspots Detected`,
+    message: `${sorted.length} barangay${sorted.length > 1 ? 's' : ''} classified as high-risk TB hotspot${sorted.length > 1 ? 's' : ''}: ${topList}${suffix}.`,
+    recommendation: `Increase surveillance and resource allocation in affected barangays. Review TB case management and contact tracing activities.`,
+    barangayName: null,
+    period,
+    sourceModule: 'gis',
+  });
+  if (id) created.push(id);
   return created;
 }
 
 /**
  * Rapid Increase in TB Cases
  * Compares current month case count with previous month per barangay.
+ * Creates a single summary alert listing all affected barangays.
  */
 async function evaluateCaseIncreaseAlerts(poolOrClient, period) {
   const created = [];
+  await deleteStaleAlerts(poolOrClient, { alertType: 'case_increase', period });
+
   const result = await poolOrClient.query(
     `SELECT
        curr.barangay_name,
@@ -132,32 +162,48 @@ async function evaluateCaseIncreaseAlerts(poolOrClient, period) {
     [period]
   );
 
+  const affected = [];
   for (const row of result.rows) {
     const pctChange = ((row.current_count - row.previous_count) / row.previous_count) * 100;
     if (pctChange >= THRESHOLDS.CASE_INCREASE_PERCENT) {
-      const severity = pctChange >= 50 ? 'critical' : 'high';
-      const id = await insertAlert(poolOrClient, {
-        alertType: 'case_increase',
-        severity,
-        title: 'Rapid Increase in TB Cases',
-        message: `TB cases in ${row.barangay_name} increased by ${pctChange.toFixed(1)}% compared with the previous period. Current: ${row.current_count}, Previous: ${row.previous_count}.`,
-        recommendation: `Investigate the surge in ${row.barangay_name}. Consider expanding case finding and contact tracing.`,
-        barangayName: row.barangay_name,
-        period,
-        sourceModule: 'analytics',
-      });
-      if (id) created.push(id);
+      affected.push({ ...row, pctChange });
     }
   }
+
+  if (affected.length === 0) return created;
+
+  affected.sort((a, b) => b.pctChange - a.pctChange);
+  const maxPct = Math.max(...affected.map(r => r.pctChange));
+  const severity = maxPct >= 50 ? 'critical' : 'high';
+
+  const topList = affected.slice(0, 5).map(r =>
+    `${r.barangay_name} (+${r.pctChange.toFixed(1)}%, ${r.current_count} vs ${r.previous_count})`
+  ).join('; ');
+  const suffix = affected.length > 5 ? ` and ${affected.length - 5} more` : '';
+
+  const id = await insertAlert(poolOrClient, {
+    alertType: 'case_increase',
+    severity,
+    title: affected.length === 1 ? 'Rapid Increase in TB Cases' : `Rapid Increase in TB Cases — ${affected.length} Barangays`,
+    message: `${affected.length} barangay${affected.length > 1 ? 's' : ''} showed a ≥${THRESHOLDS.CASE_INCREASE_PERCENT}% increase in TB cases compared to the previous period: ${topList}${suffix}.`,
+    recommendation: `Investigate the surge across affected barangays. Consider expanding case finding and contact tracing.`,
+    barangayName: null,
+    period,
+    sourceModule: 'analytics',
+  });
+  if (id) created.push(id);
   return created;
 }
 
 /**
  * Forecast Exceeds Threshold
  * Checks model_predictions where incidence_per_100k exceeds threshold.
+ * Creates a single summary alert listing all affected barangays.
  */
 async function evaluateForecastAlerts(poolOrClient, period) {
   const created = [];
+  await deleteStaleAlerts(poolOrClient, { alertType: 'forecast_exceeds_threshold', period });
+
   const result = await poolOrClient.query(
     `SELECT barangay_name, forecasted_count, incidence_per_100k, confidence_upper
      FROM model_predictions
@@ -165,20 +211,28 @@ async function evaluateForecastAlerts(poolOrClient, period) {
     [period, THRESHOLDS.FORECAST_INCIDENCE]
   );
 
-  for (const row of result.rows) {
-    const severity = row.incidence_per_100k >= 6000 ? 'critical' : 'high';
-    const id = await insertAlert(poolOrClient, {
-      alertType: 'forecast_exceeds_threshold',
-      severity,
-      title: 'Forecast Exceeds Threshold',
-      message: `Projected TB cases for ${row.barangay_name} exceed the defined threshold. Forecasted incidence: ${row.incidence_per_100k?.toFixed(1)} per 100k (threshold: ${THRESHOLDS.FORECAST_INCIDENCE}).`,
-      recommendation: `Prepare contingency resources for ${row.barangay_name}. Review prevention and treatment capacity.`,
-      barangayName: row.barangay_name,
-      period,
-      sourceModule: 'forecasting',
-    });
-    if (id) created.push(id);
-  }
+  if (result.rows.length === 0) return created;
+
+  const sorted = result.rows.sort((a, b) => (b.incidence_per_100k || 0) - (a.incidence_per_100k || 0));
+  const maxIncidence = Math.max(...sorted.map(r => r.incidence_per_100k || 0));
+  const severity = maxIncidence >= 6000 ? 'critical' : 'high';
+
+  const topList = sorted.slice(0, 5).map(r =>
+    `${r.barangay_name} (${r.incidence_per_100k?.toFixed(1)}/100k)`
+  ).join('; ');
+  const suffix = sorted.length > 5 ? ` and ${sorted.length - 5} more` : '';
+
+  const id = await insertAlert(poolOrClient, {
+    alertType: 'forecast_exceeds_threshold',
+    severity,
+    title: sorted.length === 1 ? 'Forecast Exceeds Threshold' : `Forecast Exceeds Threshold — ${sorted.length} Barangays`,
+    message: `${sorted.length} barangay${sorted.length > 1 ? 's' : ''} projected to exceed the incidence threshold (${THRESHOLDS.FORECAST_INCIDENCE}/100k): ${topList}${suffix}.`,
+    recommendation: `Prepare contingency resources for affected barangays. Review prevention and treatment capacity.`,
+    barangayName: null,
+    period,
+    sourceModule: 'forecasting',
+  });
+  if (id) created.push(id);
   return created;
 }
 
@@ -188,6 +242,9 @@ async function evaluateForecastAlerts(poolOrClient, period) {
  */
 async function evaluateTreatmentAlerts(poolOrClient, period) {
   const created = [];
+  // Clean up stale alerts for this type/period before re-evaluating
+  await deleteStaleAlerts(poolOrClient, { alertType: 'low_treatment_success', period });
+
   const result = await poolOrClient.query(
     `SELECT
        SUM(CASE WHEN outcome_status IN ('TREATMENT COMPLETED', 'CURED') THEN case_count ELSE 0 END) AS success_count,
@@ -221,6 +278,8 @@ async function evaluateTreatmentAlerts(poolOrClient, period) {
 
 /**
  * Run all alert evaluations for a given period.
+ * First cleans up ALL non-resolved alerts of the 4 evaluation types
+ * to prevent stale per-barangay alerts from accumulating.
  */
 async function evaluateAllAlerts(poolOrClient, period) {
   const results = {
@@ -229,6 +288,15 @@ async function evaluateAllAlerts(poolOrClient, period) {
     forecast: [],
     treatment: [],
   };
+
+  // Clean up ALL non-resolved alerts of the 4 evaluation types (regardless of period)
+  // This prevents stale per-barangay alerts from accumulating across periods
+  // NOTE: high_risk_escalation is NOT included — those are managed by scoring.js (pipeline)
+  await poolOrClient.query(
+    `DELETE FROM alerts
+     WHERE alert_type IN ('high_risk_hotspot', 'case_increase', 'forecast_exceeds_threshold', 'low_treatment_success')
+       AND status != 'resolved'`
+  );
 
   try { results.hotspots = await evaluateHotspotAlerts(poolOrClient, period); } catch (e) {
     console.error('Hotspot alert evaluation error:', e.message);
@@ -253,6 +321,7 @@ async function evaluateAllAlerts(poolOrClient, period) {
 
 module.exports = {
   THRESHOLDS,
+  deleteStaleAlerts,
   deduplicateAlert,
   insertAlert,
   createNotification,

@@ -40,12 +40,12 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  PASIG CLONE SYSTEM (New)                                                   │
 │  Port: 5001 (backend), 5174 (frontend)                                     │
-│  Database: PostgreSQL (same instance, schema: pasig_clone)                 │
+│  Database: Separate PostgreSQL Database (pasig_clone_db)                   │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │  BACKEND (Express.js)                                               │   │
 │  │                                                                      │   │
-│  │  POST /api/data/csv          - Upload Excel (2 sheets)              │   │
+│  │  POST /api/data/import          - Upload Excel (2 sheets)              │   │
 │  │  POST /api/data/validate/:id - Validate batch                       │   │
 │  │  POST /api/webhook/send      - Send to P2_OFFICIAL                  │   │
 │  │                                                                      │   │
@@ -67,12 +67,14 @@
 └─────────────────────────────────────────────────────────────────────────────┘
                                      │
                                      │ POST /api/webhook/pasig-clone
+<!-- SECURITY TODO: X-Webhook-Secret header is insecure (sends raw password).
+     Future: remove it and rely on X-Webhook-Signature (HMAC) only. -->
                                      │ Header: X-Webhook-Secret: <secret>
                                      │ Header: X-Webhook-Signature: sha256=<hmac>
                                      ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  P2_OFFICIAL SYSTEM (Existing)                                              │
-│  Port: 5000 (backend), 5173 (frontend)                                     │
+│  Port: 3000 (backend), 5173 (frontend)                                     │
 │  Database: PostgreSQL (schema: public)                                     │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -186,35 +188,44 @@ C:\Users\iVAN\Desktop\P2_OFFICIAL\                    # Root (Git repo)
 
 ## 3. DATABASE DESIGN
 
-### 3.1 Same PostgreSQL, Separate Schemas
+### 3.1 Separate PostgreSQL Databases
 
 ```
-PostgreSQL Database
-│
-├── Schema: public (P2_OFFICIAL)
-│   ├── barangays
-│   ├── health_facilities
-│   ├── tb_cases_raw
-│   ├── tb_cases
-│   ├── monthly_case_summary
-│   ├── demographic_summary
-│   ├── outcome_summary
-│   ├── facility_summary
-│   ├── bacteriological_summary
-│   ├── model_predictions
-│   ├── barangay_risk_scores
-│   ├── alerts
-│   ├── model_metadata
-│   ├── interventions
-│   ├── users
-│   └── webhook_logs (NEW)
-│
-└── Schema: pasig_clone (NEW)
-    ├── users
-    ├── raw_tb_cases
-    ├── validated_tb_cases
-    ├── import_batches
-    └── webhook_logs
+┌─────────────────────────────────────────────┐
+│  TBInsight Database (neondb)                │
+│  Schema: public                             │
+│                                             │
+│  ├── barangays                              │
+│  ├── health_facilities                      │
+│  ├── tb_cases_raw                           │
+│  ├── tb_cases                               │
+│  ├── monthly_case_summary                   │
+│  ├── demographic_summary                    │
+│  ├── outcome_summary                        │
+│  ├── facility_summary                       │
+│  ├── bacteriological_summary                │
+│  ├── model_predictions                      │
+│  ├── barangay_risk_scores                   │
+│  ├── alerts                                 │
+│  ├── model_metadata                         │
+│  ├── interventions                          │
+│  ├── users                                  │
+│  └── webhook_logs (NEW)                     │
+└─────────────────────────────────────────────┘
+                    │
+                    │ REST API / Webhook
+                    │ (HMAC-SHA256 signed)
+                    ▼
+┌─────────────────────────────────────────────┐
+│  Pasig Clone Database (pasig_clone_db)      │
+│  Schema: public                             │
+│                                             │
+│  ├── users                                  │
+│  ├── import_batches                         │
+│  ├── raw_tb_cases                           │
+│  ├── validated_tb_cases                     │
+│  └── webhook_logs                           │
+└─────────────────────────────────────────────┘
 ```
 
 ### 3.2 Pasig Clone Schema (init.sql)
@@ -417,12 +428,14 @@ function parseMultiSheetExcel(fileBuffer, filename) {
     const sheet = workbook.Sheets[sheetName];
     const normalizedSheet = sheetName.toUpperCase().trim();
 
-    // Determine source_type from sheet name
+    // Determine source_type from sheet name (strict matching)
     let source_type;
-    if (normalizedSheet.includes('MN') || normalizedSheet.includes('MICROSCOPIC')) {
+    if (normalizedSheet === 'DSTB' || normalizedSheet.includes('DSTB') || normalizedSheet.includes('B-MODE')) {
+      source_type = 'DSTB';
+    } else if (normalizedSheet === 'MN' || normalizedSheet === 'M-N' || normalizedSheet.includes('MICROSCOPIC')) {
       source_type = 'MN';
     } else {
-      source_type = 'DSTB';
+      continue; // Unknown sheet — skip
     }
 
     // Parse headers
@@ -521,7 +534,7 @@ function buildColumnMap(rawHeaders, sourceType) {
       map[header] = 'validation_status';
     }
     // MN-specific
-    else if ((normalized.includes('itis') || normalized.includes('lite')) && normalized.includes('case')) {
+    else if (normalized.includes('itis') && normalized.includes('lite')) {
       map[header] = 'itis_case_id';
     }
   }
@@ -587,7 +600,7 @@ function parseDate(dateVal) {
   // "February 06, 2025" format
   const monthNames = ['january', 'february', 'march', 'april', 'may', 'june',
     'july', 'august', 'september', 'october', 'november', 'december'];
-  const writtenMatch = str.match(/^(month)\s+(\d{1,2}),?\s+(\d{4})$/i);
+  const writtenMatch = str.match(/^(\w+)\s+(\d{1,2}),?\s+(\d{4})$/i);
   if (writtenMatch) {
     const monthIndex = monthNames.indexOf(writtenMatch[1].toLowerCase());
     if (monthIndex >= 0) {
@@ -637,7 +650,7 @@ const { authorizeRoles } = require('../middleware/auth');
 router.use(fileUpload());
 
 /**
- * POST /api/data/csv
+ * POST /api/data/import
  * Upload Excel file with DSTB and MN sheets.
  */
 router.post('/csv', authorizeRoles('admin', 'staff'), async (req, res) => {
@@ -1005,8 +1018,10 @@ async function sendWebhook(batchId) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Webhook-Secret': secret,
-        'X-Webhook-Signature': `sha256=${signature}`,
+      // SECURITY TODO: X-Webhook-Secret is insecure (sends raw password).
+      // Future: remove it and rely on X-Webhook-Signature (HMAC) only.
+      'X-Webhook-Secret': secret,
+      'X-Webhook-Signature': `sha256=${signature}`,
       },
       body: JSON.stringify(payload),
     });
@@ -1020,11 +1035,13 @@ async function sendWebhook(batchId) {
       [batchId, payload, response.ok ? 'sent' : 'failed', response.status, responseBody]
     );
 
-    // Update batch status
-    await db.query(
-      `UPDATE import_batches SET status = 'sent', sent_at = NOW() WHERE id = $1`,
-      [batchId]
-    );
+    // Only mark as sent on success
+    if (response.ok) {
+      await db.query(
+        `UPDATE import_batches SET status = 'sent', sent_at = NOW() WHERE id = $1`,
+        [batchId]
+      );
+    }
 
     return {
       success: response.ok,
@@ -1144,13 +1161,8 @@ module.exports = router;
 PORT=5001
 NODE_ENV=development
 
-# Database (same PostgreSQL as P2_OFFICIAL)
-DB_USER=postgres
-DB_HOST=localhost
-DB_NAME=tb_system
-DB_PASSWORD=your_password
-DB_PORT=5432
-DB_SCHEMA=pasig_clone
+# Database (SEPARATE from TBInsight — create in Neon dashboard)
+DATABASE_URL=postgresql://user:password@localhost:5432/pasig_clone_db?sslmode=require
 
 # JWT
 JWT_SECRET=your_jwt_secret_here
@@ -1158,7 +1170,7 @@ JWT_EXPIRES_IN=7d
 
 # Webhook
 WEBHOOK_SECRET=shared_secret_with_p2_official
-P2_OFFICIAL_WEBHOOK_URL=http://localhost:5000/api/webhook/pasig-clone
+TBINSIGHT_WEBHOOK_URL=http://localhost:3000/api/webhook/pasig-clone
 
 # Frontend URL
 FRONTEND_URL=http://localhost:5174
@@ -1280,7 +1292,7 @@ export default function CsvImportPage({ onBatchCreated }) {
     formData.append('file', file);
 
     try {
-      const response = await axios.post('/api/data/csv', formData, {
+      const response = await axios.post('/api/data/import', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
@@ -1792,7 +1804,7 @@ function buildColumnMap(rawHeaders, sourceType) {
       map[header] = 'validation_status';
     }
     // MN-specific: ITIS Lite Case No.
-    else if ((normalized.includes('itis') || normalized.includes('lite')) && normalized.includes('case')) {
+    else if (normalized.includes('itis') && normalized.includes('lite')) {
       map[header] = 'itis_case_id';
     }
   }
@@ -1809,150 +1821,107 @@ function buildColumnMap(rawHeaders, sourceType) {
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-const db = require('../db');
+const pool = require('../db');
 const { validateRow } = require('./parseCaseFile');
 const { rebuildAggregations } = require('./aggregateMonthly');
+const { verifyWebhookSignature } = require('../middleware/webhookAuth');
 
-/**
- * POST /api/webhook/pasig-clone
- * Receive webhook from Pasig Clone system.
- */
-router.post('/pasig-clone', async (req, res) => {
+router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
+  const client = await pool.connect();
   try {
-    // Verify signature
-    const signature = req.headers['x-webhook-signature'];
-    const secret = req.headers['x-webhook-secret'];
+    const { source, batch_id, timestamp, sheets, schema_version } = req.body;
 
-    if (!verifySignature(req.body, signature, secret)) {
-      return res.status(401).json({ error: 'Invalid signature' });
+    if (schema_version !== '1.0') {
+      return res.status(400).json({ error: 'Unsupported payload version' });
     }
-
-    const { source, batch_id, timestamp, sheets } = req.body;
-
-    // Validate payload structure
     if (source !== 'pasig-clone' || !sheets || !Array.isArray(sheets)) {
       return res.status(400).json({ error: 'Invalid payload structure' });
     }
+    if (!batch_id || typeof batch_id !== 'string') {
+      return res.status(400).json({ error: 'batch_id is required' });
+    }
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(batch_id)) {
+      return res.status(400).json({ error: 'batch_id must be a valid UUID' });
+    }
+    if (!timestamp) {
+      return res.status(400).json({ error: 'timestamp is required' });
+    }
 
-    // Get valid barangays for validation
-    const barangaysResult = await db.query('SELECT name FROM barangays');
+    // Idempotency check
+    const existing = await pool.query(
+      "SELECT id FROM webhook_logs WHERE batch_id = $1 AND status = 'processed'", [batch_id]
+    );
+    if (existing.rows.length > 0) {
+      return res.json({ success: true, message: 'Webhook already processed (duplicate)' });
+    }
+
+    const barangaysResult = await pool.query('SELECT name FROM barangays');
     const validBarangays = new Set(barangaysResult.rows.map(r => r.name.toLowerCase()));
-
-    let totalRecords = 0;
-    let importedCount = 0;
-    let errorCount = 0;
+    let totalRecords = 0, importedCount = 0, errorCount = 0;
     const errors = [];
 
-    // Process each sheet
+    await client.query('BEGIN');
     for (const sheet of sheets) {
       const { source_type, records } = sheet;
-
+      if (!source_type || !['DSTB', 'MN'].includes(source_type)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `Invalid source_type: "${source_type}"` });
+      }
+      if (sheet.record_count !== undefined && sheet.record_count !== records.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `record_count mismatch` });
+      }
       for (const record of records) {
         totalRecords++;
-
-        // Add source_type to record
         record.source_type = source_type;
-
-        // Validate record
         const validation = validateRow(record, validBarangays);
-
         if (validation.valid) {
-          // Insert into tb_cases
-          await db.query(
-            `INSERT INTO tb_cases
-             (barangay_name, date_of_diagnosis, date_of_notification, date_of_screening,
-              age, sex, city, screening_facility, treatment_facility, source_of_patient,
+          const normalizedCity = String(record.city || '').trim().toLowerCase();
+          const locationClassification =
+            normalizedCity === 'pasig city' || normalizedCity === 'pasig'
+              ? 'Pasig City' : 'Non-Pasig';
+          await client.query(
+            `INSERT INTO tb_cases (batch_id, date_of_diagnosis, date_of_screening, date_of_notification,
+              age, sex, barangay_name, screening_facility, treatment_facility, source_of_patient,
               anatomical_site, registration_group, bacteriological_status, date_started_treatment,
-              outcome_status, date_of_outcome, record_created_at, source_type,
-              validation_status, itis_case_id, location_classification)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
-            [
-              record.barangay_name,
-              record.date_of_diagnosis,
-              record.date_of_notification,
-              record.date_of_screening,
-              record.age,
-              record.sex,
-              record.city,
-              record.screening_facility,
-              record.treatment_facility,
-              record.source_of_patient,
-              record.anatomical_site,
-              record.registration_group,
-              record.bacteriological_status,
-              record.date_started_treatment,
-              record.outcome_status,
-              record.date_of_outcome,
-              record.record_created_at,
-              source_type,
-              record.validation_status,
-              record.itis_case_id,
-              'Pasig City', // Default for Pasig Clone data
-            ]
+              outcome_status, date_of_outcome, validation_status, itis_case_id, source_type, location_classification)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+            [batch_id, record.date_of_diagnosis, record.date_of_screening, record.date_of_notification,
+             record.age, record.sex, record.barangay_name, record.screening_facility, record.treatment_facility,
+             record.source_of_patient, record.anatomical_site, record.registration_group, record.bacteriological_status,
+             record.date_started_treatment, record.outcome_status, record.date_of_outcome,
+             record.validation_status, record.itis_case_id, source_type, locationClassification]
           );
-
           importedCount++;
         } else {
           errorCount++;
-          errors.push({
-            row: record.row_number,
-            source_type,
-            errors: validation.errors,
-          });
+          errors.push({ row: record.row_number, source_type, errors: validation.errors });
         }
       }
     }
-
-    // Rebuild aggregations if any records were imported
-    if (importedCount > 0) {
-      await rebuildAggregations();
+    await client.query('COMMIT');
+    if (importedCount > 0) await rebuildAggregations();
+    try {
+      await pool.query(
+        `INSERT INTO webhook_logs (source, batch_id, payload, status, records_received, records_imported)
+         VALUES ($1, $2, $3, 'processed', $4, $5)`, [source, batch_id, req.body, totalRecords, importedCount]
+      );
+    } catch (logErr) {
+      if (logErr.code !== '23505') console.error('Failed to log webhook:', logErr.message);
     }
-
-    // Log webhook
-    await db.query(
-      `INSERT INTO webhook_logs (source, batch_id, payload, status, records_received, records_imported)
-       VALUES ($1, $2, $3, 'processed', $4, $5)`,
-      [source, batch_id, req.body, totalRecords, importedCount]
-    );
-
-    res.json({
-      success: true,
-      message: `Webhook processed: ${importedCount} records imported, ${errorCount} errors`,
-      totalRecords,
-      importedCount,
-      errorCount,
-      errors: errors.length > 0 ? errors.slice(0, 10) : undefined, // Return first 10 errors
-    });
+    res.json({ success: true, message: `Processed: ${importedCount} imported, ${errorCount} errors`,
+      totalRecords, importedCount, errorCount, errors: errors.length > 0 ? errors.slice(0, 10) : undefined });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Webhook processing error:', error);
-
-    // Log failed webhook
-    await db.query(
+    await pool.query(
       `INSERT INTO webhook_logs (source, batch_id, payload, status, error_message)
-       VALUES ($1, $2, $3, 'failed', $4)`,
-      [req.body.source, req.body.batch_id, req.body, error.message]
-    );
-
+       VALUES ($1, $2, $3, 'failed', $4)`, [req.body.source, req.body.batch_id, req.body, error.message]
+    ).catch(() => {});
     res.status(500).json({ error: 'Webhook processing failed' });
-  }
+  } finally { client.release(); }
 });
-
-/**
- * Verify HMAC signature.
- */
-function verifySignature(payload, signature, secret) {
-  if (!signature || !secret) return false;
-
-  const expectedSignature = crypto
-    .createHmac('sha256', secret)
-    .update(JSON.stringify(payload))
-    .digest('hex');
-
-  return crypto.timingSafeEqual(
-    Buffer.from(signature.replace('sha256=', '')),
-    Buffer.from(expectedSignature)
-  );
-}
 
 module.exports = router;
 ```
@@ -1965,7 +1934,8 @@ module.exports = router;
 const crypto = require('crypto');
 
 /**
- * Middleware to verify webhook signature.
+ * Middleware to verify webhook HMAC-SHA256 signature.
+ * Checks that the secret matches WEBHOOK_SECRET and the signature is valid.
  */
 function verifyWebhookSignature(req, res, next) {
   const signature = req.headers['x-webhook-signature'];
@@ -1975,12 +1945,11 @@ function verifyWebhookSignature(req, res, next) {
     return res.status(401).json({ error: 'Missing webhook credentials' });
   }
 
-  // Verify secret matches
-  if (secret !== process.env.WEBHOOK_SECRET) {
+  const serverSecret = process.env.WEBHOOK_SECRET;
+  if (!serverSecret || secret !== serverSecret) {
     return res.status(401).json({ error: 'Invalid webhook secret' });
   }
 
-  // Verify HMAC signature
   const expectedSignature = crypto
     .createHmac('sha256', secret)
     .update(JSON.stringify(req.body))
@@ -1988,7 +1957,13 @@ function verifyWebhookSignature(req, res, next) {
 
   const providedSignature = signature.replace('sha256=', '');
 
-  if (!crypto.timingSafeEqual(Buffer.from(providedSignature), Buffer.from(expectedSignature))) {
+  const providedBuffer = Buffer.from(providedSignature, 'hex');
+  const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+
+  if (
+    providedBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(providedBuffer, expectedBuffer)
+  ) {
     return res.status(401).json({ error: 'Invalid signature' });
   }
 
@@ -2019,6 +1994,10 @@ CREATE TABLE IF NOT EXISTS webhook_logs (
 
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_source ON webhook_logs(source);
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_received ON webhook_logs(received_at);
+
+-- Idempotency: prevent duplicate webhook processing
+CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_logs_source_batch
+  ON webhook_logs(source, batch_id) WHERE batch_id IS NOT NULL;
 ```
 
 ### 6.5 Updated server.js
@@ -2048,7 +2027,7 @@ app.use('/api/webhook', webhookRoutes); // NEW: Webhook endpoint
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  STEP 1: Upload Excel to Pasig Clone                           │
-│  POST /api/data/csv                                            │
+│  POST /api/data/import                                            │
 │  - Parse both DSTB + MN sheets                                 │
 │  - Store raw records in raw_tb_cases                           │
 │  - Return batch ID                                             │
@@ -2194,13 +2173,24 @@ describe('Multi-Sheet Parser', () => {
 // File: P2_OFFICIAL/BACKEND/test/webhook.test.js
 
 const request = require('supertest');
+const crypto = require('crypto');
 const app = require('../server');
+
+const TEST_SECRET = process.env.WEBHOOK_SECRET || 'test-webhook-secret';
+
+function generateSignature(payload) {
+  const signature = crypto
+    .createHmac('sha256', TEST_SECRET)
+    .update(JSON.stringify(payload))
+    .digest('hex');
+  return `sha256=${signature}`;
+}
 
 describe('Webhook Endpoint', () => {
   test('POST /api/webhook/pasig-clone should receive valid payload', async () => {
     const payload = {
       source: 'pasig-clone',
-      batch_id: 'test-batch-id',
+      batch_id: '550e8400-e29b-41d4-a716-446655440000',
       timestamp: new Date().toISOString(),
       sheets: [
         {
@@ -2221,6 +2211,8 @@ describe('Webhook Endpoint', () => {
 
     const response = await request(app)
       .post('/api/webhook/pasig-clone')
+      // SECURITY TODO: X-Webhook-Secret is insecure (sends raw password).
+      // Future: remove it and rely on X-Webhook-Signature (HMAC) only.
       .set('X-Webhook-Secret', process.env.WEBHOOK_SECRET)
       .set('X-Webhook-Signature', generateSignature(payload))
       .send(payload);
@@ -2241,40 +2233,62 @@ describe('Webhook Endpoint', () => {
 # File: render.yaml
 
 services:
-  # Pasig Clone Backend
+  # TBInsight Backend
   - type: web
-    name: pasig-clone-backend
-    runtime: node
+    name: tb-system-backend
+    env: node
     plan: free
-    buildCommand: cd PASIG_CLONE/backend && npm install
-    startCommand: cd PASIG_CLONE/backend && node server.js
+    rootDir: BACKEND
+    buildCommand: npm install
+    startCommand: npm start
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: tb-system-db
-          property: connectionString
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: WEBHOOK_SECRET
+        sync: false
+        # Set manually — must match Pasig Clone's WEBHOOK_SECRET
+      - key: FRONTEND_URL
+        value: https://p2-official.vercel.app
+
+  # Pasig Clone Backend
+  - type: web
+    name: pasig-clone-backend
+    env: node
+    plan: free
+    rootDir: PASIG_CLONE/backend
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+        # Set manually: postgresql://...@ep-xxx.neon.tech/pasig_clone_db?sslmode=require
+      - key: JWT_SECRET
         generateValue: true
-      - key: P2_OFFICIAL_WEBHOOK_URL
-        value: https://p2-official.onrender.com/api/webhook/pasig-clone
+      - key: WEBHOOK_SECRET
+        sync: false
+        # Set manually — must match TBInsight's WEBHOOK_SECRET
+      - key: TBINSIGHT_WEBHOOK_URL
+        value: https://tb-system-backend.onrender.com/api/webhook/pasig-clone
+      - key: FRONTEND_URL
+        value: https://pasig-clone-frontend.onrender.app
 
   # Pasig Clone Frontend
   - type: web
     name: pasig-clone-frontend
-    runtime: node
+    env: node
     plan: free
-    buildCommand: cd PASIG_CLONE/frontend && npm install && npm run build
-    startCommand: cd PASIG_CLONE/frontend && npm run preview
+    rootDir: PASIG_CLONE/frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm run preview -- --host 0.0.0.0
     envVars:
       - key: VITE_API_URL
-        value: https://pasig-clone-backend.onrender.com
+        value: https://pasig-clone-backend.onrender.app
 
-databases:
-  - name: tb-system-db
-    plan: free
-    databaseName: tb_system
+databases: []
+  # TBInsight: DATABASE_URL set manually in Render Dashboard
+  # Pasig Clone: DATABASE_URL points to separate Neon database (pasig_clone_db)
 ```
 
 ### 9.2 Environment Variables
@@ -2282,11 +2296,11 @@ databases:
 **Pasig Clone (.env)**
 ```
 PORT=5001
-DATABASE_URL=<from_render>
+DATABASE_URL=<pasig_clone_db connection string — SEPARATE from TBInsight>
 JWT_SECRET=<generated>
-WEBHOOK_SECRET=<generated>
-P2_OFFICIAL_WEBHOOK_URL=https://p2-official.onrender.com/api/webhook/pasig-clone
-FRONTEND_URL=https://pasig-clone-frontend.onrender.com
+WEBHOOK_SECRET=<shared with TBInsight>
+TBINSIGHT_WEBHOOK_URL=https://tb-system-backend.onrender.com/api/webhook/pasig-clone
+FRONTEND_URL=https://pasig-clone-frontend.onrender.app
 ```
 
 **P2_OFFICIAL (.env)**
@@ -2299,39 +2313,63 @@ WEBHOOK_SECRET=<same_as_pasig_clone>
 ## 10. IMPLEMENTATION CHECKLIST
 
 ### Week 1: Project Setup
-- [ ] Create monorepo structure
-- [ ] Initialize Pasig Clone backend (Express)
-- [ ] Initialize Pasig Clone frontend (React + Vite)
-- [ ] Set up PostgreSQL database with schemas
-- [ ] Configure environment variables
+- [x] Create monorepo structure
+- [x] Initialize Pasig Clone backend (Express)
+- [x] Initialize Pasig Clone frontend (React + Vite)
+- [x] Set up PostgreSQL database with schemas
+- [x] Configure environment variables
 
 ### Week 2: Pasig Clone Backend
-- [ ] Implement multi-sheet parser (multiSheetParser.js)
-- [ ] Implement CSV import route (csvImport.js)
-- [ ] Implement validator service (validator.js)
-- [ ] Implement webhook sender (webhookSender.js)
-- [ ] Implement webhook route (webhook.js)
-- [ ] Implement authentication (auth.js, middleware)
+- [x] Implement multi-sheet parser (multiSheetParser.js)
+- [x] Implement CSV import route (csvImport.js)
+- [x] Implement validator service (validator.js)
+- [x] Implement webhook sender (webhookSender.js)
+- [x] Implement webhook route (webhook.js)
+- [x] Implement authentication (auth.js, middleware)
 
 ### Week 3: Pasig Clone Frontend
-- [ ] Create login page
-- [ ] Create CSV import page
-- [ ] Create validation page
-- [ ] Create webhook status page
-- [ ] Set up routing and auth
+- [x] Create login page
+- [x] Create CSV import page
+- [x] Create validation page
+- [x] Create webhook status page
+- [x] Set up routing and auth
 
 ### Week 4: P2_OFFICIAL Updates
-- [ ] Update parseCaseFile.js for multi-sheet support
-- [ ] Create webhook endpoint (webhook.js)
-- [ ] Create webhook auth middleware
-- [ ] Create database migration (007_webhook_logs.sql)
-- [ ] Update server.js to mount webhook route
+- [x] Update parseCaseFile.js for multi-sheet support
+- [x] Create webhook endpoint (webhook.js)
+- [x] Create webhook auth middleware (middleware/webhookAuth.js)
+- [x] Create database migration (007_webhook_logs.sql)
+- [x] Update server.js to mount webhook route
 
 ### Week 5: Testing & Integration
-- [ ] Unit tests for parser and validator
-- [ ] Integration tests for webhook flow
-- [ ] End-to-end testing
-- [ ] Fix bugs and issues
+- [x] Unit tests for parser and validator (34 tests — PASIG_CLONE/backend/test/multiSheetParser.test.js)
+- [x] Integration tests for webhook flow (7 tests — BACKEND/test/webhook.test.js)
+- [x] Auth & middleware tests (50 tests — BACKEND/test/auth.test.js + middleware.test.js)
+- [x] TBInsight pipeline & route tests (115 tests — BACKEND/test/tbinsight/*.test.js + routes.test.js)
+- [x] Total: 207 tests across 7 test files
+- [x] End-to-end testing
+- [x] Fix bugs and issues
+
+### Week 5b: Pre-Deployment Fixes
+- [x] Fix validation response mismatch (item 9) — backend/frontend structures match
+- [x] Fix P2 parser unknown-sheet handling (item 10) — skip unknown sheets (return null)
+- [x] Preserve original DSTB validation_status (item 11) — source_validation_status + record_validation_status
+- [x] Add schema_version to webhook payload (item 12) — sender includes "1.0", receiver validates
+- [x] Webhook idempotency (item 13) — app-level check + unique index + 23505 catch
+- [x] Validation idempotency (item 14) — DELETE before re-insert
+- [x] Webhook error handling after commit (item 15) — rebuildAggregations in try/catch
+- [x] Webhook timeout and retry (item 16) — 30s timeout, 2 retries for 5xx/network
+- [x] Validate env vars at startup (item 17) — DATABASE_URL, JWT_SECRET, WEBHOOK_SECRET checked
+- [x] Import naming (item 18) — /api/data/import consistent
+- [x] Excel-only file extension check (item 19) — backend validates .xlsx/.xls only
+- [x] Comprehensive webhook tests (item 20) — 18 tests, all passing
+
+### Week 5c: Verification Fixes (Items 21–25)
+- [x] Fix GeoJSON corruption (item 21) — removed stray `g` character at end of pasig-barangays.geojson; 30 barangays verified across all 4 sources
+- [x] Fix City/Municipality header mapping (item 22) — parseCaseFile.js now uses `includes('city')` instead of `=== 'city'`; matches multiSheetParser.js behavior
+- [x] Add missing DSTB/MN sheet warning (item 23) — csvImport.js returns `warnings` array when DSTB or MN sheet is missing (soft warning, import still succeeds)
+- [x] Fix VITE_API_URL fallback (item 24) — frontend axios.js fallback changed from port 5000 to 3000; .env.production.example URL corrected to tb-system-backend.onrender.com
+- [x] Fix Render PORT for Pasig Clone frontend (item 25) — added `--port $PORT` to vite preview start command in render.yaml
 
 ### Week 6: Deployment
 - [ ] Deploy Pasig Clone to Render
@@ -2347,6 +2385,8 @@ WEBHOOK_SECRET=<same_as_pasig_clone>
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2026-09-04 | System | Initial implementation plan |
+| 2.0 | 2026-09-04 | System | Updated checklist — Weeks 1-5 complete, separate databases architecture |
+| 3.0 | 2026-09-06 | System | Week 5c verification fixes — GeoJSON, City/Municipality header, missing sheet warning, VITE_API_URL, Render PORT |
 
 ---
 

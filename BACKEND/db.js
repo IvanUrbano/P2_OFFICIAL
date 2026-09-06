@@ -5,11 +5,15 @@ require('dotenv').config();
 
 // Use DATABASE_URL if available (Render production), otherwise fall back to discrete local settings
 const isProduction = process.env.NODE_ENV === 'production' || process.env.DATABASE_URL;
+const isNeon = process.env.DATABASE_URL && process.env.DATABASE_URL.includes('neon.tech');
 
 const poolConfig = process.env.DATABASE_URL
   ? {
     connectionString: process.env.DATABASE_URL,
-    ssl: isProduction ? { rejectUnauthorized: false } : false,
+    ssl: isNeon ? { rejectUnauthorized: false } : false,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
   }
   : {
     user: process.env.DB_USER,
@@ -17,6 +21,9 @@ const poolConfig = process.env.DATABASE_URL
     database: process.env.DB_NAME,
     password: process.env.DB_PASSWORD,
     port: process.env.DB_PORT,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
   };
 const pool = new Pool(poolConfig);
 
@@ -61,36 +68,6 @@ const initDb = async () => {
       console.log('⚠️ TBInsight migration not found, skipping.');
     }
 
-    // PostGIS: enable extension + create barangays_geom table (idempotent)
-    const postgisMigPath = path.join(__dirname, 'db', 'migrations', '003_postgis.sql');
-    if (fs.existsSync(postgisMigPath)) {
-      const postgisSql = fs.readFileSync(postgisMigPath, 'utf8');
-      await execSql(postgisSql);
-      console.log('✅ PostGIS migration completed successfully.');
-    } else {
-      console.log('⚠️ PostGIS migration not found, skipping.');
-    }
-
-    // Notifications: extend alerts table for unified alerts + notifications (idempotent)
-    const notifMigPath = path.join(__dirname, 'db', 'migrations', '004_notifications.sql');
-    if (fs.existsSync(notifMigPath)) {
-      const notifSql = fs.readFileSync(notifMigPath, 'utf8');
-      await execSql(notifSql);
-      console.log('✅ Notifications migration completed successfully.');
-    } else {
-      console.log('⚠️ Notifications migration not found, skipping.');
-    }
-
-    // Interventions: create interventions table for action planning (idempotent)
-    const intervMigPath = path.join(__dirname, 'db', 'migrations', '005_interventions.sql');
-    if (fs.existsSync(intervMigPath)) {
-      const intervSql = fs.readFileSync(intervMigPath, 'utf8');
-      await execSql(intervSql);
-      console.log('✅ Interventions migration completed successfully.');
-    } else {
-      console.log('⚠️ Interventions migration not found, skipping.');
-    }
-
     // STIS fields: add validation_status, itis_case_id, location_classification (idempotent)
     const stisMigPath = path.join(__dirname, 'db', 'migrations', '006_add_stis_fields.sql');
     if (fs.existsSync(stisMigPath)) {
@@ -99,6 +76,16 @@ const initDb = async () => {
       console.log('✅ STIS fields migration completed successfully.');
     } else {
       console.log('⚠️ STIS fields migration not found, skipping.');
+    }
+
+    // Webhook logs: track incoming webhooks from Pasig Clone (idempotent)
+    const webhookMigPath = path.join(__dirname, 'db', 'migrations', '007_webhook_logs.sql');
+    if (fs.existsSync(webhookMigPath)) {
+      const webhookSql = fs.readFileSync(webhookMigPath, 'utf8');
+      await execSql(webhookSql);
+      console.log('✅ Webhook logs migration completed successfully.');
+    } else {
+      console.log('⚠️ Webhook logs migration not found, skipping.');
     }
   } catch (err) {
     console.error('❌ Database initialization error:', err.message);

@@ -2,20 +2,10 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { loginLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
-
-// Middleware to authorize user roles
-const authorizeRoles = (...roles) => {
-  return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Access denied. Unauthorized role.' });
-    }
-    next();
-  };
-};
 
 // ==================== REGISTER (Admin Only) ====================
 router.post('/register', authenticateToken, authorizeRoles('admin'), async (req, res) => {
@@ -73,8 +63,8 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
-    // Find user by email
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    // Accept username OR email
+    const result = await pool.query('SELECT * FROM users WHERE username = $1 OR email = $1', [email]);
 
     if (result.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid email or password.' });

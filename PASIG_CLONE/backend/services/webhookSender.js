@@ -12,98 +12,123 @@ function signPayload(payload, secret) {
   return `sha256=${signature}`;
 }
 
-function chunkArray(arr, size) {
-  const chunks = [];
-  for (let i = 0; i < arr.length; i += size) {
-    chunks.push(arr.slice(i, i + size));
-  }
-  return chunks;
-}
-
-async function sendWebhook(payload, secret) {
-  const signature = signPayload(payload, secret);
-
-  const res = await fetch(config.webhook.url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Pasig-Signature': signature,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const text = await res.text();
-  return { status: res.status, body: text };
-}
-
-async function sendPendingCases() {
-  const result = await db.getPendingCases();
-  const cases = result.rows;
-
-  if (cases.length === 0) {
-    return { sent: 0, message: 'No pending cases' };
-  }
-
-  const chunks = chunkArray(cases, 500);
-  let totalSent = 0;
-  const results = [];
-
-  for (const chunk of chunks) {
-    const payload = {
-      source: 'pasig_clone',
-      timestamp: new Date().toISOString(),
-      total_cases: chunk.length,
-      cases: chunk.map(c => ({
-        id: c.id,
-        dataset: c.dataset,
-        patient_no: c.patient_no,
-        date_reported: c.date_reported,
-        facility_name: c.facility_name,
-        barangay: c.barangay,
-        case_classification: c.case_classification,
-        treatment_regimen: c.treatment_regimen,
-        patient_type: c.patient_type,
-        date_treatment_started: c.date_treatment_started,
-        outcome: c.outcome,
-        outcome_date: c.outcome_date,
-        sex: c.sex,
-        age: c.age,
-        registration_date: c.registration_date,
-        itis_case_id: c.itis_case_id,
-        first_name: c.first_name,
-        middle_name: c.middle_name,
-        last_name: c.last_name,
-        age_group: c.age_group,
-        indigenous_group: c.indigenous_group,
-        contact_name: c.contact_name,
-        contact_relationship: c.contact_relationship,
-        validation_status: c.validation_status,
-      })),
-    };
-
-    try {
-      const result = await sendWebhook(payload, config.webhook.secret);
-      results.push(result);
-
-      if (result.status >= 200 && result.status < 300) {
-        const caseIds = chunk.map(c => c.id);
-        await db.markWebhookSent(caseIds);
-        totalSent += chunk.length;
-      }
-
-      await db.logWebhook(payload, result.status, result.body);
-    } catch (err) {
-      results.push({ status: 0, body: err.message });
-      await db.logWebhook(payload, 0, err.message);
-    }
-  }
-
+function formatRecord(record) {
   return {
-    sent: totalSent,
-    total: cases.length,
-    chunks: chunks.length,
-    results,
+    barangay_name: record.barangay_name,
+    date_of_diagnosis: record.date_of_diagnosis,
+    date_of_notification: record.date_of_notification,
+    date_of_screening: record.date_of_screening,
+    age: record.age,
+    sex: record.sex,
+    city: record.city,
+    screening_facility: record.screening_facility,
+    treatment_facility: record.treatment_facility,
+    source_of_patient: record.source_of_patient,
+    anatomical_site: record.anatomical_site,
+    registration_group: record.registration_group,
+    bacteriological_status: record.bacteriological_status,
+    date_started_treatment: record.date_started_treatment,
+    outcome_status: record.outcome_status,
+    date_of_outcome: record.date_of_outcome,
+    record_created_at: record.record_created_at,
+    source_type: record.source_type,
+    validation_status: record.validation_status,
+    itis_case_id: record.itis_case_id,
   };
 }
 
-module.exports = { sendPendingCases, sendWebhook, signPayload };
+async function sendWebhook(batchId) {
+  const batchResult = await db.getBatch(batchId);
+  if (batchResult.rows.length === 0) {
+    throw new Error('Batch not found');
+  }
+
+  const batch = batchResult.rows[0];
+  if (batch.status !== 'validated') {
+    throw new Error('Batch must be validated before sending');
+  }
+
+  const recordsResult = await db.getValidatedCases(batchId);
+
+  const dstbRecords = recordsResult.rows.filter(r => r.source_type === 'DSTB');
+  const mnRecords = recordsResult.rows.filter(r => r.source_type === 'MN');
+
+  const payload = {
+    schema_version: '1.0',
+    source: 'pasig-clone',
+    batch_id: batchId,
+    timestamp: new Date().toISOString(),
+    sheets: [
+      {
+        sheet_name: 'DSTB',
+        source_type: 'DSTB',
+        record_count: dstbRecords.length,
+        records: dstbRecords.map(formatRecord),
+      },
+      {
+        sheet_name: 'MN',
+        source_type: 'MN',
+        record_count: mnRecords.length,
+        records: mnRecords.map(formatRecord),
+      },
+    ],
+  };
+
+  const secret = config.webhook.secret;
+  const signature = signPayload(payload, secret);
+  const webhookUrl = config.webhook.url;
+
+  const MAX_RETRIES = 2;
+  const TIMEOUT_MS = 30000;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Webhook-Signature': signature,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+      const responseBody = await response.text();
+
+      await db.logWebhook(batchId, payload, response.ok ? 'sent' : 'failed', response.status, responseBody);
+
+      if (response.ok) {
+        await db.updateBatchSent(batchId);
+        return { success: true, status: response.status, message: 'Webhook sent successfully' };
+      }
+
+      // 4xx errors — don't retry (permanent failure)
+      if (response.status >= 400 && response.status < 500) {
+        return { success: false, status: response.status, message: 'Webhook failed (client error)' };
+      }
+
+      // 5xx errors — retry if attempts remain
+      if (attempt < MAX_RETRIES) {
+        console.log(`Webhook retry ${attempt}/${MAX_RETRIES} after ${response.status}`);
+        continue;
+      }
+
+      return { success: false, status: response.status, message: 'Webhook failed after retries' };
+    } catch (error) {
+      // Network/timeout errors — retry if attempts remain
+      if (attempt < MAX_RETRIES) {
+        console.log(`Webhook retry ${attempt}/${MAX_RETRIES} after error: ${error.message}`);
+        continue;
+      }
+
+      await db.logWebhookError(batchId, payload, error.message);
+      return { success: false, status: 0, message: `Webhook failed: ${error.message}` };
+    }
+  }
+}
+
+module.exports = { sendWebhook, signPayload, formatRecord };

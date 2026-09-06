@@ -1,17 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
+import timeAgo from '../utils/timeAgo';
+import { MODULE_LABELS, MODULE_ROUTES } from '../utils/alertConstants';
+import FilterSelect from '../../components/FilterSelect';
+import SkeletonBlock from '../../components/SkeletonBlock';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
-
-const BARANGAYS = [
-  'Bagong Ilog', 'Bagong Katipunan', 'Bambang', 'Buting', 'Caniogan',
-  'Dela Paz', 'Kalawaan', 'Kapasigan', 'Kapitolyo', 'Malinao',
-  'Manggahan', 'Maybunga', 'Oranbo', 'Palatiw', 'Pinagbuhatan',
-  'Pineda', 'Rosario', 'Sagad', 'San Antonio', 'San Joaquin',
-  'San Jose', 'San Miguel', 'San Nicolas', 'Santa Cruz', 'Santa Lucia',
-  'Santa Rosa', 'Santo Tomas', 'Santolan', 'Sumilang', 'Ugong',
-];
 
 const ALERT_TYPES = [
   { key: 'all', title: 'All', desc: 'Alerts and notifications' },
@@ -33,66 +28,7 @@ const STATUS_STYLES = {
   resolved: { label: 'Resolved', color: '#047857', bg: '#ECFDF5' },
 };
 
-const MODULE_ROUTES = {
-  gis: '/gis-map',
-  analytics: '/analytics',
-  forecasting: '/forecasting',
-  reports: '/reports',
-  tb_records: '/records',
-  data_integration: '/data-integration',
-};
-
-const MODULE_LABELS = {
-  gis: 'GIS Hotspots',
-  analytics: 'Analytics',
-  forecasting: 'Forecasting',
-  reports: 'Reports',
-  tb_records: 'TB Records',
-  data_integration: 'Data Integration',
-};
-
 /* ─── Helper Components ──────────────────────────────────────────────── */
-
-function FilterSelect({ label, value, onChange, children }) {
-  return (
-    <div className="relative">
-      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>{label}:</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-        style={{
-          background: '#ffffff',
-          color: '#0F2D52',
-          border: '1px solid #E2E8F0',
-          paddingLeft: `${(label.length * 6.5) + 24}px`,
-        }}
-      >
-        {children}
-      </select>
-      <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-    </div>
-  );
-}
-
-function SkeletonBlock({ className }) {
-  return <div className={`animate-pulse rounded-lg ${className}`} style={{ background: '#E2E8F0' }} />;
-}
-
-function timeAgo(dateStr) {
-  if (!dateStr) return 'N/A';
-  const d = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now - d;
-  const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return 'Just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 7) return `${days}d ago`;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
 
 /* ─── Main Component ─────────────────────────────────────────────────── */
 
@@ -120,13 +56,15 @@ export default function Alert() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [resolveConfirm, setResolveConfirm] = useState(null);
   const [evaluating, setEvaluating] = useState(false);
+  const [resolvingId, setResolvingId] = useState(null);
+  const [barangays, setBarangays] = useState([]);
+  const abortRef = useRef(null);
 
   /* ── Admin check ── */
-  const storedUser = (() => {
+  const isAdmin = useMemo(() => {
     const s = localStorage.getItem('user');
-    return s ? JSON.parse(s) : null;
-  })();
-  const isAdmin = storedUser?.role === 'admin';
+    return s ? JSON.parse(s)?.role === 'admin' : false;
+  }, []);
 
   const handleTypeChange = useCallback((newType) => {
     setFilterType(newType);
@@ -134,6 +72,9 @@ export default function Alert() {
   }, []);
 
   const fetchAlerts = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     setError(null);
     try {
@@ -146,14 +87,14 @@ export default function Alert() {
       if (filterDate !== 'all') params.date = filterDate;
 
       const [alertRes, countsRes] = await Promise.all([
-        API.get('/api/tb/alerts', { params }),
-        API.get('/api/tb/alerts/counts'),
+        API.get('/api/tb/alerts', { params, signal: controller.signal }),
+        API.get('/api/tb/alerts/counts', { signal: controller.signal }),
       ]);
       setAlerts(alertRes.data.alerts || []);
       setPagination(alertRes.data.pagination || { total: 0, totalPages: 1 });
       setSummary(countsRes.data || { critical: 0, high: 0, unread: 0, today: 0 });
     } catch (err) {
-      console.error('Alerts fetch error:', err);
+      if (err.name === 'CanceledError' || err.name === 'AbortError') return;
       setError('Alerts and notifications could not be retrieved. Please try again.');
     } finally {
       setLoading(false);
@@ -162,22 +103,45 @@ export default function Alert() {
 
   useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    API.get('/api/tb/barangays', { signal: controller.signal }).then(res => {
+      const names = (res.data.barangays || []).map(b => b.barangay_name || b.name).filter(Boolean).sort();
+      setBarangays(names);
+    }).catch(() => {});
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!selectedAlert && !resolveConfirm) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        if (resolveConfirm) setResolveConfirm(null);
+        else setSelectedAlert(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedAlert, resolveConfirm]);
+
   // Auto-evaluate alerts if stale (>24h since last evaluation)
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     (async () => {
       try {
-        const staleRes = await API.get('/api/tb/alerts/stale-check');
-        if (!cancelled && staleRes.data.isStale && isAdmin) {
-          await API.post('/api/tb/alerts/evaluate');
-          if (!cancelled) fetchAlerts();
+        const staleRes = await API.get('/api/tb/alerts/stale-check', { signal: controller.signal });
+        if (staleRes.data.isStale && isAdmin) {
+          await API.post('/api/tb/alerts/evaluate', {}, { signal: controller.signal });
+          fetchAlerts();
         }
-      } catch (err) {
+      } catch {
         // Silently fail — manual evaluate button is still available
       }
     })();
-    return () => { cancelled = true; };
-  }, []);
+    return () => controller.abort();
+  }, [isAdmin, fetchAlerts]);
 
   const handleApply = useCallback(() => {
     setPage(1);
@@ -199,8 +163,8 @@ export default function Alert() {
       await API.put('/api/tb/alerts/read-all');
       setAlerts(prev => prev.map(a => a.status === 'unread' ? { ...a, status: 'read', read_at: new Date().toISOString() } : a));
       setSummary(prev => ({ ...prev, unread: 0 }));
-    } catch (err) {
-      console.error('Mark all read error:', err);
+    } catch {
+      // ignore
     }
   };
 
@@ -209,39 +173,50 @@ export default function Alert() {
     try {
       await API.post('/api/tb/alerts/evaluate');
       await fetchAlerts();
-    } catch (err) {
-      console.error('Evaluate error:', err);
+    } catch {
+      // ignore
     } finally {
       setEvaluating(false);
     }
   };
 
   const handleViewDetail = async (alert) => {
+    const controller = new AbortController();
     setDetailLoading(true);
     try {
-      const res = await API.get(`/api/tb/alerts/${alert.id}`);
+      const res = await API.get(`/api/tb/alerts/${alert.id}`, { signal: controller.signal });
       setSelectedAlert(res.data.alert);
-      // Auto-mark as read
       if (alert.status === 'unread') {
         await API.put(`/api/tb/alerts/${alert.id}/read`);
         setAlerts(prev => prev.map(a => a.id === alert.id ? { ...a, status: 'read', read_at: new Date().toISOString() } : a));
         setSummary(prev => ({ ...prev, unread: Math.max(0, prev.unread - 1) }));
       }
-    } catch (err) {
-      console.error('Detail fetch error:', err);
+    } catch {
+      // ignore
     } finally {
       setDetailLoading(false);
     }
   };
 
   const handleResolve = async (id) => {
+    setResolvingId(id);
     try {
+      const target = alerts.find(a => a.id === id) || selectedAlert;
       await API.put(`/api/tb/alerts/${id}/resolve`, { resolved_by: 'user' });
       setAlerts(prev => prev.map(a => a.id === id ? { ...a, status: 'resolved', resolved_at: new Date().toISOString() } : a));
       setSelectedAlert(prev => prev?.id === id ? { ...prev, status: 'resolved', resolved_at: new Date().toISOString() } : prev);
+      if (target) {
+        setSummary(prev => ({
+          ...prev,
+          critical: target.severity === 'critical' ? Math.max(0, prev.critical - 1) : prev.critical,
+          high: target.severity === 'high' ? Math.max(0, prev.high - 1) : prev.high,
+        }));
+      }
       setResolveConfirm(null);
-    } catch (err) {
-      console.error('Resolve error:', err);
+    } catch {
+      // ignore
+    } finally {
+      setResolvingId(null);
     }
   };
 
@@ -302,10 +277,14 @@ export default function Alert() {
 
         {/* Tabs */}
         <div style={{ borderBottom: '1px solid #E2E8F0' }}>
-          <div className="flex gap-0">
+          <div className="flex gap-0" role="tablist" aria-label="Alert type">
             {ALERT_TYPES.map(rt => (
               <button
                 key={rt.key}
+                role="tab"
+                aria-selected={filterType === rt.key}
+                aria-controls={`tabpanel-${rt.key}`}
+                id={`tab-${rt.key}`}
                 onClick={() => handleTypeChange(rt.key)}
                 className="relative px-6 py-3 text-left transition-colors"
                 style={{ background: 'transparent' }}
@@ -345,7 +324,7 @@ export default function Alert() {
 
             <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay}>
               <option value="">All Barangays</option>
-              {BARANGAYS.map(b => <option key={b} value={b}>{b}</option>)}
+              {barangays.map(b => <option key={b} value={b}>{b}</option>)}
             </FilterSelect>
 
             <FilterSelect label="Source" value={filterSource} onChange={setFilterSource}>
@@ -559,13 +538,14 @@ export default function Alert() {
                       </td>
                       <td className="px-4 py-3">
                         <button
+                          aria-label="View alert"
                           onClick={() => handleViewDetail(a)}
-                          className="text-xs font-semibold px-3 py-1.5"
-                          style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s' }}
-                          onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}
+                          className="inline-flex items-center justify-center h-6 w-6 text-sm"
+                          style={{ color: '#64748B', borderRadius: 4, transition: 'color 0.15s' }}
+                          onMouseEnter={e => { e.currentTarget.style.color = '#0F2D52'; }}
+                          onMouseLeave={e => { e.currentTarget.style.color = '#64748B'; }}
                         >
-                          View
+                          <i className="ri-eye-line" />
                         </button>
                       </td>
                     </tr>
@@ -631,7 +611,7 @@ export default function Alert() {
                     <p className="text-sm font-bold" style={{ color: '#ffffff' }}>{selectedAlert.title || selectedAlert.alert_type}</p>
                     <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.6)' }}>Alert Detail</p>
                   </div>
-                  <button onClick={() => setSelectedAlert(null)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.1)', color: '#CBD5E1' }}>
+                  <button onClick={() => setSelectedAlert(null)} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
                     <i className="ri-close-line text-base" />
                   </button>
                 </div>
@@ -740,21 +720,16 @@ export default function Alert() {
                   {selectedAlert.type === 'alert' && selectedAlert.status !== 'resolved' && (
                     <button
                       onClick={() => setResolveConfirm(selectedAlert)}
+                      disabled={resolvingId === selectedAlert.id}
                       className="px-3 py-1.5 text-xs font-semibold"
-                       style={{ background: '#047857', color: '#ffffff', border: '1px solid #047857', borderRadius: 4, transition: 'background 0.15s' }}
-                      onMouseEnter={e => { e.currentTarget.style.background = '#047857'; }}
+                       style={{ background: '#047857', color: '#ffffff', border: '1px solid #047857', borderRadius: 4, transition: 'background 0.15s', opacity: resolvingId === selectedAlert.id ? 0.6 : 1, cursor: resolvingId === selectedAlert.id ? 'not-allowed' : 'pointer' }}
+                      onMouseEnter={e => { if (!resolvingId) e.currentTarget.style.background = '#065F46'; }}
                        onMouseLeave={e => { e.currentTarget.style.background = '#047857'; }}
                     >
+                      {resolvingId === selectedAlert.id ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
                       Resolve Alert
                     </button>
                   )}
-                  <button
-                    onClick={() => setSelectedAlert(null)}
-                    className="ml-auto px-3 py-1.5 text-xs font-medium"
-                    style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}
-                  >
-                    Close
-                  </button>
                 </div>
               </>
             )}
@@ -793,11 +768,13 @@ export default function Alert() {
               </button>
               <button
                 onClick={() => handleResolve(resolveConfirm.id)}
+                disabled={resolvingId === resolveConfirm.id}
                 className="px-4 py-1.5 text-xs font-semibold"
-                       style={{ background: '#047857', color: '#ffffff', border: '1px solid #047857', borderRadius: 4, transition: 'background 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#047857'; }}
+                       style={{ background: '#047857', color: '#ffffff', border: '1px solid #047857', borderRadius: 4, transition: 'background 0.15s', opacity: resolvingId === resolveConfirm.id ? 0.6 : 1, cursor: resolvingId === resolveConfirm.id ? 'not-allowed' : 'pointer' }}
+                onMouseEnter={e => { if (!resolvingId) e.currentTarget.style.background = '#065F46'; }}
                  onMouseLeave={e => { e.currentTarget.style.background = '#047857'; }}
               >
+                {resolvingId === resolveConfirm.id ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
                 Yes, Resolve
               </button>
             </div>

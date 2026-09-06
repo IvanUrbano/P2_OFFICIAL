@@ -192,7 +192,7 @@ export default function Analytics() {
       setFilterOptions(filterRes.data || {});
       setForecastsData(fcRes.data.forecasts || []);
     } catch (err) {
-      console.error('Analytics fetch error:', err);
+      if (import.meta.env.DEV) console.error('Analytics fetch error:', err);
       setError('Failed to load analytics data. Make sure the backend is running.');
     } finally {
       setLoading(false);

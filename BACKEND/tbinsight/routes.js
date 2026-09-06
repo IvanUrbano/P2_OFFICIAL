@@ -1,10 +1,10 @@
 const express = require('express');
 const pool = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { parseCaseFile } = require('./parseCaseFile');
 const { importCases, getImportHistory, getBatchErrors, getBatchSummary } = require('./importCases');
 const { rebuildAggregations } = require('./aggregateMonthly');
-const { seedAll, getBarangays, getHealthFacilities, findBarangay } = require('./barangays');
+const { seedAll, seedBarangaysGeom, getBarangays, getHealthFacilities, findBarangay } = require('./barangays');
 const { runPipeline } = require('./pipeline');
 const { healthCheck: mlHealthCheck, evaluate: mlEvaluate, forecast: mlForecast } = require('./mlClient');
 const {
@@ -13,16 +13,6 @@ const {
 } = require('./alertEngine');
 
 const router = express.Router();
-
-// Middleware to authorize user roles
-const authorizeRoles = (...roles) => {
-  return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Access denied. Unauthorized role.' });
-    }
-    next();
-  };
-};
 
 // ==================== REFERENCE DATA ====================
 
@@ -95,6 +85,21 @@ router.post('/barangays/seed', authenticateToken, authorizeRoles('admin'), async
   } catch (err) {
     console.error('Seed error:', err.message);
     res.status(500).json({ error: 'Server error seeding reference data.' });
+  }
+});
+
+/**
+ * POST /api/tb/barangays/seed-geom
+ * Seed barangays_geom with PostGIS polygons from GeoJSON (admin only)
+ * Required for GIS map rendering
+ */
+router.post('/barangays/seed-geom', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const result = await seedBarangaysGeom();
+    res.json({ message: 'Barangay geometries seeded successfully.', result });
+  } catch (err) {
+    console.error('Geom seed error:', err.message);
+    res.status(500).json({ error: 'Server error seeding barangay geometries.' });
   }
 });
 
@@ -655,7 +660,7 @@ router.get('/dashboard/summary', async (req, res) => {
  */
 router.get('/dashboard/metrics', async (req, res) => {
   try {
-    // Core query: all data from tb_cases (guaranteed to exist)
+    // Core query: Pasig City data from tb_cases
     const result = await pool.query(`
       SELECT
         COUNT(*)::INTEGER AS total_cases,
@@ -705,10 +710,10 @@ router.get('/dashboard/metrics', async (req, res) => {
 router.get('/dashboard/monthly', async (req, res) => {
   try {
     const { year } = req.query;
-    let yearFilter = '';
+    let filters = 'WHERE date_of_diagnosis IS NOT NULL';
     const params = [];
     if (year) {
-      yearFilter = `AND EXTRACT(YEAR FROM date_of_diagnosis) = $1`;
+      filters += ` AND EXTRACT(YEAR FROM date_of_diagnosis) = $1`;
       params.push(parseInt(year));
     }
     const result = await pool.query(`
@@ -716,7 +721,7 @@ router.get('/dashboard/monthly', async (req, res) => {
              DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
              COUNT(*)::INTEGER AS case_count
       FROM tb_cases
-      WHERE date_of_diagnosis IS NOT NULL ${yearFilter}
+      ${filters}
       GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
       ORDER BY month, barangay_name
     `, params);
@@ -1379,10 +1384,10 @@ router.get('/predictions/risk', async (req, res) => {
  */
 router.get('/alerts', async (req, res) => {
   try {
-    // Seed sample data if alerts table is empty (wrapped in its own try/catch)
+    // Seed sample data if no notifications exist yet (wrapped in its own try/catch)
     try {
-      const totalCheck = await pool.query('SELECT COUNT(*)::int AS count FROM alerts');
-      if (totalCheck.rows[0].count === 0) {
+      const notifCheck = await pool.query("SELECT COUNT(*)::int AS count FROM alerts WHERE type = 'notification'");
+      if (notifCheck.rows[0].count === 0) {
         // Seed sample notifications
         const sampleNotifs = [
           { title: 'System Initialized', message: 'TBInsight surveillance system has been initialized and is ready for use.', source: 'data_integration' },
@@ -1562,6 +1567,26 @@ router.put('/alerts/read-all', authenticateToken, async (req, res) => {
 });
 
 /**
+ * GET /api/tb/alerts/stale-check
+ * Check if alerts need re-evaluation
+ *
+ * Returns the last evaluation time and whether alerts are stale (>24h old).
+ */
+router.get('/alerts/stale-check', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT MAX(created_at)::timestamptz AS last_alert_created FROM alerts WHERE type = 'alert'`
+    );
+    const lastCreated = result.rows[0]?.last_alert_created;
+    const isStale = !lastCreated || (Date.now() - new Date(lastCreated).getTime()) > 24 * 60 * 60 * 1000;
+    res.json({ lastEvaluated: lastCreated, isStale });
+  } catch (err) {
+    console.error('Stale check error:', err.message);
+    res.json({ lastEvaluated: null, isStale: true });
+  }
+});
+
+/**
  * GET /api/tb/alerts/:id
  * Get a single alert/notification detail
  */
@@ -1602,24 +1627,6 @@ router.put('/alerts/:id/resolve', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Resolve alert error:', err.message);
     res.status(500).json({ error: 'Server error resolving alert.' });
-  }
-});
-
-/**
- * GET /api/tb/alerts/stale-check
- * Returns the last evaluation time and whether alerts are stale (>24h old).
- */
-router.get('/alerts/stale-check', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT MAX(created_at)::timestamptz AS last_alert_created FROM alerts WHERE type = 'alert'`
-    );
-    const lastCreated = result.rows[0]?.last_alert_created;
-    const isStale = !lastCreated || (Date.now() - new Date(lastCreated).getTime()) > 24 * 60 * 60 * 1000;
-    res.json({ lastEvaluated: lastCreated, isStale });
-  } catch (err) {
-    console.error('Stale check error:', err.message);
-    res.json({ lastEvaluated: null, isStale: true });
   }
 });
 
@@ -1933,6 +1940,7 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
         const incidence = (targetMonth.case_count / pop) * 100_000;
 
         trainRows.push({
+          month: targetMonth.month,
           barangay_name: name,
           features: {
             forecasted_incidence: forecastedIncidence,
@@ -1950,12 +1958,7 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
     }
 
     // Sort train rows by time (so walk-forward works correctly)
-    // Each row's time position is determined by its position in the sorted months list
-    trainRows.sort((a, b) => {
-      // Use incidence as a proxy for time ordering — not ideal but workable
-      // Better: use the month from the original data
-      return 0; // The rows are already in order from the loop above
-    });
+    trainRows.sort((a, b) => a.month.localeCompare(b.month));
 
     // Call Python /evaluate
     const result = await mlEvaluate(series, trainRows, thresholds, minTrain);
@@ -2100,7 +2103,7 @@ router.get('/reports/summary', async (req, res) => {
 
     coverage = barangay || 'City-wide';
 
-    // Build base WHERE clause
+    // Build base WHERE clause (Pasig City only)
     const conditions = [`c.date_of_diagnosis >= $1`, `c.date_of_diagnosis <= $2`];
     const params = [startDate, endDate];
     let paramIdx = 3;
@@ -2113,20 +2116,8 @@ router.get('/reports/summary', async (req, res) => {
 
     const whereClause = 'WHERE ' + conditions.join(' AND ');
 
-    // Run all queries in parallel
-    const [
-      summaryRes,
-      outcomesRes,
-      sexRes,
-      ageRes,
-      caseProfileRes,
-      trendRes,
-      barangayDistRes,
-      riskRes,
-      forecastRes,
-      populationRes,
-      casesRes,
-    ] = await Promise.all([
+    // Run queries in 2 batches to stay within pool limit (max 20, but be safe)
+    const [summaryRes, outcomesRes, sexRes, ageRes, caseProfileRes, trendRes] = await Promise.all([
       // Summary: total cases, active cases, success rate
       pool.query(`
         SELECT
@@ -2194,17 +2185,19 @@ router.get('/reports/summary', async (req, res) => {
           COUNT(*)::INTEGER AS cases
         FROM tb_cases c
         WHERE date_of_diagnosis >= $1 AND date_of_diagnosis <= $2
-        ${barangay ? 'AND barangay_name = $' + (paramIdx) : ''}
+        ${barangay ? 'AND TRIM(barangay_name) = $3' : ''}
         GROUP BY month
         ORDER BY month
       `, barangay ? [startDate, endDate, barangay] : [startDate, endDate]),
+    ]);
 
+    const [barangayDistRes, riskRes, forecastRes, populationRes, casesRes, facilityRes] = await Promise.all([
       // Barangay distribution (city-wide only)
       barangay ? Promise.resolve({ rows: [] }) : pool.query(`
-        SELECT barangay_name, COUNT(*)::INTEGER AS cases
+        SELECT TRIM(barangay_name) AS barangay_name, COUNT(*)::INTEGER AS cases
         FROM tb_cases c
         WHERE date_of_diagnosis >= $1 AND date_of_diagnosis <= $2
-        GROUP BY barangay_name
+        GROUP BY TRIM(barangay_name)
         ORDER BY cases DESC
       `, [startDate, endDate]),
 
@@ -2239,6 +2232,21 @@ router.get('/reports/summary', async (req, res) => {
         FROM tb_cases c
         ${whereClause}
         ORDER BY c.date_of_diagnosis DESC
+      `, params),
+
+      // Facility performance
+      pool.query(`
+        SELECT
+          TRIM(screening_facility) AS facility,
+          COUNT(*)::INTEGER AS total_cases,
+          SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful,
+          COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != ''
+            AND UPPER(outcome_status) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated
+        FROM tb_cases c
+        ${whereClause}
+        AND screening_facility IS NOT NULL AND screening_facility != ''
+        GROUP BY TRIM(screening_facility)
+        ORDER BY total_cases DESC
       `, params),
     ]);
 
@@ -2279,7 +2287,7 @@ router.get('/reports/summary', async (req, res) => {
       sites[r.anatomical_site] = (sites[r.anatomical_site] || 0) + r.count;
     });
     const caseProfile = {
-      newCases: regGroups['New'] || regGroups['NEW'] || 0,
+      newCases: regGroups['New'] || regGroups['NEW'] || regGroups['new'] || 0,
       relapse: (regGroups['Relapse'] || 0) + (regGroups['RECAPTURE'] || 0) + (regGroups['Recapture'] || 0),
       pulmonary: sites['Pulmonary'] || sites['PULMONARY'] || 0,
       extraPulmonary: Object.entries(sites).filter(([k]) => !k.toLowerCase().includes('pulmonary')).reduce((s, [, v]) => s + v, 0),
@@ -2368,6 +2376,7 @@ router.get('/reports/summary', async (req, res) => {
       recommendations,
       cases: casesRes.rows,
       population: populationRes.rows,
+      facilityPerformance: facilityRes.rows,
     });
   } catch (err) {
     console.error('Reports summary error:', err.message);

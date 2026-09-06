@@ -1,20 +1,13 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import API from '../api/axios';
 import {
-  exportPDF, printReport,
+  exportPDF, exportCSV, exportExcel, printReport,
   saveToRecentReports, getRecentReports, deleteRecentReport,
 } from '../utils/exportReports';
+import SkeletonBlock from '../../components/SkeletonBlock';
+import FilterSelect from '../../components/FilterSelect';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
-
-const BARANGAYS = [
-  'Bagong Ilog', 'Bagong Katipunan', 'Bambang', 'Buting', 'Caniogan',
-  'Dela Paz', 'Kalawaan', 'Kapasigan', 'Kapitolyo', 'Malinao',
-  'Manggahan', 'Maybunga', 'Oranbo', 'Palatiw', 'Pinagbuhatan',
-  'Pineda', 'Rosario', 'Sagad', 'San Antonio', 'San Joaquin',
-  'San Jose', 'San Miguel', 'San Nicolas', 'Santa Cruz', 'Santa Lucia',
-  'Santa Rosa', 'Santo Tomas', 'Santolan', 'Sumilang', 'Ugong',
-];
 
 const MONTH_OPTIONS = [
   { value: '1', label: 'January' }, { value: '2', label: 'February' },
@@ -25,7 +18,7 @@ const MONTH_OPTIONS = [
   { value: '11', label: 'November' }, { value: '12', label: 'December' },
 ];
 
-const YEARS = ['2020', '2021', '2022', '2023', '2024', '2025', '2026'];
+const YEARS = Array.from({ length: new Date().getFullYear() - 2019 }, (_, i) => String(2020 + i));
 
 const QUARTER_OPTIONS = [
   { value: '1', label: 'Q1 \u2014 January\u2013March' },
@@ -41,250 +34,185 @@ const REPORT_TYPES = [
   { key: 'barangay', title: 'Barangay', desc: 'Per-barangay detail view' },
 ];
 
-/* ─── Helper Components ──────────────────────────────────────────────── */
+/* ─── Report Builder ─────────────────────────────────────────────────── */
 
-function FilterSelect({ label, value, onChange, children }) {
-  return (
-    <div className="relative">
-      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none" style={{ color: '#94A3B8' }}>{label}:</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-        style={{
-          background: '#ffffff',
-          color: '#0F2D52',
-          border: '1px solid #E2E8F0',
-          paddingLeft: `${(label.length * 6.5) + 24}px`,
-        }}
-      >
-        {children}
-      </select>
-      <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-    </div>
-  );
-}
-
-function SkeletonBlock({ className }) {
-  return <div className={`animate-pulse rounded-lg ${className}`} style={{ background: '#E2E8F0' }} />;
-}
-
-/* ─── Report Builders ────────────────────────────────────────────────── */
-
-function buildMonthlyReport(data, barangay, month, year) {
-  const { summary, outcomes, demographics, trend, barangayDistribution, recommendations, cases, caseProfile, forecast } = data;
-  const monthName = MONTH_OPTIONS.find(m => m.value === month)?.label || month;
+function buildReport(data, config) {
+  const { summary, outcomes, demographics, trend, barangayDistribution, recommendations, cases, caseProfile, forecast, riskSummary, facilityPerformance } = data;
+  const { type, barangay, month, quarter, year } = config;
   const isCitywide = !barangay;
 
+  // Period-specific labels
+  let title, headerTitle, subtitle, footerPeriod;
+  if (type === 'monthly') {
+    const monthName = MONTH_OPTIONS.find(m => m.value === month)?.label || month;
+    title = `Monthly TB Report \u2014 ${monthName} ${year}${barangay ? ' \u00B7 ' + barangay : ' \u00B7 City-wide'}`;
+    headerTitle = 'TUBERCULOSIS MONTHLY REPORT';
+    subtitle = `${monthName} ${year}  \u00B7  ${isCitywide ? 'City-wide' : barangay}`;
+    footerPeriod = `Report Period: ${monthName} ${year}`;
+  } else if (type === 'quarterly') {
+    const qLabel = QUARTER_OPTIONS.find(q => q.value === quarter)?.label || `Q${quarter}`;
+    title = `Quarterly TB Report \u2014 ${qLabel} ${year}`;
+    headerTitle = 'TUBERCULOSIS QUARTERLY REPORT';
+    subtitle = `${qLabel} ${year}`;
+    footerPeriod = `Report Period: ${qLabel} ${year}`;
+  } else if (type === 'annual') {
+    title = `Annual TB Report \u2014 ${year}`;
+    headerTitle = 'TUBERCULOSIS ANNUAL REPORT';
+    subtitle = `Calendar Year ${year}`;
+    footerPeriod = `Annual Report: ${year}`;
+  } else {
+    title = `Barangay TB Report \u2014 ${barangay} \u00B7 ${year}`;
+    headerTitle = 'BARANGAY TB DETAIL REPORT';
+    subtitle = `Barangay ${barangay}  \u00B7  ${year}`;
+    footerPeriod = `Barangay ${barangay} \u00B7 ${year}`;
+  }
+
+  // Executive summary
+  const executiveSummary = [];
+  if (type === 'monthly') {
+    const monthName = MONTH_OPTIONS.find(m => m.value === month)?.label || month;
+    executiveSummary.push(`${summary.totalCases} new TB cases were recorded in ${monthName} ${year}${isCitywide ? ' across Pasig City' : ' in ' + barangay}.`);
+  } else if (type === 'quarterly') {
+    executiveSummary.push(`${summary.totalCases} TB cases were recorded in the ${QUARTER_OPTIONS.find(q => q.value === quarter)?.label || 'Q' + quarter} of ${year}.`);
+  } else if (type === 'annual') {
+    executiveSummary.push(`${summary.totalCases} TB cases were recorded in calendar year ${year}.`);
+  } else {
+    executiveSummary.push(`${summary.totalCases} TB cases were recorded in Barangay ${barangay} for ${year}.`);
+  }
+  if (summary.activeCases > 0) {
+    executiveSummary.push(`${summary.activeCases} cases remain active on treatment.`);
+  }
+  if (summary.successRate != null) {
+    executiveSummary.push(`Treatment success rate is ${summary.successRate}%, ${summary.successRate >= 85 ? 'above' : 'below'} the 85% target.`);
+  }
+
+  // Bacteriological status breakdown
+  const bactMap = {};
+  cases?.forEach(c => {
+    const s = c.bacteriological_status || 'Unknown';
+    bactMap[s] = (bactMap[s] || 0) + 1;
+  });
+  const bacteriologicalStatus = Object.entries(bactMap)
+    .map(([status, count]) => ({
+      status,
+      count,
+      percentage: cases?.length > 0 ? Number(((count / cases.length) * 100).toFixed(1)) : 0,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  // Tables
+  const tables = [{
+    title: 'TREATMENT OUTCOME BREAKDOWN',
+    headers: ['Outcome', 'Count', 'Percentage'],
+    rows: outcomes?.map(o => [o.outcome_status, o.count, `${o.percentage}%`]) || [],
+  }];
+
+  // Side by side
+  const sideBySide = [{
+    title: 'SEX DISTRIBUTION',
+    headers: ['Sex', 'Count', 'Percentage'],
+    rows: demographics?.sex?.map(s => [s.sex, s.count, `${s.percentage}%`]) || [],
+  }];
+
   return {
-    type: 'monthly',
-    title: `Monthly TB Report \u2014 ${monthName} ${year}${barangay ? ' \u00B7 ' + barangay : ' \u00B7 City-wide'}`,
-    headerTitle: 'TUBERCULOSIS MONTHLY REPORT',
-    subtitle: `${monthName} ${year}  \u00B7  ${isCitywide ? 'City-wide' : barangay}`,
-    footerPeriod: `Report Period: ${monthName} ${year}`,
-    kpis: [
-      { label: 'Total Cases', value: summary.totalCases },
-      { label: 'Active Cases', value: summary.activeCases },
-      { label: 'Success Rate', value: summary.successRate != null ? `${summary.successRate}%` : 'N/A' },
-    ],
-    tables: [
-      {
-        title: 'TREATMENT OUTCOME BREAKDOWN',
-        headers: ['Outcome', 'Count', 'Percentage'],
-        rows: outcomes?.map(o => [o.outcome_status, o.count, `${o.percentage}%`]) || [],
-      },
-    ],
-    sideBySide: [
-      {
-        title: 'SEX DISTRIBUTION',
-        headers: ['Sex', 'Count', 'Percentage'],
-        rows: demographics?.sex?.map(s => [s.sex, s.count, `${s.percentage}%`]) || [],
-      },
-    ],
+    type, title, headerTitle, subtitle, footerPeriod,
+    executiveSummary, tables, sideBySide,
     ageGroups: demographics?.ageGroups,
-    caseProfile,
-    forecast,
-    trend,
+    caseProfile, forecast, trend,
     barangayDistribution: isCitywide ? barangayDistribution : null,
-    recommendations,
-    cases,
-  };
-}
-
-function buildQuarterlyReport(data, quarter, year) {
-  const { summary, outcomes, demographics, trend, barangayDistribution, recommendations, cases, caseProfile, forecast } = data;
-  const qLabel = QUARTER_OPTIONS.find(q => q.value === quarter)?.label || `Q${quarter}`;
-
-  return {
-    type: 'quarterly',
-    title: `Quarterly TB Report \u2014 ${qLabel} ${year}`,
-    headerTitle: 'TUBERCULOSIS QUARTERLY REPORT',
-    subtitle: `${qLabel} ${year}`,
-    footerPeriod: `Report Period: ${qLabel} ${year}`,
-    kpis: [
-      { label: 'Total Cases', value: summary.totalCases },
-      { label: 'Active Cases', value: summary.activeCases },
-      { label: 'Success Rate', value: summary.successRate != null ? `${summary.successRate}%` : 'N/A' },
-    ],
-    tables: [
-      {
-        title: `TREATMENT OUTCOME BREAKDOWN \u2014 ${qLabel} ${year}`,
-        headers: ['Outcome', 'Count', 'Percentage'],
-        rows: outcomes?.map(o => [o.outcome_status, o.count, `${o.percentage}%`]) || [],
-      },
-    ],
-    sideBySide: [
-      {
-        title: 'SEX DISTRIBUTION',
-        headers: ['Sex', 'Count', 'Percentage'],
-        rows: demographics?.sex?.map(s => [s.sex, s.count, `${s.percentage}%`]) || [],
-      },
-    ],
-    ageGroups: demographics?.ageGroups,
-    caseProfile,
-    forecast,
-    trend,
-    barangayDistribution,
-    recommendations,
-    cases,
-  };
-}
-
-function buildAnnualReport(data, year) {
-  const { summary, outcomes, demographics, trend, barangayDistribution, recommendations, cases, caseProfile, forecast } = data;
-
-  return {
-    type: 'annual',
-    title: `Annual TB Report \u2014 ${year}`,
-    headerTitle: 'TUBERCULOSIS ANNUAL REPORT',
-    subtitle: `Calendar Year ${year}`,
-    footerPeriod: `Annual Report: ${year}`,
-    kpis: [
-      { label: 'Total Cases', value: summary.totalCases },
-      { label: 'Active Cases', value: summary.activeCases },
-      { label: 'Success Rate', value: summary.successRate != null ? `${summary.successRate}%` : 'N/A' },
-      { label: 'Barangays Covered', value: barangayDistribution?.length || 0 },
-    ],
-    tables: [
-      {
-        title: `TREATMENT OUTCOME BREAKDOWN \u2014 ${year}`,
-        headers: ['Outcome', 'Count', 'Percentage'],
-        rows: outcomes?.map(o => [o.outcome_status, o.count, `${o.percentage}%`]) || [],
-      },
-    ],
-    sideBySide: [
-      {
-        title: 'SEX DISTRIBUTION',
-        headers: ['Sex', 'Count', 'Percentage'],
-        rows: demographics?.sex?.map(s => [s.sex, s.count, `${s.percentage}%`]) || [],
-      },
-    ],
-    ageGroups: demographics?.ageGroups,
-    caseProfile,
-    forecast,
-    trend,
-    barangayDistribution,
-    recommendations,
-    cases,
-  };
-}
-
-function buildBarangayReport(data, barangay, year) {
-  const { summary, outcomes, demographics, trend, recommendations, cases, caseProfile, forecast } = data;
-
-  return {
-    type: 'barangay',
-    title: `Barangay TB Report \u2014 ${barangay} \u00B7 ${year}`,
-    headerTitle: 'BARANGAY TB DETAIL REPORT',
-    subtitle: `Barangay ${barangay}  \u00B7  ${year}`,
-    footerPeriod: `Barangay ${barangay} \u00B7 ${year}`,
-    kpis: [
-      { label: 'Total Cases', value: summary.totalCases },
-      { label: 'Active Cases', value: summary.activeCases },
-      { label: 'Success Rate', value: summary.successRate != null ? `${summary.successRate}%` : 'N/A' },
-    ],
-    tables: [
-      {
-        title: 'TREATMENT OUTCOME BREAKDOWN',
-        headers: ['Outcome', 'Count', 'Percentage'],
-        rows: outcomes?.map(o => [o.outcome_status, o.count, `${o.percentage}%`]) || [],
-      },
-    ],
-    sideBySide: [
-      {
-        title: 'SEX DISTRIBUTION',
-        headers: ['Sex', 'Count', 'Percentage'],
-        rows: demographics?.sex?.map(s => [s.sex, s.count, `${s.percentage}%`]) || [],
-      },
-    ],
-    ageGroups: demographics?.ageGroups,
-    caseProfile,
-    forecast,
-    trend,
-    recommendations,
-    cases,
+    riskSummary: isCitywide ? riskSummary : null,
+    bacteriologicalStatus,
+    facilityPerformance: facilityPerformance || [],
+    recommendations, cases,
   };
 }
 
 /* ─── Report Renderer ────────────────────────────────────────────────── */
 
-function ReportRenderer({ report }) {
+function ReportRenderer({ report, reportData }) {
   if (!report) return null;
 
   return (
     <div id="printable-report" style={{ background: '#fff', border: '1px solid #d1d5db', fontFamily: 'serif' }}>
 
       {/* Header */}
-      <div className="px-10 py-6" style={{ borderBottom: '2px solid #0F2D52' }}>
+      <div className="px-10 py-8" style={{ background: 'linear-gradient(135deg, #0F2D52, #174A7E)' }}>
         <div className="text-center">
-          <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: '#374151' }}>Republic of the Philippines</p>
-          <p className="text-sm font-bold mt-0.5" style={{ color: '#111827' }}>Pasig City Health Office</p>
-          <div className="mt-3 mb-1" style={{ borderBottom: '1px solid #9CA3AF' }} />
-          <h2 className="text-base font-bold uppercase tracking-wide mt-2" style={{ color: '#0F2D52' }}>{report.headerTitle}</h2>
-          <p className="text-xs mt-1" style={{ color: '#4B5563' }}>{report.subtitle}</p>
-          <div className="mt-1" style={{ borderBottom: '1px solid #9CA3AF' }} />
+          <p className="text-[10px] uppercase tracking-[0.25em]" style={{ color: '#93C5FD' }}>Republic of the Philippines</p>
+          <p className="text-sm font-bold mt-1" style={{ color: '#ffffff' }}>Pasig City Health Office</p>
+          <div className="mt-3 mb-2 mx-auto w-48" style={{ borderBottom: '1px solid rgba(255,255,255,0.3)' }} />
+          <h2 className="text-base font-extrabold uppercase tracking-wider mt-2" style={{ color: '#ffffff' }}>{report.headerTitle}</h2>
+          <p className="text-xs mt-1" style={{ color: '#BFDBFE' }}>{report.subtitle}</p>
+          <div className="mt-2 mx-auto w-48" style={{ borderBottom: '1px solid rgba(255,255,255,0.3)' }} />
         </div>
       </div>
 
-      <div className="px-10 py-6 space-y-6">
+      <div className="px-10 py-6 space-y-8">
 
-        {/* Summary */}
-        {report.kpis?.length > 0 && (
-          <div>
-            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Summary</p>
-            <div className="grid gap-x-12" style={{ gridTemplateColumns: `repeat(${report.kpis.length}, 1fr)` }}>
-              {report.kpis.map((kpi, i) => (
-                <div key={i}>
-                  <p className="text-[10px] uppercase" style={{ color: '#6B7280' }}>{kpi.label}</p>
-                  <p className="text-lg font-bold" style={{ color: '#111827' }}>{kpi.value}</p>
-                </div>
-              ))}
+        {/* Summary Stat Cards */}
+        <div className="grid grid-cols-3 gap-4">
+          <div className="rounded-lg p-4" style={{ background: '#EFF6FF', border: '1px solid #BFDBFE' }}>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ background: '#DBEAFE' }}>
+                <i className="ri-folder-line text-lg" style={{ color: '#2563EB' }} />
+              </div>
+              <div>
+                <p className="text-[10px] uppercase font-bold" style={{ color: '#64748B' }}>Total Cases</p>
+                <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{reportData?.summary?.totalCases || 0}</p>
+              </div>
             </div>
           </div>
-        )}
+          <div className="rounded-lg p-4" style={{ background: '#FFF7ED', border: '1px solid #FED7AA' }}>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ background: '#FFEDD5' }}>
+                <i className="ri-heart-pulse-line text-lg" style={{ color: '#EA580C' }} />
+              </div>
+              <div>
+                <p className="text-[10px] uppercase font-bold" style={{ color: '#64748B' }}>Active Cases</p>
+                <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{reportData?.summary?.activeCases || 0}</p>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg p-4" style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ background: '#DCFCE7' }}>
+                <i className="ri-check-double-line text-lg" style={{ color: '#16A34A' }} />
+              </div>
+              <div>
+                <p className="text-[10px] uppercase font-bold" style={{ color: '#64748B' }}>Success Rate</p>
+                <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{reportData?.summary?.successRate != null ? `${reportData.summary.successRate}%` : 'N/A'}</p>
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Tables */}
         {report.tables?.map((table, ti) => (
           <div key={ti}>
-            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>{table.title}</p>
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '2px solid #111827' }}>
-                  {table.headers.map((h, hi) => (
-                    <th key={hi} className="py-2 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {table.rows.map((row, ri) => (
-                  <tr key={ri} style={{ borderBottom: ri < table.rows.length - 1 ? '1px solid #E5E7EB' : 'none' }}>
-                    {row.map((cell, ci) => (
-                      <td key={ci} className="py-2" style={{ color: '#1F2937' }}>{cell}</td>
+            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
+              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
+              {table.title}
+            </p>
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
+              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#F1F5F9' }}>
+                    {table.headers.map((h, hi) => (
+                      <th key={hi} className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>{h}</th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {table.rows.map((row, ri) => (
+                    <tr key={ri} style={{ background: ri % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: ri < table.rows.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                      {row.map((cell, ci) => (
+                        <td key={ci} className="py-2 px-3" style={{ color: ci === 0 ? '#1E293B' : '#475569', fontWeight: ci === 0 ? 600 : 400, textAlign: ci > 0 ? 'right' : 'left' }}>{cell}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         ))}
 
@@ -293,25 +221,30 @@ function ReportRenderer({ report }) {
           <div className="grid grid-cols-2 gap-8">
             {report.sideBySide.map((section, si) => (
               <div key={si}>
-                <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>{section.title}</p>
-                <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '2px solid #111827' }}>
-                      {section.headers.map((h, hi) => (
-                        <th key={hi} className="py-2 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {section.rows.map((row, ri) => (
-                      <tr key={ri} style={{ borderBottom: ri < section.rows.length - 1 ? '1px solid #E5E7EB' : 'none' }}>
-                        {row.map((cell, ci) => (
-                          <td key={ci} className="py-2" style={{ color: '#1F2937' }}>{cell}</td>
+                <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
+                  <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
+                  {section.title}
+                </p>
+                <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
+                  <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#F1F5F9' }}>
+                        {section.headers.map((h, hi) => (
+                          <th key={hi} className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>{h}</th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {section.rows.map((row, ri) => (
+                        <tr key={ri} style={{ background: ri % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: ri < section.rows.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                          {row.map((cell, ci) => (
+                            <td key={ci} className="py-2 px-3" style={{ color: ci === 0 ? '#1E293B' : '#475569', fontWeight: ci === 0 ? 600 : 400, textAlign: ci > 0 ? 'right' : 'left' }}>{cell}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             ))}
           </div>
@@ -320,25 +253,30 @@ function ReportRenderer({ report }) {
         {/* Age Distribution Table */}
         {report.ageGroups?.length > 0 && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Age Distribution</p>
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '2px solid #111827' }}>
-                  <th className="py-2 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Age Group</th>
-                  <th className="py-2 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Count</th>
-                  <th className="py-2 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Percentage</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.ageGroups.map((row, i) => (
-                  <tr key={i} style={{ borderBottom: i < report.ageGroups.length - 1 ? '1px solid #E5E7EB' : 'none' }}>
-                    <td className="py-2" style={{ color: '#1F2937' }}>{row.age_group}</td>
-                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{row.count}</td>
-                    <td className="py-2 text-right" style={{ color: '#4B5563' }}>{row.percentage}%</td>
+            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
+              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
+              Age Distribution
+            </p>
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
+              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#F1F5F9' }}>
+                    <th className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Age Group</th>
+                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Count</th>
+                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Percentage</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {report.ageGroups.map((row, i) => (
+                    <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: i < report.ageGroups.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.age_group}</td>
+                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.count}</td>
+                      <td className="py-2 px-3 text-right" style={{ color: '#4B5563' }}>{row.percentage}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
@@ -346,32 +284,105 @@ function ReportRenderer({ report }) {
         {report.caseProfile && (
           <div className="grid grid-cols-2 gap-8">
             <div>
-              <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Registration Group</p>
+              <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
+                <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
+                Registration Group
+              </p>
+              <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
+                <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                  <tbody>
+                    <tr style={{ background: '#ffffff', borderBottom: '1px solid #F1F5F9' }}>
+                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>New Cases</td>
+                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.newCases}</td>
+                    </tr>
+                    <tr style={{ background: '#F8FAFC' }}>
+                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Relapse / Recapture</td>
+                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.relapse}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
+                <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
+                Anatomical Site
+              </p>
+              <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
+                <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                  <tbody>
+                    <tr style={{ background: '#ffffff', borderBottom: '1px solid #F1F5F9' }}>
+                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Pulmonary</td>
+                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.pulmonary}</td>
+                    </tr>
+                    <tr style={{ background: '#F8FAFC' }}>
+                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Extra-pulmonary</td>
+                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.extraPulmonary}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Bacteriological Status */}
+        {report.bacteriologicalStatus?.length > 0 && (
+          <div>
+            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
+              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
+              Bacteriological Status
+            </p>
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
               <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#F1F5F9' }}>
+                    <th className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Status</th>
+                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Count</th>
+                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Percentage</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
-                    <td className="py-2" style={{ color: '#4B5563' }}>New Cases</td>
-                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.newCases}</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2" style={{ color: '#4B5563' }}>Relapse / Recapture</td>
-                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.relapse}</td>
-                  </tr>
+                  {report.bacteriologicalStatus.map((row, i) => (
+                    <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: i < report.bacteriologicalStatus.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.status}</td>
+                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.count}</td>
+                      <td className="py-2 px-3 text-right" style={{ color: '#4B5563' }}>{row.percentage}%</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
-            <div>
-              <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Anatomical Site</p>
+          </div>
+        )}
+
+        {/* Facility Performance */}
+        {report.facilityPerformance?.length > 0 && (
+          <div>
+            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
+              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
+              Facility Performance
+            </p>
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
               <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#F1F5F9' }}>
+                    <th className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Facility</th>
+                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Cases</th>
+                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Success Rate</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
-                    <td className="py-2" style={{ color: '#4B5563' }}>Pulmonary</td>
-                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.pulmonary}</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2" style={{ color: '#4B5563' }}>Extra-pulmonary</td>
-                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.extraPulmonary}</td>
-                  </tr>
+                  {report.facilityPerformance.map((row, i) => {
+                    const rate = row.evaluated > 0 ? ((row.successful / row.evaluated) * 100).toFixed(1) : 'N/A';
+                    return (
+                      <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: i < report.facilityPerformance.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                        <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.facility}</td>
+                        <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.total_cases}</td>
+                        <td className="py-2 px-3 text-right" style={{ color: '#4B5563' }}>{rate}%</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -381,75 +392,117 @@ function ReportRenderer({ report }) {
         {/* Forecast */}
         {report.forecast?.available && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Forecast</p>
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-              <tbody>
-                <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
-                  <td className="py-2" style={{ color: '#4B5563' }}>Forecasted Cases</td>
-                  <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.forecastedCases}</td>
-                </tr>
-                <tr>
-                  <td className="py-2" style={{ color: '#4B5563' }}>Forecast Period</td>
-                  <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.period}</td>
-                </tr>
-              </tbody>
-            </table>
+            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
+              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
+              Forecast
+            </p>
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
+              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                <tbody>
+                  <tr style={{ background: '#ffffff', borderBottom: '1px solid #F1F5F9' }}>
+                    <td className="py-2 px-3" style={{ color: '#4B5563', fontWeight: 600 }}>Forecasted Cases</td>
+                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.forecastedCases}</td>
+                  </tr>
+                  <tr style={{ background: '#F8FAFC' }}>
+                    <td className="py-2 px-3" style={{ color: '#4B5563', fontWeight: 600 }}>Forecast Period</td>
+                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.period}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
         {/* TB Case Trend Table */}
         {report.trend?.length > 0 && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>TB Case Trend</p>
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '2px solid #111827' }}>
-                  <th className="py-2 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Month</th>
-                  <th className="py-2 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Cases</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.trend.map((row, i) => (
-                  <tr key={i} style={{ borderBottom: i < report.trend.length - 1 ? '1px solid #E5E7EB' : 'none' }}>
-                    <td className="py-2" style={{ color: '#1F2937' }}>{row.label}</td>
-                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
+            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
+              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
+              TB Case Trend
+            </p>
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
+              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#F1F5F9' }}>
+                    <th className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Month</th>
+                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Cases</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {report.trend.map((row, i) => (
+                    <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: i < report.trend.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.label}</td>
+                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
         {/* Barangay Distribution Table */}
         {report.barangayDistribution?.length > 0 && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>TB Cases by Barangay</p>
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '2px solid #111827' }}>
-                  <th className="py-2 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Barangay</th>
-                  <th className="py-2 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10 }}>Cases</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.barangayDistribution.map((row, i) => (
-                  <tr key={i} style={{ borderBottom: i < report.barangayDistribution.length - 1 ? '1px solid #E5E7EB' : 'none' }}>
-                    <td className="py-2" style={{ color: '#1F2937' }}>{row.barangay}</td>
-                    <td className="py-2 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
+            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
+              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
+              TB Cases by Barangay
+            </p>
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
+              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#F1F5F9' }}>
+                    <th className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Barangay</th>
+                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Cases</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {report.barangayDistribution.map((row, i) => (
+                    <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: i < report.barangayDistribution.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.barangay}</td>
+                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Top Barangays Bar Chart */}
+            <div className="mt-4 space-y-1.5">
+              <p className="text-[10px] font-bold uppercase mb-2" style={{ color: '#6B7280' }}>Top Barangays by Case Count</p>
+              {report.barangayDistribution.slice(0, 10).map((row, i) => {
+                const maxCases = report.barangayDistribution[0]?.cases || 1;
+                const pct = (row.cases / maxCases) * 100;
+                return (
+                  <div key={i} className="flex items-center gap-3">
+                    <span className="text-[10px] w-24 shrink-0 text-right truncate" style={{ color: '#374151' }}>{row.barangay}</span>
+                    <div className="flex-1 h-3 rounded" style={{ background: '#F1F5F9' }}>
+                      <div className="h-full rounded" style={{
+                        width: `${pct}%`,
+                        background: pct > 70 ? '#EF4444' : pct > 40 ? '#F59E0B' : '#0F2D52',
+                      }} />
+                    </div>
+                    <span className="text-[10px] font-bold w-8 text-right" style={{ color: '#111827' }}>{row.cases}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
         {/* Recommendations */}
         {report.recommendations?.length > 0 && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2" style={{ color: '#374151', borderBottom: '1px solid #D1D5DB', paddingBottom: 4 }}>Recommendations</p>
-            <div className="space-y-1">
+            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
+              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
+              Recommendations
+            </p>
+            <div className="space-y-1.5 rounded-lg p-3" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
               {report.recommendations.map((rec, i) => (
-                <p key={i} className="text-xs leading-relaxed" style={{ color: '#374151' }}>{i + 1}. {rec}</p>
+                <p key={i} className="text-xs leading-relaxed flex items-start gap-2" style={{ color: '#92400E' }}>
+                  <i className="ri-lightbulb-line mt-0.5 shrink-0" />
+                  {rec}
+                </p>
               ))}
             </div>
           </div>
@@ -458,17 +511,17 @@ function ReportRenderer({ report }) {
         {/* Footer */}
         <div className="pt-4" style={{ borderTop: '2px solid #0F2D52' }}>
           <div className="flex items-center justify-between">
-            <span className="text-[10px]" style={{ color: '#6B7280' }}>TBInsight Dashboard &middot; Pasig City Health Office</span>
-            <span className="text-[10px]" style={{ color: '#6B7280' }}>{report.footerPeriod}</span>
+            <span className="text-[10px] font-semibold" style={{ color: '#64748B' }}>TBInsight Dashboard &middot; Pasig City Health Office</span>
+            <span className="text-[10px]" style={{ color: '#94A3B8' }}>{report.footerPeriod}</span>
           </div>
-          <div className="mt-3 flex items-center justify-between">
+          <div className="mt-4 flex items-center justify-between">
             <div className="text-center">
-              <div className="w-32" style={{ borderTop: '1px solid #111827' }} />
-              <p className="text-[10px] mt-1" style={{ color: '#374151' }}>Prepared by</p>
+              <div className="w-36" style={{ borderTop: '1px solid #94A3B8' }} />
+              <p className="text-[10px] mt-1.5 font-semibold" style={{ color: '#374151' }}>Prepared by</p>
             </div>
             <div className="text-center">
-              <div className="w-32" style={{ borderTop: '1px solid #111827' }} />
-              <p className="text-[10px] mt-1" style={{ color: '#374151' }}>Noted by</p>
+              <div className="w-36" style={{ borderTop: '1px solid #94A3B8' }} />
+              <p className="text-[10px] mt-1.5 font-semibold" style={{ color: '#374151' }}>Noted by</p>
             </div>
           </div>
         </div>
@@ -494,6 +547,23 @@ export default function Reports() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [recentReports, setRecentReports] = useState(() => getRecentReports());
+  const [barangays, setBarangays] = useState([]);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [regenerateTrigger, setRegenerateTrigger] = useState(0);
+  const [showAllReports, setShowAllReports] = useState(false);
+  const [exportToast, setExportToast] = useState('');
+  const [exporting, setExporting] = useState('');
+  const abortRef = useRef(null);
+  const reportRef = useRef(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    API.get('/api/tb/barangays', { signal: controller.signal }).then(res => {
+      const names = (res.data.barangays || []).map(b => b.barangay_name || b.name).filter(Boolean).sort();
+      setBarangays(names);
+    }).catch(() => {});
+    return () => controller.abort();
+  }, []);
 
   const handleReportTypeChange = useCallback((newType) => {
     setReportType(newType);
@@ -507,6 +577,9 @@ export default function Reports() {
 
   /* ── Generate report ── */
   const handleGenerate = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     setError('');
     setReportData(null);
@@ -522,28 +595,31 @@ export default function Reports() {
       if (reportType === 'barangay') {
         params.barangay = filterBarangay;
       }
-      const res = await API.get('/api/tb/reports/summary', { params });
+      const res = await API.get('/api/tb/reports/summary', { params, signal: controller.signal });
       setReportData(res.data);
-      setRecentReports(saveToRecentReports(res.data));
+      setRecentReports(saveToRecentReports(res.data, { reportType, year: filterYear, month: filterMonth, quarter: filterQuarter, barangay: filterBarangay }));
 
       // Build structured report
       try {
-        let built;
-        if (reportType === 'monthly') built = buildMonthlyReport(res.data, filterBarangay, filterMonth, filterYear);
-        else if (reportType === 'quarterly') built = buildQuarterlyReport(res.data, filterQuarter, filterYear);
-        else if (reportType === 'annual') built = buildAnnualReport(res.data, filterYear);
-        else if (reportType === 'barangay') built = buildBarangayReport(res.data, filterBarangay, filterYear);
+        const built = buildReport(res.data, {
+          type: reportType, barangay: filterBarangay,
+          month: filterMonth, quarter: filterQuarter, year: filterYear,
+        });
         setReport(built);
-      } catch (buildErr) {
-        console.error('Report build error:', buildErr);
+      } catch {
         setError('Report was generated but could not be rendered. Please try again.');
       }
     } catch (err) {
+      if (err.name === 'CanceledError' || err.name === 'AbortError') return;
       setError(err.response?.data?.error || 'The report could not be generated because the TB records could not be retrieved.');
     } finally {
       setLoading(false);
     }
   }, [reportType, filterMonth, filterQuarter, filterYear, filterBarangay]);
+
+  useEffect(() => {
+    if (regenerateTrigger > 0) handleGenerate();
+  }, [regenerateTrigger, handleGenerate]);
 
   const handleReset = useCallback(() => {
     setReportType('monthly');
@@ -556,11 +632,37 @@ export default function Reports() {
     setError('');
   }, []);
 
-  const handleDeleteReport = useCallback((id) => {
-    if (window.confirm('Delete this report?')) {
-      setRecentReports(deleteRecentReport(id));
+  const handleDeleteReport = useCallback(() => {
+    if (!deleteTarget) return;
+    setRecentReports(deleteRecentReport(deleteTarget.id));
+    setDeleteTarget(null);
+  }, [deleteTarget]);
+
+  const handleExport = useCallback(async (key, fn, label) => {
+    try {
+      setExporting(key);
+      await fn();
+      setExportToast(label);
+      setTimeout(() => setExportToast(''), 2500);
+    } catch {
+      setExportToast('');
+    } finally {
+      setExporting('');
     }
   }, []);
+
+  useEffect(() => {
+    if (report && reportRef.current) {
+      reportRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [report]);
+
+  useEffect(() => {
+    if (!deleteTarget) return;
+    const onKey = (e) => { if (e.key === 'Escape') setDeleteTarget(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [deleteTarget]);
 
   /* ────────── Render ────────── */
 
@@ -587,10 +689,14 @@ export default function Reports() {
 
         {/* Tabs */}
         <div style={{ borderBottom: '1px solid #E2E8F0' }}>
-          <div className="flex gap-0">
+          <div className="flex gap-0" role="tablist" aria-label="Report type">
             {REPORT_TYPES.map(rt => (
               <button
                 key={rt.key}
+                role="tab"
+                aria-selected={reportType === rt.key}
+                aria-controls={`tabpanel-${rt.key}`}
+                id={`tab-${rt.key}`}
                 onClick={() => handleReportTypeChange(rt.key)}
                 className="relative px-6 py-3 text-left transition-colors"
                 style={{ background: 'transparent' }}
@@ -644,7 +750,7 @@ export default function Reports() {
                 </FilterSelect>
                 <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay}>
                   <option value="">Select Barangay</option>
-                  {BARANGAYS.map(b => <option key={b} value={b}>{b}</option>)}
+                  {barangays.map(b => <option key={b} value={b}>{b}</option>)}
                 </FilterSelect>
               </>
             )}
@@ -672,10 +778,18 @@ export default function Reports() {
       {loading && (
         <div className="space-y-4">
           <div className="rounded-xl p-6" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-            <div className="flex items-center gap-3 mb-4">
+            <div className="flex items-center gap-3 mb-3">
               <i className="ri-loader-4-line animate-spin text-xl" style={{ color: '#0F2D52' }} />
               <p className="text-sm font-bold" style={{ color: '#0F2D52' }}>Generating Report...</p>
             </div>
+            <div className="w-full h-1.5 rounded-full overflow-hidden mb-4" style={{ background: '#E2E8F0' }}>
+              <div className="h-full rounded-full" style={{
+                background: 'linear-gradient(90deg, #0F2D52, #3B82F6)',
+                animation: 'reports-progress 2s ease-in-out infinite',
+                width: '60%',
+              }} />
+            </div>
+            <style>{`@keyframes reports-progress { 0% { width: 10%; } 50% { width: 70%; } 100% { width: 90%; } }`}</style>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               {[1, 2, 3, 4].map(i => (
                 <div key={i} className="rounded-xl p-4" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
@@ -717,8 +831,8 @@ export default function Reports() {
             <i className="ri-file-chart-line text-3xl" style={{ color: '#CBD5E1' }} />
           </div>
           <div className="text-center">
-            <p className="text-sm font-bold" style={{ color: '#475569' }}>Select a report type and click Generate</p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>Choose a report type above, set your filters, and click Generate & Preview to create a report.</p>
+            <p className="text-sm font-bold" style={{ color: '#475569' }}>Select a report type and click Apply Filters</p>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>Choose a report type above, set your filters, and click Apply Filters to create a report.</p>
           </div>
         </div>
       )}
@@ -741,7 +855,7 @@ export default function Reports() {
 
       {/* ─── Report Preview ─── */}
       {!loading && !error && report && (
-        <div className="space-y-5">
+        <div ref={reportRef} className="space-y-5">
           {/* Action Bar */}
           <div className="flex items-center justify-between no-print">
             <div>
@@ -749,25 +863,53 @@ export default function Reports() {
               <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Generated report preview</p>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={printReport}
+              <button onClick={() => handleExport('csv', () => exportCSV(reportData?.cases), 'CSV')} disabled={!!exporting}
                 className="px-3 py-1.5 text-xs font-medium"
-                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, opacity: exporting ? 0.5 : 1, cursor: exporting ? 'not-allowed' : 'pointer', transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { if (!exporting) e.currentTarget.style.background = '#E5E7EB'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
+                {exporting === 'csv' ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
+                Export CSV
+              </button>
+              <button onClick={() => handleExport('excel', () => exportExcel(reportData), 'Excel')} disabled={!!exporting}
+                className="px-3 py-1.5 text-xs font-medium"
+                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, opacity: exporting ? 0.5 : 1, cursor: exporting ? 'not-allowed' : 'pointer', transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { if (!exporting) e.currentTarget.style.background = '#E5E7EB'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
+                {exporting === 'excel' ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
+                Export Excel
+              </button>
+              <button onClick={() => handleExport('print', () => printReport(), 'Print')} disabled={!!exporting}
+                className="px-3 py-1.5 text-xs font-medium"
+                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, opacity: exporting ? 0.5 : 1, cursor: exporting ? 'not-allowed' : 'pointer', transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { if (!exporting) e.currentTarget.style.background = '#E5E7EB'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
+                {exporting === 'print' ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
                 Print
               </button>
-              <button onClick={() => exportPDF(report)}
+              <button onClick={() => handleExport('pdf', () => exportPDF(report), 'PDF')} disabled={!!exporting}
                 className="px-3 py-1.5 text-xs font-semibold"
-                style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+                style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, opacity: exporting ? 0.5 : 1, cursor: exporting ? 'not-allowed' : 'pointer', transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { if (!exporting) { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; } }}
                 onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
+                {exporting === 'pdf' ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
                 Save as PDF
               </button>
             </div>
           </div>
 
           {/* Rendered Report */}
-          <ReportRenderer report={report} />
+          <ReportRenderer report={report} reportData={reportData} />
+        </div>
+      )}
+
+      {/* ─── Export Toast ─── */}
+      {exportToast && (
+        <div className="fixed bottom-6 right-6 z-50 no-print">
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-lg" style={{ background: '#059669', color: '#ffffff' }}>
+            <i className="ri-check-line text-sm" />
+            <span className="text-sm font-semibold">{exportToast} exported!</span>
+          </div>
         </div>
       )}
 
@@ -796,7 +938,7 @@ export default function Reports() {
                   </tr>
                 </thead>
                 <tbody>
-                  {recentReports.slice(0, 10).map((rpt) => (
+                  {recentReports.slice(0, showAllReports ? recentReports.length : 10).map((rpt) => (
                     <tr key={rpt.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
                       <td className="px-4 py-2 text-xs font-semibold" style={{ color: '#1E293B' }}>{rpt.type ? rpt.type.charAt(0).toUpperCase() + rpt.type.slice(1) : 'Report'}</td>
                       <td className="px-4 py-2 text-xs font-medium" style={{ color: '#64748B' }}>{rpt.period || '\u2014'}</td>
@@ -806,14 +948,22 @@ export default function Reports() {
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex items-center gap-1">
-                          <button aria-label="View report" onClick={() => { setReportType(rpt.type); setFilterYear(String(new Date(rpt.generatedAt).getFullYear())); handleGenerate(); }}
+                          <button aria-label="View report" onClick={() => {
+                            const f = rpt.filters || {};
+                            setReportType(f.reportType || rpt.type || 'monthly');
+                            setFilterYear(f.year || String(new Date(rpt.generatedAt).getFullYear()));
+                            setFilterMonth(f.month || String(new Date().getMonth() + 1));
+                            setFilterQuarter(f.quarter || '1');
+                            setFilterBarangay(f.barangay || '');
+                            setRegenerateTrigger(n => n + 1);
+                          }}
                             className="inline-flex items-center justify-center h-7 w-7 text-sm"
                             style={{ color: '#64748B', borderRadius: 4, transition: 'color 0.15s' }}
                             onMouseEnter={e => { e.currentTarget.style.color = '#0F2D52'; }}
                             onMouseLeave={e => { e.currentTarget.style.color = '#64748B'; }}>
                             <i className="ri-eye-line" />
                           </button>
-                          <button aria-label="Delete report" onClick={() => handleDeleteReport(rpt.id)}
+                          <button aria-label="Delete report" onClick={() => setDeleteTarget(rpt)}
                             className="inline-flex items-center justify-center h-7 w-7 text-sm"
                             style={{ color: '#64748B', borderRadius: 4, transition: 'color 0.15s' }}
                             onMouseEnter={e => { e.currentTarget.style.color = '#EF4444'; }}
@@ -828,8 +978,53 @@ export default function Reports() {
               </table>
             </div>
           )}
+          {recentReports.length > 10 && (
+            <div className="flex justify-center pt-3 px-5">
+              <button onClick={() => setShowAllReports(!showAllReports)}
+                className="text-[11px] font-semibold px-3 py-1.5 rounded-lg"
+                style={{ color: '#0F2D52', background: '#F1F5F9', border: '1px solid #E2E8F0', transition: 'background 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#E2E8F0'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#F1F5F9'; }}>
+                {showAllReports ? 'Show Less' : `Show All (${recentReports.length})`}
+              </button>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* ─── Delete Confirmation Modal ─── */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Confirm delete">
+          <div className="absolute inset-0" style={{ background: 'rgba(15,45,82,0.2)' }} onClick={() => setDeleteTarget(null)} />
+          <div className="relative w-full max-w-sm mx-4 rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 20px 60px rgba(15,45,82,0.25)' }}>
+            <div className="px-6 py-5 text-center">
+              <div className="w-12 h-12 rounded-full mx-auto mb-4 flex items-center justify-center" style={{ background: '#FEF2F2' }}>
+                <i className="ri-error-warning-line text-xl" style={{ color: '#EF4444' }} />
+              </div>
+              <p className="text-sm font-bold" style={{ color: '#1E293B' }}>Delete Report?</p>
+              <p className="text-xs mt-1.5 max-w-xs mx-auto" style={{ color: '#64748B' }}>
+                This will permanently delete the {deleteTarget.type ? deleteTarget.type.charAt(0).toUpperCase() + deleteTarget.type.slice(1) : 'report'} report for {deleteTarget.period || 'this period'}. This action cannot be undone.
+              </p>
+            </div>
+            <div className="flex" style={{ borderTop: '1px solid #F1F5F9' }}>
+              <button onClick={() => setDeleteTarget(null)}
+                className="flex-1 px-4 py-3 text-xs font-semibold"
+                style={{ color: '#374151', background: '#ffffff', borderRight: '1px solid #F1F5F9', transition: 'background 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#F8FAFC'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#ffffff'; }}>
+                Cancel
+              </button>
+              <button onClick={handleDeleteReport}
+                className="flex-1 px-4 py-3 text-xs font-semibold"
+                style={{ color: '#ffffff', background: '#DC2626', transition: 'background 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#B91C1C'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#DC2626'; }}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

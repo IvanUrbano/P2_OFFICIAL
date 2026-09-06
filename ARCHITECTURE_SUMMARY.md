@@ -63,7 +63,7 @@ GIS-Based Predictive Tuberculosis Hotspot and Resource Prioritization Dashboard 
 ## Services
 
 ### Backend (Express.js 5)
-- **Port**: 5000 (dev) / Render (prod)
+- **Port**: 3000 (dev) / Render (prod)
 - **Database**: PostgreSQL 14 + PostGIS
 - **Auth**: JWT in httpOnly cookies + localStorage
 - **File Upload**: express-fileupload (50MB limit)

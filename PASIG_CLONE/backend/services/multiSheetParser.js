@@ -1,220 +1,212 @@
 const ExcelJS = require('exceljs');
 
-const DSTB_COLUMNS = [
-  'No.', 'Date Reported', 'Facility Name', 'Barangay', 'Case Classification',
-  'Treatment Regimen', 'Patient Type', 'Date Treatment Started', 'Outcome',
-  'Outcome Date', 'Sex', 'Age', 'Registration Date', 'Validation Status',
-  'Smear Sample Date', 'Smear Result', 'GeneXpert Date', 'GeneXpert Result'
-];
-
-const MN_COLUMNS = [
-  'ITIS Lite Case No.', 'ITIS Lite Case', 'No.', 'Type', 'Date Reported',
-  'Facility Name', 'Barangay', 'Case Classification', 'Treatment Regimen',
-  'Patient Type', 'Patient Name', 'Last Name', 'First Name', 'Middle Name',
-  'Sex', 'Age', 'Age Group', 'Indigenous Group', 'Date Treatment Started',
-  'Outcome', 'Outcome Date', 'Registration Date', 'Province', 'Region',
-  'Referred to DOTS', 'Referral Status', 'Contact Name', 'Contact Relationship',
-  'Microscopy Result', 'Microscopy Result Date', 'Microscopy Release Date',
-  'RDT Result', 'RDT Result Date', 'RDT Release Date'
-];
-
 function normalizeHeader(header) {
   if (!header) return '';
-  return String(header).trim().toLowerCase().replace(/\s+/g, '_');
+  return String(header).trim().toLowerCase();
 }
 
-function matchColumn(normalized, targets) {
-  for (const t of targets) {
-    if (normalized.includes(t) || normalized === t) return true;
+function buildColumnMap(rawHeaders, sourceType) {
+  const map = {};
+
+  for (let i = 0; i < rawHeaders.length; i++) {
+    const header = String(rawHeaders[i] || '');
+    const normalized = normalizeHeader(header);
+
+    if (normalized === 'no.' || normalized === 'no') continue;
+
+    if (normalized.includes('notification') && normalized.includes('date')) {
+      map[i] = 'date_of_notification';
+    } else if (normalized.includes('screening') && normalized.includes('date')) {
+      map[i] = 'date_of_screening';
+    } else if (normalized.includes('diagnosis') && normalized.includes('date')) {
+      map[i] = 'date_of_diagnosis';
+    } else if (normalized.includes('treatment') && normalized.includes('started')) {
+      map[i] = 'date_started_treatment';
+    } else if (normalized.includes('outcome') && normalized.includes('date')) {
+      map[i] = 'date_of_outcome';
+    } else if (normalized.includes('record') && normalized.includes('created')) {
+      map[i] = 'record_created_at';
+    } else if (normalized === 'age') {
+      map[i] = 'age';
+    } else if (normalized === 'sex') {
+      map[i] = 'sex';
+    } else if (normalized.includes('barangay') || normalized === 'brgy') {
+      map[i] = 'barangay_name';
+    } else if (normalized.includes('city') || normalized.includes('municipality')) {
+      map[i] = 'city';
+    } else if (normalized.includes('treatment') && (normalized.includes('health') || normalized.includes('facility'))) {
+      map[i] = 'treatment_facility';
+    } else if (normalized.includes('screening') && (normalized.includes('health') || normalized.includes('facility'))) {
+      map[i] = 'screening_facility';
+    } else if (normalized.includes('source') && normalized.includes('patient')) {
+      map[i] = 'source_of_patient';
+    } else if (normalized.includes('anatomical')) {
+      map[i] = 'anatomical_site';
+    } else if (normalized.includes('registration')) {
+      map[i] = 'registration_group';
+    } else if (normalized.includes('bacteriological')) {
+      map[i] = 'bacteriological_status';
+    } else if (normalized.includes('outcome') && !normalized.includes('date')) {
+      map[i] = 'outcome_status';
+    } else if (normalized.includes('validation') && sourceType === 'DSTB') {
+      map[i] = 'validation_status';
+    } else if (normalized.includes('itis') && normalized.includes('lite')) {
+      map[i] = 'itis_case_id';
+    }
   }
-  return false;
+
+  return map;
 }
 
-function parseDate(value) {
-  if (!value) return null;
-  if (value instanceof Date) return value.toISOString().split('T')[0];
-  const str = String(value).trim();
+function parseDate(dateVal) {
+  if (!dateVal) return null;
+  if (dateVal instanceof Date) {
+    if (isNaN(dateVal.getTime())) return null;
+    return dateVal.toISOString().split('T')[0];
+  }
+
+  const str = String(dateVal).trim();
   if (!str) return null;
+
+  const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${String(isoMatch[2]).padStart(2, '0')}-${String(isoMatch[3]).padStart(2, '0')}`;
+  }
+
+  const monthNames = ['january', 'february', 'march', 'april', 'may', 'june',
+    'july', 'august', 'september', 'october', 'november', 'december'];
+  const writtenMatch = str.match(/^(\w+)\s+(\d{1,2}),?\s+(\d{4})$/i);
+  if (writtenMatch) {
+    const monthIndex = monthNames.indexOf(writtenMatch[1].toLowerCase());
+    if (monthIndex >= 0) {
+      const m = String(monthIndex + 1).padStart(2, '0');
+      const d = String(writtenMatch[2]).padStart(2, '0');
+      return `${writtenMatch[3]}-${m}-${d}`;
+    }
+  }
 
   const d = new Date(str);
   if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
 
-  const parts = str.split(/[\/\-\.]/);
-  if (parts.length === 3) {
-    const [m, day, y] = parts.map(Number);
-    if (m && day && y) return `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  }
   return null;
 }
 
-function parseAge(value) {
-  if (!value) return null;
-  const n = parseInt(String(value).replace(/\D/g, ''), 10);
-  return isNaN(n) ? null : n;
-}
-
-function normalizeSex(value) {
-  if (!value) return null;
-  const v = String(value).trim().toUpperCase();
-  if (v === 'M' || v === 'MALE') return 'MALE';
-  if (v === 'F' || v === 'FEMALE') return 'FEMALE';
-  return v;
-}
-
-function normalizeValidationStatus(value) {
-  if (!value) return 'pending';
-  const v = String(value).trim().toUpperCase();
-  if (v === 'VALIDATED' || v === 'VALID') return 'validated';
-  if (v === 'UNVALIDATED' || v === 'UNVALID') return 'unvalidated';
-  if (v === 'PENDING') return 'pending';
-  return 'pending';
-}
-
-function mapDSTBRow(row) {
-  const fields = {};
-  const data = row;
-
-  const dateReportedIdx = 1;
-  const facilityIdx = 2;
-  const barangayIdx = 3;
-  const caseClassificationIdx = 4;
-  const treatmentRegimenIdx = 5;
-  const patientTypeIdx = 6;
-  const dateTreatmentStartedIdx = 7;
-  const outcomeIdx = 8;
-  const outcomeDateIdx = 9;
-  const sexIdx = 10;
-  const ageIdx = 11;
-  const registrationDateIdx = 12;
-  const validationStatusIdx = 13;
-
-  fields.patient_no = data[0] ? String(data[0]).trim() : null;
-  fields.date_reported = parseDate(data[dateReportedIdx]);
-  fields.facility_name = data[facilityIdx] ? String(data[facilityIdx]).trim() : null;
-  fields.barangay = data[barangayIdx] ? String(data[barangayIdx]).trim() : null;
-  fields.case_classification = data[caseClassificationIdx] ? String(data[caseClassificationIdx]).trim() : null;
-  fields.treatment_regimen = data[treatmentRegimenIdx] ? String(data[treatmentRegimenIdx]).trim() : null;
-  fields.patient_type = data[patientTypeIdx] ? String(data[patientTypeIdx]).trim() : null;
-  fields.date_treatment_started = parseDate(data[dateTreatmentStartedIdx]);
-  fields.outcome = data[outcomeIdx] ? String(data[outcomeIdx]).trim() : null;
-  fields.outcome_date = parseDate(data[outcomeDateIdx]);
-  fields.sex = normalizeSex(data[sexIdx]);
-  fields.age = parseAge(data[ageIdx]);
-  fields.registration_date = parseDate(data[registrationDateIdx]);
-  fields.validation_status = normalizeValidationStatus(data[validationStatusIdx]);
-
-  return fields;
-}
-
-function mapMNRow(row) {
-  const fields = {};
-  const data = row;
-
-  fields.itis_case_id = data[0] ? String(data[0]).trim() : null;
-  fields.patient_no = data[2] ? String(data[2]).trim() : null;
-  fields.date_reported = parseDate(data[5]);
-  fields.facility_name = data[6] ? String(data[6]).trim() : null;
-  fields.barangay = data[7] ? String(data[7]).trim() : null;
-  fields.case_classification = data[8] ? String(data[8]).trim() : null;
-  fields.treatment_regimen = data[9] ? String(data[9]).trim() : null;
-  fields.patient_type = data[10] ? String(data[10]).trim() : null;
-  fields.last_name = data[12] ? String(data[12]).trim() : null;
-  fields.first_name = data[13] ? String(data[13]).trim() : null;
-  fields.middle_name = data[14] ? String(data[14]).trim() : null;
-  fields.sex = normalizeSex(data[15]);
-  fields.age = parseAge(data[16]);
-  fields.age_group = data[17] ? String(data[17]).trim() : null;
-  fields.indigenous_group = data[18] ? String(data[18]).trim() : null;
-  fields.date_treatment_started = parseDate(data[19]);
-  fields.outcome = data[20] ? String(data[20]).trim() : null;
-  fields.outcome_date = parseDate(data[21]);
-  fields.registration_date = parseDate(data[22]);
-  fields.contact_name = data[27] ? String(data[27]).trim() : null;
-  fields.contact_relationship = data[28] ? String(data[28]).trim() : null;
-  fields.validation_status = 'validated';
-
-  return fields;
+function normalizeSex(val) {
+  if (!val) return null;
+  const v = String(val).trim().toLowerCase();
+  if (v === 'm' || v === 'male') return 'Male';
+  if (v === 'f' || v === 'female') return 'Female';
+  return null;
 }
 
 function detectSheetType(sheetName) {
-  const name = sheetName.toUpperCase();
-  if (name.includes('DSTB') || name.includes('B-MODE')) return 'DSTB';
-  if (name.includes('MN') || name.includes('M-N') || name.includes('CASE')) return 'MN';
-  return null;
+  const name = sheetName.toUpperCase().trim();
+  if (name === 'DSTB' || name.includes('DSTB') || name.includes('B-MODE')) return 'DSTB';
+  if (name === 'MN' || name === 'M-N' || name.includes('MICROSCOPIC')) return 'MN';
+  return null; // Unknown sheet — skip
 }
 
-async function parseExcel(filePath) {
+async function parseMultiSheetExcel(fileBuffer, filename) {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(filePath);
+  await workbook.xlsx.load(fileBuffer);
 
-  const results = { DSTB: [], MN: [], errors: [] };
+  const result = {
+    filename,
+    sheets: [],
+    totalRecords: 0,
+    dstbCount: 0,
+    mnCount: 0,
+  };
 
-  workbook.eachSheet((sheet, sheetId) => {
-    const sheetType = detectSheetType(sheet.name);
-    if (!sheetType) {
-      results.errors.push(`Skipping unknown sheet: "${sheet.name}"`);
-      return;
-    }
+  workbook.eachSheet((sheet) => {
+    const sourceType = detectSheetType(sheet.name);
+    if (!sourceType) return;
 
-    let headerRow = null;
-    let dataStartRow = 3;
-
-    sheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) {
-        const firstCell = row.getCell(1).text;
-        if (firstCell && firstCell.trim().toUpperCase().includes('CASE')) {
-          return;
-        }
-      }
-      if (rowNumber === 2) {
-        const firstCell = row.getCell(1).text;
-        if (firstCell && (firstCell.trim() === 'No.' || firstCell.trim() === 'ITIS Lite Case No.')) {
-          headerRow = rowNumber;
-          dataStartRow = rowNumber + 1;
-        }
-      }
-    });
-
-    if (!headerRow) {
-      results.errors.push(`No header row found in sheet: "${sheet.name}"`);
-      return;
-    }
-
-    const mapper = sheetType === 'DSTB' ? mapDSTBRow : mapMNRow;
-
-    for (let r = dataStartRow; r <= sheet.rowCount; r++) {
+    let headerRowIndex = null;
+    for (let r = 1; r <= Math.min(5, sheet.rowCount); r++) {
       const row = sheet.getRow(r);
       const firstCell = row.getCell(1).text;
-      if (!firstCell || firstCell.trim() === '' || firstCell.trim().toUpperCase() === 'TOTAL') {
-        continue;
+      if (firstCell && (firstCell.trim() === 'No.' || firstCell.trim().toUpperCase().includes('ITIS'))) {
+        headerRowIndex = r;
+        break;
       }
+    }
+
+    if (!headerRowIndex) return;
+
+    const headerRow = sheet.getRow(headerRowIndex);
+    const rawHeaders = [];
+    headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      rawHeaders[colNumber - 1] = cell.text;
+    });
+
+    const columnMap = buildColumnMap(rawHeaders, sourceType);
+    const records = [];
+
+    for (let r = headerRowIndex + 1; r <= sheet.rowCount; r++) {
+      const row = sheet.getRow(r);
+      const firstCell = row.getCell(1).text;
+      if (!firstCell || firstCell.trim() === '' || firstCell.trim().toUpperCase() === 'TOTAL') continue;
 
       const values = [];
       row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-        values[colNumber - 1] = cell.text || cell.value;
+        values[colNumber - 1] = cell.value;
       });
 
-      const mapped = mapper(values);
-      mapped._source_sheet = sheet.name;
-      results[sheetType].push(mapped);
+      const mapped = {
+        source_type: sourceType,
+        validation_status: null,
+        itis_case_id: null,
+      };
+
+      for (const [colIndex, field] of Object.entries(columnMap)) {
+        const val = values[parseInt(colIndex)];
+        if (val !== undefined && val !== null) {
+          mapped[field] = val instanceof Date ? val : String(val).trim();
+        }
+      }
+
+      mapped.date_of_screening = parseDate(mapped.date_of_screening);
+      mapped.date_of_diagnosis = parseDate(mapped.date_of_diagnosis);
+      mapped.date_of_notification = parseDate(mapped.date_of_notification);
+      mapped.date_started_treatment = parseDate(mapped.date_started_treatment);
+      mapped.date_of_outcome = parseDate(mapped.date_of_outcome);
+      mapped.record_created_at = mapped.record_created_at
+        ? new Date(mapped.record_created_at).toISOString()
+        : null;
+
+      mapped.age = mapped.age ? parseInt(mapped.age) : null;
+      mapped.sex = normalizeSex(mapped.sex);
+      mapped.row_number = r;
+      mapped.sheet_name = sheet.name;
+
+      records.push(mapped);
+    }
+
+    const sheetData = {
+      sheet_name: sheet.name,
+      source_type: sourceType,
+      record_count: records.length,
+      records,
+    };
+
+    result.sheets.push(sheetData);
+    result.totalRecords += records.length;
+
+    if (sourceType === 'DSTB') {
+      result.dstbCount += records.length;
+    } else {
+      result.mnCount += records.length;
     }
   });
 
-  return results;
-}
-
-function validateCase(row, dataset) {
-  const errors = [];
-  if (!row.patient_no) errors.push('Missing patient_no');
-  if (!row.facility_name) errors.push('Missing facility_name');
-  if (!row.date_reported) errors.push('Missing date_reported');
-  return { valid: errors.length === 0, errors };
+  return result;
 }
 
 module.exports = {
-  parseExcel,
-  validateCase,
+  parseMultiSheetExcel,
+  buildColumnMap,
+  parseDate,
+  normalizeSex,
   detectSheetType,
-  DSTB_COLUMNS,
-  MN_COLUMNS,
 };

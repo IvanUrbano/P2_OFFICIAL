@@ -176,7 +176,7 @@ export default function Forecasting() {
       setPipelineStatus(pipelineRes.data.latest_run || null);
       setBacktestData(backtestRes.data.data || []);
     } catch (err) {
-      console.error('Forecasting fetch error:', err);
+      if (import.meta.env.DEV) console.error('Forecasting fetch error:', err);
       setError('Failed to load analytics data. Make sure the backend is running.');
     }
   }, []);
@@ -214,7 +214,7 @@ export default function Forecasting() {
       setBacktestData(freshAvp.data.data || []);
       setPipelineStatus(freshPipeline.data.latest_run || null);
     } catch (err) {
-      console.error('Pipeline error:', err.response?.data?.error || err.message);
+      if (import.meta.env.DEV) console.error('Pipeline error:', err.response?.data?.error || err.message);
     } finally {
       // Apply filters
       setAppliedStartYear(startYear);

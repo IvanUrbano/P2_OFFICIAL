@@ -1,4 +1,5 @@
 services:
+  # ==================== TBInsight Backend ====================
   - type: web
     name: tb-system-backend
     env: node
@@ -24,12 +25,52 @@ services:
       - key: FRONTEND_URL
         value: https://p2-official.vercel.app
         sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+        # Set manually — must match Pasig Clone's WEBHOOK_SECRET
+
+  # ==================== Pasig Clone Backend ====================
+  - type: web
+    name: pasig-clone-backend
+    env: node
+    plan: free
+    rootDir: PASIG_CLONE/backend
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+        # Set manually in Render Dashboard → Environment:
+        # postgresql://neondb_owner:...@ep-xxx.neon.tech/pasig_clone_db?sslmode=require
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: WEBHOOK_SECRET
+        sync: false
+        # Set manually — must match TBInsight's WEBHOOK_SECRET
+      - key: TBINSIGHT_WEBHOOK_URL
+        value: https://tb-system-backend.onrender.com/api/webhook/pasig-clone
+      - key: FRONTEND_URL
+        value: https://pasig-clone-frontend.onrender.com
+        sync: false
+
+  # ==================== Pasig Clone Frontend ====================
+  - type: web
+    name: pasig-clone-frontend
+    env: node
+    plan: free
+    rootDir: PASIG_CLONE/frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm run preview -- --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: VITE_API_URL
+        value: https://pasig-clone-backend.onrender.com
+        sync: false
 
 databases: []
   # Render free Postgres was auto-deleted.
-  # DATABASE_URL is set manually in Render Dashboard → Environment.
-  # To recreate: uncomment below and remove the DATABASE_URL env var override.
-  # - name: tb-system-db
-  #   databaseName: tb_system
-  #   user: tb_system_user
-  #   plan: free
+  # TBInsight DATABASE_URL is set manually in Render Dashboard → Environment.
+  # Pasig Clone DATABASE_URL is set manually (separate Neon database: pasig_clone_db).

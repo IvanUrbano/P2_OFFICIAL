@@ -71,6 +71,10 @@ describe('matchHeader', () => {
     assert.equal(matchHeader('city'), 'city');
   });
 
+  it('maps "city/municipality"', () => {
+    assert.equal(matchHeader('city/municipality'), 'city');
+  });
+
   it('maps "no." to null (skip)', () => {
     assert.equal(matchHeader('no.'), null);
   });
@@ -256,15 +260,28 @@ describe('validateRow', () => {
     assert.ok(result.errors.some(e => e.includes('Barangay is required')));
   });
 
-  it('rejects unknown barangay', () => {
+  it('rejects unknown barangay for Pasig records', () => {
     const row = {
       barangay_name: 'Unknown Barangay',
       date_of_diagnosis: '2024-01-15',
       sex: 'Male',
+      city: 'Pasig',
     };
     const result = validateRow(row, validBarangays);
     assert.equal(result.valid, false);
     assert.ok(result.errors.some(e => e.includes('Unknown barangay')));
+  });
+
+  it('warns on unknown barangay for non-Pasig records', () => {
+    const row = {
+      barangay_name: 'Unknown Barangay',
+      date_of_diagnosis: '2024-01-15',
+      sex: 'Male',
+      city: 'Manila',
+    };
+    const result = validateRow(row, validBarangays);
+    assert.equal(result.valid, true);
+    assert.ok(result.warnings.some(w => w.includes('Non-Pasig record')));
   });
 
   it('rejects missing date_of_diagnosis', () => {

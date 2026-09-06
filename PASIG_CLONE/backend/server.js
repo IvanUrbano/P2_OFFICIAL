@@ -1,23 +1,41 @@
 require('dotenv').config();
+
+// Validate required environment variables
+const requiredEnvVars = ['DATABASE_URL', 'JWT_SECRET', 'WEBHOOK_SECRET', 'TBINSIGHT_WEBHOOK_URL'];
+for (const key of requiredEnvVars) {
+  if (!process.env[key]) {
+    console.error(`FATAL: Missing required environment variable: ${key}`);
+    process.exit(1);
+  }
+}
+
 const express = require('express');
 const cors = require('cors');
-const helmet = require('helmet');
-const morgan = require('morgan');
+const cookieParser = require('cookie-parser');
 const config = require('./config');
 const { initSchema } = require('./db/pasigSchema');
-const apiRoutes = require('./routes/api');
+
+const authRoutes = require('./routes/auth');
+const csvImportRoutes = require('./routes/csvImport');
+const validationRoutes = require('./routes/validation');
+const webhookRoutes = require('./routes/webhook');
 
 const app = express();
 
-app.use(helmet());
-app.use(cors());
-app.use(morgan('dev'));
-app.use(express.json());
+app.use(cors({
+  origin: ['http://localhost:5174', config.frontendUrl],
+  credentials: true,
+}));
+app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser());
 
-app.use('/api', apiRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/data', csvImportRoutes);
+app.use('/api/data', validationRoutes);
+app.use('/api/webhook', webhookRoutes);
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'pasig-clone-backend' });
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', service: 'pasig-clone', timestamp: new Date().toISOString() });
 });
 
 async function start() {
@@ -33,3 +51,5 @@ async function start() {
 }
 
 start();
+
+module.exports = app;

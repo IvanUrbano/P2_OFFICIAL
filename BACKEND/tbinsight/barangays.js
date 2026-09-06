@@ -42,6 +42,46 @@ async function seedBarangays() {
 }
 
 /**
+ * Seed barangays_geom with PostGIS polygons from pasig-barangays.geojson
+ * Converts GeoJSON MultiPolygon to PostGIS geometry for GIS map rendering
+ */
+async function seedBarangaysGeom() {
+  const geojsonPath = path.join(__dirname, '..', 'data', 'pasig-barangays.geojson');
+  const geojson = JSON.parse(fs.readFileSync(geojsonPath, 'utf8'));
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    let seeded = 0;
+    for (const feature of geojson.features) {
+      const { name, population } = feature.properties;
+      const geometry = JSON.stringify(feature.geometry);
+
+      await client.query(
+        `INSERT INTO barangays_geom (name, population, geom)
+         VALUES ($1, $2, ST_SetSRID(ST_GeomFromGeoJSON($3), 4326))
+         ON CONFLICT (name) DO UPDATE SET
+           population = EXCLUDED.population,
+           geom = EXCLUDED.geom`,
+        [name, population || 0, geometry]
+      );
+      seeded++;
+    }
+
+    await client.query('COMMIT');
+    console.log(`✅ Seeded ${seeded} barangay geometries`);
+    return { success: true, count: seeded };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to seed barangay geometries:', err.message);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Seed health facilities from pasig-health-facilities.csv
  */
 async function seedHealthFacilities() {
@@ -130,6 +170,7 @@ async function findBarangay(name) {
 
 module.exports = {
   seedBarangays,
+  seedBarangaysGeom,
   seedHealthFacilities,
   seedAll,
   getBarangays,

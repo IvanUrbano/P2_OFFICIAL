@@ -1,4 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import ErrorBoundary from '../components/ErrorBoundary';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import Layout from '../components/Layout';
@@ -24,7 +25,8 @@ function ProtectedRoute() {
 function App() {
   return (
     <Router>
-      <Routes>
+      <ErrorBoundary>
+        <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<LoginPage />} />
 
@@ -45,7 +47,8 @@ function App() {
             <Route path="/profile" element={<Profile />} />
           </Route>
         </Route>
-      </Routes>
+        </Routes>
+      </ErrorBoundary>
     </Router>
   );
 }

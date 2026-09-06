@@ -316,7 +316,7 @@ export function printReport() {
   window.print();
 }
 
-export function saveToRecentReports(reportData) {
+export function saveToRecentReports(reportData, filters = {}) {
   const key = 'tbinsight_recent_reports';
   const existing = JSON.parse(localStorage.getItem(key) || '[]');
   const entry = {
@@ -325,6 +325,13 @@ export function saveToRecentReports(reportData) {
     period: reportData.report?.period || '',
     coverage: reportData.report?.coverage || '',
     generatedAt: reportData.report?.generatedAt || new Date().toISOString(),
+    filters: {
+      reportType: filters.reportType || reportData.report?.type || 'monthly',
+      year: filters.year || '',
+      month: filters.month || '',
+      quarter: filters.quarter || '',
+      barangay: filters.barangay || '',
+    },
   };
   const updated = [entry, ...existing].slice(0, 20);
   localStorage.setItem(key, JSON.stringify(updated));

@@ -236,9 +236,7 @@ function SectionCard({ title, iconColor, description, action, actionTo, children
   );
 }
 
-function SkeletonBlock({ className }) {
-  return <div className={`animate-pulse rounded-lg ${className}`} style={{ background: '#E2E8F0' }} />;
-}
+import SkeletonBlock from '../../components/SkeletonBlock';
 
 function SkeletonCard() {
   return (
@@ -326,7 +324,7 @@ export default function DashboardPage() {
       setPipelineStatus(pipelineRes.data.latest_run || null);
       setDemographicsData(demoRes.data.demographics || []);
     } catch (err) {
-      console.error('Dashboard fetch error:', err);
+      if (import.meta.env.DEV) console.error('Dashboard fetch error:', err);
       setError('Dashboard data could not be retrieved. Please try again.');
     } finally {
       setLoading(false);

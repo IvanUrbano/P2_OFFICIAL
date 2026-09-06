@@ -4,12 +4,23 @@ const cookieParser = require('cookie-parser');
 const fileUpload = require('express-fileupload');
 require('dotenv').config();
 
+// Validate required environment variables
+const requiredEnvVars = ['DATABASE_URL', 'JWT_SECRET', 'WEBHOOK_SECRET'];
+for (const key of requiredEnvVars) {
+  if (!process.env[key]) {
+    console.error(`FATAL: Missing required environment variable: ${key}`);
+    process.exit(1);
+  }
+}
+
 // Import database connection
 const pool = require('./db');
 
 // Import routes
 const authRoutes = require('./routes/auth');
 const tbInsightRoutes = require('./tbinsight/routes');
+const webhookRoutes = require('./tbinsight/webhook');
+const { apiLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -18,6 +29,7 @@ const PORT = process.env.PORT || 5000;
 const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:5174',
+  'http://localhost:5001',
   'http://localhost:3000',
   process.env.FRONTEND_URL, // e.g. https://p2-official.vercel.app
 ].filter(Boolean);
@@ -31,7 +43,6 @@ app.use(cors({
     if (!origin) return callback(null, true);
 
     const isAllowed =
-      origin.startsWith('http://localhost:') ||
       allowedOrigins.includes(origin) ||
       vercelPreviewPattern.test(origin);
 
@@ -44,7 +55,7 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(fileUpload({
@@ -53,9 +64,30 @@ app.use(fileUpload({
   responseOnLimit: 'File size exceeds 50MB limit.',
 }));
 
+// ==================== REQUEST TIMEOUT ====================
+// Kill requests that take too long to prevent pool exhaustion
+// 60s for normal endpoints, 300s for pipeline/evaluate/import
+const slowRequestTimeout = (timeoutMs) => (req, res, next) => {
+  req.setTimeout(timeoutMs, () => {
+    if (!res.headersSent) {
+      res.status(408).json({ error: 'Request timeout' });
+    }
+  });
+  next();
+};
+
+// Apply 60s timeout to all API routes by default
+app.use('/api', slowRequestTimeout(60_000));
+
+// Extend timeout for long-running endpoints
+app.use('/api/tb/pipeline', slowRequestTimeout(300_000));
+app.use('/api/tb/evaluate', slowRequestTimeout(300_000));
+app.use('/api/tb/import', slowRequestTimeout(300_000));
+
 // ==================== ROUTES ====================
-app.use('/api/auth', authRoutes);
-app.use('/api/tb', tbInsightRoutes);
+app.use('/api/auth', apiLimiter, authRoutes);
+app.use('/api/tb', apiLimiter, tbInsightRoutes);
+app.use('/api/webhook', webhookRoutes);
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
@@ -99,6 +131,14 @@ app.get('/', (req, res) => {
       },
     },
   });
+});
+
+// ==================== GLOBAL ERROR HANDLER ====================
+app.use((err, req, res, next) => {
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Invalid JSON in request body.' });
+  }
+  next(err);
 });
 
 // ==================== START SERVER ====================
