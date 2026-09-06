@@ -1,7 +1,7 @@
 require('dotenv').config();
 
 // Validate required environment variables
-const requiredEnvVars = ['DATABASE_URL', 'JWT_SECRET', 'WEBHOOK_SECRET', 'TBINSIGHT_WEBHOOK_URL'];
+const requiredEnvVars = ['DATABASE_URL', 'AUTH_DATABASE_URL', 'JWT_SECRET', 'WEBHOOK_SECRET', 'TBINSIGHT_WEBHOOK_URL'];
 for (const key of requiredEnvVars) {
   if (!process.env[key]) {
     console.error(`FATAL: Missing required environment variable: ${key}`);

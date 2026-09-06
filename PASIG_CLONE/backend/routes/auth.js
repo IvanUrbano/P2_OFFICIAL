@@ -31,8 +31,8 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
       return res.status(400).json({ error: 'Role must be admin or staff' });
     }
 
-    const existing = await db.pool.query(
-      'SELECT id FROM users WHERE username = $1 OR email = $2',
+    const existing = await db.authPool.query(
+      'SELECT id FROM users WHERE LOWER(username) = $1 OR LOWER(email) = $2',
       [cleanUsername, cleanEmail]
     );
     if (existing.rows.length > 0) {
@@ -40,7 +40,7 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const result = await db.pool.query(
+    const result = await db.authPool.query(
       `INSERT INTO users (username, email, password_hash, role)
        VALUES ($1, $2, $3, $4) RETURNING id, username, email, role, created_at`,
       [cleanUsername, cleanEmail, hashedPassword, userRole]
@@ -63,8 +63,8 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
-    const result = await db.pool.query(
-      'SELECT * FROM users WHERE username = $1',
+    const result = await db.authPool.query(
+      'SELECT * FROM users WHERE LOWER(username) = $1 OR LOWER(email) = $1',
       [cleanUsername]
     );
 
@@ -108,7 +108,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 
 router.get('/profile', authenticate, async (req, res) => {
   try {
-    const result = await db.pool.query(
+    const result = await db.authPool.query(
       'SELECT id, username, email, role, created_at FROM users WHERE id = $1',
       [req.user.id]
     );
