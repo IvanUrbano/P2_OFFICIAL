@@ -30,6 +30,7 @@ app.set('trust proxy', 1);
 
 // ==================== MIDDLEWARE ====================
 const allowedOrigins = [
+  'http://localhost:5050',
   'http://localhost:5173',
   'http://localhost:5174',
   'http://localhost:5001',
