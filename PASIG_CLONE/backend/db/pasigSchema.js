@@ -60,7 +60,7 @@ function insertRawCase(batchId, sheetName, sourceType, rowNumber, csvData) {
   );
 }
 
-function insertRawCases(client, batchId, records) {
+async function insertRawCases(client, batchId, records) {
   if (records.length === 0) return Promise.resolve();
   const chunkSize = 100;
   for (let i = 0; i < records.length; i += chunkSize) {
