@@ -64,7 +64,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
 
     // Accept username OR email
-    const result = await pool.query('SELECT * FROM users WHERE username = $1 OR email = $1', [email]);
+    const result = await pool.query('SELECT * FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)', [email]);
 
     if (result.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid email or password.' });
