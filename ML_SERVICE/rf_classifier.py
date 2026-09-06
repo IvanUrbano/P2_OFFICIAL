@@ -54,7 +54,7 @@ def compute_incidence(cases: float, population: int) -> float:
     """Compute annualized incidence per 100k population."""
     if population <= 0:
         return 0.0
-    return (cases / population) * 100_000
+    return (cases / population) * 100_000 * 12
 
 
 def classify_incidence_tertile(

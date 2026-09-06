@@ -90,7 +90,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict', // 'none' required for cross-origin (Vercel ↔ Render)
+      sameSite: 'lax', // 'lax' for CSRF protection; frontend uses Bearer header, not cookies
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 

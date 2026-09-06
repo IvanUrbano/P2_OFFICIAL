@@ -22,6 +22,9 @@ const webhookRoutes = require('./routes/webhook');
 
 const app = express();
 
+// Trust first proxy (required for rate limiting behind Render's reverse proxy)
+app.set('trust proxy', 1);
+
 app.use(cors({
   origin: ['http://localhost:5174', config.frontendUrl],
   credentials: true,
@@ -36,6 +39,12 @@ app.use('/api/webhook', webhookRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'pasig-clone', timestamp: new Date().toISOString() });
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 async function start() {

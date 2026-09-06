@@ -45,6 +45,7 @@ function App() {
             <Route path="/reports" element={<Reports />} />
             <Route path="/alert" element={<Alert />} />
             <Route path="/profile" element={<Profile />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Route>
         </Route>
         </Routes>

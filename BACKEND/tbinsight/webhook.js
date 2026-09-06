@@ -121,7 +121,6 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
     }
 
     await client.query('COMMIT');
-    client.release();
 
     // Rebuild aggregations separately — data is already committed
     if (importedCount > 0) {

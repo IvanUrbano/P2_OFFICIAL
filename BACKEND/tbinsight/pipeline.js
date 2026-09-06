@@ -420,11 +420,12 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     // Re-acquire client for transaction
     const txClient = await pool.connect();
     try {
+    await txClient.query('BEGIN');
+
     // Clean up old rows with non-1st-of-month dates (legacy data)
     await txClient.query(
       `DELETE FROM model_predictions WHERE period::date != date_trunc('month', period)::date`
     );
-    await txClient.query('BEGIN');
 
     await storeResults(
       txClient,
@@ -563,9 +564,9 @@ function _nextMonth(dateStr) {
  *   - neighbor_risk: average incidence of OTHER barangays in the same month, normalized
  *   - historical_bias: AVG(|actual - forecasted|) from past predictions (0 if no history)
  */
-async function _buildTrainingRows(client, populationMap, thresholds) {
-  // Fetch all monthly data sorted by month
-  const result = await client.query(
+async function _buildTrainingRows(_client, populationMap, thresholds) {
+  // Fetch all monthly data sorted by month (use pool directly — client is released)
+  const result = await pool.query(
     `SELECT barangay_name, month, case_count
      FROM monthly_case_summary
      ORDER BY month ASC`
@@ -590,7 +591,7 @@ async function _buildTrainingRows(client, populationMap, thresholds) {
   // Fetch past predictions with actual_count for historical_bias computation
   let pastPredictions = [];
   try {
-    const pastResult = await client.query(
+    const pastResult = await pool.query(
       `SELECT barangay_name, period, actual_count, forecasted_count
        FROM model_predictions
        WHERE actual_count IS NOT NULL

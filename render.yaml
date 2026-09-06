@@ -28,6 +28,12 @@ services:
       - key: WEBHOOK_SECRET
         sync: false
         # Set manually — must match Pasig Clone's WEBHOOK_SECRET
+      - key: ML_API_KEY
+        sync: false
+        # Set manually — must match ML Service's ML_API_KEY
+      - key: ML_SERVICE_URL
+        value: https://tb-system-ml.onrender.com
+        sync: false
 
   # ==================== Pasig Clone Backend ====================
   - type: web
@@ -69,6 +75,21 @@ services:
       - key: VITE_API_URL
         value: https://pasig-clone-backend.onrender.com
         sync: false
+
+  # ==================== TBInsight ML Service ====================
+  - type: web
+    name: tb-system-ml
+    env: python
+    plan: free
+    rootDir: ML_SERVICE
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ENV
+        value: production
+      - key: ML_API_KEY
+        sync: false
+        # Set manually — must match TBInsight backend's ML_API_KEY
 
 databases: []
   # Render free Postgres was auto-deleted.

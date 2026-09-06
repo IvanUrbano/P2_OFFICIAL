@@ -30,7 +30,7 @@ class ErrorBoundaryInner extends Component {
                 Refresh Page
               </button>
               <button
-                onClick={() => { window.location.href = '/login'; }}
+                onClick={() => { window.location.replace('/login'); }}
                 className="px-4 py-2 text-xs font-semibold rounded-lg"
                 style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB' }}
               >

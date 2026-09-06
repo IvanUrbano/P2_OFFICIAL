@@ -1382,50 +1382,31 @@ router.get('/predictions/risk', async (req, res) => {
  *   page     = integer (default: 1)
  *   limit    = integer (default: 50, max: 100)
  */
+router.post('/alerts/seed', authenticateToken, async (req, res) => {
+  try {
+    const notifCheck = await pool.query("SELECT COUNT(*)::int AS count FROM alerts WHERE type = 'notification'");
+    if (notifCheck.rows[0].count > 0) {
+      return res.json({ message: 'Notifications already seeded' });
+    }
+    const sampleNotifs = [
+      { title: 'System Initialized', message: 'TBInsight surveillance system has been initialized and is ready for use.', source: 'data_integration' },
+      { title: 'Data Import Completed', message: 'TB case records have been successfully imported and validated.', source: 'tb_records' },
+      { title: 'Forecast Model Updated', message: 'ARIMA forecasting model has been retrained with the latest case data.', source: 'forecasting' },
+      { title: 'Risk Assessment Complete', message: 'Barangay risk classification has been updated based on current data.', source: 'analytics' },
+      { title: 'Report Generated', message: 'Monthly TB surveillance report has been generated and is available for review.', source: 'reports' },
+    ];
+    for (const n of sampleNotifs) {
+      await createNotification(pool, { title: n.title, message: n.message, sourceModule: n.source });
+    }
+    res.json({ message: 'Notifications seeded', count: sampleNotifs.length });
+  } catch (err) {
+    console.error('Seed error:', err.message);
+    res.status(500).json({ error: 'Failed to seed notifications' });
+  }
+});
+
 router.get('/alerts', async (req, res) => {
   try {
-    // Seed sample data if no notifications exist yet (wrapped in its own try/catch)
-    try {
-      const notifCheck = await pool.query("SELECT COUNT(*)::int AS count FROM alerts WHERE type = 'notification'");
-      if (notifCheck.rows[0].count === 0) {
-        // Seed sample notifications
-        const sampleNotifs = [
-          { title: 'System Initialized', message: 'TBInsight surveillance system has been initialized and is ready for use.', source: 'data_integration' },
-          { title: 'Data Import Completed', message: 'TB case records have been successfully imported and validated.', source: 'tb_records' },
-          { title: 'Forecast Model Updated', message: 'ARIMA forecasting model has been retrained with the latest case data.', source: 'forecasting' },
-          { title: 'Risk Assessment Complete', message: 'Barangay risk classification has been updated based on current data.', source: 'analytics' },
-          { title: 'Report Generated', message: 'Monthly TB surveillance report has been generated and is available for review.', source: 'reports' },
-        ];
-        for (const n of sampleNotifs) {
-          await createNotification(pool, {
-            title: n.title,
-            message: n.message,
-            sourceModule: n.source,
-          });
-        }
-
-        // Try to evaluate real alerts using the latest period from the database
-        try {
-          const periodResult = await pool.query(`
-            SELECT MAX(month)::text AS latest FROM monthly_case_summary
-            UNION ALL
-            SELECT MAX(period)::text FROM barangay_risk_scores
-            UNION ALL
-            SELECT MAX(period)::text FROM model_predictions
-          `);
-          const periods = periodResult.rows.map(r => r.latest).filter(Boolean).sort().reverse();
-          if (periods.length > 0) {
-            const evalPeriod = periods[0].slice(0, 10); // keep full date "YYYY-MM-DD"
-            await evaluateAllAlerts(pool, evalPeriod);
-          }
-        } catch (e) {
-          console.error('Seed alert evaluation skipped:', e.message);
-        }
-      }
-    } catch (seedErr) {
-      console.error('Alert seed/evaluation skipped:', seedErr.message);
-    }
-
     const { type, status, severity, barangay, source, date, from, to } = req.query;
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
@@ -1687,6 +1668,10 @@ router.put('/predictions/backfill', authenticateToken, authorizeRoles('admin'), 
       return res.status(400).json({
         error: 'Required: { period: "YYYY-MM-DD", actual_counts: { "Barangay A": 45, ... } }',
       });
+    }
+
+    if (!/^\d{4}-\d{2}/.test(period)) {
+      return res.status(400).json({ error: 'Period must be in YYYY-MM format' });
     }
 
     const periodDate = period + '-01'; // Ensure it's a valid date
@@ -2513,7 +2498,7 @@ router.get('/interventions/:id', async (req, res) => {
  * POST /api/tb/interventions
  * Create a new intervention
  */
-router.post('/interventions', authenticateToken, async (req, res) => {
+router.post('/interventions', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {
     const {
       title, description, intervention_type, barangay_name,
@@ -2549,7 +2534,7 @@ router.post('/interventions', authenticateToken, async (req, res) => {
  * PUT /api/tb/interventions/:id
  * Update an intervention
  */
-router.put('/interventions/:id', authenticateToken, async (req, res) => {
+router.put('/interventions/:id', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -2601,7 +2586,7 @@ router.put('/interventions/:id', authenticateToken, async (req, res) => {
  * POST /api/tb/interventions/:id/complete
  * Mark an intervention as completed
  */
-router.post('/interventions/:id/complete', authenticateToken, async (req, res) => {
+router.post('/interventions/:id/complete', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {
     const { id } = req.params;
     await pool.query(
@@ -2619,7 +2604,7 @@ router.post('/interventions/:id/complete', authenticateToken, async (req, res) =
  * DELETE /api/tb/interventions/:id
  * Delete an intervention
  */
-router.delete('/interventions/:id', authenticateToken, async (req, res) => {
+router.delete('/interventions/:id', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {
     const { id } = req.params;
     await pool.query('DELETE FROM interventions WHERE id = $1', [id]);

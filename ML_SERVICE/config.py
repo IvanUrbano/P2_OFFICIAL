@@ -8,6 +8,12 @@ Health officers can override via config.
 
 import os
 
+# ==================== AUTH ====================
+
+ML_API_KEY = os.environ.get("ML_API_KEY")
+if not ML_API_KEY:
+    raise RuntimeError("ML_API_KEY environment variable is required")
+
 # ==================== MODEL CONFIG ====================
 
 MODEL_VERSION = "arima-v1.0-rf-v1.0"

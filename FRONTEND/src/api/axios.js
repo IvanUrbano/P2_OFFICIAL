@@ -29,7 +29,7 @@ API.interceptors.response.use(
       localStorage.removeItem('user');
       // Redirect to login if not already there
       if (window.location.pathname !== '/login') {
-        window.location.href = '/login';
+        window.location.replace('/login');
       }
     }
     return Promise.reject(error);

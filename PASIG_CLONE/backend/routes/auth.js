@@ -2,9 +2,18 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const config = require('../config');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many login attempts. Please try again after 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 router.post('/register', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
@@ -15,6 +24,11 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
 
     if (!cleanUsername || !cleanEmail || !password) {
       return res.status(400).json({ error: 'Username, email, and password are required' });
+    }
+
+    const userRole = role || 'staff';
+    if (!['admin', 'staff'].includes(userRole)) {
+      return res.status(400).json({ error: 'Role must be admin or staff' });
     }
 
     const existing = await db.pool.query(
@@ -29,7 +43,7 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
     const result = await db.pool.query(
       `INSERT INTO users (username, email, password_hash, role)
        VALUES ($1, $2, $3, $4) RETURNING id, username, email, role, created_at`,
-      [cleanUsername, cleanEmail, hashedPassword, role || 'staff']
+      [cleanUsername, cleanEmail, hashedPassword, userRole]
     );
 
     res.status(201).json({ user: result.rows[0] });
@@ -39,7 +53,7 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
 

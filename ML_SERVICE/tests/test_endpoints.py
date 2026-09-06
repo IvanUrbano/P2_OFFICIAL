@@ -329,7 +329,7 @@ def test_pipeline_short_series():
     })
     assert r.status_code == 200
     data = r.json()
-    assert data["forecast"]["method"] in ("seasonal_naive", "exp_smoothing")
+    assert data["forecast"]["method"] in ("seasonal_naive", "exponential_smoothing")
     assert data["classification"]["risk_class"] in ("Low", "Medium", "High")
     print(f"  PASS: test_pipeline_short_series (method={data['forecast']['method']})")
 

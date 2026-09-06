@@ -100,7 +100,8 @@ pool.connect()
     await initDb();
   })
   .catch((err) => {
-    console.error('❌ Failed to connect to PostgreSQL:', err.message);
+    console.error('❌ FATAL: Failed to connect to PostgreSQL:', err.message);
+    process.exit(1);
   });
 
 module.exports = pool;
