@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const authPool = new Pool({ connectionString: process.env.AUTH_DATABASE_URL });
 
 pool.on('error', (err) => {
   console.error('[pasig-clone] Unexpected pool error:', err.message);
@@ -60,7 +61,7 @@ function insertRawCase(batchId, sheetName, sourceType, rowNumber, csvData) {
   );
 }
 
-function insertRawCases(client, batchId, records) {
+async function insertRawCases(client, batchId, records) {
   if (records.length === 0) return Promise.resolve();
   const chunkSize = 100;
   for (let i = 0; i < records.length; i += chunkSize) {
@@ -187,6 +188,7 @@ function deleteValidatedCases(batchId) {
 
 module.exports = {
   pool,
+  authPool,
   initSchema,
   insertBatch,
   insertRawCase,
