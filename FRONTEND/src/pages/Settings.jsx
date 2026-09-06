@@ -95,11 +95,8 @@ export default function Settings() {
     // System info — non-fatal if unreachable
     (async () => {
       try {
-        const [health, root] = await Promise.all([
-          API.get('/api/health'),
-          API.get('/'),
-        ]);
-        setSys({ ...health.data, version: root.data.version });
+        const health = await API.get('/api/health');
+        setSys({ ...health.data, version: '1.0.0' });
       } catch {
         setSysError(true);
       }

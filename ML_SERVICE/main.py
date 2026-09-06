@@ -9,10 +9,10 @@ import logging
 import os
 import sys
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
-from routes import router
+from routes import router, verify_api_key
 from config import MODEL_VERSION
 
 # Configure logging
@@ -46,7 +46,7 @@ app.add_middleware(
 app.include_router(router, prefix="/api/ml")
 
 
-@app.get("/")
+@app.get("/", dependencies=[Depends(verify_api_key)])
 async def root():
     """Root endpoint with service info."""
     return {

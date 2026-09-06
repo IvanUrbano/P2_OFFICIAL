@@ -13,8 +13,9 @@ import logging
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header, Depends
 
+from config import ML_API_KEY, MODEL_VERSION
 from models import (
     ClassifyRequest,
     ClassifyResponse,
@@ -47,10 +48,15 @@ from rf_classifier import (
     FEATURES,
 )
 from thresholds import compute_thresholds
-from config import MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def verify_api_key(x_api_key: str = Header(...)):
+    """Verify ML API key from request header."""
+    if x_api_key != ML_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing ML API key")
 
 
 # ==================== GET /health ====================
@@ -67,7 +73,7 @@ async def health_check():
 
 # ==================== POST /thresholds ====================
 
-@router.post("/thresholds", response_model=ThresholdResponse)
+@router.post("/thresholds", response_model=ThresholdResponse, dependencies=[Depends(verify_api_key)])
 async def compute_risk_thresholds(req: ThresholdRequest):
     """
     Compute risk band thresholds from incidence data.
@@ -90,7 +96,7 @@ async def compute_risk_thresholds(req: ThresholdRequest):
 
 # ==================== POST /forecast ====================
 
-@router.post("/forecast", response_model=ForecastResponse)
+@router.post("/forecast", response_model=ForecastResponse, dependencies=[Depends(verify_api_key)])
 async def run_forecast(req: ForecastRequest):
     """
     Run ARIMA forecasting on time series data.
@@ -151,7 +157,7 @@ async def run_forecast(req: ForecastRequest):
 
 # ==================== POST /classify ====================
 
-@router.post("/classify", response_model=ClassifyResponse)
+@router.post("/classify", response_model=ClassifyResponse, dependencies=[Depends(verify_api_key)])
 async def run_classify(req: ClassifyRequest):
     """
     Train RF on training data and predict risk classes.
@@ -202,7 +208,7 @@ async def run_classify(req: ClassifyRequest):
 
 # ==================== POST /pipeline ====================
 
-@router.post("/pipeline", response_model=PipelineResponse)
+@router.post("/pipeline", response_model=PipelineResponse, dependencies=[Depends(verify_api_key)])
 async def run_pipeline(req: PipelineRequest):
     """
     Full pipeline: ARIMA forecast → classification.
@@ -216,6 +222,14 @@ async def run_pipeline(req: PipelineRequest):
             raise HTTPException(status_code=400, detail="No series data provided")
 
         series_data = [pt.model_dump() for pt in req.series]
+
+        # Validate all records belong to the same barangay
+        barangay_names = {pt.barangay_name for pt in req.series}
+        if len(barangay_names) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Pipeline endpoint requires single-barangay input. Got {len(barangay_names)} barangays: {', '.join(sorted(barangay_names))}"
+            )
         barangay_name = series_data[0]["barangay_name"]
 
         # Step 1: ARIMA forecasting
@@ -312,7 +326,7 @@ async def run_pipeline(req: PipelineRequest):
 
 # ==================== POST /evaluate ====================
 
-@router.post("/evaluate", response_model=EvaluateResponse)
+@router.post("/evaluate", response_model=EvaluateResponse, dependencies=[Depends(verify_api_key)])
 async def evaluate_models(req: EvaluateRequest):
     """
     Walk-forward evaluation for both ARIMA and RF models.

@@ -78,8 +78,8 @@ async function sendWebhook(batchId) {
   const signature = signPayload(payload, secret);
   const webhookUrl = config.webhook.url;
 
-  const MAX_RETRIES = 2;
-  const TIMEOUT_MS = 30000;
+  const MAX_RETRIES = parseInt(process.env.WEBHOOK_MAX_RETRIES || '3');
+  const TIMEOUT_MS = parseInt(process.env.WEBHOOK_TIMEOUT_MS || '60000');
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {

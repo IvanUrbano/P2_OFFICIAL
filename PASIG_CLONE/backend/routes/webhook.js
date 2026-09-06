@@ -2,9 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { sendWebhook } = require('../services/webhookSender');
 const db = require('../db/pasigSchema');
-const { authorizeRoles } = require('../middleware/auth');
+const { authenticate, authorizeRoles } = require('../middleware/auth');
 
-router.post('/send', authorizeRoles('admin'), async (req, res) => {
+router.post('/send', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const { batchId } = req.body;
 
@@ -25,7 +25,7 @@ router.post('/send', authorizeRoles('admin'), async (req, res) => {
   }
 });
 
-router.get('/logs', authorizeRoles('admin'), async (req, res) => {
+router.get('/logs', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const result = await db.getWebhookLogs();
     res.json(result.rows);

@@ -50,30 +50,30 @@ describe('authenticateToken middleware', () => {
     assert.ok(res.body.error.includes('No token'));
   });
 
-  it('returns 403 for malformed token', async () => {
+  it('returns 401 for malformed token', async () => {
     const res = await request(buildApp())
       .get('/protected')
       .set('Authorization', 'Bearer not.a.valid.jwt');
-    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.status, 401);
     assert.ok(res.body.error.includes('Invalid or expired'));
   });
 
-  it('returns 403 for token signed with wrong secret', async () => {
+  it('returns 401 for token signed with wrong secret', async () => {
     const token = jwt.sign({ id: 1 }, 'wrong-secret', { expiresIn: '1h' });
     const res = await request(buildApp())
       .get('/protected')
       .set('Authorization', `Bearer ${token}`);
-    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.status, 401);
   });
 
-  it('returns 403 for expired token', async () => {
+  it('returns 401 for expired token', async () => {
     const token = jwt.sign({ id: 1 }, TEST_SECRET, { expiresIn: '0s' });
     // Small delay to ensure expiration
     await new Promise(r => setTimeout(r, 50));
     const res = await request(buildApp())
       .get('/protected')
       .set('Authorization', `Bearer ${token}`);
-    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.status, 401);
     assert.ok(res.body.error.includes('Invalid or expired'));
   });
 
@@ -126,7 +126,7 @@ describe('authenticateToken middleware', () => {
     const res = await request(buildApp())
       .get('/protected')
       .set('Authorization', `Bearer ${token}`);
-    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.status, 401);
   });
 
   it('passes through all decoded fields', async () => {

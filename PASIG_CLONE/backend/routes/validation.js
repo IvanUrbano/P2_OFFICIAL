@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { validateBatch } = require('../services/validator');
-const { authorizeRoles } = require('../middleware/auth');
+const { authenticate, authorizeRoles } = require('../middleware/auth');
 
-router.post('/validate/:batchId', authorizeRoles('admin', 'staff'), async (req, res) => {
+router.post('/validate/:batchId', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
     const { batchId } = req.params;
 

@@ -22,10 +22,20 @@ const loginLimiter = rateLimit({
 // General rate limiter for all API routes
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per window
+  max: parseInt(process.env.API_LIMIT_MAX, 10) || 300,
+  skip: (req) => req.method === 'OPTIONS',
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests. Please try again later.' },
 });
 
-module.exports = { loginLimiter, apiLimiter };
+// Rate limiter for webhook endpoints (stricter — external calls only)
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many webhook requests. Please slow down.' },
+});
+
+module.exports = { loginLimiter, apiLimiter, webhookLimiter };

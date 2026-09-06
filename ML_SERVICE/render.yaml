@@ -1,13 +1,2 @@
-services:
-  - type: web
-    name: tb-system-ml
-    env: python
-    plan: free
-    rootDir: ML_SERVICE
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: ENV
-        value: production
-      - key: PORT
-        value: 8001
+# ML Service is deployed via root render.yaml (P2_OFFICIAL/render.yaml)
+# This file is intentionally left empty to avoid duplicate service definitions.

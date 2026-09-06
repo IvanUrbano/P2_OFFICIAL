@@ -66,12 +66,40 @@ async function validateBatch(batchId) {
   await db.updateBatchValidation(batchId, results.valid, results.invalid);
 
   // Idempotency: delete existing validated records for this batch before re-inserting
-  await db.deleteValidatedCases(batchId);
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM validated_tb_cases WHERE batch_id = $1', [batchId]);
 
-  for (const record of results.validatedRecords) {
-    if (record.is_valid) {
-      await db.insertValidatedCase(batchId, record);
+    for (const record of results.validatedRecords) {
+      if (record.is_valid) {
+        await client.query(
+          `INSERT INTO validated_tb_cases
+           (batch_id, source_type, barangay_name, date_of_diagnosis, date_of_notification,
+            age, sex, city, screening_facility, treatment_facility, source_of_patient,
+            anatomical_site, registration_group, bacteriological_status, date_started_treatment,
+            outcome_status, date_of_outcome, record_created_at, date_of_screening,
+            validation_status, itis_case_id, is_valid, validation_errors, validation_warnings)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
+          [
+            batchId, record.source_type, record.barangay_name, record.date_of_diagnosis,
+            record.date_of_notification, record.age, record.sex, record.city,
+            record.screening_facility, record.treatment_facility, record.source_of_patient,
+            record.anatomical_site, record.registration_group, record.bacteriological_status,
+            record.date_started_treatment, record.outcome_status, record.date_of_outcome,
+            record.record_created_at, record.date_of_screening, record.validation_status,
+            record.itis_case_id, record.is_valid, JSON.stringify(record.errors),
+            JSON.stringify(record.warnings),
+          ]
+        );
+      }
     }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
 
   return results;

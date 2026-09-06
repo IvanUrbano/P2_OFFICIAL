@@ -13,6 +13,10 @@
  */
 
 const ML_BASE = process.env.ML_SERVICE_URL || 'http://localhost:8001';
+const ML_API_KEY = process.env.ML_API_KEY;
+if (!ML_API_KEY) {
+  console.warn('⚠️ ML_API_KEY not set — ML service calls will fail');
+}
 
 // Timeout for ML calls (ARIMA can be slow on first run)
 const ML_TIMEOUT_MS = 60_000;
@@ -32,7 +36,10 @@ async function mlPost(path, body) {
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Api-Key': ML_API_KEY,
+      },
       body: JSON.stringify(body),
       signal: controller.signal,
     });

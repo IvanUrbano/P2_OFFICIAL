@@ -19,7 +19,7 @@ const execSql = async (sqlContent) => {
       .join('\n');
 
     const statements = cleaned
-      .split(';')
+      .split(/;\s*\n/)
       .map(s => s.trim())
       .filter(s => s.length > 0);
 
@@ -58,6 +58,26 @@ function insertRawCase(batchId, sheetName, sourceType, rowNumber, csvData) {
      VALUES ($1, $2, $3, $4, $5)`,
     [batchId, sheetName, sourceType, rowNumber, csvData]
   );
+}
+
+function insertRawCases(client, batchId, records) {
+  if (records.length === 0) return Promise.resolve();
+  const chunkSize = 100;
+  for (let i = 0; i < records.length; i += chunkSize) {
+    const chunk = records.slice(i, i + chunkSize);
+    const placeholders = chunk.map((_, idx) => {
+      const base = idx * 5;
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
+    }).join(', ');
+    const flatParams = chunk.flatMap(r => [
+      batchId, r.sheet_name, r.source_type, r.row_number, JSON.stringify(r.csv_data),
+    ]);
+    await client.query(
+      `INSERT INTO raw_tb_cases (batch_id, sheet_name, source_type, row_number, csv_data)
+       VALUES ${placeholders}`,
+      flatParams
+    );
+  }
 }
 
 function insertValidatedCase(batchId, record) {
@@ -170,6 +190,7 @@ module.exports = {
   initSchema,
   insertBatch,
   insertRawCase,
+  insertRawCases,
   insertValidatedCase,
   deleteValidatedCases,
   updateBatchValidation,

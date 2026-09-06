@@ -20,10 +20,13 @@ const pool = require('./db');
 const authRoutes = require('./routes/auth');
 const tbInsightRoutes = require('./tbinsight/routes');
 const webhookRoutes = require('./tbinsight/webhook');
-const { apiLimiter } = require('./middleware/rateLimiter');
+const { apiLimiter, webhookLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Trust first proxy (required for rate limiting behind Render's reverse proxy)
+app.set('trust proxy', 1);
 
 // ==================== MIDDLEWARE ====================
 const allowedOrigins = [
@@ -87,7 +90,7 @@ app.use('/api/tb/import', slowRequestTimeout(300_000));
 // ==================== ROUTES ====================
 app.use('/api/auth', apiLimiter, authRoutes);
 app.use('/api/tb', apiLimiter, tbInsightRoutes);
-app.use('/api/webhook', webhookRoutes);
+app.use('/api/webhook', webhookLimiter, express.json({ limit: '10mb' }), webhookRoutes);
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
@@ -107,38 +110,41 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// Root endpoint
-app.get('/', (req, res) => {
-  res.json({
-    message: 'TB System API is running',
-    version: '1.0.0',
-    endpoints: {
-      health: 'GET /api/health',
-      register: 'POST /api/auth/register',
-      login: 'POST /api/auth/login',
-      logout: 'POST /api/auth/logout',
-      profile: 'GET /api/auth/profile',
-      tbInsight: {
-        barangays: 'GET /api/tb/barangays',
-        facilities: 'GET /api/tb/facilities',
-        import: 'POST /api/tb/import',
-        importHistory: 'GET /api/tb/import-history',
-        dashboard: 'GET /api/tb/dashboard/summary',
-        monthly: 'GET /api/tb/dashboard/monthly',
-        choropleth: 'GET /api/tb/gis/choropleth',
-        forecasts: 'GET /api/tb/forecasts',
-        alerts: 'GET /api/tb/alerts',
+// Root endpoint (dev only — exposes API surface)
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/', (req, res) => {
+    res.json({
+      message: 'TB System API is running',
+      version: '1.0.0',
+      endpoints: {
+        health: 'GET /api/health',
+        register: 'POST /api/auth/register',
+        login: 'POST /api/auth/login',
+        logout: 'POST /api/auth/logout',
+        profile: 'GET /api/auth/profile',
+        tbInsight: {
+          barangays: 'GET /api/tb/barangays',
+          facilities: 'GET /api/tb/facilities',
+          import: 'POST /api/tb/import',
+          importHistory: 'GET /api/tb/import-history',
+          dashboard: 'GET /api/tb/dashboard/summary',
+          monthly: 'GET /api/tb/dashboard/monthly',
+          choropleth: 'GET /api/tb/gis/choropleth',
+          forecasts: 'GET /api/tb/forecasts',
+          alerts: 'GET /api/tb/alerts',
+        },
       },
-    },
+    });
   });
-});
+}
 
 // ==================== GLOBAL ERROR HANDLER ====================
 app.use((err, req, res, next) => {
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'Invalid JSON in request body.' });
   }
-  next(err);
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 // ==================== START SERVER ====================

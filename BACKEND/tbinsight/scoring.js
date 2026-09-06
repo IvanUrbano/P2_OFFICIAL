@@ -227,7 +227,7 @@ async function storeResults(client, period, forecasts, classifications, riskScor
   const periodList = [...allPeriods].sort();
 
   // Clear ALL previous results (each pipeline run replaces all prior forecasts)
-  await client.query('DELETE FROM model_predictions');
+  await client.query('DELETE FROM model_predictions WHERE period = ANY($1)', [periodList]);
   await client.query('DELETE FROM barangay_risk_scores WHERE period = $1', [period]);
   await client.query("DELETE FROM alerts WHERE alert_type = 'high_risk_escalation' AND status != 'resolved'");
 
