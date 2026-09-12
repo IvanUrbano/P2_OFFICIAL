@@ -114,4 +114,47 @@ router.get('/batches/:id', authenticate, authorizeRoles('admin', 'staff'), async
   }
 });
 
+// ==================== STATS (Dashboard KPIs) ====================
+router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  try {
+    const totalResult = await db.pool.query('SELECT COUNT(*)::int AS count FROM validated_tb_cases');
+    const validResult = await db.pool.query('SELECT COUNT(*)::int AS count FROM validated_tb_cases WHERE is_valid = true');
+    const invalidResult = await db.pool.query('SELECT COUNT(*)::int AS count FROM validated_tb_cases WHERE is_valid = false');
+    const pendingResult = await db.pool.query("SELECT COUNT(*)::int AS count FROM validated_tb_cases WHERE validation_status IS NULL OR validation_status = 'Pending'");
+
+    let syncedCount = 0;
+    try {
+      const syncedResult = await db.pool.query("SELECT COUNT(DISTINCT batch_id)::int AS count FROM webhook_logs WHERE status = 'sent'");
+      syncedCount = syncedResult.rows[0]?.count || 0;
+    } catch { /* webhook_logs may not have data yet */ }
+
+    res.json({
+      total: totalResult.rows[0]?.count || 0,
+      validated: validResult.rows[0]?.count || 0,
+      invalid: invalidResult.rows[0]?.count || 0,
+      pending: pendingResult.rows[0]?.count || 0,
+      synced: syncedCount,
+    });
+  } catch (error) {
+    console.error('Error fetching stats:', error);
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
+// ==================== RECORDS (TB Records page) ====================
+router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  try {
+    // Ensure archive column exists
+    await db.pool.query('ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false');
+
+    const result = await db.pool.query(
+      'SELECT * FROM validated_tb_cases WHERE is_archived = false ORDER BY id DESC LIMIT 500'
+    );
+    res.json({ records: result.rows });
+  } catch (error) {
+    console.error('Error fetching records:', error);
+    res.status(500).json({ error: 'Failed to fetch records' });
+  }
+});
+
 module.exports = router;

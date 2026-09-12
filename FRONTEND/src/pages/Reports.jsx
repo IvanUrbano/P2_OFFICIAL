@@ -133,86 +133,74 @@ function ReportRenderer({ report, reportData }) {
   if (!report) return null;
 
   return (
-    <div id="printable-report" style={{ background: '#fff', border: '1px solid #d1d5db', fontFamily: 'serif' }}>
+    <div id="printable-report" style={{ background: '#fff', border: '1px solid #d1d5db', fontFamily: 'Times New Roman, Times, serif', color: '#111827' }}>
 
       {/* Header */}
-      <div className="px-10 py-8" style={{ background: 'linear-gradient(135deg, #0F2D52, #174A7E)' }}>
+      <div className="px-10 py-6" style={{ background: '#0F2D52' }}>
         <div className="text-center">
-          <p className="text-[10px] uppercase tracking-[0.25em]" style={{ color: '#93C5FD' }}>Republic of the Philippines</p>
-          <p className="text-sm font-bold mt-1" style={{ color: '#ffffff' }}>Pasig City Health Office</p>
-          <div className="mt-3 mb-2 mx-auto w-48" style={{ borderBottom: '1px solid rgba(255,255,255,0.3)' }} />
-          <h2 className="text-base font-extrabold uppercase tracking-wider mt-2" style={{ color: '#ffffff' }}>{report.headerTitle}</h2>
-          <p className="text-xs mt-1" style={{ color: '#BFDBFE' }}>{report.subtitle}</p>
-          <div className="mt-2 mx-auto w-48" style={{ borderBottom: '1px solid rgba(255,255,255,0.3)' }} />
+          <p className="text-[11px] uppercase tracking-[0.15em]" style={{ color: '#93C5FD' }}>Republic of the Philippines</p>
+          <p className="text-sm font-bold mt-0.5" style={{ color: '#ffffff' }}>Pasig City Health Office</p>
+          <div className="mt-2 mx-auto" style={{ width: 160, borderBottom: '1px solid rgba(255,255,255,0.4)' }} />
+          <p className="text-sm font-bold uppercase tracking-wide mt-2" style={{ color: '#ffffff' }}>{report.headerTitle}</p>
+          <p className="text-[11px] mt-1" style={{ color: '#BFDBFE' }}>{report.subtitle}</p>
         </div>
       </div>
 
-      <div className="px-10 py-6 space-y-8">
+      <div className="px-10 py-6 space-y-6" style={{ fontSize: '11pt', lineHeight: 1.6 }}>
 
-        {/* Summary Stat Cards */}
-        <div className="grid grid-cols-3 gap-4">
-          <div className="rounded-lg p-4" style={{ background: '#EFF6FF', border: '1px solid #BFDBFE' }}>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ background: '#DBEAFE' }}>
-                <i className="ri-folder-line text-lg" style={{ color: '#2563EB' }} />
-              </div>
-              <div>
-                <p className="text-[10px] uppercase font-bold" style={{ color: '#64748B' }}>Total Cases</p>
-                <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{reportData?.summary?.totalCases || 0}</p>
-              </div>
+        {/* Executive Summary */}
+        {report.executiveSummary?.length > 0 && (
+          <div>
+            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Executive Summary</p>
+            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+            <div className="space-y-1">
+              {report.executiveSummary.map((line, i) => (
+                <p key={i} className="text-xs" style={{ color: '#1E293B' }}>{line}</p>
+              ))}
             </div>
           </div>
-          <div className="rounded-lg p-4" style={{ background: '#FFF7ED', border: '1px solid #FED7AA' }}>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ background: '#FFEDD5' }}>
-                <i className="ri-heart-pulse-line text-lg" style={{ color: '#EA580C' }} />
-              </div>
-              <div>
-                <p className="text-[10px] uppercase font-bold" style={{ color: '#64748B' }}>Active Cases</p>
-                <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{reportData?.summary?.activeCases || 0}</p>
-              </div>
+        )}
+
+        {/* Summary Stats - simple text row */}
+        {reportData?.summary && (
+          <div>
+            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Summary</p>
+            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+            <div className="flex flex-wrap gap-x-8 gap-y-1 text-xs" style={{ color: '#1E293B' }}>
+              <span><strong>Total Cases:</strong> {reportData.summary.totalCases ?? 0}</span>
+              <span><strong>Active Cases:</strong> {reportData.summary.activeCases ?? 0}</span>
+              <span><strong>Success Rate:</strong> {reportData.summary.successRate != null ? `${reportData.summary.successRate}%` : 'N/A'}</span>
             </div>
           </div>
-          <div className="rounded-lg p-4" style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ background: '#DCFCE7' }}>
-                <i className="ri-check-double-line text-lg" style={{ color: '#16A34A' }} />
-              </div>
-              <div>
-                <p className="text-[10px] uppercase font-bold" style={{ color: '#64748B' }}>Success Rate</p>
-                <p className="text-xl font-extrabold" style={{ color: '#0F2D52' }}>{reportData?.summary?.successRate != null ? `${reportData.summary.successRate}%` : 'N/A'}</p>
-              </div>
-            </div>
-          </div>
-        </div>
+        )}
 
         {/* Tables */}
         {report.tables?.map((table, ti) => (
           <div key={ti}>
-            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
-              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
-              {table.title}
-            </p>
-            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
-              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>{table.title}</p>
+            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+            {table.rows.length > 0 ? (
+              <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
                 <thead>
-                  <tr style={{ background: '#F1F5F9' }}>
+                  <tr style={{ background: '#0F2D52' }}>
                     {table.headers.map((h, hi) => (
-                      <th key={hi} className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>{h}</th>
+                      <th key={hi} className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {table.rows.map((row, ri) => (
-                    <tr key={ri} style={{ background: ri % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: ri < table.rows.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                    <tr key={ri} style={{ background: ri % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
                       {row.map((cell, ci) => (
-                        <td key={ci} className="py-2 px-3" style={{ color: ci === 0 ? '#1E293B' : '#475569', fontWeight: ci === 0 ? 600 : 400, textAlign: ci > 0 ? 'right' : 'left' }}>{cell}</td>
+                        <td key={ci} className="py-2 px-3" style={{ color: ci === 0 ? '#1E293B' : '#374151', fontWeight: ci === 0 ? 600 : 400, textAlign: ci > 0 ? 'right' : 'left' }}>{cell}</td>
                       ))}
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            ) : (
+              <p className="text-xs italic" style={{ color: '#9CA3AF' }}>No data available for this period.</p>
+            )}
           </div>
         ))}
 
@@ -221,62 +209,58 @@ function ReportRenderer({ report, reportData }) {
           <div className="grid grid-cols-2 gap-8">
             {report.sideBySide.map((section, si) => (
               <div key={si}>
-                <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
-                  <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
-                  {section.title}
-                </p>
-                <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
-                  <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>{section.title}</p>
+                <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+                {section.rows.length > 0 ? (
+                  <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
                     <thead>
-                      <tr style={{ background: '#F1F5F9' }}>
+                      <tr style={{ background: '#0F2D52' }}>
                         {section.headers.map((h, hi) => (
-                          <th key={hi} className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>{h}</th>
+                          <th key={hi} className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {section.rows.map((row, ri) => (
-                        <tr key={ri} style={{ background: ri % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: ri < section.rows.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                        <tr key={ri} style={{ background: ri % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
                           {row.map((cell, ci) => (
-                            <td key={ci} className="py-2 px-3" style={{ color: ci === 0 ? '#1E293B' : '#475569', fontWeight: ci === 0 ? 600 : 400, textAlign: ci > 0 ? 'right' : 'left' }}>{cell}</td>
+                            <td key={ci} className="py-2 px-3" style={{ color: ci === 0 ? '#1E293B' : '#374151', fontWeight: ci === 0 ? 600 : 400, textAlign: ci > 0 ? 'right' : 'left' }}>{cell}</td>
                           ))}
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                </div>
+                ) : (
+                  <p className="text-xs italic" style={{ color: '#9CA3AF' }}>No data available.</p>
+                )}
               </div>
             ))}
           </div>
         )}
 
-        {/* Age Distribution Table */}
+        {/* Age Distribution */}
         {report.ageGroups?.length > 0 && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
-              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
-              Age Distribution
-            </p>
-            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
-              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: '#F1F5F9' }}>
-                    <th className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Age Group</th>
-                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Count</th>
-                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Percentage</th>
+            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Age Distribution</p>
+            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
+              <thead>
+                <tr style={{ background: '#0F2D52' }}>
+                  <th className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Age Group</th>
+                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Count</th>
+                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Percentage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.ageGroups.map((row, i) => (
+                  <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
+                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.age_group}</td>
+                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.count}</td>
+                    <td className="py-2 px-3 text-right" style={{ color: '#374151' }}>{row.percentage}%</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {report.ageGroups.map((row, i) => (
-                    <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: i < report.ageGroups.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
-                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.age_group}</td>
-                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.count}</td>
-                      <td className="py-2 px-3 text-right" style={{ color: '#4B5563' }}>{row.percentage}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
 
@@ -284,44 +268,36 @@ function ReportRenderer({ report, reportData }) {
         {report.caseProfile && (
           <div className="grid grid-cols-2 gap-8">
             <div>
-              <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
-                <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
-                Registration Group
-              </p>
-              <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
-                <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-                  <tbody>
-                    <tr style={{ background: '#ffffff', borderBottom: '1px solid #F1F5F9' }}>
-                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>New Cases</td>
-                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.newCases}</td>
-                    </tr>
-                    <tr style={{ background: '#F8FAFC' }}>
-                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Relapse / Recapture</td>
-                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.relapse}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Registration Group</p>
+              <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+              <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
+                <tbody>
+                  <tr style={{ background: '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
+                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>New Cases</td>
+                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.newCases}</td>
+                  </tr>
+                  <tr style={{ background: '#F8FAFC' }}>
+                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Relapse / Recapture</td>
+                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.relapse}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
             <div>
-              <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
-                <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
-                Anatomical Site
-              </p>
-              <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
-                <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-                  <tbody>
-                    <tr style={{ background: '#ffffff', borderBottom: '1px solid #F1F5F9' }}>
-                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Pulmonary</td>
-                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.pulmonary}</td>
-                    </tr>
-                    <tr style={{ background: '#F8FAFC' }}>
-                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Extra-pulmonary</td>
-                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.extraPulmonary}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Anatomical Site</p>
+              <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+              <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
+                <tbody>
+                  <tr style={{ background: '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
+                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Pulmonary</td>
+                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.pulmonary}</td>
+                  </tr>
+                  <tr style={{ background: '#F8FAFC' }}>
+                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Extra-pulmonary</td>
+                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.extraPulmonary}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -329,200 +305,158 @@ function ReportRenderer({ report, reportData }) {
         {/* Bacteriological Status */}
         {report.bacteriologicalStatus?.length > 0 && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
-              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
-              Bacteriological Status
-            </p>
-            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
-              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: '#F1F5F9' }}>
-                    <th className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Status</th>
-                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Count</th>
-                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Percentage</th>
+            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Bacteriological Status</p>
+            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
+              <thead>
+                <tr style={{ background: '#0F2D52' }}>
+                  <th className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Status</th>
+                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Count</th>
+                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Percentage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.bacteriologicalStatus.map((row, i) => (
+                  <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
+                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.status}</td>
+                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.count}</td>
+                    <td className="py-2 px-3 text-right" style={{ color: '#374151' }}>{row.percentage}%</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {report.bacteriologicalStatus.map((row, i) => (
-                    <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: i < report.bacteriologicalStatus.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
-                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.status}</td>
-                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.count}</td>
-                      <td className="py-2 px-3 text-right" style={{ color: '#4B5563' }}>{row.percentage}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
 
         {/* Facility Performance */}
         {report.facilityPerformance?.length > 0 && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
-              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
-              Facility Performance
-            </p>
-            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
-              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: '#F1F5F9' }}>
-                    <th className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Facility</th>
-                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Cases</th>
-                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Success Rate</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {report.facilityPerformance.map((row, i) => {
-                    const rate = row.evaluated > 0 ? ((row.successful / row.evaluated) * 100).toFixed(1) : 'N/A';
-                    return (
-                      <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: i < report.facilityPerformance.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
-                        <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.facility}</td>
-                        <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.total_cases}</td>
-                        <td className="py-2 px-3 text-right" style={{ color: '#4B5563' }}>{rate}%</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Facility Performance</p>
+            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
+              <thead>
+                <tr style={{ background: '#0F2D52' }}>
+                  <th className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Facility</th>
+                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Cases</th>
+                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Success Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.facilityPerformance.map((row, i) => {
+                  const rate = row.evaluated > 0 ? ((row.successful / row.evaluated) * 100).toFixed(1) : 'N/A';
+                  return (
+                    <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
+                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.facility}</td>
+                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.total_cases}</td>
+                      <td className="py-2 px-3 text-right" style={{ color: '#374151' }}>{rate}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
 
         {/* Forecast */}
         {report.forecast?.available && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
-              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
-              Forecast
-            </p>
-            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
-              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-                <tbody>
-                  <tr style={{ background: '#ffffff', borderBottom: '1px solid #F1F5F9' }}>
-                    <td className="py-2 px-3" style={{ color: '#4B5563', fontWeight: 600 }}>Forecasted Cases</td>
-                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.forecastedCases}</td>
-                  </tr>
-                  <tr style={{ background: '#F8FAFC' }}>
-                    <td className="py-2 px-3" style={{ color: '#4B5563', fontWeight: 600 }}>Forecast Period</td>
-                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.period}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Forecast</p>
+            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
+              <tbody>
+                <tr style={{ background: '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
+                  <td className="py-2 px-3" style={{ color: '#374151', fontWeight: 600 }}>Forecasted Cases</td>
+                  <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.forecastedCases}</td>
+                </tr>
+                <tr style={{ background: '#F8FAFC' }}>
+                  <td className="py-2 px-3" style={{ color: '#374151', fontWeight: 600 }}>Forecast Period</td>
+                  <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.period}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         )}
 
-        {/* TB Case Trend Table */}
+        {/* TB Case Trend */}
         {report.trend?.length > 0 && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
-              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
-              TB Case Trend
-            </p>
-            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
-              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: '#F1F5F9' }}>
-                    <th className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Month</th>
-                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Cases</th>
+            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>TB Case Trend</p>
+            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
+              <thead>
+                <tr style={{ background: '#0F2D52' }}>
+                  <th className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Month</th>
+                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Cases</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.trend.map((row, i) => (
+                  <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
+                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.label}</td>
+                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {report.trend.map((row, i) => (
-                    <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: i < report.trend.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
-                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.label}</td>
-                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
 
-        {/* Barangay Distribution Table */}
+        {/* Barangay Distribution */}
         {report.barangayDistribution?.length > 0 && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
-              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
-              TB Cases by Barangay
-            </p>
-            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
-              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: '#F1F5F9' }}>
-                    <th className="py-2.5 px-3 text-left font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Barangay</th>
-                    <th className="py-2.5 px-3 text-right font-bold uppercase" style={{ color: '#374151', fontSize: 10, borderBottom: '2px solid #E2E8F0' }}>Cases</th>
+            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>TB Cases by Barangay</p>
+            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
+              <thead>
+                <tr style={{ background: '#0F2D52' }}>
+                  <th className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Barangay</th>
+                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Cases</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.barangayDistribution.map((row, i) => (
+                  <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
+                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.barangay}</td>
+                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {report.barangayDistribution.map((row, i) => (
-                    <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: i < report.barangayDistribution.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
-                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.barangay}</td>
-                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Top Barangays Bar Chart */}
-            <div className="mt-4 space-y-1.5">
-              <p className="text-[10px] font-bold uppercase mb-2" style={{ color: '#6B7280' }}>Top Barangays by Case Count</p>
-              {report.barangayDistribution.slice(0, 10).map((row, i) => {
-                const maxCases = report.barangayDistribution[0]?.cases || 1;
-                const pct = (row.cases / maxCases) * 100;
-                return (
-                  <div key={i} className="flex items-center gap-3">
-                    <span className="text-[10px] w-24 shrink-0 text-right truncate" style={{ color: '#374151' }}>{row.barangay}</span>
-                    <div className="flex-1 h-3 rounded" style={{ background: '#F1F5F9' }}>
-                      <div className="h-full rounded" style={{
-                        width: `${pct}%`,
-                        background: pct > 70 ? '#EF4444' : pct > 40 ? '#F59E0B' : '#0F2D52',
-                      }} />
-                    </div>
-                    <span className="text-[10px] font-bold w-8 text-right" style={{ color: '#111827' }}>{row.cases}</span>
-                  </div>
-                );
-              })}
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
 
         {/* Recommendations */}
         {report.recommendations?.length > 0 && (
           <div>
-            <p className="text-xs font-bold uppercase mb-2 flex items-center gap-2" style={{ color: '#374151', paddingBottom: 4 }}>
-              <span className="w-1 h-4 rounded-full shrink-0" style={{ background: '#0F2D52' }} />
-              Recommendations
-            </p>
-            <div className="space-y-1.5 rounded-lg p-3" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Recommendations</p>
+            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+            <ol className="text-xs pl-4 space-y-1" style={{ color: '#1E293B', listStyleType: 'decimal' }}>
               {report.recommendations.map((rec, i) => (
-                <p key={i} className="text-xs leading-relaxed flex items-start gap-2" style={{ color: '#92400E' }}>
-                  <i className="ri-lightbulb-line mt-0.5 shrink-0" />
-                  {rec}
-                </p>
+                <li key={i}>{rec}</li>
               ))}
-            </div>
+            </ol>
           </div>
         )}
 
-        {/* Footer */}
-        <div className="pt-4" style={{ borderTop: '2px solid #0F2D52' }}>
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-semibold" style={{ color: '#64748B' }}>TBInsight Dashboard &middot; Pasig City Health Office</span>
-            <span className="text-[10px]" style={{ color: '#94A3B8' }}>{report.footerPeriod}</span>
+        {/* Signature Block */}
+        <div className="pt-6" style={{ borderTop: '1px solid #0F2D52' }}>
+          <div className="flex justify-between">
+            <div className="text-center">
+              <div style={{ width: 140, borderBottom: '1px solid #111827' }}>&nbsp;</div>
+              <p className="text-[10px] mt-1 font-semibold" style={{ color: '#1E293B' }}>Prepared by</p>
+            </div>
+            <div className="text-center">
+              <div style={{ width: 140, borderBottom: '1px solid #111827' }}>&nbsp;</div>
+              <p className="text-[10px] mt-1 font-semibold" style={{ color: '#1E293B' }}>Noted by</p>
+            </div>
           </div>
-          <div className="mt-4 flex items-center justify-between">
-            <div className="text-center">
-              <div className="w-36" style={{ borderTop: '1px solid #94A3B8' }} />
-              <p className="text-[10px] mt-1.5 font-semibold" style={{ color: '#374151' }}>Prepared by</p>
-            </div>
-            <div className="text-center">
-              <div className="w-36" style={{ borderTop: '1px solid #94A3B8' }} />
-              <p className="text-[10px] mt-1.5 font-semibold" style={{ color: '#374151' }}>Noted by</p>
-            </div>
+        </div>
+
+        {/* Footer */}
+        <div className="pt-3" style={{ borderTop: '1px solid #D1D5DB' }}>
+          <div className="flex items-center justify-between">
+            <span className="text-[9px]" style={{ color: '#6B7280' }}>TBInsight &middot; Pasig City Health Office</span>
+            <span className="text-[9px]" style={{ color: '#9CA3AF' }}>{report.footerPeriod}</span>
           </div>
         </div>
 
@@ -551,8 +485,9 @@ export default function Reports() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [regenerateTrigger, setRegenerateTrigger] = useState(0);
   const [showAllReports, setShowAllReports] = useState(false);
-  const [exportToast, setExportToast] = useState('');
   const [exporting, setExporting] = useState('');
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportFormat, setExportFormat] = useState('pdf');
   const abortRef = useRef(null);
   const reportRef = useRef(null);
 
@@ -561,7 +496,7 @@ export default function Reports() {
     API.get('/api/tb/barangays', { signal: controller.signal }).then(res => {
       const names = (res.data.barangays || []).map(b => b.barangay_name || b.name).filter(Boolean).sort();
       setBarangays(names);
-    }).catch(() => {});
+    }).catch(() => { });
     return () => controller.abort();
   }, []);
 
@@ -638,14 +573,12 @@ export default function Reports() {
     setDeleteTarget(null);
   }, [deleteTarget]);
 
-  const handleExport = useCallback(async (key, fn, label) => {
+  const handleExport = useCallback(async (key, fn) => {
     try {
       setExporting(key);
       await fn();
-      setExportToast(label);
-      setTimeout(() => setExportToast(''), 2500);
     } catch {
-      setExportToast('');
+      // silent
     } finally {
       setExporting('');
     }
@@ -806,7 +739,7 @@ export default function Reports() {
       {/* ─── Error State ─── */}
       {error && !loading && (
         <div className="flex flex-col items-center justify-center py-16 gap-4" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
-           <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: '#FEF2F2' }}>
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: '#FEF2F2' }}>
             <i className="ri-error-warning-line text-2xl" style={{ color: '#EF4444' }} />
           </div>
           <div className="text-center">
@@ -855,7 +788,7 @@ export default function Reports() {
 
       {/* ─── Report Preview ─── */}
       {!loading && !error && report && (
-        <div ref={reportRef} className="space-y-5">
+        <div ref={reportRef} className="space-y-5 reports-print-root">
           {/* Action Bar */}
           <div className="flex items-center justify-between no-print">
             <div>
@@ -863,53 +796,19 @@ export default function Reports() {
               <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Generated report preview</p>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => handleExport('csv', () => exportCSV(reportData?.cases), 'CSV')} disabled={!!exporting}
-                className="px-3 py-1.5 text-xs font-medium"
-                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, opacity: exporting ? 0.5 : 1, cursor: exporting ? 'not-allowed' : 'pointer', transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                onMouseEnter={e => { if (!exporting) e.currentTarget.style.background = '#E5E7EB'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-                {exporting === 'csv' ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
-                Export CSV
-              </button>
-              <button onClick={() => handleExport('excel', () => exportExcel(reportData), 'Excel')} disabled={!!exporting}
-                className="px-3 py-1.5 text-xs font-medium"
-                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, opacity: exporting ? 0.5 : 1, cursor: exporting ? 'not-allowed' : 'pointer', transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                onMouseEnter={e => { if (!exporting) e.currentTarget.style.background = '#E5E7EB'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-                {exporting === 'excel' ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
-                Export Excel
-              </button>
-              <button onClick={() => handleExport('print', () => printReport(), 'Print')} disabled={!!exporting}
-                className="px-3 py-1.5 text-xs font-medium"
-                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, opacity: exporting ? 0.5 : 1, cursor: exporting ? 'not-allowed' : 'pointer', transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                onMouseEnter={e => { if (!exporting) e.currentTarget.style.background = '#E5E7EB'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-                {exporting === 'print' ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
-                Print
-              </button>
-              <button onClick={() => handleExport('pdf', () => exportPDF(report), 'PDF')} disabled={!!exporting}
-                className="px-3 py-1.5 text-xs font-semibold"
-                style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, opacity: exporting ? 0.5 : 1, cursor: exporting ? 'not-allowed' : 'pointer', transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                onMouseEnter={e => { if (!exporting) { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; } }}
+              <button onClick={() => { setExportFormat('pdf'); setShowExportModal(true); }}
+                className="px-4 py-2 text-xs font-semibold flex items-center gap-1.5"
+                style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
-                {exporting === 'pdf' ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
-                Save as PDF
+
+                Export
               </button>
             </div>
           </div>
 
           {/* Rendered Report */}
           <ReportRenderer report={report} reportData={reportData} />
-        </div>
-      )}
-
-      {/* ─── Export Toast ─── */}
-      {exportToast && (
-        <div className="fixed bottom-6 right-6 z-50 no-print">
-          <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-lg" style={{ background: '#059669', color: '#ffffff' }}>
-            <i className="ri-check-line text-sm" />
-            <span className="text-sm font-semibold">{exportToast} exported!</span>
-          </div>
         </div>
       )}
 
@@ -1020,6 +919,101 @@ export default function Reports() {
                 onMouseEnter={e => { e.currentTarget.style.background = '#B91C1C'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = '#DC2626'; }}>
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Export Modal ─── */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Export report">
+          <div className="absolute inset-0" style={{ background: 'rgba(15,45,82,0.2)' }} onClick={() => { setShowExportModal(false); setExporting(''); }} />
+          <div className="relative w-full max-w-md mx-4 rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 20px 60px rgba(15,45,82,0.25)' }}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: '1px solid #E2E8F0' }}>
+              <div>
+                <p className="text-sm font-bold" style={{ color: '#0F2D52' }}>Export Reports</p>
+                <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Choose a format to download</p>
+              </div>
+              <button onClick={() => { setShowExportModal(false); setExporting(''); }}
+                className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                style={{ background: '#F3F4F6', color: '#64748B', transition: 'background 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
+                <i className="ri-close-line text-base" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="px-6 py-5 space-y-4">
+              {/* Format Selection */}
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide mb-2" style={{ color: '#64748B' }}>Export Format</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { key: 'pdf', icon: 'ri-file-pdf-line', label: 'PDF', color: '#DC2626' },
+                    { key: 'excel', icon: 'ri-file-excel-line', label: 'Excel', color: '#16A34A' },
+                    { key: 'print', icon: 'ri-printer-line', label: 'Print', color: '#2563EB' },
+                  ].map(fmt => (
+                    <button
+                      key={fmt.key}
+                      onClick={() => setExportFormat(fmt.key)}
+                      className="flex flex-col items-center gap-1.5 p-3 rounded-lg transition-all"
+                      style={{
+                        background: exportFormat === fmt.key ? 'rgba(15,45,82,0.06)' : '#F8FAFC',
+                        border: exportFormat === fmt.key ? '2px solid #0F2D52' : '2px solid transparent',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <i className={`${fmt.icon} text-xl`} style={{ color: exportFormat === fmt.key ? fmt.color : '#94A3B8' }} />
+                      <span className="text-[11px] font-bold" style={{ color: exportFormat === fmt.key ? '#0F2D52' : '#64748B' }}>{fmt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Info */}
+              <div className="flex items-start gap-2.5 p-3 rounded-lg" style={{ background: '#F0F9FF', border: '1px solid #BAE6FD' }}>
+                <i className="ri-information-line text-sm mt-0.5 shrink-0" style={{ color: '#0284C7' }} />
+                <div>
+                  <p className="text-[11px] font-semibold" style={{ color: '#0F2D52' }}>
+                    Ready to export as {exportFormat === 'pdf' ? 'PDF' : exportFormat === 'excel' ? 'Excel' : 'Print'} document
+                  </p>
+                  <p className="text-[10px] mt-0.5" style={{ color: '#64748B' }}>
+                    {report?.title || 'TB Report'} — {report?.subtitle || ''}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-2 px-6 py-3.5" style={{ borderTop: '1px solid #E2E8F0', background: '#F8FAFC' }}>
+              <button onClick={() => { setShowExportModal(false); setExporting(''); }}
+                className="px-4 py-2 text-xs font-medium rounded-lg"
+                style={{ background: '#ffffff', color: '#374151', border: '1px solid #D1D5DB', transition: 'background 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#F3F4F6'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#ffffff'; }}>
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const formatMap = {
+                    pdf: { fn: () => exportPDF(report), label: 'PDF' },
+                    excel: { fn: () => exportExcel(reportData), label: 'Excel' },
+                    print: { fn: () => printReport(), label: 'Print' },
+                  };
+                  const selected = formatMap[exportFormat];
+                  if (!selected) return;
+                  setShowExportModal(false);
+                   await handleExport(exportFormat, selected.fn);
+                }}
+                disabled={!!exporting}
+                className="px-5 py-2 text-xs font-semibold rounded-lg flex items-center gap-1.5"
+                style={{ background: '#0F2D52', color: '#ffffff', opacity: exporting ? 0.5 : 1, cursor: exporting ? 'not-allowed' : 'pointer', transition: 'background 0.15s' }}
+                onMouseEnter={e => { if (!exporting) e.currentTarget.style.background = '#174A7E'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}>
+                {exporting ? <><i className="ri-loader-4-line animate-spin" /> Exporting...</> : <>Download</>}
               </button>
             </div>
           </div>

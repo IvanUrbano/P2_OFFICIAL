@@ -1,1 +1,135 @@
 @import "tailwindcss";
+
+/* ==================== PASIG TB-IS Theme (Matching TBInsight Design System) ==================== */
+@theme {
+  /* Core Colors */
+  --color-primary: #0F2D52;
+  --color-primary-light: #174A7E;
+  --color-primary-dark: #0A1F3D;
+
+  --color-secondary: #10B981;
+  --color-accent: #2E6FAF;
+
+  /* Glassmorphism */
+  --glass-bg: rgba(255, 255, 255, 0.95);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-shadow: 0 8px 32px rgba(15, 45, 82, 0.12);
+  --glass-blur: blur(20px);
+
+  /* Status Colors */
+  --color-danger: #991B1B;
+  --color-success: #10B981;
+  --color-warning: #D97706;
+
+  /* Layout */
+  --color-bg: #F8FAFC;
+  --color-surface: #FFFFFF;
+
+  /* Typography */
+  --color-text: #0F172A;
+  --color-desc: #475569;
+  --color-muted: #64748B;
+
+  --font-sans: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ==================== Global Base ==================== */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ==================== Scrollbar ==================== */
+::-webkit-scrollbar {
+  width: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(15, 45, 82, 0.15);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 45, 82, 0.25);
+}
+
+/* ==================== Animations ==================== */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.animate-slide-up {
+  /* Page switch transition animation disabled */
+}
+
+/* ==================== Glass Card ==================== */
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+
+/* ==================== Background Blobs ==================== */
+.bg-blob-blue {
+  position: absolute;
+  width: 400px;
+  height: 400px;
+  border-radius: 999px;
+  background: #1E3A5F;
+  filter: blur(120px);
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.bg-blob-teal {
+  position: absolute;
+  width: 350px;
+  height: 350px;
+  border-radius: 999px;
+  background: #3D6B6E;
+  filter: blur(120px);
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+/* ==================== Login Page Autofill Reset ==================== */
+.login-input:-webkit-autofill,
+.login-input:-webkit-autofill:hover,
+.login-input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #ffffff !important;
+  -webkit-box-shadow: 0 0 0px 1000px transparent inset !important;
+  transition: background-color 5000s ease-in-out 0s;
+}

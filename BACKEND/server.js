@@ -20,6 +20,7 @@ const pool = require('./db');
 const authRoutes = require('./routes/auth');
 const tbInsightRoutes = require('./tbinsight/routes');
 const webhookRoutes = require('./tbinsight/webhook');
+const integrationRoutes = require('./tbinsight/integration');
 const { apiLimiter, webhookLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
@@ -92,6 +93,7 @@ app.use('/api/tb/import', slowRequestTimeout(300_000));
 app.use('/api/auth', apiLimiter, authRoutes);
 app.use('/api/tb', apiLimiter, tbInsightRoutes);
 app.use('/api/webhook', webhookLimiter, express.json({ limit: '10mb' }), webhookRoutes);
+app.use('/api/tb/integration', apiLimiter, integrationRoutes);
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
