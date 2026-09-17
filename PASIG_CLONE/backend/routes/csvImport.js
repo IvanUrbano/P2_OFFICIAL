@@ -1,11 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const fileUpload = require('express-fileupload');
 const { parseMultiSheetExcel } = require('../services/multiSheetParser');
+const { calculateFileHash } = require('../utils/fileHash');
+const { logAuditEvent } = require('../utils/auditLogger');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
-
-router.use(fileUpload());
 
 router.post('/import', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   const client = await db.pool.connect();
@@ -15,10 +14,10 @@ router.post('/import', authenticate, authorizeRoles('admin', 'staff'), async (re
     }
 
     const file = req.files.file;
-    const maxSize = 50 * 1024 * 1024;
+    const maxSize = 500 * 1024 * 1024; // 500MB to support large imports
 
     if (file.size > maxSize) {
-      return res.status(400).json({ error: 'File too large. Maximum size is 50MB.' });
+      return res.status(400).json({ error: 'File too large. Maximum size is 500MB.' });
     }
 
     // Validate file extension — only .xlsx and .xls are supported
@@ -27,7 +26,52 @@ router.post('/import', authenticate, authorizeRoles('admin', 'staff'), async (re
       return res.status(400).json({ error: 'Unsupported file type. Only .xlsx and .xls files are accepted.' });
     }
 
-    const parsed = parseMultiSheetExcel(file.data, file.name);
+    // ========== STEP 1: DUPLICATE FILE DETECTION ==========
+    const fileHash = calculateFileHash(file.data);
+    
+    // Check if file already imported
+    const existingBatchResult = await db.pool.query(
+      `SELECT id, filename, uploaded_by, status, created_at, validated_at, synced_at, sync_status
+       FROM import_batches
+       WHERE file_hash = $1
+       LIMIT 1`,
+      [fileHash]
+    );
+
+    if (existingBatchResult.rows.length > 0) {
+      // File already imported - return 409 Conflict with previous batch info
+      const existingBatch = existingBatchResult.rows[0];
+      const userResult = await db.authPool.query(
+        'SELECT username FROM users WHERE id = $1',
+        [existingBatch.uploaded_by]
+      );
+
+      console.log(`⚠️  Duplicate file detected: ${fileHash}`);
+      await logAuditEvent({
+        userId: req.user.id,
+        action: 'IMPORT_FILE_DUPLICATE',
+        resourceType: 'import_batch',
+        resourceId: existingBatch.id,
+        result: 'DUPLICATE_DETECTED',
+        details: { filename: file.name, previousBatch: existingBatch.id },
+      });
+
+      return res.status(409).json({
+        error: 'File already imported',
+        isDuplicate: true,
+        previousImport: {
+          batchId: existingBatch.id,
+          filename: existingBatch.filename,
+          importedBy: userResult.rows[0]?.username || 'Unknown',
+          importedAt: existingBatch.created_at,
+          status: existingBatch.status,
+          syncStatus: existingBatch.sync_status,
+        },
+      });
+    }
+
+    // ========== STEP 2: PARSE AND CREATE BATCH ==========
+    const parsed = await parseMultiSheetExcel(file.data, file.name);
 
     const warnings = [];
     if (parsed.dstbCount === 0) warnings.push('Required DSTB sheet missing');
@@ -35,10 +79,11 @@ router.post('/import', authenticate, authorizeRoles('admin', 'staff'), async (re
 
     await client.query('BEGIN');
 
+    // Insert batch with file_hash and audit fields
     const batchResult = await client.query(
-      `INSERT INTO import_batches (filename, uploaded_by, total_rows, dstb_count, mn_count)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      [file.name, req.user.id, parsed.totalRecords, parsed.dstbCount, parsed.mnCount]
+      `INSERT INTO import_batches (filename, uploaded_by, file_hash, total_rows, dstb_count, mn_count, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING id`,
+      [file.name, req.user.id, fileHash, parsed.totalRecords, parsed.dstbCount, parsed.mnCount, 'uploaded']
     );
 
     const batchId = batchResult.rows[0].id;
@@ -54,9 +99,21 @@ router.post('/import', authenticate, authorizeRoles('admin', 'staff'), async (re
         });
       }
     }
-    db.insertRawCases(client, batchId, allRecords);
+    await db.insertRawCases(client, batchId, allRecords);
 
     await client.query('COMMIT');
+
+    // Log audit event
+    await logAuditEvent({
+      userId: req.user.id,
+      action: 'IMPORT_FILE',
+      resourceType: 'import_batch',
+      resourceId: batchId,
+      result: 'SUCCESS',
+      details: { filename: file.name, recordCount: parsed.totalRecords, fileHash },
+    });
+
+    console.log(`✅ File imported successfully: Batch ${batchId}, ${parsed.totalRecords} records`);
 
     res.status(201).json({
       message: 'File uploaded successfully',
@@ -66,6 +123,7 @@ router.post('/import', authenticate, authorizeRoles('admin', 'staff'), async (re
         totalRows: parsed.totalRecords,
         dstbCount: parsed.dstbCount,
         mnCount: parsed.mnCount,
+        fileHash: fileHash.substring(0, 16) + '...', // Show truncated hash for verification
       },
       sheets: parsed.sheets.map(s => ({
         name: s.sheet_name,
@@ -76,7 +134,13 @@ router.post('/import', authenticate, authorizeRoles('admin', 'staff'), async (re
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
-    console.error('CSV import error:', error);
+    console.error('❌ CSV import error:', error);
+    await logAuditEvent({
+      userId: req.user.id,
+      action: 'IMPORT_FILE',
+      result: 'FAILURE',
+      details: { filename: req.files?.file?.name || 'unknown', error: error.message },
+    });
     res.status(500).json({ error: 'Failed to process file' });
   } finally {
     client.release();
@@ -114,19 +178,93 @@ router.get('/batches/:id', authenticate, authorizeRoles('admin', 'staff'), async
   }
 });
 
+// ==================== IMPORT HISTORY (Organization-wide) ====================
+router.get('/import-history', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  try {
+    const result = await db.pool.query(
+      `SELECT 
+        b.id,
+        b.filename,
+        b.uploaded_by,
+        u.username as imported_by_username,
+        b.total_rows,
+        b.valid_count,
+        b.error_count,
+        b.status,
+        b.sync_status,
+        b.created_at,
+        b.validated_at,
+        b.synced_at
+       FROM import_batches b
+       LEFT JOIN users u ON b.uploaded_by = u.id
+       ORDER BY b.created_at DESC
+       LIMIT 100`,
+    );
+
+    const batches = result.rows.map(b => ({
+      id: b.id,
+      filename: b.filename,
+      importedBy: b.imported_by_username || 'Unknown',
+      records: b.total_rows,
+      validated: b.valid_count,
+      rejected: b.error_count,
+      status: b.status,
+      syncStatus: b.sync_status,
+      importedAt: b.created_at,
+      validatedAt: b.validated_at,
+      syncedAt: b.synced_at,
+    }));
+
+    res.json({ batches });
+  } catch (error) {
+    console.error('Error fetching import history:', error);
+    res.status(500).json({ error: 'Failed to fetch import history' });
+  }
+});
+
 // ==================== STATS (Dashboard KPIs) ====================
 router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
+    // ========== Organization-wide stats (not per-user) ==========
     const totalResult = await db.pool.query('SELECT COUNT(*)::int AS count FROM validated_tb_cases');
     const validResult = await db.pool.query('SELECT COUNT(*)::int AS count FROM validated_tb_cases WHERE is_valid = true');
     const invalidResult = await db.pool.query('SELECT COUNT(*)::int AS count FROM validated_tb_cases WHERE is_valid = false');
-    const pendingResult = await db.pool.query("SELECT COUNT(*)::int AS count FROM validated_tb_cases WHERE validation_status IS NULL OR validation_status = 'Pending'");
+    const pendingResult = await db.pool.query("SELECT COUNT(*)::int AS count FROM import_batches WHERE status NOT IN ('validated', 'sent')");
 
+    // Synced count from batches with successful sync
     let syncedCount = 0;
-    try {
-      const syncedResult = await db.pool.query("SELECT COUNT(DISTINCT batch_id)::int AS count FROM webhook_logs WHERE status = 'sent'");
-      syncedCount = syncedResult.rows[0]?.count || 0;
-    } catch { /* webhook_logs may not have data yet */ }
+    const syncedResult = await db.pool.query("SELECT COUNT(DISTINCT batch_id)::int AS count FROM import_batches WHERE sync_status = 'synced'");
+    syncedCount = syncedResult.rows[0]?.count || 0;
+
+    // Recent imports for dashboard
+    const recentResult = await db.pool.query(
+      `SELECT b.id, b.filename, u.username, b.total_rows, b.status, b.sync_status, b.created_at
+       FROM import_batches b
+       LEFT JOIN users u ON b.uploaded_by = u.id
+       ORDER BY b.created_at DESC
+       LIMIT 5`
+    );
+
+    // Latest sync info
+    const latestSyncResult = await db.pool.query(
+      `SELECT b.id, b.filename, u.username, b.total_rows, b.sync_status, b.synced_at
+       FROM import_batches b
+       LEFT JOIN users u ON b.synced_by = u.id
+       WHERE b.sync_status = 'synced'
+       ORDER BY b.synced_at DESC
+       LIMIT 1`
+    );
+
+    // Pending actions
+    const pendingValidationResult = await db.pool.query(
+      "SELECT COUNT(*)::int AS count FROM import_batches WHERE status = 'uploaded'"
+    );
+    const readyForSyncResult = await db.pool.query(
+      "SELECT COUNT(*)::int AS count FROM import_batches WHERE status = 'validated' AND sync_status = 'pending'"
+    );
+    const failedSyncResult = await db.pool.query(
+      "SELECT COUNT(*)::int AS count FROM import_batches WHERE sync_status = 'sync_failed'"
+    );
 
     res.json({
       total: totalResult.rows[0]?.count || 0,
@@ -134,6 +272,13 @@ router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req,
       invalid: invalidResult.rows[0]?.count || 0,
       pending: pendingResult.rows[0]?.count || 0,
       synced: syncedCount,
+      recentImports: recentResult.rows,
+      latestSync: latestSyncResult.rows[0] || null,
+      pendingActions: {
+        requiresValidation: pendingValidationResult.rows[0]?.count || 0,
+        readyForSync: readyForSyncResult.rows[0]?.count || 0,
+        failedSync: failedSyncResult.rows[0]?.count || 0,
+      },
     });
   } catch (error) {
     console.error('Error fetching stats:', error);
@@ -144,9 +289,6 @@ router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req,
 // ==================== RECORDS (TB Records page) ====================
 router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
-    // Ensure archive column exists
-    await db.pool.query('ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false');
-
     const result = await db.pool.query(
       'SELECT * FROM validated_tb_cases WHERE is_archived = false ORDER BY id DESC LIMIT 500'
     );

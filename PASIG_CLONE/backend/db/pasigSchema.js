@@ -147,27 +147,28 @@ function getAllCases() {
   return pool.query(`SELECT * FROM validated_tb_cases ORDER BY id DESC`);
 }
 
-function logWebhook(batchId, payload, status, responseCode, responseBody) {
+function logWebhook(batchId, payload, status, responseCode, responseBody, initiatedBy) {
   return pool.query(
-    `INSERT INTO webhook_logs (batch_id, payload, status, response_code, response_body)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [batchId, JSON.stringify(payload), status, responseCode, responseBody]
+    `INSERT INTO webhook_logs (batch_id, payload, status, response_code, response_body, initiated_by, initiated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+    [batchId, JSON.stringify(payload), status, responseCode, responseBody, initiatedBy || null]
   );
 }
 
-function logWebhookError(batchId, payload, errorMessage) {
+function logWebhookError(batchId, payload, errorMessage, initiatedBy) {
   return pool.query(
-    `INSERT INTO webhook_logs (batch_id, payload, status, error_message)
-     VALUES ($1, $2, 'failed', $3)`,
-    [batchId, JSON.stringify(payload), errorMessage]
+    `INSERT INTO webhook_logs (batch_id, payload, status, error_message, initiated_by, initiated_at)
+     VALUES ($1, $2, 'failed', $3, $4, NOW())`,
+    [batchId, JSON.stringify(payload), errorMessage, initiatedBy || null]
   );
 }
 
 function getWebhookLogs() {
   return pool.query(
-    `SELECT wl.*, ib.filename
+    `SELECT wl.*, ib.filename, u.username
      FROM webhook_logs wl
      LEFT JOIN import_batches ib ON wl.batch_id = ib.id
+     LEFT JOIN users u ON wl.initiated_by = u.id
      ORDER BY wl.sent_at DESC
      LIMIT 50`
   );

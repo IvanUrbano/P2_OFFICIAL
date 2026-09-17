@@ -1,5 +1,10 @@
 const ExcelJS = require('exceljs');
 
+const MONTH_ABBR = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+};
+
 function normalizeHeader(header) {
   if (!header) return '';
   return String(header).trim().toLowerCase();
@@ -52,6 +57,26 @@ function buildColumnMap(rawHeaders, sourceType) {
       map[i] = 'validation_status';
     } else if (normalized.includes('itis') && normalized.includes('lite')) {
       map[i] = 'itis_case_id';
+    } else if (normalized === 'type') {
+      map[i] = 'type';
+    } else if (normalized.includes('province')) {
+      map[i] = 'province';
+    } else if (normalized.includes('region')) {
+      map[i] = 'region';
+    } else if (normalized.includes('referred') || normalized.includes('dots')) {
+      map[i] = 'referred_to_dots';
+    } else if (normalized.includes('referral') && normalized.includes('status')) {
+      map[i] = 'referral_status';
+    } else if (normalized.includes('microscopy') && normalized.includes('result')) {
+      map[i] = 'microscopy_result';
+    } else if (normalized.includes('microscopy') && normalized.includes('date')) {
+      map[i] = 'microscopy_release_date';
+    } else if (normalized.includes('rdt') && normalized.includes('result')) {
+      map[i] = 'rdt_result';
+    } else if (normalized.includes('rdt') && normalized.includes('date')) {
+      map[i] = 'rdt_release_date';
+    } else if (normalized.includes('outcome') && normalized.includes('reason')) {
+      map[i] = 'outcome_reason';
     }
   }
 
@@ -71,6 +96,21 @@ function parseDate(dateVal) {
   const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (isoMatch) {
     return `${isoMatch[1]}-${String(isoMatch[2]).padStart(2, '0')}-${String(isoMatch[3]).padStart(2, '0')}`;
+  }
+
+  // Try DD-Mon-YY or DD-Mon-YYYY (e.g., "07-Jan-23", "16-Dec-25")
+  const ddmMonMatch = str.match(/^(\d{1,2})\-([A-Za-z]{3})\-(\d{2,4})$/);
+  if (ddmMonMatch) {
+    const [_, day, monStr, yearStr] = ddmMonMatch;
+    const monthNum = MONTH_ABBR[monStr.toLowerCase()];
+    if (monthNum) {
+      let y = parseInt(yearStr);
+      if (y >= 0 && y < 100) y += 2000;
+      const d = parseInt(day);
+      if (d >= 1 && d <= 31) {
+        return `${y}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      }
+    }
   }
 
   const monthNames = ['january', 'february', 'march', 'april', 'may', 'june',
@@ -126,7 +166,13 @@ async function parseMultiSheetExcel(fileBuffer, filename) {
     for (let r = 1; r <= Math.min(5, sheet.rowCount); r++) {
       const row = sheet.getRow(r);
       const firstCell = row.getCell(1).text;
-      if (firstCell && (firstCell.trim() === 'No.' || firstCell.trim().toUpperCase().includes('ITIS'))) {
+      if (firstCell && (
+        firstCell.trim() === 'No.' ||
+        firstCell.trim().toUpperCase().includes('ITIS') ||
+        firstCell.trim().toLowerCase().includes('validation') ||
+        firstCell.trim().toLowerCase().includes('date') ||
+        firstCell.trim().toLowerCase().includes('age')
+      )) {
         headerRowIndex = r;
         break;
       }
@@ -172,7 +218,9 @@ async function parseMultiSheetExcel(fileBuffer, filename) {
       mapped.date_started_treatment = parseDate(mapped.date_started_treatment);
       mapped.date_of_outcome = parseDate(mapped.date_of_outcome);
       mapped.record_created_at = mapped.record_created_at
-        ? new Date(mapped.record_created_at).toISOString()
+        ? parseDate(mapped.record_created_at)
+          ? new Date(parseDate(mapped.record_created_at)).toISOString()
+          : null
         : null;
 
       mapped.age = mapped.age ? parseInt(mapped.age) : null;

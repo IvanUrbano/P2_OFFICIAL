@@ -1,5 +1,9 @@
 const STYLES = {
   validated: { bg: 'rgba(16,185,129,0.1)', color: '#047857', border: 'rgba(16,185,129,0.2)' },
+  new: { bg: 'rgba(16,185,129,0.1)', color: '#047857', border: 'rgba(16,185,129,0.2)' },
+  existing: { bg: 'rgba(59,130,246,0.1)', color: '#1D4ED8', border: 'rgba(59,130,246,0.2)' },
+  updated: { bg: 'rgba(245,158,11,0.1)', color: '#92400E', border: 'rgba(245,158,11,0.2)' },
+  duplicate: { bg: 'rgba(107,114,128,0.1)', color: '#374151', border: 'rgba(107,114,128,0.2)' },
   pending: { bg: 'rgba(217,119,6,0.1)', color: '#92400E', border: 'rgba(217,119,6,0.2)' },
   invalid: { bg: 'rgba(239,68,68,0.1)', color: '#991B1B', border: 'rgba(239,68,68,0.2)' },
   synced: { bg: 'rgba(59,130,246,0.1)', color: '#1D4ED8', border: 'rgba(59,130,246,0.2)' },

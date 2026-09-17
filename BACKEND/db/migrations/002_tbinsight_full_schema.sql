@@ -94,7 +94,25 @@ CREATE TABLE IF NOT EXISTS tb_cases (
   date_started_treatment DATE,
   outcome_status TEXT,
   date_of_outcome DATE,
-  imported_at TIMESTAMPTZ DEFAULT NOW()
+  imported_at TIMESTAMPTZ DEFAULT NOW(),
+
+  -- Validation & sync fields (added by webhook receiver)
+  validation_status TEXT,
+  itis_case_id TEXT,
+  source_type TEXT,
+  location_classification TEXT,
+
+  -- New clinical/laboratory columns
+  type TEXT,
+  province TEXT,
+  region TEXT,
+  referred_to_dots TEXT,
+  referral_status TEXT,
+  microscopy_result TEXT,
+  microscopy_release_date DATE,
+  rdt_result TEXT,
+  rdt_release_date DATE,
+  outcome_reason TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tb_cases_batch ON tb_cases(batch_id);
@@ -190,7 +208,7 @@ ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS norm_forecast_error DO
 -- alerts: unified alerts + notifications
 CREATE TABLE IF NOT EXISTS alerts (
   id BIGSERIAL PRIMARY KEY,
-  barangay_name TEXT NOT NULL REFERENCES barangays(name) ON DELETE CASCADE,
+  barangay_name TEXT REFERENCES barangays(name) ON DELETE CASCADE,
   period DATE NOT NULL,
   alert_type TEXT NOT NULL,
   severity TEXT NOT NULL DEFAULT 'info',

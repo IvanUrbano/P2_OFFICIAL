@@ -28,6 +28,7 @@ export default function DataIntegrationPage() {
   const [status, setStatus] = useState(null);
   const [syncHistory, setSyncHistory] = useState([]);
   const [stats, setStats] = useState(null);
+  const [webhookLogs, setWebhookLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedSync, setSelectedSync] = useState(null);
@@ -35,14 +36,16 @@ export default function DataIntegrationPage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [statusRes, historyRes, statsRes] = await Promise.all([
+      const [statusRes, historyRes, statsRes, webhookRes] = await Promise.all([
         API.get('/api/tb/integration/status').catch(() => ({ data: {} })),
         API.get('/api/tb/integration/sync-history').catch(() => ({ data: { batches: [] } })),
         API.get('/api/tb/integration/stats').catch(() => ({ data: {} })),
+        API.get('/api/tb/webhook-logs').catch(() => ({ data: { logs: [] } })),
       ]);
       setStatus(statusRes.data);
       setSyncHistory(historyRes.data.batches || []);
       setStats(statsRes.data);
+      setWebhookLogs(webhookRes.data.logs || []);
     } catch {
       setError('Unable to load integration status.');
     } finally {
@@ -178,6 +181,54 @@ export default function DataIntegrationPage() {
               {i < 3 && <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />}
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* ── Webhook Integration ── */}
+      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
+        <div className="px-6 py-4" style={{ background: '#0F2D52' }}>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold" style={{ color: '#ffffff' }}>Webhook Integration</h2>
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.8)' }}>
+              {webhookLogs.length} log{webhookLogs.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
+                {['Date', 'Source', 'Batch ID', 'Received', 'Imported', 'Status'].map((h) => (
+                  <th key={h} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#64748B' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {webhookLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-5 py-16 text-center">
+                    <i className="ri-webhook-line text-xl mb-2 block" style={{ color: '#CBD5E1' }} />
+                    <p className="text-xs" style={{ color: '#94A3B8' }}>No webhook logs available. Webhooks will appear here once the Pasig Clone system sends data.</p>
+                  </td>
+                </tr>
+              ) : webhookLogs.map((log, idx) => (
+                <tr
+                  key={log.id}
+                  style={{ borderBottom: '1px solid #F1F5F9', background: idx % 2 === 0 ? '#ffffff' : '#FAFBFC' }}
+                >
+                  <td className="px-5 py-3 text-xs" style={{ color: '#94A3B8' }}>
+                    <div>{formatDate(log.received_at)}</div>
+                    <div className="text-[10px]">{formatTime(log.received_at)}</div>
+                  </td>
+                  <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#0F2D52' }}>{log.source || '—'}</td>
+                  <td className="px-5 py-3 text-xs font-mono" style={{ color: '#64748B' }}>{log.batch_id ? log.batch_id.slice(0, 8) : '—'}</td>
+                  <td className="px-5 py-3 text-xs" style={{ color: '#64748B' }}>{(log.records_received || 0).toLocaleString()}</td>
+                  <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#047857' }}>{(log.records_imported || 0).toLocaleString()}</td>
+                  <td className="px-5 py-3"><SyncStatusBadge status={log.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 

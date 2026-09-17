@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS import_batches (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     filename TEXT NOT NULL,
-    uploaded_by INTEGER REFERENCES users(id),
+    uploaded_by INTEGER,
+    file_hash TEXT UNIQUE,
     status TEXT DEFAULT 'uploaded' CHECK (status IN ('uploaded', 'validated', 'sent', 'failed')),
     total_rows INTEGER DEFAULT 0,
     dstb_count INTEGER DEFAULT 0,
@@ -28,8 +29,13 @@ CREATE TABLE IF NOT EXISTS import_batches (
     valid_count INTEGER DEFAULT 0,
     error_count INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT NOW(),
+    validated_by INTEGER,
     validated_at TIMESTAMP,
-    sent_at TIMESTAMP
+    sent_at TIMESTAMP,
+    synced_by INTEGER,
+    synced_at TIMESTAMP,
+    sync_status TEXT DEFAULT 'pending' CHECK (sync_status IN ('pending', 'syncing', 'synced', 'sync_failed')),
+    sync_error TEXT
 );
 
 -- Raw TB cases (from CSV)
@@ -78,6 +84,13 @@ CREATE TABLE IF NOT EXISTS validated_tb_cases (
     is_valid BOOLEAN DEFAULT true,
     validation_errors JSONB,
     validation_warnings JSONB,
+    is_archived BOOLEAN DEFAULT false,
+
+    -- Record classification and audit
+    source_record_id TEXT,
+    record_status TEXT DEFAULT 'new' CHECK (record_status IN ('new', 'existing', 'updated', 'duplicate')),
+    updated_by INTEGER,
+    updated_at TIMESTAMP,
 
     created_at TIMESTAMP DEFAULT NOW()
 );
@@ -91,11 +104,66 @@ CREATE TABLE IF NOT EXISTS webhook_logs (
     response_code INTEGER,
     response_body TEXT,
     error_message TEXT,
+    initiated_by INTEGER,
+    initiated_at TIMESTAMP,
     sent_at TIMESTAMP DEFAULT NOW(),
     acknowledged_at TIMESTAMP
 );
+
+-- Audit logs (complete audit trail)
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    resource_type TEXT,
+    resource_id TEXT,
+    result TEXT,
+    details JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ==========================================
+-- Migrate existing tables (add missing columns)
+-- ==========================================
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS file_hash TEXT;
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS uploaded_by INTEGER;
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS validated_by INTEGER;
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS validated_at TIMESTAMP;
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS synced_by INTEGER;
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS synced_at TIMESTAMP;
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_status TEXT DEFAULT 'pending';
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_error TEXT;
+
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS source_record_id TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS record_status TEXT DEFAULT 'new';
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS updated_by INTEGER;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false;
+
+-- New MN-specific clinical/laboratory columns
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS type TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS province TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS region TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS referred_to_dots TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS referral_status TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS microscopy_result TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS microscopy_release_date DATE;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS rdt_result TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS rdt_release_date DATE;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS outcome_reason TEXT;
+
+ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS initiated_by INTEGER;
+ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS initiated_at TIMESTAMP;
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_raw_cases_batch ON raw_tb_cases(batch_id);
 CREATE INDEX IF NOT EXISTS idx_validated_cases_batch ON validated_tb_cases(batch_id);
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_batch ON webhook_logs(batch_id);
+CREATE INDEX IF NOT EXISTS idx_import_batches_file_hash ON import_batches(file_hash);
+CREATE INDEX IF NOT EXISTS idx_import_batches_sync_status ON import_batches(sync_status);
+CREATE INDEX IF NOT EXISTS idx_validated_cases_source_record ON validated_tb_cases(source_type, source_record_id)
+  WHERE source_record_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);

@@ -11,6 +11,8 @@ const {
   createNotification, getUnreadCount, evaluateAllAlerts,
   evaluateCaseIncreaseAlerts,
 } = require('./alertEngine');
+const { buildAnalyticsMetrics, buildForecastingMetrics } = require('./insightDataBuilder');
+const { generateAnalyticsInsight, generateForecastingInsight } = require('./nlgEngine');
 
 const router = express.Router();
 
@@ -2693,6 +2695,77 @@ router.delete('/interventions/:id', authenticateToken, authorizeRoles('admin'), 
   } catch (err) {
     console.error('Delete intervention error:', err.message);
     res.status(500).json({ error: 'Server error deleting intervention.' });
+  }
+});
+
+// ==================== NLG INSIGHTS ====================
+
+/**
+ * GET /api/tb/insights/analytics
+ * Generate NLG-based analytics insight from computed metrics.
+ * Query params: year, month, barangay, outcome, sex, ageGroup, bacteriological
+ */
+router.get('/insights/analytics', async (req, res) => {
+  try {
+    const { year, month, barangay, outcome, sex, ageGroup, bacteriological } = req.query;
+    const filters = {};
+    if (year) filters.year = year;
+    if (month) filters.month = month;
+    if (barangay) filters.barangay = barangay;
+    if (outcome) filters.outcome = outcome;
+    if (sex) filters.sex = sex;
+    if (ageGroup) filters.ageGroup = ageGroup;
+    if (bacteriological) filters.bacteriological = bacteriological;
+
+    const metrics = await buildAnalyticsMetrics(pool, filters);
+    const insight = generateAnalyticsInsight(metrics, filters);
+    res.json(insight);
+  } catch (err) {
+    console.error('Analytics insight error:', err.message);
+    res.status(500).json({ error: 'Server error generating analytics insight.' });
+  }
+});
+
+/**
+ * GET /api/tb/insights/forecasting
+ * Generate NLG-based forecasting insight from computed metrics.
+ * Query params: startYear, endYear, barangay, horizon
+ */
+router.get('/insights/forecasting', async (req, res) => {
+  try {
+    const { startYear, endYear, barangay, horizon } = req.query;
+    const filters = {};
+    if (startYear) filters.startYear = startYear;
+    if (endYear) filters.endYear = endYear;
+    if (barangay) filters.barangay = barangay;
+    if (horizon) filters.horizon = horizon;
+
+    const metrics = await buildForecastingMetrics(pool, filters);
+    const insight = generateForecastingInsight(metrics, filters);
+    res.json(insight);
+  } catch (err) {
+    console.error('Forecasting insight error:', err.message);
+    res.status(500).json({ error: 'Server error generating forecasting insight.' });
+  }
+});
+
+/**
+ * GET /api/tb/webhook-logs
+ * List recent webhook integration logs.
+ */
+router.get('/webhook-logs', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, source, batch_id, status, records_received, records_imported,
+             error_message, received_at, processed_at
+      FROM webhook_logs
+      ORDER BY received_at DESC
+      LIMIT 50
+    `);
+    res.json({ logs: result.rows });
+  } catch (err) {
+    console.error('Webhook logs error:', err.message);
+    res.status(500).json({ error: 'Server error fetching webhook logs.' });
   }
 });
 

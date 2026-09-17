@@ -131,14 +131,14 @@ export default function TBRecordsPage() {
           <table className="w-full">
             <thead>
               <tr style={{ background: '#FAFCFF', borderBottom: '1px solid #E2E8F0' }}>
-                {['Barangay', 'City', 'Source', 'Diagnosis Date', 'Sex', 'Age', 'Status'].map((h) => (
+                {['Barangay', 'City', 'Source', 'Diagnosis Date', 'Sex', 'Age', 'Status', 'Record'].map((h) => (
                   <th key={h} className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider" style={{ color: '#0F2D52' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {paged.length === 0 ? (
-                <tr><td colSpan={7}><EmptyState icon="ri-file-list-line" title="No Records Found" description="There are no records matching your current filters." /></td></tr>
+                <tr><td colSpan={8}><EmptyState icon="ri-file-list-line" title="No Records Found" description="There are no records matching your current filters." /></td></tr>
               ) : paged.map((r) => (
                 <tr key={r.id} className="hover:bg-blue-50/40 transition-colors" style={{ borderBottom: '1px solid #F1F5F9' }}>
                   <td className="px-4 py-3 text-xs font-bold" style={{ color: '#0F2D52' }}>{r.barangay_name || '—'}</td>
@@ -148,6 +148,7 @@ export default function TBRecordsPage() {
                   <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{r.sex || '—'}</td>
                   <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{r.age || '—'}</td>
                   <td className="px-4 py-3"><StatusBadge status={r.is_valid ? 'Validated' : 'Invalid'} /></td>
+                  <td className="px-4 py-3"><StatusBadge status={r.record_status || 'new'} /></td>
                 </tr>
               ))}
             </tbody>

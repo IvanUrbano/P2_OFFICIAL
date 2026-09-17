@@ -56,11 +56,21 @@ function matchHeader(normalized) {
     return 'source_of_patient';
   if (normalized.includes('anatomical')) return 'anatomical_site';
   if (normalized.includes('registration')) return 'registration_group';
-  if (normalized.includes('bacteriological')) return 'bacteriological_status';
+  if (normalized.includes('bacteriological') || normalized.includes('bacteriologic')) return 'bacteriological_status';
   if (normalized.includes('validation')) return 'validation_status';
   if (normalized.includes('itis') && normalized.includes('lite')) return 'itis_case_id';
   if (normalized.includes('source') && normalized.includes('type')) return 'source_type';
-  if (normalized.includes('outcome')) return 'outcome_status';
+  if (normalized.includes('outcome') && !normalized.includes('date') && !normalized.includes('reason')) return 'outcome_status';
+  if (normalized === 'type') return 'type';
+  if (normalized.includes('province')) return 'province';
+  if (normalized.includes('region')) return 'region';
+  if (normalized.includes('referred') || normalized.includes('dots')) return 'referred_to_dots';
+  if (normalized.includes('referral') && normalized.includes('status')) return 'referral_status';
+  if (normalized.includes('microscopy') && normalized.includes('result')) return 'microscopy_result';
+  if (normalized.includes('microscopy') && normalized.includes('date')) return 'microscopy_release_date';
+  if (normalized.includes('rdt') && normalized.includes('result')) return 'rdt_result';
+  if (normalized.includes('rdt') && normalized.includes('date')) return 'rdt_release_date';
+  if (normalized.includes('outcome') && normalized.includes('reason')) return 'outcome_reason';
 
   return null;
 }

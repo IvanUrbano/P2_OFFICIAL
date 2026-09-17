@@ -173,6 +173,32 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
+
+      {/* Pending Actions */}
+      {((stats.pendingActions?.requiresValidation > 0) || (stats.pendingActions?.failedSync > 0)) && (
+        <div className="rounded-xl p-5" style={{ background: '#FFFBEB', border: '1px solid #FCD34D', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
+          <div className="flex items-center gap-2 mb-3">
+            <i className="ri-alert-line text-sm" style={{ color: '#D97706' }} />
+            <h2 className="text-sm font-bold" style={{ color: '#92400E' }}>Pending Actions</h2>
+          </div>
+          <div className="space-y-2">
+            {stats.pendingActions?.requiresValidation > 0 && (
+              <div className="flex items-center gap-2 text-xs" style={{ color: '#92400E' }}>
+                <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#F59E0B' }} />
+                <span>{stats.pendingActions.requiresValidation} batch{stats.pendingActions.requiresValidation !== 1 ? 'es' : ''} require{stats.pendingActions.requiresValidation === 1 ? 's' : ''} validation</span>
+                <button onClick={() => navigate('/import')} className="ml-2 text-[10px] font-bold underline cursor-pointer">Review</button>
+              </div>
+            )}
+            {stats.pendingActions?.failedSync > 0 && (
+              <div className="flex items-center gap-2 text-xs" style={{ color: '#92400E' }}>
+                <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#EF4444' }} />
+                <span>{stats.pendingActions.failedSync} synchronization{stats.pendingActions.failedSync !== 1 ? 's' : ''} failed and require{stats.pendingActions.failedSync === 1 ? 's' : ''} review</span>
+                <button onClick={() => navigate('/sync-history')} className="ml-2 text-[10px] font-bold underline cursor-pointer">Review</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

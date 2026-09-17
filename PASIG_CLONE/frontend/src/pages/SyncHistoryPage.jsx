@@ -90,7 +90,7 @@ export default function SyncHistoryPage() {
             <table className="w-full">
               <thead>
                 <tr style={{ background: '#FAFCFF', borderBottom: '1px solid #E2E8F0' }}>
-                  {['Batch ID', 'Status', 'HTTP Code', 'Timestamp'].map((h) => (
+                  {['Batch ID', 'Status', 'HTTP Code', 'Initiated By', 'Timestamp'].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider" style={{ color: '#0F2D52' }}>{h}</th>
                   ))}
                 </tr>
@@ -105,6 +105,7 @@ export default function SyncHistoryPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-xs font-semibold" style={{ color: '#475569' }}>{log.response_code || '—'}</td>
+                    <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{log.username || '—'}</td>
                     <td className="px-4 py-3 text-xs" style={{ color: '#64748B' }}>{log.sent_at ? new Date(log.sent_at).toLocaleString() : '—'}</td>
                   </tr>
                 ))}

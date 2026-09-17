@@ -19,23 +19,29 @@ export default function DataImportPage() {
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  const [duplicateInfo, setDuplicateInfo] = useState(null);
 
   const handleFile = (e) => {
     const f = e.target.files?.[0];
-    if (f) { setFile(f); setError(''); setResult(null); }
+    if (f) { setFile(f); setError(''); setResult(null); setDuplicateInfo(null); }
   };
 
   const handleUpload = async () => {
     if (!file) return;
     setUploading(true);
     setError('');
+    setDuplicateInfo(null);
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const res = await API.post('/api/data/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const res = await API.post('/api/data/import', formData);
       setResult(res.data);
     } catch (err) {
-      setError(err.response?.data?.error || 'Upload failed.');
+      if (err.response?.status === 409 && err.response?.data?.isDuplicate) {
+        setDuplicateInfo(err.response.data);
+      } else {
+        setError(err.response?.data?.error || 'Upload failed.');
+      }
     } finally {
       setUploading(false);
     }
@@ -85,6 +91,28 @@ export default function DataImportPage() {
           <div className="mt-4 px-3.5 py-2.5 rounded-lg text-xs flex items-center gap-2" style={{ background: '#FEF2F2', color: '#991B1B', border: '1px solid #FCA5A5' }}>
             <i className="ri-error-warning-line text-sm shrink-0" />
             <span>{error}</span>
+          </div>
+        )}
+
+        {duplicateInfo && (
+          <div className="mt-4 px-4 py-3 rounded-lg text-xs" style={{ background: '#FFF7ED', color: '#9A3412', border: '1px solid #FDBA74' }}>
+            <div className="flex items-center gap-2 mb-2">
+              <i className="ri-file-shield-line text-sm shrink-0" />
+              <span className="font-bold text-sm">File Already Imported</span>
+            </div>
+            <p className="mb-2">This file appears to have already been processed.</p>
+            {duplicateInfo.previousImport && (
+              <div className="grid grid-cols-2 gap-2 mt-2 p-2 rounded" style={{ background: 'rgba(255,255,255,0.6)' }}>
+                <div><span className="font-semibold">Batch:</span> {duplicateInfo.previousImport.batchId?.slice(0, 8)}</div>
+                <div><span className="font-semibold">File:</span> {duplicateInfo.previousImport.filename}</div>
+                <div><span className="font-semibold">Imported By:</span> {duplicateInfo.previousImport.importedBy || 'Unknown'}</div>
+                <div><span className="font-semibold">Date:</span> {duplicateInfo.previousImport.importedAt ? new Date(duplicateInfo.previousImport.importedAt).toLocaleDateString() : '—'}</div>
+                <div><span className="font-semibold">Status:</span> {duplicateInfo.previousImport.syncStatus || '—'}</div>
+              </div>
+            )}
+            <button onClick={() => setDuplicateInfo(null)} className="mt-2 px-3 py-1 text-[11px] font-bold rounded cursor-pointer" style={{ background: '#9A3412', color: '#fff' }}>
+              Upload Different File
+            </button>
           </div>
         )}
 

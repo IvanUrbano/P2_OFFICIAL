@@ -23,3 +23,17 @@ CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 -- Ensure role column is added if migrating existing DB
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'staff';
 
+-- ==========================================
+-- TBInsight tb_cases new columns
+-- ==========================================
+ALTER TABLE tb_cases ADD COLUMN IF NOT EXISTS type TEXT;
+ALTER TABLE tb_cases ADD COLUMN IF NOT EXISTS province TEXT;
+ALTER TABLE tb_cases ADD COLUMN IF NOT EXISTS region TEXT;
+ALTER TABLE tb_cases ADD COLUMN IF NOT EXISTS referred_to_dots TEXT;
+ALTER TABLE tb_cases ADD COLUMN IF NOT EXISTS referral_status TEXT;
+ALTER TABLE tb_cases ADD COLUMN IF NOT EXISTS microscopy_result TEXT;
+ALTER TABLE tb_cases ADD COLUMN IF NOT EXISTS microscopy_release_date DATE;
+ALTER TABLE tb_cases ADD COLUMN IF NOT EXISTS rdt_result TEXT;
+ALTER TABLE tb_cases ADD COLUMN IF NOT EXISTS rdt_release_date DATE;
+ALTER TABLE tb_cases ADD COLUMN IF NOT EXISTS outcome_reason TEXT;
+

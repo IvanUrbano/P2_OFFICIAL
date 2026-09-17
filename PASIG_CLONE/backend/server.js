@@ -33,7 +33,17 @@ app.use(cors({
 }));
 app.use(helmet());
 app.use(morgan('dev'));
-app.use(express.json({ limit: '1mb' }));
+const fileUpload = require('express-fileupload');
+app.use(fileUpload({ 
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB max file upload
+  abortOnLimit: true, 
+  responseOnLimit: 'File too large. Maximum size is 500MB.' 
+}));
+
+// JSON size limits for different routes
+app.use('/api/auth', express.json({ limit: '50mb' }));
+app.use('/api/webhook', express.json({ limit: '100mb' })); // Large payloads from TBInsight
+app.use(express.json({ limit: '50mb' })); // Default for other routes
 app.use(cookieParser());
  
 app.use('/api/auth', authRoutes);
@@ -55,7 +65,11 @@ async function start() {
   try {
     await initSchema();
     app.listen(config.port, () => {
-      console.log(`Pasig Clone backend running on port ${config.port}`);
+      console.log(`🚀 Pasig Clone backend running on port ${config.port}`);
+      console.log(`📦 File upload limits:`);
+      console.log(`   • JSON payload: 50 MB (general), 100 MB (webhook)`);
+      console.log(`   • File upload: 500 MB`);
+      console.log(`✅ Supports large CSV/Excel files`);
     });
   } catch (err) {
     console.error('Failed to start:', err);
