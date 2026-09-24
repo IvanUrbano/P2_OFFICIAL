@@ -64,8 +64,6 @@ async function validateBatch(batchId) {
     }
   }
 
-  await db.updateBatchValidation(batchId, results.valid, results.invalid);
-
   // Idempotency: delete existing validated records for this batch before re-inserting
   const validRecords = results.validatedRecords.filter(r => r.is_valid);
 
@@ -78,8 +76,11 @@ async function validateBatch(batchId) {
   const client = await db.pool.connect();
   try {
     await client.query('BEGIN');
+
+    // Delete existing validated records for this batch
     await client.query('DELETE FROM validated_tb_cases WHERE batch_id = $1', [batchId]);
 
+    // Insert validated records
     const COLS = 27;
     const chunkSize = 100;
     for (let i = 0; i < validRecords.length; i += chunkSize) {
@@ -111,6 +112,15 @@ async function validateBatch(batchId) {
         flatParams
       );
     }
+
+    // Update batch status INSIDE the transaction so it rolls back on failure
+    await client.query(
+      `UPDATE import_batches
+       SET status = 'validated', valid_count = $1, error_count = $2, validated_at = NOW()
+       WHERE id = $3`,
+      [results.valid, results.invalid, batchId]
+    );
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});

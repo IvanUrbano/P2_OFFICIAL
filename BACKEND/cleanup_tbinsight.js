@@ -28,7 +28,19 @@ async function cleanup() {
     
     console.log('Deleting monthly summaries...');
     await client.query('DELETE FROM monthly_case_summary');
-    
+
+    console.log('Deleting demographic summaries...');
+    await client.query('DELETE FROM demographic_summary');
+
+    console.log('Deleting outcome summaries...');
+    await client.query('DELETE FROM outcome_summary');
+
+    console.log('Deleting facility summaries...');
+    await client.query('DELETE FROM facility_summary');
+
+    console.log('Deleting bacteriological summaries...');
+    await client.query('DELETE FROM bacteriological_summary');
+
     console.log('Deleting case records...');
     await client.query('DELETE FROM tb_cases');
     
@@ -53,6 +65,10 @@ async function cleanup() {
         (SELECT COUNT(*) FROM tb_cases)::int as tb_cases_count,
         (SELECT COUNT(*) FROM tb_cases_raw)::int as tb_cases_raw_count,
         (SELECT COUNT(*) FROM monthly_case_summary)::int as monthly_summary_count,
+        (SELECT COUNT(*) FROM demographic_summary)::int as demographic_summary_count,
+        (SELECT COUNT(*) FROM outcome_summary)::int as outcome_summary_count,
+        (SELECT COUNT(*) FROM facility_summary)::int as facility_summary_count,
+        (SELECT COUNT(*) FROM bacteriological_summary)::int as bacteriological_summary_count,
         (SELECT COUNT(*) FROM model_predictions)::int as predictions_count,
         (SELECT COUNT(*) FROM barangay_risk_scores)::int as risk_scores_count,
         (SELECT COUNT(*) FROM alerts)::int as alerts_count,

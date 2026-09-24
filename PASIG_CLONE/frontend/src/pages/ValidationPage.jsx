@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import { useTheme } from '../theme';
@@ -20,9 +20,24 @@ export default function ValidationPage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  const [batches, setBatches] = useState([]);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [selectedBatch, setSelectedBatch] = useState('');
+  const [validating, setValidating] = useState(false);
+  const validatedRef = useRef(false);
 
   useEffect(() => {
-    if (!batchId) return;
+    if (batchId) return;
+    setBatchesLoading(true);
+    API.get('/api/data/batches')
+      .then(res => setBatches(Array.isArray(res.data) ? res.data.filter(b => b.status === 'uploaded') : []))
+      .catch(() => {})
+      .finally(() => setBatchesLoading(false));
+  }, [batchId]);
+
+  useEffect(() => {
+    if (!batchId || validatedRef.current) return;
+    validatedRef.current = true;
     setLoading(true);
     API.post(`/api/data/validate/${batchId}`)
       .then(res => setResult(res.data))
@@ -30,11 +45,63 @@ export default function ValidationPage() {
       .finally(() => setLoading(false));
   }, [batchId]);
 
+  const handleValidate = () => {
+    if (!selectedBatch) return;
+    navigate(`/validation?batchId=${selectedBatch}`);
+  };
+
   if (!batchId) {
     return (
-      <div style={cardStyle(t)} className="p-6">
-        <EmptyState icon="ri-checkbox-circle-line" title="No Batch Selected" description="Import a file first, then validate it."
-          action={<button onClick={() => navigate('/import')} className="px-4 py-2 text-xs font-semibold rounded-lg" style={{ background: '#0F2D52', color: '#fff' }}>Go to Import</button>} />
+      <div className="space-y-6">
+        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
+          <div className="px-6 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
+            <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Validation</h1>
+            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Review imported records before synchronization.</p>
+          </div>
+        </div>
+
+        <div style={cardStyle(t)} className="p-6">
+          {batchesLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <i className="ri-loader-4-line animate-spin text-lg" style={{ color: '#94A3B8' }} />
+            </div>
+          ) : batches.length === 0 ? (
+            <EmptyState
+              icon="ri-checkbox-circle-line"
+              title="No Batches to Validate"
+              description="All imported batches have already been validated. Import a new file first."
+              action={<button onClick={() => navigate('/import')} className="px-4 py-2 text-xs font-semibold rounded-lg cursor-pointer" style={{ background: '#0F2D52', color: '#fff' }}>Go to Import</button>}
+            />
+          ) : (
+            <div>
+              <h3 className="text-sm font-bold mb-1" style={{ color: '#0F2D52' }}>Select Batch to Validate</h3>
+              <p className="text-xs mb-4" style={{ color: '#64748B' }}>Choose an imported batch that requires validation.</p>
+              <div className="flex items-center gap-3">
+                <select
+                  value={selectedBatch}
+                  onChange={(e) => setSelectedBatch(e.target.value)}
+                  className="flex-1 px-3 py-2 text-xs rounded-lg outline-none"
+                  style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52' }}
+                >
+                  <option value="">Select a batch...</option>
+                  {batches.map(b => (
+                    <option key={b.id} value={b.id}>
+                      {b.filename} — {b.total_rows} records ({b.id?.slice(0, 8)})
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleValidate}
+                  disabled={!selectedBatch}
+                  className="px-5 py-2 text-xs font-bold rounded-lg disabled:opacity-40 transition-colors cursor-pointer"
+                  style={{ background: '#0F2D52', color: '#ffffff' }}
+                >
+                  Validate
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -43,9 +110,17 @@ export default function ValidationPage() {
 
   if (error) {
     return (
-      <div style={cardStyle(t)} className="p-6">
-        <EmptyState icon="ri-error-warning-line" title="Validation Failed" description={error}
-          action={<button onClick={() => window.location.reload()} className="px-4 py-2 text-xs font-semibold rounded-lg" style={{ background: '#0F2D52', color: '#fff' }}>Try Again</button>} />
+      <div className="space-y-6">
+        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
+          <div className="px-6 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
+            <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Validation</h1>
+            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Review imported records before synchronization.</p>
+          </div>
+        </div>
+        <div style={cardStyle(t)} className="p-6">
+          <EmptyState icon="ri-error-warning-line" title="Validation Failed" description={error}
+            action={<button onClick={() => window.location.reload()} className="px-4 py-2 text-xs font-semibold rounded-lg" style={{ background: '#0F2D52', color: '#fff' }}>Try Again</button>} />
+        </div>
       </div>
     );
   }
@@ -56,7 +131,6 @@ export default function ValidationPage() {
 
   return (
     <div className="space-y-6">
-      {/* Card Header */}
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
         <div className="px-6 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Validation</h1>
@@ -64,14 +138,12 @@ export default function ValidationPage() {
         </div>
       </div>
 
-      {/* KPI Cards */}
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
-        <div className="grid grid-cols-2 sm:grid-cols-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3">
           {[
             { label: 'Total Records', value: summary.total || 0, color: '#3B82F6', icon: 'ri-database-2-line' },
             { label: 'Validated', value: summary.valid || 0, color: '#10B981', icon: 'ri-checkbox-circle-line' },
             { label: 'Invalid', value: summary.invalid || 0, color: '#EF4444', icon: 'ri-close-circle-line' },
-            { label: 'Warnings', value: summary.warnings || 0, color: '#F97316', icon: 'ri-alert-line' },
           ].map((kpi, idx) => (
             <div key={kpi.label} className="p-4 relative">
               <div className="flex items-center gap-1.5 mb-1">
@@ -79,7 +151,7 @@ export default function ValidationPage() {
                 <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>{kpi.label}</span>
               </div>
               <p className="text-2xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{kpi.value}</p>
-              {idx < 3 && <div className="hidden sm:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-8" style={{ background: '#E2E8F0' }} />}
+              {idx < 2 && <div className="hidden sm:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-8" style={{ background: '#E2E8F0' }} />}
             </div>
           ))}
         </div>

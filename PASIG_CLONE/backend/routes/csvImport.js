@@ -181,25 +181,8 @@ router.get('/batches/:id', authenticate, authorizeRoles('admin', 'staff'), async
 // ==================== IMPORT HISTORY (Organization-wide) ====================
 router.get('/import-history', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
-    const result = await db.pool.query(
-      `SELECT 
-        b.id,
-        b.filename,
-        b.uploaded_by,
-        u.username as imported_by_username,
-        b.total_rows,
-        b.valid_count,
-        b.error_count,
-        b.status,
-        b.sync_status,
-        b.created_at,
-        b.validated_at,
-        b.synced_at
-       FROM import_batches b
-       LEFT JOIN users u ON b.uploaded_by = u.id
-       ORDER BY b.created_at DESC
-       LIMIT 100`,
-    );
+    const status = req.query.status || 'active';
+    const result = await db.getImportHistory(status);
 
     const batches = result.rows.map(b => ({
       id: b.id,
@@ -213,6 +196,10 @@ router.get('/import-history', authenticate, authorizeRoles('admin', 'staff'), as
       importedAt: b.created_at,
       validatedAt: b.validated_at,
       syncedAt: b.synced_at,
+      isArchived: b.is_archived,
+      archivedBy: b.archived_by_username || null,
+      archivedAt: b.archived_at || null,
+      archiveReason: b.archive_reason || null,
     }));
 
     res.json({ batches });
@@ -296,6 +283,183 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
   } catch (error) {
     console.error('Error fetching records:', error);
     res.status(500).json({ error: 'Failed to fetch records' });
+  }
+});
+
+// ==================== ARCHIVE RECORD ====================
+router.patch('/records/:id/archive', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.archiveRecord(id);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Record not found' });
+    }
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'ARCHIVE_RECORD',
+      resourceType: 'validated_tb_cases',
+      resourceId: id,
+      result: 'SUCCESS',
+      details: { recordId: id },
+    });
+
+    res.json({ message: 'Record archived successfully', record: result.rows[0] });
+  } catch (error) {
+    console.error('Error archiving record:', error);
+    res.status(500).json({ error: 'Failed to archive record' });
+  }
+});
+
+// ==================== ARCHIVE BATCH ====================
+router.patch('/batches/:id/archive', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    const result = await db.archiveBatch(id, req.user.id, reason || null);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Batch not found' });
+    }
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'ARCHIVE_BATCH',
+      resourceType: 'import_batch',
+      resourceId: id,
+      result: 'SUCCESS',
+      details: { batchId: id, reason: reason || null },
+    });
+
+    res.json({ message: 'Batch archived successfully', batch: result.rows[0] });
+  } catch (error) {
+    console.error('Error archiving batch:', error);
+    res.status(500).json({ error: 'Failed to archive batch' });
+  }
+});
+
+// ==================== UNARCHIVE BATCH ====================
+router.patch('/batches/:id/unarchive', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.unarchiveBatch(id);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Batch not found' });
+    }
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'UNARCHIVE_BATCH',
+      resourceType: 'import_batch',
+      resourceId: id,
+      result: 'SUCCESS',
+      details: { batchId: id },
+    });
+
+    res.json({ message: 'Batch unarchived successfully', batch: result.rows[0] });
+  } catch (error) {
+    console.error('Error unarchiving batch:', error);
+    res.status(500).json({ error: 'Failed to unarchive batch' });
+  }
+});
+
+// ==================== BATCH DETAILS ====================
+router.get('/batches/:id/details', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const batchResult = await db.getBatchWithUsers(id);
+    if (batchResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Batch not found' });
+    }
+
+    const syncResult = await db.pool.query(
+      `SELECT wl.*, u.username 
+       FROM webhook_logs wl
+       LEFT JOIN users u ON wl.initiated_by = u.id
+       WHERE wl.batch_id = $1
+       ORDER BY wl.sent_at DESC`,
+      [id]
+    );
+
+    res.json({
+      batch: batchResult.rows[0],
+      syncLogs: syncResult.rows,
+    });
+  } catch (error) {
+    console.error('Error fetching batch details:', error);
+    res.status(500).json({ error: 'Failed to fetch batch details' });
+  }
+});
+
+// ==================== POPULATION ====================
+router.get('/population', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  try {
+    const result = await db.getPopulation();
+    res.json({ population: result.rows });
+  } catch (error) {
+    console.error('Error fetching population:', error);
+    res.status(500).json({ error: 'Failed to fetch population data' });
+  }
+});
+
+router.post('/population', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { barangay_name, population, reference_year, source } = req.body;
+    if (!barangay_name || !population || !reference_year) {
+      return res.status(400).json({ error: 'barangay_name, population, and reference_year are required.' });
+    }
+
+    const result = await db.addPopulation(barangay_name, population, reference_year, source || null);
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'ADD_POPULATION',
+      resourceType: 'barangay_population',
+      resourceId: String(result.rows[0].id),
+      result: 'SUCCESS',
+      details: { barangay_name, population, reference_year, source },
+    });
+
+    res.status(201).json({ message: 'Population data added', record: result.rows[0] });
+  } catch (error) {
+    console.error('Error adding population:', error);
+    res.status(500).json({ error: 'Failed to add population data' });
+  }
+});
+
+router.put('/population/:id', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { population, source } = req.body;
+
+    if (!population) {
+      return res.status(400).json({ error: 'population is required.' });
+    }
+
+    const result = await db.updatePopulation(id, population, source || null);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Population record not found' });
+    }
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'UPDATE_POPULATION',
+      resourceType: 'barangay_population',
+      resourceId: id,
+      result: 'SUCCESS',
+      details: { population, source },
+    });
+
+    res.json({ message: 'Population data updated', record: result.rows[0] });
+  } catch (error) {
+    console.error('Error updating population:', error);
+    res.status(500).json({ error: 'Failed to update population data' });
   }
 });
 

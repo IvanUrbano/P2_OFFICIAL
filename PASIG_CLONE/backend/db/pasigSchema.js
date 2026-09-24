@@ -176,7 +176,109 @@ function getWebhookLogs() {
 
 function getBatches() {
   return pool.query(
-    `SELECT * FROM import_batches ORDER BY created_at DESC LIMIT 50`
+    `SELECT * FROM import_batches WHERE is_archived = false ORDER BY created_at DESC LIMIT 50`
+  );
+}
+
+function getImportHistory(status = 'active') {
+  let whereClause = '';
+  if (status === 'active') whereClause = 'WHERE b.is_archived = false';
+  else if (status === 'archived') whereClause = 'WHERE b.is_archived = true';
+  else whereClause = '';
+
+  return pool.query(
+    `SELECT 
+      b.id,
+      b.filename,
+      b.uploaded_by,
+      u.username as imported_by_username,
+      b.total_rows,
+      b.valid_count,
+      b.error_count,
+      b.status,
+      b.sync_status,
+      b.created_at,
+      b.validated_at,
+      b.synced_at,
+      b.is_archived,
+      b.archived_by,
+      b.archived_at,
+      b.archive_reason,
+      au.username as archived_by_username
+     FROM import_batches b
+     LEFT JOIN users u ON b.uploaded_by = u.id
+     LEFT JOIN users au ON b.archived_by = au.id
+     ${whereClause}
+     ORDER BY b.created_at DESC
+     LIMIT 100`
+  );
+}
+
+function getBatchWithUsers(batchId) {
+  return pool.query(
+    `SELECT 
+      b.*,
+      u.username as imported_by_username,
+      v.username as validated_by_username,
+      s.username as synced_by_username,
+      a.username as archived_by_username
+     FROM import_batches b
+     LEFT JOIN users u ON b.uploaded_by = u.id
+     LEFT JOIN users v ON b.validated_by = v.id
+     LEFT JOIN users s ON b.synced_by = s.id
+     LEFT JOIN users a ON b.archived_by = a.id
+     WHERE b.id = $1`,
+    [batchId]
+  );
+}
+
+function archiveBatch(batchId, archivedBy, reason) {
+  return pool.query(
+    `UPDATE import_batches 
+     SET is_archived = true, archived_by = $2, archived_at = NOW(), archive_reason = $3
+     WHERE id = $1 RETURNING *`,
+    [batchId, archivedBy, reason]
+  );
+}
+
+function unarchiveBatch(batchId) {
+  return pool.query(
+    `UPDATE import_batches 
+     SET is_archived = false, archived_by = NULL, archived_at = NULL, archive_reason = NULL
+     WHERE id = $1 RETURNING *`,
+    [batchId]
+  );
+}
+
+function archiveRecord(recordId) {
+  return pool.query(
+    `UPDATE validated_tb_cases SET is_archived = true WHERE id = $1 RETURNING *`,
+    [recordId]
+  );
+}
+
+function getPopulation() {
+  return pool.query(
+    `SELECT * FROM barangay_population ORDER BY barangay_name, reference_year DESC`
+  );
+}
+
+function addPopulation(barangayName, population, referenceYear, source) {
+  return pool.query(
+    `INSERT INTO barangay_population (barangay_name, population, reference_year, source)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (barangay_name, reference_year) 
+     DO UPDATE SET population = $2, source = $4, updated_at = NOW()
+     RETURNING *`,
+    [barangayName, population, referenceYear, source]
+  );
+}
+
+function updatePopulation(id, population, source) {
+  return pool.query(
+    `UPDATE barangay_population SET population = $2, source = $3, updated_at = NOW()
+     WHERE id = $1 RETURNING *`,
+    [id, population, source]
   );
 }
 
@@ -199,6 +301,7 @@ module.exports = {
   updateBatchValidation,
   updateBatchSent,
   getBatch,
+  getBatchWithUsers,
   getRawCases,
   getValidatedCases,
   getPendingCases,
@@ -207,4 +310,11 @@ module.exports = {
   logWebhookError,
   getWebhookLogs,
   getBatches,
+  getImportHistory,
+  archiveBatch,
+  unarchiveBatch,
+  archiveRecord,
+  getPopulation,
+  addPopulation,
+  updatePopulation,
 };

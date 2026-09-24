@@ -127,7 +127,7 @@ export default function DashboardPage() {
               <i className="ri-upload-cloud-2-line text-sm" style={{ color: '#0F2D52' }} />
               <h2 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Recent Imports</h2>
             </div>
-            <button onClick={() => navigate('/import')} className="text-[11px] font-semibold transition-colors cursor-pointer" style={{ color: '#2E6FAF' }}>View All</button>
+            <button onClick={() => navigate('/import?tab=history')} className="text-[11px] font-semibold transition-colors cursor-pointer" style={{ color: '#2E6FAF' }}>View All Imports &rarr;</button>
           </div>
           {recentImports.length === 0 ? (
             <p className="text-xs text-center py-8" style={{ color: '#94A3B8' }}>No imports recorded yet</p>

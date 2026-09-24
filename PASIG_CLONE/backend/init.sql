@@ -155,6 +155,33 @@ ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS outcome_reason TEXT;
 ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS initiated_by INTEGER;
 ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS initiated_at TIMESTAMP;
 
+-- Archive support for import batches
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false;
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS archived_by INTEGER;
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP;
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS archive_reason TEXT;
+
+-- Fix audit_logs columns to match what auth.js writes
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS username TEXT NOT NULL DEFAULT 'system';
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS target_user_id INTEGER;
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS target_username TEXT;
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS ip_address TEXT;
+
+-- Barangay population reference data
+CREATE TABLE IF NOT EXISTS barangay_population (
+    id SERIAL PRIMARY KEY,
+    barangay_name TEXT NOT NULL,
+    population INTEGER NOT NULL,
+    reference_year INTEGER NOT NULL,
+    source TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(barangay_name, reference_year)
+);
+
+CREATE INDEX IF NOT EXISTS idx_barangay_population_year ON barangay_population(reference_year);
+CREATE INDEX IF NOT EXISTS idx_import_batches_archived ON import_batches(is_archived);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_raw_cases_batch ON raw_tb_cases(batch_id);
 CREATE INDEX IF NOT EXISTS idx_validated_cases_batch ON validated_tb_cases(batch_id);
