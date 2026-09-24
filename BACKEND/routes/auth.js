@@ -97,11 +97,11 @@ router.post('/login', loginLimiter, async (req, res) => {
       });
     }
 
-    // Find user
-    const result = await pool.query(
-      'SELECT * FROM users WHERE username = $1 OR email = $1 LIMIT 1',
-      [username]
-    );
+// Find user by username or email (case-insensitive)
+const result = await pool.query(
+  'SELECT * FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1) LIMIT 1',
+  [username]
+);
 
     if (result.rows.length === 0) {
       await logLoginAttempt(username, ipAddress, false);
