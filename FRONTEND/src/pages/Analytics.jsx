@@ -5,6 +5,8 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import API from '../api/axios';
+import AiInsightPanel from '../components/AiInsightPanel';
+import { getAnalyticsInsight } from '../services/insightService';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
@@ -171,6 +173,11 @@ export default function Analytics() {
   const [compareYear, setCompareYear] = useState(false);
   const [showIncidence, setShowIncidence] = useState(false);
 
+  /* NLG Insight state */
+  const [insightData, setInsightData] = useState(null);
+  const [insightLoading, setInsightLoading] = useState(false);
+  const [insightError, setInsightError] = useState(null);
+
   /* ── Data fetching ── */
   const loadAll = useCallback(async () => {
     try {
@@ -230,6 +237,24 @@ export default function Analytics() {
     setABact('');
     setApplied(false);
   }, []);
+
+  const handleGenerateInsight = useCallback(async () => {
+    try {
+      setInsightLoading(true);
+      setInsightError(null);
+      const insight = await getAnalyticsInsight({
+        year: aYear,
+        month: aMonth,
+        barangay: aBarangay,
+      });
+      setInsightData(insight);
+    } catch (err) {
+      if (import.meta.env.DEV) console.error('Insight generation failed:', err);
+      setInsightError('Unable to generate insight.');
+    } finally {
+      setInsightLoading(false);
+    }
+  }, [aYear, aMonth, aBarangay]);
 
   /* ── Remove a single filter chip ── */
   const removeFilter = useCallback((key) => {
@@ -521,106 +546,6 @@ export default function Analytics() {
     return chips;
   }, [aYear, aMonth, aBarangay, aOutcome, aSex, aAgeGroup, aBact]);
 
-  /* ── Key Insights ── */
-  const insights = useMemo(() => {
-    const list = [];
-    if (filteredCases.length === 0) return list;
-
-    if (barangayData.length > 0) {
-      const top = barangayData[0];
-      list.push({
-        category: 'HOTSPOT',
-        color: '#991B1B',
-        stat: top.Cases.toLocaleString(),
-        unit: 'cases',
-        text: `${top.name} has the highest number of reported TB cases.`,
-      });
-    }
-
-    if (trendData.length >= 2) {
-      const recent = trendData.slice(-3).reduce((s, r) => s + r.Cases, 0) / 3;
-      const older = trendData.slice(0, 3).reduce((s, r) => s + r.Cases, 0) / 3;
-      if (older > 0) {
-        const pct = (((recent - older) / older) * 100).toFixed(0);
-        if (pct > 5) list.push({ category: 'TREND', color: '#0D9488', stat: `+${pct}`, unit: '%', text: 'TB cases have increased compared to the earlier period.' });
-        else if (pct < -5) list.push({ category: 'TREND', color: '#047857', stat: `${pct}`, unit: '%', text: 'TB cases have decreased compared to the earlier period.' });
-        else list.push({ category: 'TREND', color: '#64748B', stat: '~0', unit: '%', text: 'TB cases have remained relatively stable across the selected period.' });
-      }
-    }
-
-    if (ageData.length > 0) {
-      const topAge = ageData.reduce((max, r) => r.Cases > max.Cases ? r : max, ageData[0]);
-      if (topAge.Cases > 0) {
-        list.push({
-          category: 'DEMOGRAPHICS',
-          color: '#1E293B',
-          stat: topAge.Cases.toLocaleString(),
-          unit: 'cases',
-          text: `The ${topAge.group} age group accounts for the largest proportion of cases.`,
-        });
-      }
-    }
-
-    if (Number(metrics.successRate) > 0) {
-      const rate = Number(metrics.successRate);
-      const isBelow = rate < 85;
-      list.push({
-        category: 'TREATMENT',
-        color: isBelow ? '#991B1B' : '#047857',
-        stat: metrics.successRate,
-        unit: '%',
-        text: isBelow ? 'Treatment success rate is currently below target.' : 'Treatment success rate meets the target threshold.',
-      });
-    }
-
-    if (metrics.highRisk > 0) {
-      list.push({
-        category: 'HIGH RISK',
-        color: '#991B1B',
-        stat: String(metrics.highRisk),
-        unit: `barangay${metrics.highRisk > 1 ? 's' : ''}`,
-        text: `${metrics.highRisk} barangay${metrics.highRisk > 1 ? 's are' : ' is'} currently classified as high risk.`,
-      });
-    }
-
-    if (sexData.length >= 2) {
-      const topSex = sexData[0];
-      list.push({
-        category: 'DEMOGRAPHICS',
-        color: '#1E293B',
-        stat: `${((topSex.value / totalSex) * 100).toFixed(0)}`,
-        unit: '%',
-        text: `${topSex.name} cases account for the majority of all reported TB cases.`,
-      });
-    }
-
-    if (facilityData.length > 0) {
-      const top = facilityData[0];
-      list.push({
-        category: 'FACILITY LOAD',
-         color: '#6B7280',
-        stat: top.Cases.toLocaleString(),
-        unit: 'cases',
-        text: `${top.name} handles the most TB cases among health facilities.`,
-      });
-    }
-
-    if (barangayIncidenceData.length > 0) {
-      const sorted = [...barangayIncidenceData].filter((d) => d.Population > 0).sort((a, b) => b.Incidence - a.Incidence);
-      if (sorted.length > 0) {
-        list.push({
-          category: 'INCIDENCE',
-           color: '#92400E',
-          stat: sorted[0].Incidence.toLocaleString(),
-          unit: 'per 100k',
-          text: `${sorted[0].name} has the highest incidence rate among Pasig City barangays.`,
-        });
-      }
-    }
-
-    return list;
-  }, [filteredCases, barangayData, trendData, ageData, metrics, sexData, totalSex, facilityData, barangayIncidenceData]);
-
   /* ── Last updated ── */
   const lastUpdated = useMemo(() => {
     const dates = allCases
@@ -641,7 +566,13 @@ export default function Analytics() {
           <i className="ri-error-warning-line text-3xl" style={{ color: COLORS.red }} />
         </div>
         <span className="text-sm font-medium" style={{ color: '#64748B' }}>{error}</span>
-        <button onClick={loadAll} className="text-xs font-medium px-5 py-2.5" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>Retry</button>
+        <button
+          onClick={loadAll}
+          className="px-4 py-2 text-xs font-medium"
+          style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -763,7 +694,10 @@ export default function Analytics() {
       ) : !hasData ? (
         <EmptyState />
       ) : (
-        <>
+        <div className="flex gap-6">
+          {/* ─── LEFT COLUMN: KPI Cards + Charts (scrollable) ─── */}
+          <div className="flex-1 min-w-0 space-y-6">
+
           {/* ─── Metric Cards (with Trend Indicators) ─── */}
           <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15,45,82,0.12), 0 2px 8px rgba(15,45,82,0.08)' }}>
             <div className="grid grid-cols-2 lg:grid-cols-4">
@@ -900,223 +834,211 @@ export default function Analytics() {
             </div>
           </div>
 
-          {/* ─── TB Cases by Barangay (with Incidence Toggle) ─── */}
+          {/* ─── TB Cases by Barangay ─── */}
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-            <div className="flex items-center justify-between px-5 py-4">
-              <div className="flex items-center gap-3">
-                 <div className="w-1 h-8 rounded-full" style={{ background: showIncidence ? '#92400E' : '#0D9488' }} />
-                <div>
-                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>TB Cases by Barangay</h3>
-                  <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>{showIncidence ? 'Incidence rate per 100,000 population across Pasig City barangays.' : 'Distribution of reported TB cases across the 30 barangays of Pasig City.'}</p>
-                </div>
-              </div>
-              <button onClick={() => setShowIncidence(!showIncidence)}
-                className="text-xs font-semibold px-3 py-1.5"
-                style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
-                {showIncidence ? 'Show Cases' : 'Show Incidence'}
-              </button>
-            </div>
-            <div className="px-5 pb-5">
-              {barangayIncidenceData.length > 0 ? (
-                <div className="w-full" style={{ height: Math.max(380, barangayIncidenceData.length * 26) }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={barangayIncidenceData} layout="vertical" margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
-                      <XAxis type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
-                      <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={105} tickMargin={4} />
-                      <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
-                      <Bar dataKey={showIncidence ? 'Incidence' : 'Cases'} radius={[0, 6, 6, 0]} barSize={16} name={showIncidence ? 'Per 100k' : 'Cases'}>
-                        {barangayIncidenceData.map((entry, i) => (
-                          <Cell key={i} fill={showIncidence
-                             ? (entry.Incidence > 100 ? '#991B1B' : entry.Incidence > 50 ? '#92400E' : '#047857')
-                            : (i === 0 ? '#0D9488' : i < 5 ? '#14B8A6' : '#99F6E4')
-                          } />
-                        ))}
-                      </Bar>
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : (
-                <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No barangay data available.</p>
-              )}
-            </div>
-          </div>
-
-          {/* ─── Cases by Health Facility ─── */}
-          {facilityData.length > 0 && (
-            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-              <div className="px-5 py-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-1 h-8 rounded-full" style={{ background: '#6B7280' }} />
-                  <div>
-                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Cases by Health Facility</h3>
-                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Top 15 health facilities handling TB cases in Pasig City.</p>
-                  </div>
-                </div>
-              </div>
-              <div className="px-5 pb-5">
-                <div className="w-full" style={{ height: Math.max(260, facilityData.length * 28) }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={facilityData} layout="vertical" margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
-                      <XAxis type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
-                      <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={140} tickMargin={4} />
-                      <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
-                      <Bar dataKey="Cases" radius={[0, 6, 6, 0]} barSize={16} name="Cases">
-                        {facilityData.map((entry, i) => (
-                          <Cell key={i} fill={i === 0 ? '#374151' : i < 5 ? '#6B7280' : '#9CA3AF'} />
-                        ))}
-                      </Bar>
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ─── Age + Sex Cross-Tabulation + Treatment Outcomes ─── */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Sex Distribution Pie Chart */}
-            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
               <div className="flex items-center justify-between px-5 py-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-1 h-8 rounded-full" style={{ background: '#2563EB' }} />
+                   <div className="w-1 h-8 rounded-full" style={{ background: showIncidence ? '#92400E' : '#0D9488' }} />
                   <div>
-                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Cases by Sex</h3>
-                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>TB case distribution by sex.</p>
+                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>TB Cases by Barangay</h3>
+                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>{showIncidence ? 'Incidence rate per 100,000 population across Pasig City barangays.' : 'Distribution of reported TB cases across the 30 barangays of Pasig City.'}</p>
                   </div>
                 </div>
+                <button onClick={() => setShowIncidence(!showIncidence)}
+                  className="text-xs font-semibold px-3 py-1.5"
+                  style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
+                  {showIncidence ? 'Show Cases' : 'Show Incidence'}
+                </button>
               </div>
               <div className="px-5 pb-5">
-                {sexData.length > 0 ? (
-                  <div className="flex items-center justify-center gap-6">
-                    <div className="w-[180px] h-[180px]">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={sexData}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={45}
-                            outerRadius={80}
-                            paddingAngle={3}
-                            dataKey="value"
-                          >
-                            {sexData.map((entry) => (
-                              <Cell key={entry.name} fill={entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#B48EAD' : '#94A3B8'} />
-                            ))}
-                          </Pie>
-                          <Tooltip formatter={(value) => value.toLocaleString()} />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </div>
-                    <div className="space-y-2">
-                      {sexData.map((entry) => (
-                        <div key={entry.name} className="flex items-center gap-2">
-                           <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#B48EAD' : '#94A3B8' }} />
-                          <span className="text-xs font-semibold" style={{ color: '#475569' }}>{entry.name}</span>
-                          <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>{entry.value.toLocaleString()}</span>
-                          <span className="text-[10px]" style={{ color: '#94A3B8' }}>({totalSex > 0 ? ((entry.value / totalSex) * 100).toFixed(1) : 0}%)</span>
-                        </div>
-                      ))}
-                    </div>
+                {barangayIncidenceData.length > 0 ? (
+                  <div className="w-full" style={{ height: Math.max(380, barangayIncidenceData.length * 26) }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={barangayIncidenceData} layout="vertical" margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                        <XAxis type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
+                        <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={105} tickMargin={4} />
+                        <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
+                        <Bar dataKey={showIncidence ? 'Incidence' : 'Cases'} radius={[0, 6, 6, 0]} barSize={16} name={showIncidence ? 'Per 100k' : 'Cases'}>
+                          {barangayIncidenceData.map((entry, i) => (
+                            <Cell key={i} fill={showIncidence
+                               ? (entry.Incidence > 100 ? '#991B1B' : entry.Incidence > 50 ? '#92400E' : '#047857')
+                              : (i === 0 ? '#0D9488' : i < 5 ? '#14B8A6' : '#99F6E4')
+                            } />
+                          ))}
+                        </Bar>
+                      </ComposedChart>
+                    </ResponsiveContainer>
                   </div>
                 ) : (
-                  <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
+                  <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No barangay data available.</p>
                 )}
               </div>
             </div>
 
-            {/* Treatment Outcomes Pie Chart */}
-            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-              <div className="px-5 py-4">
-                <div className="flex items-center gap-3">
-                   <div className="w-1 h-8 rounded-full" style={{ background: '#047857' }} />
-                  <div>
-                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Treatment Outcomes</h3>
-                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Distribution of treatment outcomes.</p>
+            {/* ─── Cases by Health Facility ─── */}
+            {facilityData.length > 0 && (
+              <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+                <div className="px-5 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-1 h-8 rounded-full" style={{ background: '#6B7280' }} />
+                    <div>
+                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Cases by Health Facility</h3>
+                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Top 15 health facilities handling TB cases in Pasig City.</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="px-5 pb-5">
+                  <div className="w-full" style={{ height: Math.max(260, facilityData.length * 28) }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={facilityData} layout="vertical" margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                        <XAxis type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
+                        <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={140} tickMargin={4} />
+                        <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
+                        <Bar dataKey="Cases" radius={[0, 6, 6, 0]} barSize={16} name="Cases">
+                          {facilityData.map((entry, i) => (
+                            <Cell key={i} fill={i === 0 ? '#374151' : i < 5 ? '#6B7280' : '#9CA3AF'} />
+                          ))}
+                        </Bar>
+                      </ComposedChart>
+                    </ResponsiveContainer>
                   </div>
                 </div>
               </div>
-              <div className="px-5 pb-5">
-                {outcomeData.length > 0 ? (
-                  <div className="flex items-center justify-center gap-6">
-                    <div className="w-[180px] h-[180px]">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={outcomeData}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={45}
-                            outerRadius={80}
-                            paddingAngle={2}
-                            dataKey="Cases"
-                          >
-                            {outcomeData.map((entry) => (
-                              <Cell key={entry.name} fill={OUTCOME_COLORS[entry.name] || '#94A3B8'} />
-                            ))}
-                          </Pie>
-                          <Tooltip formatter={(value) => value.toLocaleString()} />
-                        </PieChart>
-                      </ResponsiveContainer>
+            )}
+
+            {/* ─── Age + Sex Cross-Tabulation + Treatment Outcomes ─── */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Sex Distribution Pie Chart */}
+              <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+                <div className="flex items-center justify-between px-5 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-1 h-8 rounded-full" style={{ background: '#2563EB' }} />
+                    <div>
+                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Cases by Sex</h3>
+                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>TB case distribution by sex.</p>
                     </div>
-                    <div className="space-y-1.5">
-                      {outcomeData.map((entry) => {
-                        const total = outcomeData.reduce((s, e) => s + e.Cases, 0);
-                        const pct = total > 0 ? ((entry.Cases / total) * 100).toFixed(1) : '0.0';
-                        return (
+                  </div>
+                </div>
+                <div className="px-5 pb-5">
+                  {sexData.length > 0 ? (
+                    <div className="flex items-center justify-center gap-6">
+                      <div className="w-[180px] h-[180px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={sexData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={45}
+                              outerRadius={80}
+                              paddingAngle={3}
+                              dataKey="value"
+                            >
+                              {sexData.map((entry) => (
+                                <Cell key={entry.name} fill={entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#B48EAD' : '#94A3B8'} />
+                              ))}
+                            </Pie>
+                            <Tooltip formatter={(value) => value.toLocaleString()} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="space-y-2">
+                        {sexData.map((entry) => (
                           <div key={entry.name} className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: OUTCOME_COLORS[entry.name] || '#94A3B8' }} />
-                            <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>
-                              {entry.name?.length > 18 ? entry.name.slice(0, 16) + '...' : entry.name}
-                            </span>
-                            <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{entry.Cases.toLocaleString()}</span>
-                            <span className="text-[10px]" style={{ color: '#94A3B8' }}>({pct}%)</span>
+                            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: entry.name.toLowerCase() === 'male' ? '#3B82F6' : entry.name.toLowerCase() === 'female' ? '#B48EAD' : '#94A3B8' }} />
+                            <span className="text-xs font-semibold" style={{ color: '#475569' }}>{entry.name}</span>
+                            <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>{entry.value.toLocaleString()}</span>
+                            <span className="text-[10px]" style={{ color: '#94A3B8' }}>({totalSex > 0 ? ((entry.value / totalSex) * 100).toFixed(1) : 0}%)</span>
                           </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* ─── Key Insights ─── */}
-          {insights.length > 0 && (
-            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-              <div className="px-5 py-4">
-                <div className="flex items-center gap-2">
-                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#6B7280' }}>Summary</span>
-                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Key Insights</h3>
-                </div>
-              </div>
-              <div className="px-5 pb-5">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {insights.map((insight, i) => (
-                    <div key={i} className="flex gap-3 p-4">
-                      <div className="w-[3px] rounded-full shrink-0" style={{ background: insight.color }} />
-                      <div className="flex flex-col gap-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: insight.color }}>{insight.category}</span>
-                        <div className="flex items-baseline gap-1.5">
-                          <span className="text-xl font-extrabold" style={{ color: '#1E293B', letterSpacing: '-0.02em' }}>{insight.stat}</span>
-                          <span className="text-sm font-medium" style={{ color: '#94A3B8' }}>{insight.unit}</span>
-                        </div>
-                        <p className="text-[12px] leading-relaxed" style={{ color: '#64748B' }}>{insight.text}</p>
+                        ))}
                       </div>
                     </div>
-                  ))}
+                  ) : (
+                    <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Treatment Outcomes Pie Chart */}
+              <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+                <div className="px-5 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-1 h-8 rounded-full" style={{ background: '#047857' }} />
+                    <div>
+                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Treatment Outcomes</h3>
+                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Distribution of treatment outcomes.</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="px-5 pb-5">
+                  {outcomeData.length > 0 ? (
+                    <div className="flex items-center justify-center gap-6">
+                      <div className="w-[180px] h-[180px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={outcomeData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={45}
+                              outerRadius={80}
+                              paddingAngle={2}
+                              dataKey="Cases"
+                            >
+                              {outcomeData.map((entry) => (
+                                <Cell key={entry.name} fill={OUTCOME_COLORS[entry.name] || '#94A3B8'} />
+                              ))}
+                            </Pie>
+                            <Tooltip formatter={(value) => value.toLocaleString()} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="space-y-1.5">
+                        {outcomeData.map((entry) => {
+                          const total = outcomeData.reduce((s, e) => s + e.Cases, 0);
+                          const pct = total > 0 ? ((entry.Cases / total) * 100).toFixed(1) : '0.0';
+                          return (
+                            <div key={entry.name} className="flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: OUTCOME_COLORS[entry.name] || '#94A3B8' }} />
+                              <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>
+                                {entry.name?.length > 18 ? entry.name.slice(0, 16) + '...' : entry.name}
+                              </span>
+                              <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{entry.Cases.toLocaleString()}</span>
+                              <span className="text-[10px]" style={{ color: '#94A3B8' }}>({pct}%)</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
+                  )}
                 </div>
               </div>
             </div>
-          )}
-        </>
+
+          </div>
+
+          {/* ─── RIGHT COLUMN: Sticky NLG Insight Panel ─── */}
+          <div className="w-[320px] shrink-0 hidden lg:block">
+            <div className="sticky top-4">
+              <AiInsightPanel
+                type="analytics"
+                data={insightData}
+                loading={insightLoading}
+                error={insightError}
+                onRetry={handleGenerateInsight}
+                onGenerate={handleGenerateInsight}
+              />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
 }
+

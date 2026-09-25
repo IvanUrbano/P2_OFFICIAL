@@ -6,29 +6,41 @@ const rateLimit = require('express-rate-limit');
 const config = require('../config');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
+const { validatePassword } = require('../utils/passwordValidator');
+const { generateTempPassword } = require('../utils/tempPasswordGenerator');
+const { logAuditEvent } = require('../utils/auditLogger');
+const {
+  logLoginAttempt,
+  isAccountLocked,
+  getLockoutRemaining,
+  recordFailedAttempt,
+  resetFailedAttempts,
+} = require('../utils/loginAttemptLogger');
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'production' ? 5 : 50,
-  message: { error: 'Too many login attempts. Please try again after 15 minutes.' },
+  max: 5,
+  message: { error: 'Too many login attempts. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
+// ==================== REGISTER (Admin Only) ====================
 router.post('/register', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
-    const { username, email, password, role } = req.body;
+    const { username, email, role } = req.body;
+    const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
     const cleanUsername = username?.trim().toLowerCase();
     const cleanEmail = email?.trim().toLowerCase();
 
-    if (!cleanUsername || !cleanEmail || !password) {
-      return res.status(400).json({ error: 'Username, email, and password are required' });
+    if (!cleanUsername || !cleanEmail) {
+      return res.status(400).json({ error: 'Username and email are required.' });
     }
 
     const userRole = role || 'staff';
     if (!['admin', 'staff'].includes(userRole)) {
-      return res.status(400).json({ error: 'Role must be admin or staff' });
+      return res.status(400).json({ error: 'Role must be admin or staff.' });
     }
 
     const existing = await db.authPool.query(
@@ -36,54 +48,106 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
       [cleanUsername, cleanEmail]
     );
     if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'Username or email already exists' });
+      return res.status(409).json({ error: 'Username or email already exists.' });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // Generate secure temporary password
+    const tempPassword = generateTempPassword();
+
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
     const result = await db.authPool.query(
-      `INSERT INTO users (username, email, password_hash, role)
-       VALUES ($1, $2, $3, $4) RETURNING id, username, email, role, created_at`,
+      `INSERT INTO users (username, email, password_hash, role, password_changed_at)
+       VALUES ($1, $2, $3, $4, NOW()) RETURNING id, username, email, role, created_at`,
       [cleanUsername, cleanEmail, hashedPassword, userRole]
     );
 
-    res.status(201).json({ user: result.rows[0] });
+    const newUser = result.rows[0];
+
+    // Log audit event (never log the password itself)
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'CREATE_USER',
+      targetUserId: newUser.id,
+      targetUsername: newUser.username,
+      result: 'SUCCESS',
+      ipAddress,
+    });
+
+    res.status(201).json({
+      message: 'User created successfully.',
+      user: newUser,
+      tempPassword,
+    });
   } catch (error) {
-    console.error('Register error:', error);
-    res.status(500).json({ error: 'Registration failed' });
+    console.error('Register error:', error.message);
+    res.status(500).json({ error: 'Unable to create user. Please try again.' });
   }
 });
 
+// ==================== LOGIN ====================
 router.post('/login', loginLimiter, async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { email, password } = req.body;
+    const username = email;
 
     const cleanUsername = username?.trim().toLowerCase();
 
     if (!cleanUsername || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
+      return res.status(400).json({ error: 'Username/email and password are required.' });
     }
 
+    const ipAddress = req.ip || req.connection?.remoteAddress || null;
+
+    // Check if account is locked
+    if (await isAccountLocked(cleanUsername)) {
+      const remaining = await getLockoutRemaining(cleanUsername);
+      return res.status(423).json({
+        error: 'Account temporarily locked due to too many failed attempts. Please try again later.',
+        retryAfter: remaining,
+      });
+    }
+
+    // Find user
     const result = await db.authPool.query(
       'SELECT * FROM users WHERE LOWER(username) = $1 OR LOWER(email) = $1',
       [cleanUsername]
     );
 
     if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      await logLoginAttempt(cleanUsername, ipAddress, false);
+      return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
     const user = result.rows[0];
+
+    // Compare password
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      await logLoginAttempt(cleanUsername, ipAddress, false);
+      const { locked } = await recordFailedAttempt(cleanUsername, ipAddress);
+      if (locked) {
+        const remaining = await getLockoutRemaining(cleanUsername);
+        return res.status(423).json({
+          error: 'Account temporarily locked due to too many failed attempts. Please try again later.',
+          retryAfter: remaining,
+        });
+      }
+      return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
+    // Success — reset lockout and log
+    await resetFailedAttempts(cleanUsername);
+    await logLoginAttempt(cleanUsername, ipAddress, true);
+
+    // Generate JWT
     const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role },
+      { id: user.id, username: user.username, email: user.email, role: user.role },
       config.jwt.secret,
       { expiresIn: config.jwt.expiresIn }
     );
 
+    // Set token in httpOnly cookie
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -91,21 +155,37 @@ router.post('/login', loginLimiter, async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
+    // Check if password was changed within the last 24 hours
+    const recentlyChanged = user.password_changed_at &&
+      (Date.now() - new Date(user.password_changed_at).getTime()) < 24 * 60 * 60 * 1000;
+
     res.json({
-      token,
+      message: 'Login successful.',
       user: {
         id: user.id,
         username: user.username,
         email: user.email,
         role: user.role,
       },
+      passwordRecentlyChanged: recentlyChanged,
     });
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Login failed' });
+    console.error('Login error:', error.message);
+    res.status(500).json({ error: 'Server error during login.' });
   }
 });
 
+// ==================== LOGOUT ====================
+router.post('/logout', (req, res) => {
+  res.clearCookie('token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+  });
+  res.json({ message: 'Logged out successfully.' });
+});
+
+// ==================== GET PROFILE (Protected) ====================
 router.get('/profile', authenticate, async (req, res) => {
   try {
     const result = await db.authPool.query(
@@ -114,19 +194,187 @@ router.get('/profile', authenticate, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ error: 'User not found.' });
     }
 
     res.json({ user: result.rows[0] });
   } catch (error) {
-    console.error('Profile error:', error);
-    res.status(500).json({ error: 'Failed to fetch profile' });
+    console.error('Profile error:', error.message);
+    res.status(500).json({ error: 'Failed to fetch profile.' });
   }
 });
 
-router.post('/logout', (req, res) => {
-  res.clearCookie('token');
-  res.json({ message: 'Logged out' });
+// ==================== UPDATE PROFILE (Protected) ====================
+router.put('/profile', authenticate, async (req, res) => {
+  try {
+    const { username, email } = req.body;
+
+    if (!username || !email) {
+      return res.status(400).json({ error: 'Username and email are required.' });
+    }
+
+    const conflict = await db.authPool.query(
+      'SELECT id FROM users WHERE (LOWER(email) = $1 OR LOWER(username) = $2) AND id <> $3',
+      [email.toLowerCase(), username.toLowerCase(), req.user.id]
+    );
+    if (conflict.rows.length > 0) {
+      return res.status(409).json({ error: 'Username or email is already in use by another account.' });
+    }
+
+    const result = await db.authPool.query(
+      'UPDATE users SET username = $1, email = $2 WHERE id = $3 RETURNING id, username, email, role, created_at',
+      [username.toLowerCase(), email.toLowerCase(), req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    res.json({ message: 'Profile updated successfully.', user: result.rows[0] });
+  } catch (error) {
+    console.error('Update profile error:', error.message);
+    res.status(500).json({ error: 'Failed to update profile.' });
+  }
+});
+
+// ==================== CHANGE PASSWORD (Protected) ====================
+router.put('/password', authenticate, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required.' });
+    }
+
+    const passwordErrors = validatePassword(newPassword);
+    if (passwordErrors.length > 0) {
+      return res.status(400).json({ error: passwordErrors.join(' ') });
+    }
+
+    const result = await db.authPool.query(
+      'SELECT id, password_hash FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const user = result.rows[0];
+    const isMatch = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Current password is incorrect.' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    await db.authPool.query('UPDATE users SET password_hash = $1, password_changed_at = NOW() WHERE id = $2', [hashedPassword, req.user.id]);
+
+    res.json({ message: 'Password changed successfully.' });
+  } catch (error) {
+    console.error('Change password error:', error.message);
+    res.status(500).json({ error: 'Failed to change password.' });
+  }
+});
+
+// ==================== GET ALL USERS (Admin Only) ====================
+router.get('/users', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const result = await db.authPool.query(
+      'SELECT id, username, email, role, created_at FROM users ORDER BY created_at DESC'
+    );
+    res.json({ users: result.rows });
+  } catch (error) {
+    console.error('Fetch users error:', error.message);
+    res.status(500).json({ error: 'Failed to fetch users.' });
+  }
+});
+
+// ==================== DELETE USER (Admin Only) ====================
+router.delete('/users/:id', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (parseInt(id) === req.user.id) {
+      return res.status(400).json({ error: 'You cannot delete your own account.' });
+    }
+    await db.authPool.query('DELETE FROM users WHERE id = $1', [id]);
+    res.json({ message: 'User deleted successfully.' });
+  } catch (error) {
+    console.error('Delete user error:', error.message);
+    res.status(500).json({ error: 'Failed to delete user.' });
+  }
+});
+
+// ==================== ADMIN RESET PASSWORD (Admin Only) ====================
+router.put('/users/:id/password', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const ipAddress = req.ip || req.connection?.remoteAddress || null;
+
+    const userResult = await db.authPool.query('SELECT id, username FROM users WHERE id = $1', [id]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const targetUser = userResult.rows[0];
+
+    // Generate secure temporary password
+    const tempPassword = generateTempPassword();
+
+    // Hash and store
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(tempPassword, salt);
+    await db.authPool.query(
+      'UPDATE users SET password_hash = $1, failed_attempts = 0, locked_until = NULL, password_changed_at = NOW() WHERE id = $2',
+      [hashedPassword, id]
+    );
+
+    // Log audit event (never log the password itself)
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'PASSWORD_RESET',
+      targetUserId: targetUser.id,
+      targetUsername: targetUser.username,
+      result: 'SUCCESS',
+      ipAddress,
+    });
+
+    res.json({
+      message: 'Password reset successfully.',
+      tempPassword,
+    });
+  } catch (error) {
+    console.error('Admin reset password error:', error.message);
+    res.status(500).json({ error: 'Unable to reset password. Please try again.' });
+  }
+});
+
+// ==================== AUDIT LOGS (Admin Only) ====================
+router.get('/audit-logs', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    // Ensure audit_logs table exists
+    await db.authPool.query(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER,
+        username TEXT NOT NULL,
+        action TEXT NOT NULL,
+        target_user_id INTEGER,
+        target_username TEXT,
+        result TEXT NOT NULL DEFAULT 'SUCCESS',
+        ip_address TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    const result = await db.authPool.query(
+      'SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 200'
+    );
+    res.json({ logs: result.rows });
+  } catch (error) {
+    console.error('Fetch audit logs error:', error.message);
+    res.status(500).json({ error: 'Failed to fetch audit logs.' });
+  }
 });
 
 module.exports = router;

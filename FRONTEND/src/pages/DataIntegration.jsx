@@ -1,504 +1,360 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import API from '../api/axios';
-import { useTheme } from '../theme';
+import SkeletonBlock from '../../components/SkeletonBlock';
 
-const EXPECTED_COLUMNS = [
-  'Validation Status',
-  'Date of Screening',
-  'Date of Diagnosis',
-  'Date of Notification',
-  'Age',
-  'Sex',
-  'Barangay',
-  'City',
-  'Screening/Diagnosis Health Facility',
-  'Treatment Health Facility',
-  'Source of Patient',
-  'Anatomical Site',
-  'Registration Group',
-  'Bacteriological Status',
-  'Date Started Treatment',
-  'Outcome/Status',
-  'Date of Outcome/Status',
-  'Date/Time Record Created',
-];
-
-const getStoredUser = () => {
-  try {
-    return JSON.parse(localStorage.getItem('user') || 'null');
-  } catch {
-    return null;
-  }
+const STATUS_MAP = {
+  connected: { bg: '#ECFDF5', text: '#047857', dot: '#10B981' },
+  waiting: { bg: '#FFFBEB', text: '#92400E', dot: '#F59E0B' },
+  standby: { bg: '#FFF7ED', text: '#9A3412', dot: '#F97316' },
+  successful: { bg: '#ECFDF5', text: '#047857', dot: '#10B981' },
+  failed: { bg: '#FEF2F2', text: '#991B1B', dot: '#EF4444' },
+  processed: { bg: '#ECFDF5', text: '#047857', dot: '#10B981' },
 };
 
-const formatDate = (dateStr) => {
-  if (!dateStr) return 'N/A';
-  try {
-    const d = new Date(dateStr);
-    return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  } catch {
-    return dateStr;
-  }
-};
+function SyncStatusBadge({ status }) {
+  const s = STATUS_MAP[status] || { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' };
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap" style={{ background: s.bg, color: s.text }}>
+      <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: s.dot }} />
+      {status?.charAt(0).toUpperCase() + status?.slice(1)}
+    </span>
+  );
+}
 
-export default function DataIntegration() {
-  const { t } = useTheme();
-  const isAdmin = getStoredUser()?.role === 'admin';
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState(null);
-  const [uploadError, setUploadError] = useState('');
-  const [showColumns, setShowColumns] = useState(false);
-  const [imports, setImports] = useState([]);
-  const [historyLoading, setHistoryLoading] = useState(true);
-  const [historyError, setHistoryError] = useState('');
-  const [selectedBatch, setSelectedBatch] = useState(null);
-  const [batchSummary, setBatchSummary] = useState(null);
-  const [batchErrors, setBatchErrors] = useState([]);
-  const [batchLoading, setBatchLoading] = useState(false);
-  const [pipelineRunning, setPipelineRunning] = useState(false);
-  const [pipelineResult, setPipelineResult] = useState(null);
-  const [pipelineError, setPipelineError] = useState('');
+const formatDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+const formatTime = (d) => d ? new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
 
-  useEffect(() => {
-    if (getStoredUser()?.role !== 'admin') return;
-    const fetchHistory = async () => {
-      try {
-        const res = await API.get('/api/tb/import-history');
-        setImports(res.data.imports || []);
-      } catch (err) {
-        if (import.meta.env.DEV) console.error('Failed to fetch import history:', err);
-        setHistoryError('Could not load import history. Make sure the backend is running.');
-      } finally {
-        setHistoryLoading(false);
-      }
-    };
-    fetchHistory();
+export default function DataIntegrationPage() {
+  const [status, setStatus] = useState(null);
+  const [syncHistory, setSyncHistory] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [webhookLogs, setWebhookLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [selectedSync, setSelectedSync] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [statusRes, historyRes, statsRes, webhookRes] = await Promise.all([
+        API.get('/api/tb/integration/status').catch(() => ({ data: {} })),
+        API.get('/api/tb/integration/sync-history').catch(() => ({ data: { batches: [] } })),
+        API.get('/api/tb/integration/stats').catch(() => ({ data: {} })),
+        API.get('/api/tb/webhook-logs').catch(() => ({ data: { logs: [] } })),
+      ]);
+      setStatus(statusRes.data);
+      setSyncHistory(historyRes.data.batches || []);
+      setStats(statsRes.data);
+      setWebhookLogs(webhookRes.data.logs || []);
+    } catch {
+      setError('Unable to load integration status.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
-  const handleFileChange = (e) => {
-    setSelectedFile(e.target.files[0] || null);
-    setUploadResult(null);
-    setUploadError('');
-  };
+  useEffect(() => { fetchData(); }, [fetchData]);
 
-  const handleUpload = async () => {
-    if (!selectedFile || uploading) return;
-    setUploading(true);
-    setUploadResult(null);
-    setUploadError('');
-    try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-      const res = await API.post('/api/tb/import', formData);
-      setUploadResult(res.data);
-      setSelectedFile(null);
-      const historyRes = await API.get('/api/tb/import-history');
-      setImports(historyRes.data.imports || []);
-    } catch (err) {
-      setUploadError(err.response?.data?.error || 'Import failed. Check the file format and try again.');
-    } finally {
-      setUploading(false);
-    }
-  };
+  const handleRefresh = () => { setRefreshing(true); setError(''); fetchData(); };
 
-  const handleViewErrors = async (batchId) => {
-    if (selectedBatch === batchId) {
-      setSelectedBatch(null);
-      setBatchSummary(null);
-      setBatchErrors([]);
-      return;
-    }
-    setBatchLoading(true);
-    try {
-      const res = await API.get(`/api/tb/import/${batchId}/errors`);
-      setSelectedBatch(batchId);
-      setBatchSummary(res.data.summary || null);
-      setBatchErrors(res.data.errors || []);
-    } catch (err) {
-      if (import.meta.env.DEV) console.error('Failed to fetch batch errors:', err);
-    } finally {
-      setBatchLoading(false);
-    }
-  };
-
-  const handleRunPipeline = async () => {
-    if (pipelineRunning) return;
-    setPipelineRunning(true);
-    setPipelineResult(null);
-    setPipelineError('');
-    try {
-      const res = await API.post('/api/tb/pipeline');
-      setPipelineResult(res.data);
-    } catch (err) {
-      setPipelineError(err.response?.data?.error || 'Pipeline failed. Make sure the ML service is running.');
-    } finally {
-      setPipelineRunning(false);
-    }
-  };
-
-  if (!isAdmin) {
+  if (loading) {
     return (
-      <div className="flex flex-col gap-6">
-        <div className="glass-card p-8 text-center">
-           <i className="ri-lock-2-line text-4xl" style={{ color: '#92400E' }} />
-          <p className="mt-3 text-sm font-bold" style={{ color: t.text }}>Admin access required</p>
-          <p className="text-xs mt-1" style={{ color: t.textSecondary }}>
-            Data import and import history are only available to admin users.
-          </p>
+      <div className="flex flex-col gap-5">
+        <SkeletonBlock className="h-20 w-full rounded-xl" />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <SkeletonBlock className="h-36 rounded-xl" />
+          <SkeletonBlock className="h-36 rounded-xl" />
         </div>
+        <SkeletonBlock className="h-28 rounded-xl" />
+        <SkeletonBlock className="h-64 rounded-xl" />
       </div>
     );
   }
 
   return (
-    <div className="relative space-y-5">
+    <div className="flex flex-col gap-5">
 
-      <div className="glass-card p-5">
-        <div className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
-          <i className="ri-upload-2-line text-lg" style={{ color: '#2E6FAF' }} />
-          <span>Import TB Case Records</span>
-        </div>
-        <p className="mt-1 text-xs leading-relaxed" style={{ color: t.textSecondary }}>
-          Upload a CSV or Excel file exported from the DOH TB-DOTS registry. Rows are validated against
-          Pasig City barangays before import, and dashboard aggregations are rebuilt automatically.
-        </p>
-
-        <label
-          className="mt-4 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-10 text-center cursor-pointer transition hover:opacity-80"
-          style={{ borderColor: 'rgba(46,111,175,0.35)', background: 'rgba(46,111,175,0.04)' }}
-        >
-          <input type="file" accept=".csv,.xls,.xlsx" className="sr-only" onChange={handleFileChange} />
-          <i className="ri-file-upload-line text-3xl" style={{ color: '#2E6FAF' }} />
-          {selectedFile ? (
-            <>
-              <span className="text-sm font-bold" style={{ color: t.text }}>{selectedFile.name}</span>
-              <span className="text-[11px]" style={{ color: t.textSecondary }}>
-                {(selectedFile.size / 1024).toFixed(1)} KB — click to choose a different file
-              </span>
-            </>
-          ) : (
-            <>
-              <span className="text-sm font-bold" style={{ color: t.text }}>Click to choose a file</span>
-              <span className="text-[11px]" style={{ color: t.textSecondary }}>CSV or Excel (.csv, .xls, .xlsx) · up to 50 MB</span>
-            </>
-          )}
-        </label>
-
-        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <button
-            onClick={() => setShowColumns(v => !v)}
-            className="inline-flex items-center gap-1.5 text-xs font-bold transition hover:opacity-80"
-            style={{ color: '#2E6FAF' }}
-          >
-            <i className={showColumns ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line'} />
-            Expected file format — 18 columns
-          </button>
-          <button
-            onClick={handleUpload}
-            disabled={!selectedFile || uploading}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-            onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
-          >
-            {uploading ? 'Importing...' : 'Import File'}
-          </button>
-        </div>
-
-        {showColumns && (
-          <div className="mt-4 rounded-xl p-4" style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}` }}>
-            <p className="text-[11px] font-bold uppercase tracking-widest mb-3" style={{ color: t.textSecondary }}>
-              Expected columns (column order is flexible — headers are matched by keyword)
-            </p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {EXPECTED_COLUMNS.map((col, i) => (
-                <div
-                  key={col}
-                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-[11px] font-semibold"
-                  style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.textSecondary }}
-                >
-                  <span className="text-[10px] font-bold" style={{ color: '#94A3B8' }}>{String(i + 1).padStart(2, '0')}</span>
-                  <span className="truncate">{col}</span>
-                </div>
-              ))}
-            </div>
-            <p className="mt-3 text-[11px] leading-relaxed" style={{ color: '#94A3B8' }}>
-              Required per row: Barangay, Date of Diagnosis, Sex. Age must be 0–120 and City should be
-              Pasig. Accepted date formats: MM/DD/YYYY, YYYY-MM-DD, DD-Mon-YY.
-            </p>
+      {/* ── Page Header ── */}
+      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
+        <div className="flex flex-col gap-3 px-6 py-2 sm:flex-row sm:items-center sm:justify-between" style={{ borderBottom: '1px solid #DBEAFE' }}>
+          <div>
+            <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Data Integration</h1>
+            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Monitor the connection and synchronization of tuberculosis data from PASIG TB-IS.</p>
           </div>
-        )}
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="px-4 py-2 text-xs font-semibold rounded flex items-center gap-1.5 transition"
+            style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+            onMouseEnter={(e) => { if (!refreshing) { e.currentTarget.style.background = '#E5E7EB'; e.currentTarget.style.borderColor = '#9CA3AF'; } }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = '#F3F4F6'; e.currentTarget.style.borderColor = '#D1D5DB'; }}
+          >
+            <i className={`ri-refresh-line text-sm ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh Status
+          </button>
+        </div>
       </div>
 
-      {uploadResult && (
-        <div className="rounded-xl p-5" style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.25)' }}>
-          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
-            <i className="ri-checkbox-circle-line text-lg" style={{ color: '#10B981' }} />
-            Import complete
+      {error && (
+        <div className="px-4 py-3 rounded-xl text-xs flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.12)' }}>
+          <i className="ri-error-warning-line" /> {error}
+        </div>
+      )}
+
+      {/* ── Connection + Last Sync ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Connection Status */}
+        <div className="rounded-xl p-5" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-1 h-8 rounded-full" style={{ background: '#3B82F6' }} />
+            <h2 className="text-sm font-bold" style={{ color: '#1E293B' }}>PASIG TB-IS Connection</h2>
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="rounded-xl p-3" style={{ background: t.card }}>
-              <div className="text-[10px] font-bold uppercase tracking-widest" style={{ color: t.textSecondary }}>Total Rows</div>
-              <div className="mt-1 text-xl font-bold" style={{ color: t.text }}>{uploadResult.batch?.totalRows ?? '—'}</div>
-            </div>
-            <div className="rounded-xl p-3" style={{ background: t.card }}>
-              <div className="text-[10px] font-bold uppercase tracking-widest" style={{ color: t.textSecondary }}>Imported</div>
-              <div className="mt-1 text-xl font-bold" style={{ color: '#10B981' }}>{uploadResult.batch?.imported ?? '—'}</div>
-            </div>
-            <div className="rounded-xl p-3" style={{ background: t.card }}>
-              <div className="text-[10px] font-bold uppercase tracking-widest" style={{ color: t.textSecondary }}>Rejected</div>
-              <div className="mt-1 text-xl font-bold" style={{ color: '#EF4444' }}>{uploadResult.batch?.errors ?? '—'}</div>
-            </div>
-            <div className="rounded-xl p-3" style={{ background: t.card }}>
-              <div className="text-[10px] font-bold uppercase tracking-widest" style={{ color: t.textSecondary }}>Batch ID</div>
-              <div className="mt-1 text-lg font-bold font-mono" style={{ color: t.text }}>
-                {uploadResult.batch?.id ? uploadResult.batch.id.substring(0, 8) : '—'}
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-2.5 h-2.5 rounded-full" style={{ background: STATUS_MAP[status?.status]?.dot || '#94A3B8' }} />
+            <span className="text-sm font-bold" style={{ color: '#0F2D52' }}>
+              {status?.status === 'connected' ? 'Connected' : status?.status === 'standby' ? 'Standby' : status?.status === 'waiting' ? 'Waiting for Data' : 'Unknown'}
+            </span>
+          </div>
+          <div className="space-y-2.5">
+            {[
+              { label: 'Source', value: 'PASIG TB-IS' },
+              { label: 'Integration', value: 'REST API / Secure Webhook' },
+              { label: 'Status', value: status?.message || '—' },
+            ].map((row) => (
+              <div key={row.label} className="flex items-center justify-between gap-4">
+                <span className="text-xs" style={{ color: '#94A3B8' }}>{row.label}</span>
+                <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{row.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Last Synchronization */}
+        <div className="rounded-xl p-5" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-1 h-8 rounded-full" style={{ background: '#10B981' }} />
+            <h2 className="text-sm font-bold" style={{ color: '#1E293B' }}>Last Synchronization</h2>
+          </div>
+          {status?.lastSync ? (
+            <div className="space-y-3">
+              <div>
+                <p className="text-2xl font-extrabold" style={{ color: '#0F2D52' }}>{formatDate(status.lastSync.receivedAt)}</p>
+                <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{formatTime(status.lastSync.receivedAt)}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ background: '#ECFDF5', color: '#047857' }}>
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#10B981' }} />
+                  Successful
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-xs" style={{ color: '#94A3B8' }}>Batch</span>
+                <span className="text-xs font-semibold" style={{ color: '#0F2D52' }}>{status.lastSync.batchId?.slice(0, 8) || '—'}</span>
               </div>
             </div>
-          </div>
-          {(uploadResult.validation?.errors?.length > 0 || uploadResult.validation?.warnings?.length > 0) && (
-            <div className="mt-3 space-y-2">
-              {uploadResult.validation.errors.map((e, i) => (
-                <div
-                  key={i}
-                  className="rounded-lg px-3 py-2 text-[11px] font-semibold"
-                  style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.15)', color: '#B91C1C' }}
-                >
-                  Row {e.row}: {e.errors.join('; ')}
-                </div>
-              ))}
-              {uploadResult.validation.warnings.map((w, i) => (
-                <div
-                  key={`w${i}`}
-                  className="rounded-lg px-3 py-2 text-[11px] font-semibold"
-                  style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.15)', color: '#92400E' }}
-                >
-                  Row {w.row}: {w.warnings.join('; ')}
-                </div>
-              ))}
-          </div>
-          )}
-        </div>
-      )}
-
-      {uploadResult && uploadResult.batch?.imported > 0 && !pipelineResult && (
-        <div
-          className="rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-          style={{ background: 'rgba(13,148,136,0.06)', border: '1px solid rgba(13,148,136,0.25)' }}
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(13,148,136,0.1)' }}>
-              <i className="ri-refresh-line text-lg" style={{ color: '#0D9488' }} />
-            </div>
-            <div>
-              <p className="text-sm font-bold" style={{ color: t.text }}>Update forecasts and risk data</p>
-              <p className="text-[11px] mt-0.5" style={{ color: t.textSecondary }}>
-                Forecast, risk classification, and alert data may be outdated after this import.
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={handleRunPipeline}
-            disabled={pipelineRunning}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
-            style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-            onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
-          >
-            {pipelineRunning ? 'Running...' : 'Run Pipeline'}
-          </button>
-        </div>
-      )}
-
-      {pipelineResult && (
-        <div
-          className="rounded-xl p-4 flex items-center justify-between gap-3"
-          style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.25)' }}
-        >
-          <div className="flex items-center gap-3">
-            <i className="ri-checkbox-circle-line text-lg" style={{ color: '#10B981' }} />
-            <div>
-              <p className="text-sm font-bold" style={{ color: t.text }}>Pipeline completed successfully</p>
-              <p className="text-[11px] mt-0.5" style={{ color: t.textSecondary }}>
-                Forecasts, risk scores, and alerts are now up to date.
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={() => setPipelineResult(null)}
-            className="inline-flex h-7 w-7 items-center justify-center shrink-0 text-xs font-medium"
-            style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-            onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
-          >
-            Close
-          </button>
-        </div>
-      )}
-
-      {pipelineError && (
-        <div
-          className="rounded-xl p-4 flex items-center justify-between gap-3"
-          style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)' }}
-        >
-          <div className="flex items-center gap-3">
-            <i className="ri-error-warning-line text-lg" style={{ color: '#EF4444' }} />
-            <div>
-              <p className="text-sm font-bold" style={{ color: t.text }}>Pipeline failed</p>
-              <p className="text-[11px] mt-0.5" style={{ color: '#B91C1C' }}>{pipelineError}</p>
-            </div>
-          </div>
-          <button
-            onClick={() => setPipelineError('')}
-            className="inline-flex h-7 w-7 items-center justify-center shrink-0 text-xs font-medium"
-            style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-            onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
-          >
-            Close
-          </button>
-        </div>
-      )}
-
-      {uploadError && (
-        <div
-          className="rounded-xl p-4 text-sm font-semibold"
-          style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', color: '#B91C1C' }}
-        >
-          <i className="ri-error-warning-line mr-2" />
-          {uploadError}
-        </div>
-      )}
-
-      {selectedBatch && (
-        <div className="glass-card p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
-              <i className="ri-error-warning-line text-lg" style={{ color: '#EF4444' }} />
-              Batch Errors — {selectedBatch.substring(0, 8)}
-            </div>
-            <button
-              onClick={() => {
-                setSelectedBatch(null);
-                setBatchSummary(null);
-                setBatchErrors([]);
-              }}
-              aria-label="Close batch errors"
-              className="inline-flex h-8 w-8 items-center justify-center text-xs font-medium"
-              style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-              onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
-            >
-              Close
-            </button>
-          </div>
-          {batchLoading ? (
-            <div className="flex items-center justify-center h-24">
-              <i className="ri-loader-4-line animate-spin text-2xl" style={{ color: '#2E6FAF' }} />
-            </div>
           ) : (
-            <>
-              {batchSummary && (
-                <div className="mb-3 flex gap-6 text-xs font-bold" style={{ color: t.textSecondary }}>
-                  <span>Total: <span style={{ color: t.text }}>{batchSummary.total_rows}</span></span>
-                  <span>Imported: <span style={{ color: '#10B981' }}>{batchSummary.valid_rows}</span></span>
-                  <span>Rejected: <span style={{ color: '#EF4444' }}>{batchSummary.error_rows}</span></span>
-                </div>
-              )}
-              {batchErrors.length === 0 ? (
-                <div className="text-center py-6 text-sm" style={{ color: '#94A3B8' }}>
-                  No validation errors in this batch.
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                  {batchErrors.map((e) => (
-                    <div
-                      key={e.row_number}
-                      className="rounded-lg px-3 py-2 text-[11px] font-semibold"
-                      style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.15)', color: '#B91C1C' }}
-                    >
-                      Row {e.row_number} — Rejected
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
+            <div className="flex flex-col items-center justify-center py-8">
+              <i className="ri-inbox-line text-2xl mb-2" style={{ color: '#CBD5E1' }} />
+              <p className="text-xs text-center" style={{ color: '#94A3B8' }}>No synchronization has been completed yet.</p>
+            </div>
           )}
         </div>
-      )}
-
-      <div className="glass-card overflow-hidden">
-        <div className="flex items-center justify-between p-5 pb-0">
-          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: t.text }}>
-            <i className="ri-history-line text-lg" style={{ color: '#2E6FAF' }} />
-            <span>Import History</span>
-          </div>
-          <span className="text-xs font-bold" style={{ color: t.textSecondary }}>{imports.length} imports</span>
-        </div>
-
-        {historyError && (
-          <div
-            className="mx-5 mt-4 rounded-xl px-3 py-2 text-xs font-semibold"
-            style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', color: '#B91C1C' }}
-          >
-            {historyError}
-          </div>
-        )}
-
-        <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
-              <thead>
-                <tr>
-                  {['Batch', 'File', 'Imported At', 'Rows', 'Imported', 'Rejected', 'Action'].map((h) => (
-                    <th
-                      key={h}
-                      className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
-                      style={{ color: t.textSecondary, borderBottom: '1px solid rgba(148,163,184,.15)' }}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {imports.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="px-5 py-12 text-center text-sm" style={{ color: '#94A3B8' }}>
-                      No imports yet. Upload your first file above.
-                    </td>
-                  </tr>
-                ) : (
-                  imports.map((row) => (
-                    <tr key={row.batch_id}>
-                      <td className="px-5 py-3 font-mono text-xs font-bold" style={{ color: t.text }}>
-                        {row.batch_id.substring(0, 8)}
-                      </td>
-                      <td className="px-5 py-3 text-xs" style={{ color: t.textSecondary }}>{row.source_file}</td>
-                      <td className="px-5 py-3 text-xs" style={{ color: t.textSecondary }}>{formatDate(row.imported_at)}</td>
-                      <td className="px-5 py-3 text-xs font-semibold" style={{ color: t.text }}>{row.total_rows}</td>
-                      <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#10B981' }}>{row.valid_rows}</td>
-                      <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#EF4444' }}>{row.error_rows}</td>
-                      <td className="px-5 py-3">
-                        <button
-                          onClick={() => handleViewErrors(row.batch_id)}
-                          disabled={Number(row.error_rows) === 0}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-40"
-                          style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                          onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
-                        >
-                          {selectedBatch === row.batch_id ? 'Hide Errors' : 'Errors'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
       </div>
 
+      {/* ── KPI Cards (shared container with dividers) ── */}
+      <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.12), 0 2px 8px rgba(15, 45, 82, 0.08)' }}>
+        <div className="grid grid-cols-2 lg:grid-cols-4">
+          {[
+            { label: 'Records Received', value: stats?.received || 0, icon: 'ri-download-line', iconColor: '#6B7FA3' },
+            { label: 'Records Accepted', value: stats?.accepted || 0, icon: 'ri-check-line', iconColor: '#6B9E8A' },
+            { label: 'Records Rejected', value: stats?.rejected || 0, icon: 'ri-close-line', iconColor: '#B07070' },
+            { label: 'Failed Batches', value: stats?.failed || 0, icon: 'ri-error-warning-line', iconColor: '#8B7BA3' },
+          ].map((kpi, i) => (
+            <div key={kpi.label} className="flex flex-col px-5 py-5 relative">
+              <div className="flex items-center gap-2">
+                <i className={`${kpi.icon} text-sm`} style={{ color: kpi.iconColor }} />
+                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>{kpi.label}</span>
+              </div>
+              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{kpi.value.toLocaleString()}</p>
+              {i < 3 && <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Webhook Integration ── */}
+      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
+        <div className="px-6 py-4" style={{ background: '#0F2D52' }}>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold" style={{ color: '#ffffff' }}>Webhook Integration</h2>
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.8)' }}>
+              {webhookLogs.length} log{webhookLogs.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
+                {['Date', 'Source', 'Batch ID', 'Received', 'Imported', 'Status'].map((h) => (
+                  <th key={h} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#64748B' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {webhookLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-5 py-16 text-center">
+                    <i className="ri-webhook-line text-xl mb-2 block" style={{ color: '#CBD5E1' }} />
+                    <p className="text-xs" style={{ color: '#94A3B8' }}>No webhook logs available. Webhooks will appear here once the Pasig Clone system sends data.</p>
+                  </td>
+                </tr>
+              ) : webhookLogs.map((log, idx) => (
+                <tr
+                  key={log.id}
+                  style={{ borderBottom: '1px solid #F1F5F9', background: idx % 2 === 0 ? '#ffffff' : '#FAFBFC' }}
+                >
+                  <td className="px-5 py-3 text-xs" style={{ color: '#94A3B8' }}>
+                    <div>{formatDate(log.received_at)}</div>
+                    <div className="text-[10px]">{formatTime(log.received_at)}</div>
+                  </td>
+                  <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#0F2D52' }}>{log.source || '—'}</td>
+                  <td className="px-5 py-3 text-xs font-mono" style={{ color: '#64748B' }}>{log.batch_id ? log.batch_id.slice(0, 8) : '—'}</td>
+                  <td className="px-5 py-3 text-xs" style={{ color: '#64748B' }}>{(log.records_received || 0).toLocaleString()}</td>
+                  <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#047857' }}>{(log.records_imported || 0).toLocaleString()}</td>
+                  <td className="px-5 py-3"><SyncStatusBadge status={log.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Recent Synchronization Table ── */}
+      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
+        {/* Table Header */}
+        <div className="px-6 py-4" style={{ background: '#0F2D52' }}>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold" style={{ color: '#ffffff' }}>Recent Synchronization</h2>
+          </div>
+        </div>
+
+        {/* Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
+                {['Batch ID', 'Records', 'Accepted', 'Rejected', 'Status', 'Date'].map((h) => (
+                  <th key={h} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#64748B' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {syncHistory.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-5 py-16 text-center">
+                    <i className="ri-inbox-line text-xl mb-2 block" style={{ color: '#CBD5E1' }} />
+                    <p className="text-xs" style={{ color: '#94A3B8' }}>No synchronization history available.</p>
+                  </td>
+                </tr>
+              ) : syncHistory.map((batch, idx) => (
+                <tr
+                  key={batch.id}
+                  className="cursor-pointer"
+                  onClick={() => setSelectedSync(batch)}
+                  style={{ borderBottom: '1px solid #F1F5F9', background: idx % 2 === 0 ? '#ffffff' : '#FAFBFC' }}
+                >
+                  <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#0F2D52' }}>
+                    {batch.batchId ? batch.batchId.slice(0, 8) : '—'}
+                  </td>
+                  <td className="px-5 py-3 text-xs" style={{ color: '#64748B' }}>{batch.records.toLocaleString()}</td>
+                  <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#047857' }}>{batch.accepted.toLocaleString()}</td>
+                  <td className="px-5 py-3 text-xs font-semibold" style={{ color: batch.rejected > 0 ? '#991B1B' : '#64748B' }}>
+                    {batch.rejected.toLocaleString()}
+                  </td>
+                  <td className="px-5 py-3"><SyncStatusBadge status={batch.status} /></td>
+                  <td className="px-5 py-3 text-xs" style={{ color: '#94A3B8' }}>{formatDate(batch.receivedAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Data Source Info ── */}
+      <div className="rounded-xl p-5" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-1 h-8 rounded-full" style={{ background: '#64748B' }} />
+          <h2 className="text-sm font-bold" style={{ color: '#1E293B' }}>Data Source</h2>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {[
+            { label: 'Source System', value: 'PASIG TB-IS', sub: 'Tuberculosis Information System' },
+            { label: 'Integration Method', value: 'REST API / Secure Webhook', sub: 'HMAC-SHA256 Verification' },
+            { label: 'Destination', value: 'TBInsight PostgreSQL Database', sub: 'TB Records & Analytics' },
+          ].map((item) => (
+            <div key={item.label} className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold" style={{ color: '#0F2D52' }}>{item.label}</p>
+                <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>{item.sub}</p>
+              </div>
+              <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{item.value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Sync Detail Modal ── */}
+      {selectedSync && (
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center" style={{ background: 'rgba(15, 45, 82, 0.2)' }} onClick={() => setSelectedSync(null)}>
+          <div className="relative w-full max-w-md mx-4 rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 20px 60px rgba(15, 45, 82, 0.25)' }} onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="px-6 py-4 flex items-center justify-between" style={{ background: '#0F2D52' }}>
+              <h3 className="text-sm font-bold" style={{ color: '#ffffff' }}>Synchronization Details</h3>
+              <button onClick={() => setSelectedSync(null)} className="w-8 h-8 rounded flex items-center justify-center transition" style={{ background: 'rgba(255,255,255,0.15)' }}>
+                <i className="ri-close-line text-sm" style={{ color: '#ffffff' }} />
+              </button>
+            </div>
+            {/* Content */}
+            <div className="px-6 py-5 space-y-3">
+              {[
+                { label: 'Batch ID', value: selectedSync.batchId || '—' },
+                { label: 'Source', value: selectedSync.source || 'PASIG TB-IS' },
+                { label: 'Received', value: `${formatDate(selectedSync.receivedAt)} ${formatTime(selectedSync.receivedAt)}` },
+                { label: 'Records', value: selectedSync.records.toLocaleString() },
+                { label: 'Accepted', value: selectedSync.accepted.toLocaleString() },
+                { label: 'Rejected', value: selectedSync.rejected.toLocaleString() },
+                { label: 'Status', value: selectedSync.status },
+              ].map((row) => (
+                <div key={row.label} className="flex items-center justify-between gap-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
+                  <span className="text-xs" style={{ color: '#94A3B8' }}>{row.label}</span>
+                  <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{row.value}</span>
+                </div>
+              ))}
+              {selectedSync.errorMessage && (
+                <div className="mt-2 p-3 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.1)' }}>
+                  <p className="font-semibold mb-1">Error</p>
+                  <p>{selectedSync.errorMessage}</p>
+                </div>
+              )}
+            </div>
+            {/* Footer */}
+            <div className="px-6 py-4" style={{ borderTop: '1px solid #E2E8F0' }}>
+              <button
+                onClick={() => setSelectedSync(null)}
+                className="w-full py-2.5 text-xs font-semibold rounded transition"
+                style={{ background: '#0F2D52', color: '#ffffff', borderRadius: 4, transition: 'background 0.15s' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#174A7E'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#0F2D52'}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

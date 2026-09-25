@@ -20,6 +20,7 @@ const pool = require('./db');
 const authRoutes = require('./routes/auth');
 const tbInsightRoutes = require('./tbinsight/routes');
 const webhookRoutes = require('./tbinsight/webhook');
+const integrationRoutes = require('./tbinsight/integration');
 const { apiLimiter, webhookLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
@@ -30,6 +31,7 @@ app.set('trust proxy', 1);
 
 // ==================== MIDDLEWARE ====================
 const allowedOrigins = [
+  'http://localhost:5050',
   'http://localhost:5173',
   'http://localhost:5174',
   'http://localhost:5001',
@@ -58,18 +60,28 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true }));
+
+// Apply larger JSON limit to most routes (50MB default to support large imports)
+// Webhook routes will override this with their own even larger limit (100MB)
+app.use((req, res, next) => {
+  // Skip JSON parsing for webhook routes — they have custom middleware
+  if (req.path.startsWith('/api/webhook')) {
+    return next();
+  }
+  express.json({ limit: '50mb' })(req, res, next);
+});
+
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 app.use(fileUpload({
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB max file upload
   abortOnLimit: true,
-  responseOnLimit: 'File size exceeds 50MB limit.',
+  responseOnLimit: 'File size exceeds 500MB limit.',
 }));
 
 // ==================== REQUEST TIMEOUT ====================
 // Kill requests that take too long to prevent pool exhaustion
-// 60s for normal endpoints, 300s for pipeline/evaluate/import
+// Timeout varies by endpoint: import/pipeline/evaluate can take longer
 const slowRequestTimeout = (timeoutMs) => (req, res, next) => {
   req.setTimeout(timeoutMs, () => {
     if (!res.headersSent) {
@@ -82,15 +94,39 @@ const slowRequestTimeout = (timeoutMs) => (req, res, next) => {
 // Apply 60s timeout to all API routes by default
 app.use('/api', slowRequestTimeout(60_000));
 
-// Extend timeout for long-running endpoints
-app.use('/api/tb/pipeline', slowRequestTimeout(300_000));
-app.use('/api/tb/evaluate', slowRequestTimeout(300_000));
-app.use('/api/tb/import', slowRequestTimeout(300_000));
+// Extend timeout for long-running endpoints (up to 10 minutes for large file processing)
+app.use('/api/tb/pipeline', slowRequestTimeout(600_000));
+app.use('/api/tb/evaluate', slowRequestTimeout(600_000));
+app.use('/api/tb/import', slowRequestTimeout(600_000));
+
+// ==================== WEBHOOK RAW BODY CAPTURE ====================
+// CRITICAL: Use raw body parser with VERY LARGE limit BEFORE custom middleware
+// This prevents the global JSON parser from rejecting large webhook payloads
+// Supports payloads up to 100MB
+const rawBodyParser = express.raw({ type: 'application/json', limit: '100mb' });
+
+app.use('/api/webhook', webhookLimiter, rawBodyParser, (req, res, next) => {
+  // At this point, req.body is a Buffer
+  // Convert to string for signature verification
+  const rawBodyString = req.body.toString('utf8');
+  req.rawBody = rawBodyString;
+  
+  // Parse JSON for route handlers
+  try {
+    req.body = JSON.parse(rawBodyString);
+    console.log('✅ Webhook payload parsed successfully');
+  } catch (err) {
+    console.error('❌ Webhook JSON parse error:', err.message);
+    return res.status(400).json({ error: 'Invalid JSON in request body' });
+  }
+  next();
+});
 
 // ==================== ROUTES ====================
 app.use('/api/auth', apiLimiter, authRoutes);
 app.use('/api/tb', apiLimiter, tbInsightRoutes);
-app.use('/api/webhook', webhookLimiter, express.json({ limit: '10mb' }), webhookRoutes);
+app.use('/api/webhook', webhookRoutes);
+app.use('/api/tb/integration', apiLimiter, integrationRoutes);
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
@@ -150,4 +186,10 @@ app.use((err, req, res, next) => {
 // ==================== START SERVER ====================
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
+  console.log(`✅ Webhook endpoint: POST http://localhost:${PORT}/api/webhook/pasig-clone`);
+  console.log(`✅ Webhook signature: ${process.env.WEBHOOK_SECRET ? '✓ WEBHOOK_SECRET configured' : '❌ WEBHOOK_SECRET NOT SET'}`);
+  console.log(`📦 File upload limits:`);
+  console.log(`   • JSON payload: 50 MB (general), 100 MB (webhook)`);
+  console.log(`   • File upload: 500 MB`);
+  console.log(`   • Request timeout: 10 minutes (for large imports)`);
 });

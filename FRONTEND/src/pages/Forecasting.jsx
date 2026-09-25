@@ -4,6 +4,8 @@ import {
   Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 import API from '../api/axios';
+import AiInsightPanel from '../components/AiInsightPanel';
+import { getForecastingInsight } from '../services/insightService';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
@@ -151,6 +153,11 @@ export default function Forecasting() {
   const [filterLoading, setFilterLoading] = useState(false);
   const [forecastRan, setForecastRan] = useState(false);
 
+  /* ── NLG Insight state ── */
+  const [insightData, setInsightData] = useState(null);
+  const [insightLoading, setInsightLoading] = useState(false);
+  const [insightError, setInsightError] = useState(null);
+
   /* ── Table sorting ── */
   const [sortKey, setSortKey] = useState('period');
   const [sortDir, setSortDir] = useState('asc');
@@ -160,19 +167,23 @@ export default function Forecasting() {
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [monthlyRes, forecastsRes, barangaysRes, casesRes, pipelineRes, backtestRes] =
+      const [monthlyRes, forecastsRes, barangaysRes, firstPageRes, pipelineRes, backtestRes] =
         await Promise.all([
           API.get('/api/tb/dashboard/monthly'),
           API.get('/api/tb/forecasts'),
           API.get('/api/tb/barangays'),
-          API.get('/api/tb/cases?limit=9999'),
+          API.get('/api/tb/cases?limit=1'),
           API.get('/api/tb/pipeline/status').catch(() => ({ data: { latest_run: null } })),
           API.get('/api/tb/forecast/backtest').catch(() => ({ data: { data: [] } })),
         ]);
+      const totalCases = firstPageRes.data.pagination?.total || 0;
+      const allCasesRes = totalCases > 0
+        ? await API.get(`/api/tb/cases?limit=${totalCases}`)
+        : firstPageRes;
       setMonthlyData(monthlyRes.data.monthly || []);
       setForecastsData(forecastsRes.data.forecasts || []);
       setBarangays(barangaysRes.data.barangays || []);
-      setCasesData(casesRes.data.cases || []);
+      setCasesData(allCasesRes.data.cases || []);
       setPipelineStatus(pipelineRes.data.latest_run || null);
       setBacktestData(backtestRes.data.data || []);
     } catch (err) {
@@ -236,6 +247,25 @@ export default function Forecasting() {
     setAppliedMonths(null);
     setForecastRan(false);
   }, []);
+
+  const handleGenerateInsight = useCallback(async () => {
+    try {
+      setInsightLoading(true);
+      setInsightError(null);
+      const insight = await getForecastingInsight({
+        startYear: appliedStartYear,
+        endYear: appliedEndYear,
+        barangay: appliedBarangay,
+        horizon: appliedMonths,
+      });
+      setInsightData(insight);
+    } catch (err) {
+      if (import.meta.env.DEV) console.error('Insight generation failed:', err);
+      setInsightError('Unable to generate insight.');
+    } finally {
+      setInsightLoading(false);
+    }
+  }, [appliedStartYear, appliedEndYear, appliedBarangay, appliedMonths]);
 
   /* ────────── Derived data (all behind forecastRan + applied filters) ────────── */
 
@@ -598,45 +628,6 @@ export default function Forecasting() {
     [sortKey, sortDir]
   );
 
-  /** Forecast summary text */
-  const forecastSummaryParts = useMemo(() => {
-    if (!filteredForecasts.length) return null;
-    const barangayLabel = appliedBarangay || 'all 30 Pasig City barangays';
-    const rate = Number(growthRate);
-    const trendWord = rate > 0 ? 'increase' : rate < 0 ? 'decrease' : 'no significant change';
-
-    // Find peak period
-    const peak = filteredForecasts.reduce(
-      (max, r) => (r.forecasted > max.forecasted ? r : max),
-      filteredForecasts[0]
-    );
-    const peakLabel = new Date(peak.period).toLocaleDateString('en-US', {
-      month: 'long',
-      year: 'numeric',
-    });
-
-    const riskColor = RISK_COLORS[riskLevel] || '#94A3B8';
-
-    return {
-      paragraphs: [
-        'Based on the selected historical period, TB cases are projected to ',
-        trendWord,
-        ` during the forecast period for ${barangayLabel}. The highest projected caseload is expected in `,
-        peakLabel,
-        `, with an expected growth rate of `,
-        `${rate >= 0 ? '+' : ''}${Math.abs(rate).toFixed(1)}%`,
-        ' — a ',
-        riskLevel.toLowerCase(),
-        ' risk classification.',
-      ],
-      trendWord,
-      peakLabel,
-      growthRateValue: `${rate >= 0 ? '+' : ''}${Math.abs(rate).toFixed(1)}%`,
-      riskLevel,
-      riskColor,
-    };
-  }, [filteredForecasts, growthRate, riskLevel, appliedBarangay]);
-
   /** Last updated from pipeline run timestamp */
   const lastUpdated = useMemo(() => {
     if (pipelineStatus?.trained_at) return new Date(pipelineStatus.trained_at);
@@ -814,7 +805,10 @@ export default function Forecasting() {
           </div>
         </div>
       ) : (
-        <>
+        <div className="flex gap-6">
+          {/* ─── LEFT COLUMN: KPI Cards + Charts (scrollable) ─── */}
+          <div className="flex-1 min-w-0 space-y-6">
+
           {/* ─── 3. METRIC CARDS ─── */}
           <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15,45,82,0.12), 0 2px 8px rgba(15,45,82,0.08)' }}>
             <div className="grid grid-cols-2 lg:grid-cols-4">
@@ -884,6 +878,11 @@ export default function Forecasting() {
                 <div>
                   <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Historical vs Forecasted TB Cases</h3>
                   <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Comparison of historical tuberculosis cases and projected cases for the selected forecast period.</p>
+                  {!pipelineStatus && (
+                    <p className="text-[10px] mt-0.5 font-medium" style={{ color: '#D97706' }}>
+                      Baseline forecast (previous month) — run pipeline for ARIMA predictions.
+                    </p>
+                  )}
                 </div>
               </div>
               {/* Inline legend */}
@@ -1019,103 +1018,108 @@ export default function Forecasting() {
           </div>
 
           {/* ─── 5. ACTUAL VS PREDICTED GRAPH ─── */}
-          <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-            <div className="flex items-center justify-between px-5 py-4">
-              <div className="flex items-center gap-3">
-                <div className="w-1 h-8 rounded-full" style={{ background: '#2563EB' }} />
-                <div>
-                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Actual vs Predicted Cases</h3>
-                  <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Comparison of observed TB cases and model-predicted values across historical periods.</p>
+            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+              <div className="flex items-center justify-between px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-1 h-8 rounded-full" style={{ background: '#2563EB' }} />
+                  <div>
+                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Actual vs Predicted Cases</h3>
+                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Comparison of observed TB cases and model-predicted values across historical periods.</p>
+                    {!pipelineStatus && (
+                      <p className="text-[10px] mt-0.5 font-medium" style={{ color: '#D97706' }}>
+                        Using seasonal naive baseline — run pipeline for ML predictions.
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-6 h-[3px] rounded-full" style={{ background: '#2563EB' }} />
+                    <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Actual</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-6 h-[3px] rounded-full" style={{ background: '#14B8A6' }} />
+                    <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Predicted</span>
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-6 h-[3px] rounded-full" style={{ background: '#2563EB' }} />
-                  <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Actual</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-6 h-[3px] rounded-full" style={{ background: '#14B8A6' }} />
-                  <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Predicted</span>
-                </div>
+              <div className="px-5 pb-5">
+                {avpChartData.length > 0 ? (
+                  <div className="w-full" style={{ height: 340 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={avpChartData} margin={{ top: 20, right: 25, left: 5, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                        <XAxis
+                          dataKey="label"
+                          tick={{ fontSize: 10, fill: '#94A3B8' }}
+                          axisLine={{ stroke: '#E2E8F0' }}
+                          tickLine={false}
+                          tickMargin={8}
+                        />
+                        <YAxis
+                          tick={{ fontSize: 10, fill: '#94A3B8' }}
+                          axisLine={{ stroke: '#E2E8F0' }}
+                          tickLine={false}
+                          tickMargin={4}
+                          width={40}
+                        />
+                        <Tooltip content={<ForecastTooltip />} />
+                        <Line
+                          type="monotone"
+                          dataKey="Actual"
+                          stroke="#2563EB"
+                          strokeWidth={2.5}
+                          dot={{ fill: '#2563EB', r: 3, strokeWidth: 0 }}
+                          activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }}
+                          name="Actual Cases"
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="Predicted"
+                          stroke="#14B8A6"
+                          strokeWidth={2.5}
+                          dot={{ fill: '#14B8A6', r: 3, strokeWidth: 0 }}
+                          activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }}
+                          name="Predicted Cases"
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-16 gap-3">
+                    <i className="ri-scales-line text-2xl" style={{ color: '#CBD5E1' }} />
+                    <p className="text-xs" style={{ color: '#94A3B8' }}>No comparison data available.</p>
+                  </div>
+                )}
               </div>
             </div>
-            <div className="px-5 pb-5">
-              {avpChartData.length > 0 ? (
-                <div className="w-full" style={{ height: 340 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={avpChartData} margin={{ top: 20, right: 25, left: 5, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
-                      <XAxis
-                        dataKey="label"
-                        tick={{ fontSize: 10, fill: '#94A3B8' }}
-                        axisLine={{ stroke: '#E2E8F0' }}
-                        tickLine={false}
-                        tickMargin={8}
-                      />
-                      <YAxis
-                        tick={{ fontSize: 10, fill: '#94A3B8' }}
-                        axisLine={{ stroke: '#E2E8F0' }}
-                        tickLine={false}
-                        tickMargin={4}
-                        width={40}
-                      />
-                      <Tooltip content={<ForecastTooltip />} />
-                      <Line
-                        type="monotone"
-                        dataKey="Actual"
-                        stroke="#2563EB"
-                        strokeWidth={2.5}
-                        dot={{ fill: '#2563EB', r: 3, strokeWidth: 0 }}
-                        activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }}
-                        name="Actual Cases"
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="Predicted"
-                        stroke="#14B8A6"
-                        strokeWidth={2.5}
-                        dot={{ fill: '#14B8A6', r: 3, strokeWidth: 0 }}
-                        activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }}
-                        name="Predicted Cases"
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-16 gap-3">
-                  <i className="ri-scales-line text-2xl" style={{ color: '#CBD5E1' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>No comparison data available.</p>
-                </div>
-              )}
-            </div>
-          </div>
 
-          {/* ─── 6. FORECAST DETAILS TABLE ─── */}
-          <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-            <div className="px-5 py-4">
-              <div className="flex items-center gap-2">
-                 <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#6B7280' }}>Data</span>
-                <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Forecast Details</h3>
+            {/* ─── 6. FORECAST DETAILS TABLE ─── */}
+            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+              <div className="px-5 py-4">
+                <div className="flex items-center gap-2">
+                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#6B7280' }}>Data</span>
+                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Forecast Details</h3>
+                </div>
               </div>
-            </div>
-            <div className="px-5 pb-5">
-              {sortedForecastTable.length > 0 ? (
-                <div className="overflow-x-auto -mx-5">
-                  <table className="w-full text-sm" style={{ minWidth: 750 }}>
-                    <thead>
-                      <tr style={{ borderBottom: '1px solid #E2E8F0', background: '#0F2D52' }}>
-                        {TABLE_COLUMNS.map((col) => (
-                          <th
-                            key={col.key}
-                            onClick={() => col.key !== 'confidence' && handleSort(col.key)}
-                            className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-widest cursor-pointer select-none whitespace-nowrap"
-                            style={{ color: '#ffffff' }}
-                          >
-                            <span className="inline-flex items-center gap-1">
-                              {col.label}
-                              {col.key !== 'confidence' && renderSortIcon(col.key)}
-                            </span>
-                          </th>
+              <div className="px-5 pb-5">
+                {sortedForecastTable.length > 0 ? (
+                  <div className="overflow-x-auto -mx-5">
+                    <table className="w-full text-sm" style={{ minWidth: 750 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid #E2E8F0', background: '#0F2D52' }}>
+                          {TABLE_COLUMNS.map((col) => (
+                            <th
+                              key={col.key}
+                              onClick={() => col.key !== 'confidence' && handleSort(col.key)}
+                              className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-widest cursor-pointer select-none whitespace-nowrap"
+                              style={{ color: '#ffffff' }}
+                            >
+                              <span className="inline-flex items-center gap-1">
+                                {col.label}
+                                {col.key !== 'confidence' && renderSortIcon(col.key)}
+                              </span>
+                            </th>
                         ))}
                       </tr>
                     </thead>
@@ -1213,55 +1217,22 @@ export default function Forecasting() {
               )}
             </div>
           </div>
+          </div>
 
-          {/* ─── 7. FORECAST SUMMARY ─── */}
-          {forecastSummaryParts && (
-            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-              <div className="px-5 py-4">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#EF4444' }}>Auto-Generated</span>
-                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Forecast Summary</h3>
-                </div>
-              </div>
-              <div className="px-5 pb-5">
-                {/* Key metrics grid */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-                  <div className="p-3 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Forecast Period</span>
-                    <p className="text-sm font-bold mt-1" style={{ color: '#0F2D52' }}>{appliedMonths} months</p>
-                  </div>
-                  <div className="p-3 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Growth Rate</span>
-                    <p className="text-sm font-bold mt-1" style={{ color: forecastSummaryParts.growthRateValue.startsWith('+') ? '#EF4444' : '#10B981' }}>{forecastSummaryParts.growthRateValue}</p>
-                  </div>
-                  <div className="p-3 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Peak Period</span>
-                    <p className="text-sm font-bold mt-1" style={{ color: '#0F2D52' }}>{forecastSummaryParts.peakLabel}</p>
-                  </div>
-                  <div className="p-3 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Risk Level</span>
-                    <div className="flex items-center gap-1.5 mt-1">
-                      <span className="w-2 h-2 rounded-full" style={{ background: forecastSummaryParts.riskColor }} />
-                      <p className="text-sm font-bold" style={{ color: forecastSummaryParts.riskColor }}>{forecastSummaryParts.riskLevel}</p>
-                    </div>
-                  </div>
-                </div>
-                {/* Summary text */}
-                <p className="text-sm leading-relaxed" style={{ color: '#475569' }}>
-                  {forecastSummaryParts.paragraphs.map((part, i) => {
-                    if (part === forecastSummaryParts.trendWord || part === forecastSummaryParts.peakLabel || part === forecastSummaryParts.growthRateValue) {
-                      return <strong key={i} style={{ color: '#1E293B' }}>{part}</strong>;
-                    }
-                    if (part === `${forecastSummaryParts.riskLevel.toLowerCase()} risk classification.`) {
-                      return <strong key={i} style={{ color: forecastSummaryParts.riskColor }}>{part}</strong>;
-                    }
-                    return <span key={i}>{part}</span>;
-                  })}
-                </p>
-              </div>
+          {/* ─── RIGHT COLUMN: Sticky NLG Insight Panel ─── */}
+          <div className="w-[320px] shrink-0 hidden lg:block">
+            <div className="sticky top-4">
+              <AiInsightPanel
+                type="forecasting"
+                data={insightData}
+                loading={insightLoading}
+                error={insightError}
+                onRetry={handleGenerateInsight}
+                onGenerate={handleGenerateInsight}
+              />
             </div>
-          )}
-        </>
+          </div>
+        </div>
       )}
     </div>
   );

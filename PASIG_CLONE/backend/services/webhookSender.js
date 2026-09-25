@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fetch = require('node-fetch');
 const config = require('../config');
 const db = require('../db/pasigSchema');
+const { logAuditEvent } = require('../utils/auditLogger');
 
 function signPayload(payload, secret) {
   const body = JSON.stringify(payload);
@@ -34,100 +35,284 @@ function formatRecord(record) {
     source_type: record.source_type,
     validation_status: record.validation_status,
     itis_case_id: record.itis_case_id,
+    type: record.type,
+    province: record.province,
+    region: record.region,
+    referred_to_dots: record.referred_to_dots,
+    referral_status: record.referral_status,
+    microscopy_result: record.microscopy_result,
+    microscopy_release_date: record.microscopy_release_date,
+    rdt_result: record.rdt_result,
+    rdt_release_date: record.rdt_release_date,
+    outcome_reason: record.outcome_reason,
   };
 }
 
-async function sendWebhook(batchId) {
-  const batchResult = await db.getBatch(batchId);
-  if (batchResult.rows.length === 0) {
-    throw new Error('Batch not found');
-  }
+/**
+ * Check if a record is from Pasig City
+ */
+function isPasigRecord(record) {
+  const normalizedCity = String(record.city || '').trim().toLowerCase();
+  if (normalizedCity === 'pasig city' || normalizedCity === 'pasig') return true;
 
-  const batch = batchResult.rows[0];
-  if (batch.status !== 'validated') {
-    throw new Error('Batch must be validated before sending');
-  }
+  const PASIG_BARANGAYS = new Set([
+    'bagong ilog', 'bambang', 'buting', 'caniogan', 'dela paz',
+    'kalawaan', 'kapasigan', 'kapasigan extension', 'kapitolyo', 'malinao', 'manggahan',
+    'maybunga', 'oranbo', 'palatiw', 'pinagbuhatan', 'pineda',
+    'rosario', 'sagad', 'san antonio', 'san joaquin', 'san jose',
+    'san miguel', 'san nicolas', 'santa cruz', 'santa lucia',
+    'santa rosa', 'santo tomas', 'santolan', 'sumilang', 'ugong',
+  ]);
+  return PASIG_BARANGAYS.has(String(record.barangay_name || '').trim().toLowerCase());
+}
 
-  const recordsResult = await db.getValidatedCases(batchId);
-
-  const dstbRecords = recordsResult.rows.filter(r => r.source_type === 'DSTB');
-  const mnRecords = recordsResult.rows.filter(r => r.source_type === 'MN');
-
-  const payload = {
-    schema_version: '1.0',
-    source: 'pasig-clone',
-    batch_id: batchId,
-    timestamp: new Date().toISOString(),
-    sheets: [
-      {
-        sheet_name: 'DSTB',
-        source_type: 'DSTB',
-        record_count: dstbRecords.length,
-        records: dstbRecords.map(formatRecord),
-      },
-      {
-        sheet_name: 'MN',
-        source_type: 'MN',
-        record_count: mnRecords.length,
-        records: mnRecords.map(formatRecord),
-      },
-    ],
-  };
-
-  const secret = config.webhook.secret;
-  const signature = signPayload(payload, secret);
-  const webhookUrl = config.webhook.url;
-
-  const MAX_RETRIES = parseInt(process.env.WEBHOOK_MAX_RETRIES || '3');
-  const TIMEOUT_MS = parseInt(process.env.WEBHOOK_TIMEOUT_MS || '60000');
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-      const response = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Webhook-Signature': signature,
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeout);
-      const responseBody = await response.text();
-
-      await db.logWebhook(batchId, payload, response.ok ? 'sent' : 'failed', response.status, responseBody);
-
-      if (response.ok) {
-        await db.updateBatchSent(batchId);
-        return { success: true, status: response.status, message: 'Webhook sent successfully' };
-      }
-
-      // 4xx errors — don't retry (permanent failure)
-      if (response.status >= 400 && response.status < 500) {
-        return { success: false, status: response.status, message: 'Webhook failed (client error)' };
-      }
-
-      // 5xx errors — retry if attempts remain
-      if (attempt < MAX_RETRIES) {
-        console.log(`Webhook retry ${attempt}/${MAX_RETRIES} after ${response.status}`);
-        continue;
-      }
-
-      return { success: false, status: response.status, message: 'Webhook failed after retries' };
-    } catch (error) {
-      // Network/timeout errors — retry if attempts remain
-      if (attempt < MAX_RETRIES) {
-        console.log(`Webhook retry ${attempt}/${MAX_RETRIES} after error: ${error.message}`);
-        continue;
-      }
-
-      await db.logWebhookError(batchId, payload, error.message);
-      return { success: false, status: 0, message: `Webhook failed: ${error.message}` };
+/**
+ * Send webhook to TBInsight with comprehensive sync tracking
+ * @param {string} batchId - Batch ID to sync
+ * @param {number} userId - ID of user initiating sync
+ * @returns {Object} { success, status, message, recordsSent, recordsAccepted }
+ */
+async function sendWebhook(batchId, userId) {
+  const client = await db.pool.connect();
+  
+  try {
+    const batchResult = await db.getBatch(batchId);
+    if (batchResult.rows.length === 0) {
+      throw new Error('Batch not found');
     }
+
+    const batch = batchResult.rows[0];
+    if (batch.status !== 'validated') {
+      throw new Error('Batch must be validated before sending');
+    }
+
+    const recordsResult = await db.getValidatedCases(batchId);
+
+    // Filter: only send Pasig City records to TBInsight
+    const pasigRecords = recordsResult.rows.filter(isPasigRecord);
+    const nonPasigCount = recordsResult.rows.length - pasigRecords.length;
+
+    const dstbRecords = pasigRecords.filter(r => r.source_type === 'DSTB');
+    const mnRecords = pasigRecords.filter(r => r.source_type === 'MN');
+
+    const payload = {
+      schema_version: '1.0',
+      source: 'pasig-clone',
+      batch_id: batchId,
+      timestamp: new Date().toISOString(),
+      sheets: [
+        {
+          sheet_name: 'DSTB',
+          source_type: 'DSTB',
+          record_count: dstbRecords.length,
+          records: dstbRecords.map(formatRecord),
+        },
+        {
+          sheet_name: 'MN',
+          source_type: 'MN',
+          record_count: mnRecords.length,
+          records: mnRecords.map(formatRecord),
+        },
+      ],
+    };
+
+    const recordsSent = dstbRecords.length + mnRecords.length;
+
+    // ========== Mark sync as in-progress ==========
+    await client.query('BEGIN');
+    await client.query(
+      `UPDATE import_batches
+       SET sync_status = 'syncing', synced_by = $1
+       WHERE id = $2`,
+      [userId, batchId]
+    );
+    await client.query('COMMIT');
+
+    console.log(`🔄 Starting webhook sync for batch ${batchId}: ${recordsSent} Pasig records${nonPasigCount > 0 ? `, ${nonPasigCount} non-Pasig excluded` : ''}`);
+
+    // ========== Send webhook with retries ==========
+    const secret = config.webhook.secret;
+    const signature = signPayload(payload, secret);
+    const webhookUrl = config.webhook.url;
+
+    const MAX_RETRIES = parseInt(process.env.WEBHOOK_MAX_RETRIES || '3');
+    const TIMEOUT_MS = parseInt(process.env.WEBHOOK_TIMEOUT_MS || '60000');
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+        const response = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Webhook-Signature': signature,
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+        const responseBody = await response.text();
+
+        // Log webhook attempt
+        await db.logWebhook(batchId, payload, response.ok ? 'sent' : 'failed', response.status, responseBody, userId);
+
+        if (response.ok) {
+          // ========== Mark sync as successful ==========
+          await client.query('BEGIN');
+          await client.query(
+            `UPDATE import_batches
+             SET sync_status = 'synced', synced_at = NOW(), sync_error = NULL
+             WHERE id = $1`,
+            [batchId]
+          );
+          await client.query('COMMIT');
+
+          console.log(`✅ Webhook synced successfully for batch ${batchId}`);
+
+          // Log audit event
+          await logAuditEvent({
+            userId,
+            action: 'SYNC_BATCH',
+            resourceType: 'import_batch',
+            resourceId: batchId,
+            result: 'SUCCESS',
+            details: { recordsSent, status: response.status },
+          });
+
+          return {
+            success: true,
+            status: response.status,
+            message: nonPasigCount > 0
+              ? `Webhook sent successfully. ${nonPasigCount} non-Pasig records excluded.`
+              : 'Webhook sent successfully',
+            recordsSent,
+            recordsAccepted: recordsSent,
+            nonPasigExcluded: nonPasigCount,
+          };
+        }
+
+        // 4xx errors — don't retry (permanent failure)
+        if (response.status >= 400 && response.status < 500) {
+          const errorMsg = `Webhook failed with status ${response.status}: ${responseBody}`;
+          
+          await client.query('BEGIN');
+          await client.query(
+            `UPDATE import_batches
+             SET sync_status = 'sync_failed', sync_error = $1
+             WHERE id = $2`,
+            [errorMsg.substring(0, 500), batchId]
+          );
+          await client.query('COMMIT');
+
+          console.error(`❌ Webhook failed (client error) for batch ${batchId}: ${errorMsg}`);
+
+          await logAuditEvent({
+            userId,
+            action: 'SYNC_BATCH',
+            resourceType: 'import_batch',
+            resourceId: batchId,
+            result: 'FAILURE',
+            details: { status: response.status, error: 'Client error' },
+          });
+
+          return {
+            success: false,
+            status: response.status,
+            message: 'Webhook failed: Please check your configuration',
+            recordsSent,
+            recordsAccepted: 0,
+          };
+        }
+
+        // 5xx errors — retry if attempts remain
+        if (attempt < MAX_RETRIES) {
+          console.log(`⚠️  Webhook retry ${attempt}/${MAX_RETRIES} after status ${response.status}`);
+          await new Promise(r => setTimeout(r, 1000 * attempt)); // Exponential backoff
+          continue;
+        }
+
+        const errorMsg = `Server error after ${MAX_RETRIES} retries`;
+        await client.query('BEGIN');
+        await client.query(
+          `UPDATE import_batches
+           SET sync_status = 'sync_failed', sync_error = $1
+           WHERE id = $2`,
+          [errorMsg, batchId]
+        );
+        await client.query('COMMIT');
+
+        await logAuditEvent({
+          userId,
+          action: 'SYNC_BATCH',
+          resourceType: 'import_batch',
+          resourceId: batchId,
+          result: 'FAILURE',
+          details: { status: response.status, error: 'Server error (retries exhausted)' },
+        });
+
+        return {
+          success: false,
+          status: response.status,
+          message: 'Webhook failed: Server error',
+          recordsSent,
+          recordsAccepted: 0,
+        };
+      } catch (error) {
+        // Network/timeout errors — retry if attempts remain
+        if (attempt < MAX_RETRIES) {
+          console.log(`⚠️  Webhook retry ${attempt}/${MAX_RETRIES} after error: ${error.message}`);
+          await new Promise(r => setTimeout(r, 1000 * attempt)); // Exponential backoff
+          continue;
+        }
+
+        const errorMsg = `Network error: ${error.message}`;
+        await db.logWebhookError(batchId, payload, errorMsg, userId);
+        
+        await client.query('BEGIN');
+        await client.query(
+          `UPDATE import_batches
+           SET sync_status = 'sync_failed', sync_error = $1
+           WHERE id = $2`,
+          [errorMsg.substring(0, 500), batchId]
+        );
+        await client.query('COMMIT');
+
+        console.error(`❌ Webhook failed (network error) for batch ${batchId}: ${errorMsg}`);
+
+        await logAuditEvent({
+          userId,
+          action: 'SYNC_BATCH',
+          resourceType: 'import_batch',
+          resourceId: batchId,
+          result: 'FAILURE',
+          details: { error: 'Network error' },
+        });
+
+        return {
+          success: false,
+          status: 0,
+          message: `Webhook failed: ${error.message}`,
+          recordsSent,
+          recordsAccepted: 0,
+        };
+      }
+    }
+  } catch (error) {
+    console.error(`❌ Webhook error for batch ${batchId}:`, error);
+    await logAuditEvent({
+      userId,
+      action: 'SYNC_BATCH',
+      resourceType: 'import_batch',
+      resourceId: batchId,
+      result: 'FAILURE',
+      details: { error: error.message },
+    });
+    throw error;
+  } finally {
+    client.release();
   }
 }
 

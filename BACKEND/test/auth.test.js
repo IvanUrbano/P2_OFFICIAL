@@ -38,7 +38,11 @@ function clearAuthCache() {
     .filter(k =>
       k.includes('routes/auth') ||
       k.includes('middleware/auth') ||
-      k.includes('middleware/rateLimiter')
+      k.includes('middleware/rateLimiter') ||
+      k.includes('utils/passwordValidator') ||
+      k.includes('utils/loginAttemptLogger') ||
+      k.includes('utils/tempPasswordGenerator') ||
+      k.includes('utils/auditLogger')
     )
     .forEach(k => delete require.cache[k]);
 }
@@ -59,18 +63,18 @@ function teardown() {
 }
 
 /* ─── Test data helpers ─── */
-const STAFF_HASH = bcrypt.hashSync('staffpass123', 4); // low rounds for speed
-const ADMIN_HASH = bcrypt.hashSync('adminpass123', 4);
+const STAFF_HASH = bcrypt.hashSync('Staffpass1', 4);
+const ADMIN_HASH = bcrypt.hashSync('Adminpass1', 4);
 
 const STAFF_USER = {
   id: 1, username: 'staff1', email: 'staff@test.com',
-  password: STAFF_HASH, role: 'staff',
+  password_hash: STAFF_HASH, role: 'staff',
   created_at: '2025-01-01T00:00:00Z',
 };
 
 const ADMIN_USER = {
   id: 2, username: 'admin1', email: 'admin@test.com',
-  password: ADMIN_HASH, role: 'admin',
+  password_hash: ADMIN_HASH, role: 'admin',
   created_at: '2025-01-01T00:00:00Z',
 };
 
@@ -89,7 +93,7 @@ function makeToken(user) {
 before(() => {
   process.env.JWT_SECRET = TEST_SECRET;
   process.env.JWT_EXPIRES_IN = '1h';
-  process.env.LOGIN_LIMIT_MAX = '100'; // high limit so tests don't trigger 429
+  process.env.LOGIN_LIMIT_MAX = '100';
   process.env.LOGIN_LIMIT_WINDOW_MINS = '1';
 });
 
@@ -129,7 +133,7 @@ describe('POST /api/auth/login', () => {
       .post('/api/auth/login')
       .send({ email: 'nobody@test.com', password: 'pass' });
     assert.strictEqual(res.status, 401);
-    assert.ok(res.body.error.includes('Invalid email or password'));
+    assert.ok(res.body.error.includes('Invalid credentials'));
   });
 
   it('returns 401 for wrong password', async () => {
@@ -138,26 +142,26 @@ describe('POST /api/auth/login', () => {
       .post('/api/auth/login')
       .send({ email: 'staff@test.com', password: 'wrongpassword' });
     assert.strictEqual(res.status, 401);
-    assert.ok(res.body.error.includes('Invalid email or password'));
+    assert.ok(res.body.error.includes('Invalid credentials'));
   });
 
-  it('returns token and user on valid login', async () => {
+  it('returns user on valid login (no token in body)', async () => {
     mockQueryFn = async () => ({ rows: [STAFF_USER] });
     const res = await request(buildApp())
       .post('/api/auth/login')
-      .send({ email: 'staff@test.com', password: 'staffpass123' });
+      .send({ email: 'staff@test.com', password: 'Staffpass1' });
     assert.strictEqual(res.status, 200);
-    assert.ok(res.body.token, 'response should include token');
+    assert.ok(!res.body.token, 'token must not be in response body');
     assert.strictEqual(res.body.user.email, 'staff@test.com');
     assert.strictEqual(res.body.user.role, 'staff');
-    assert.ok(!res.body.user.password, 'password must not be returned');
+    assert.ok(!res.body.user.password_hash, 'password_hash must not be returned');
   });
 
   it('sets httpOnly cookie with token', async () => {
     mockQueryFn = async () => ({ rows: [STAFF_USER] });
     const res = await request(buildApp())
       .post('/api/auth/login')
-      .send({ email: 'staff@test.com', password: 'staffpass123' });
+      .send({ email: 'staff@test.com', password: 'Staffpass1' });
     assert.strictEqual(res.status, 200);
     const cookies = res.headers['set-cookie'];
     assert.ok(cookies, 'should set cookies');
@@ -174,6 +178,25 @@ describe('POST /api/auth/login', () => {
     assert.strictEqual(res.status, 500);
     assert.ok(res.body.error.includes('Server error'));
   });
+
+  it('returns generic error message for wrong password (no enumeration)', async () => {
+    // First call: user lookup returns user, second call: lockout check, third: log attempt, fourth: record failed
+    let callCount = 0;
+    mockQueryFn = async (sql) => {
+      callCount++;
+      const s = String(sql);
+      if (s.includes('SELECT * FROM users')) return { rows: [STAFF_USER] };
+      if (s.includes('locked_until')) return { rows: [{ locked_until: null }] };
+      if (s.includes('INSERT INTO login_attempts')) return { rows: [] };
+      if (s.includes('UPDATE users')) return { rows: [{ failed_attempts: 1, locked_until: null }] };
+      return { rows: [] };
+    };
+    const res = await request(buildApp())
+      .post('/api/auth/login')
+      .send({ email: 'staff@test.com', password: 'wrong' });
+    assert.strictEqual(res.status, 401);
+    assert.ok(res.body.error.includes('Invalid credentials'));
+  });
 });
 
 /* ═══════════════════════════════════════════════════════ */
@@ -187,7 +210,7 @@ describe('POST /api/auth/register', () => {
   it('returns 401 without token', async () => {
     const res = await request(buildApp())
       .post('/api/auth/register')
-      .send({ username: 'new', email: 'new@test.com', password: 'pass123' });
+      .send({ username: 'new', email: 'new@test.com' });
     assert.strictEqual(res.status, 401);
   });
 
@@ -195,7 +218,7 @@ describe('POST /api/auth/register', () => {
     const res = await request(buildApp())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${staffToken}`)
-      .send({ username: 'new', email: 'new@test.com', password: 'pass123' });
+      .send({ username: 'new', email: 'new@test.com' });
     assert.strictEqual(res.status, 403);
     assert.ok(res.body.error.includes('Access denied'));
   });
@@ -214,27 +237,26 @@ describe('POST /api/auth/register', () => {
     const res = await request(buildApp())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ username: 'new', email: 'new@test.com', password: 'pass123', role: 'superadmin' });
+      .send({ username: 'new', email: 'new@test.com', role: 'superadmin' });
     assert.strictEqual(res.status, 400);
     assert.ok(res.body.error.includes('Invalid role'));
   });
 
   it('returns 409 for duplicate user', async () => {
-    mockQueryFn = async () => ({ rows: [{ id: 99 }] }); // user exists
+    mockQueryFn = async () => ({ rows: [{ id: 99 }] });
     const res = await request(buildApp())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ username: 'dup', email: 'dup@test.com', password: 'pass123' });
+      .send({ username: 'dup', email: 'dup@test.com' });
     assert.strictEqual(res.status, 409);
     assert.ok(res.body.error.includes('already exists'));
   });
 
-  it('returns 201 on successful registration', async () => {
+  it('returns 201 with temp password on successful registration', async () => {
     let callCount = 0;
     mockQueryFn = async (sql, params) => {
       callCount++;
       if (callCount === 1) return { rows: [] }; // no existing user
-      // Second call is the INSERT
       return {
         rows: [{
           id: 10, username: params[0], email: params[1],
@@ -245,10 +267,14 @@ describe('POST /api/auth/register', () => {
     const res = await request(buildApp())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ username: 'newstaff', email: 'new@test.com', password: 'pass123' });
+      .send({ username: 'newstaff', email: 'new@test.com' });
     assert.strictEqual(res.status, 201);
     assert.strictEqual(res.body.user.username, 'newstaff');
     assert.strictEqual(res.body.user.email, 'new@test.com');
+    assert.ok(!res.body.user.password_hash, 'password_hash must not be returned');
+    assert.ok(res.body.tempPassword, 'should return tempPassword');
+    assert.ok(typeof res.body.tempPassword === 'string');
+    assert.ok(res.body.tempPassword.length >= 8, 'temp password should be at least 8 chars');
   });
 
   it('defaults role to staff when not specified', async () => {
@@ -256,14 +282,18 @@ describe('POST /api/auth/register', () => {
     let callCount = 0;
     mockQueryFn = async (sql, params) => {
       callCount++;
-      if (callCount === 1) return { rows: [] };
-      capturedRole = params[3]; // role is 4th param
-      return { rows: [{ id: 10, username: params[0], email: params[1], role: params[3], created_at: new Date() }] };
+      const s = String(sql);
+      if (s.includes('SELECT id FROM users')) return { rows: [] };
+      if (s.includes('INSERT INTO users')) {
+        capturedRole = params[3];
+        return { rows: [{ id: 10, username: params[0], email: params[1], role: params[3], created_at: new Date() }] };
+      }
+      return { rows: [] };
     };
     await request(buildApp())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ username: 'newstaff', email: 'new@test.com', password: 'pass123' });
+      .send({ username: 'newstaff', email: 'new@test.com' });
     assert.strictEqual(capturedRole, 'staff');
   });
 });
@@ -428,12 +458,12 @@ describe('PUT /api/auth/profile', () => {
     const res = await request(buildApp())
       .put('/api/auth/profile')
       .set('Authorization', `Bearer ${token}`)
-      .send({ username: 'staff1' }); // no email
+      .send({ username: 'staff1' });
     assert.strictEqual(res.status, 400);
   });
 
   it('returns 409 when username/email is taken by another account', async () => {
-    mockQueryFn = async () => ({ rows: [{ id: 2 }] }); // conflict found
+    mockQueryFn = async () => ({ rows: [{ id: 2 }] });
     const token = makeToken(STAFF_USER);
     const res = await request(buildApp())
       .put('/api/auth/profile')
@@ -448,7 +478,7 @@ describe('PUT /api/auth/profile', () => {
       if (String(sql).includes('UPDATE')) {
         return { rows: [{ id: 1, username: 'staff-new', email: 'staff-new@test.com', role: 'staff', created_at: '2025-01-01' }] };
       }
-      return { rows: [] }; // conflict check passes
+      return { rows: [] };
     };
     const token = makeToken(STAFF_USER);
     const res = await request(buildApp())
@@ -486,7 +516,7 @@ describe('PUT /api/auth/password', () => {
     const res = await request(buildApp())
       .put('/api/auth/password')
       .set('Authorization', `Bearer ${token}`)
-      .send({ currentPassword: 'staffpass123' }); // no newPassword
+      .send({ currentPassword: 'Staffpass1' });
     assert.strictEqual(res.status, 400);
   });
 
@@ -495,18 +525,28 @@ describe('PUT /api/auth/password', () => {
     const res = await request(buildApp())
       .put('/api/auth/password')
       .set('Authorization', `Bearer ${token}`)
-      .send({ currentPassword: 'staffpass123', newPassword: '123' });
+      .send({ currentPassword: 'Staffpass1', newPassword: 'Ab1' });
     assert.strictEqual(res.status, 400);
-    assert.ok(res.body.error.includes('at least 6'));
+    assert.ok(res.body.error.includes('8 characters'));
   });
 
-  it('returns 401 when current password is incorrect', async () => {
-    mockQueryFn = async () => ({ rows: [{ id: 1, password: STAFF_HASH }] });
+  it('returns 400 when new password lacks uppercase', async () => {
     const token = makeToken(STAFF_USER);
     const res = await request(buildApp())
       .put('/api/auth/password')
       .set('Authorization', `Bearer ${token}`)
-      .send({ currentPassword: 'wrongpass', newPassword: 'newpass123' });
+      .send({ currentPassword: 'Staffpass1', newPassword: 'weakpass1' });
+    assert.strictEqual(res.status, 400);
+    assert.ok(res.body.error.includes('uppercase'));
+  });
+
+  it('returns 401 when current password is incorrect', async () => {
+    mockQueryFn = async () => ({ rows: [{ id: 1, password_hash: STAFF_HASH }] });
+    const token = makeToken(STAFF_USER);
+    const res = await request(buildApp())
+      .put('/api/auth/password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ currentPassword: 'wrongpass', newPassword: 'Newpass1' });
     assert.strictEqual(res.status, 401);
     assert.ok(res.body.error.includes('incorrect'));
   });
@@ -514,15 +554,15 @@ describe('PUT /api/auth/password', () => {
   it('changes password successfully', async () => {
     mockQueryFn = async (sql) => {
       if (String(sql).includes('SELECT')) {
-        return { rows: [{ id: 1, password: STAFF_HASH }] };
+        return { rows: [{ id: 1, password_hash: STAFF_HASH }] };
       }
-      return { rows: [] }; // UPDATE
+      return { rows: [] };
     };
     const token = makeToken(STAFF_USER);
     const res = await request(buildApp())
       .put('/api/auth/password')
       .set('Authorization', `Bearer ${token}`)
-      .send({ currentPassword: 'staffpass123', newPassword: 'newpass123' });
+      .send({ currentPassword: 'Staffpass1', newPassword: 'Newpass1' });
     assert.strictEqual(res.status, 200);
     assert.ok(res.body.message.includes('changed'));
   });
@@ -533,7 +573,182 @@ describe('PUT /api/auth/password', () => {
     const res = await request(buildApp())
       .put('/api/auth/password')
       .set('Authorization', `Bearer ${token}`)
-      .send({ currentPassword: 'x', newPassword: 'abcdef' });
+      .send({ currentPassword: 'x', newPassword: 'Abcdefg1' });
     assert.strictEqual(res.status, 500);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════ */
+/*            PUT /api/auth/users/:id/password             */
+/* ═══════════════════════════════════════════════════════ */
+
+describe('PUT /api/auth/users/:id/password', () => {
+  const adminToken = makeToken(ADMIN_USER);
+  const staffToken = makeToken(STAFF_USER);
+
+  it('returns 401 without token', async () => {
+    const res = await request(buildApp()).put('/api/auth/users/1/password');
+    assert.strictEqual(res.status, 401);
+  });
+
+  it('returns 403 for non-admin', async () => {
+    const res = await request(buildApp())
+      .put('/api/auth/users/1/password')
+      .set('Authorization', `Bearer ${staffToken}`);
+    assert.strictEqual(res.status, 403);
+  });
+
+  it('returns 404 when user not found', async () => {
+    mockQueryFn = async () => ({ rows: [] });
+    const res = await request(buildApp())
+      .put('/api/auth/users/999/password')
+      .set('Authorization', `Bearer ${adminToken}`);
+    assert.strictEqual(res.status, 404);
+  });
+
+  it('generates temp password and returns it once', async () => {
+    mockQueryFn = async (sql) => {
+      if (String(sql).includes('SELECT')) return { rows: [{ id: 1, username: 'staff1' }] };
+      return { rows: [] };
+    };
+    const res = await request(buildApp())
+      .put('/api/auth/users/1/password')
+      .set('Authorization', `Bearer ${adminToken}`);
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.message.includes('reset'));
+    assert.ok(res.body.tempPassword, 'should return tempPassword');
+    assert.ok(typeof res.body.tempPassword === 'string');
+    assert.ok(res.body.tempPassword.length >= 8, 'temp password should be at least 8 chars');
+  });
+
+  it('temp password meets policy (uppercase, lowercase, digit)', () => {
+    const { generateTempPassword } = require('../utils/tempPasswordGenerator');
+    for (let i = 0; i < 10; i++) {
+      const pw = generateTempPassword();
+      assert.ok(/[A-Z]/.test(pw), `temp password "${pw}" should have uppercase`);
+      assert.ok(/[a-z]/.test(pw), `temp password "${pw}" should have lowercase`);
+      assert.ok(/[0-9]/.test(pw), `temp password "${pw}" should have digit`);
+      assert.ok(pw.length >= 8, `temp password "${pw}" should be at least 8 chars`);
+    }
+  });
+
+  it('temp password format matches XXXX-XXXX-XXXX-XXXX', () => {
+    const { generateTempPassword } = require('../utils/tempPasswordGenerator');
+    const pw = generateTempPassword();
+    assert.ok(/^\w{4}-\w{4}-\w{4}-\w{4}$/.test(pw), `temp password "${pw}" should match format XXXX-XXXX-XXXX-XXXX`);
+  });
+
+  it('resets failed_attempts and locked_until on reset', async () => {
+    let resetLockout = false;
+    mockQueryFn = async (sql) => {
+      const s = String(sql);
+      if (s.includes('SELECT') && s.includes('FROM users')) return { rows: [{ id: 1, username: 'staff1' }] };
+      if (s.includes('UPDATE users') && s.includes('failed_attempts = 0')) {
+        resetLockout = true;
+        return { rows: [] };
+      }
+      return { rows: [] };
+    };
+    await request(buildApp())
+      .put('/api/auth/users/1/password')
+      .set('Authorization', `Bearer ${adminToken}`);
+    assert.ok(resetLockout, 'should reset failed_attempts and locked_until');
+  });
+});
+
+/* ═══════════════════════════════════════════════════════ */
+/*            Account Lockout Tests                       */
+/* ═══════════════════════════════════════════════════════ */
+
+describe('Account Lockout', () => {
+  it('returns 423 when account is locked', async () => {
+    mockQueryFn = async (sql) => {
+      const s = String(sql);
+      if (s.includes('locked_until') && s.includes('SELECT')) {
+        return { rows: [{ locked_until: new Date(Date.now() + 900000) }] };
+      }
+      return { rows: [] };
+    };
+    const res = await request(buildApp())
+      .post('/api/auth/login')
+      .send({ email: 'locked@test.com', password: 'pass' });
+    assert.strictEqual(res.status, 423);
+    assert.ok(res.body.error.includes('locked'));
+    assert.ok(res.body.retryAfter > 0);
+  });
+
+  it('allows login when lockout has expired', async () => {
+    mockQueryFn = async (sql) => {
+      const s = String(sql);
+      if (s.includes('locked_until') && s.includes('SELECT')) {
+        return { rows: [{ locked_until: new Date(Date.now() - 1000) }] };
+      }
+      if (s.includes('SELECT * FROM users')) return { rows: [STAFF_USER] };
+      return { rows: [] };
+    };
+    const res = await request(buildApp())
+      .post('/api/auth/login')
+      .send({ email: 'staff@test.com', password: 'Staffpass1' });
+    assert.strictEqual(res.status, 200);
+  });
+
+  it('resets failed_attempts on successful login', async () => {
+    let resetCalled = false;
+    mockQueryFn = async (sql) => {
+      const s = String(sql);
+      if (s.includes('locked_until') && s.includes('SELECT')) {
+        return { rows: [{ locked_until: null }] };
+      }
+      if (s.includes('SELECT * FROM users')) return { rows: [STAFF_USER] };
+      if (s.includes('UPDATE users') && s.includes('failed_attempts = 0')) {
+        resetCalled = true;
+        return { rows: [] };
+      }
+      if (s.includes('INSERT INTO login_attempts')) return { rows: [] };
+      return { rows: [] };
+    };
+    const res = await request(buildApp())
+      .post('/api/auth/login')
+      .send({ email: 'staff@test.com', password: 'Staffpass1' });
+    assert.strictEqual(res.status, 200);
+    assert.ok(resetCalled, 'failed_attempts should be reset on success');
+  });
+});
+
+/* ═══════════════════════════════════════════════════════ */
+/*            Password Policy Tests                       */
+/* ═══════════════════════════════════════════════════════ */
+
+describe('Password Policy', () => {
+  const { validatePassword } = require('../utils/passwordValidator');
+
+  it('rejects password shorter than 8 characters', () => {
+    const errors = validatePassword('Ab1');
+    assert.ok(errors.some(e => e.includes('8 characters')));
+  });
+
+  it('rejects password without uppercase', () => {
+    const errors = validatePassword('alllower1');
+    assert.ok(errors.some(e => e.includes('uppercase')));
+  });
+
+  it('rejects password without lowercase', () => {
+    const errors = validatePassword('ALLUPPER1');
+    assert.ok(errors.some(e => e.includes('lowercase')));
+  });
+
+  it('rejects password without number', () => {
+    const errors = validatePassword('NoNumberHere');
+    assert.ok(errors.some(e => e.includes('number')));
+  });
+
+  it('accepts valid strong password', () => {
+    const errors = validatePassword('StrongPass1');
+    assert.strictEqual(errors.length, 0);
+  });
+
+  it('accepts password with exactly 8 characters', () => {
+    const errors = validatePassword('Abcdef1x');
+    assert.strictEqual(errors.length, 0);
   });
 });

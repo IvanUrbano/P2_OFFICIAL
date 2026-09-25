@@ -313,7 +313,32 @@ export function exportPDF(report) {
 }
 
 export function printReport() {
+  const report = document.getElementById('printable-report');
+  if (!report) return;
+
+  const hidden = [];
+  let current = report;
+
+  while (current && current !== document.body) {
+    const parent = current.parentElement;
+    if (parent) {
+      Array.from(parent.children).forEach(sibling => {
+        if (sibling !== current && !sibling.contains(report) && sibling !== report) {
+          sibling.style.setProperty('display', 'none', 'important');
+          hidden.push(sibling);
+        }
+      });
+    }
+    current = parent;
+  }
+
   window.print();
+
+  const restore = () => {
+    hidden.forEach(e => e.style.removeProperty('display'));
+  };
+  window.addEventListener('afterprint', restore, { once: true });
+  setTimeout(restore, 5000);
 }
 
 export function saveToRecentReports(reportData, filters = {}) {
