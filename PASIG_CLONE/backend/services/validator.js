@@ -11,8 +11,8 @@ async function getValidBarangays() {
   // In production, this could query a barangays reference table.
   // For now, use the hardcoded list as the authoritative source.
   return new Set([
-    'bagong ilog', 'bambang', 'buting', 'caniogan', 'dela paz',
-    'kalawaan', 'kapasigan', 'kapasigan extension', 'kapitolyo', 'malinao', 'manggahan',
+    'bagong ilog', 'bagong katipunan', 'bambang', 'buting', 'caniogan', 'dela paz',
+    'kalawaan', 'kapasigan', 'kapitolyo', 'malinao', 'manggahan',
     'maybunga', 'oranbo', 'palatiw', 'pinagbuhatan', 'pineda',
     'rosario', 'sagad', 'san antonio', 'san joaquin', 'san jose',
     'san miguel', 'san nicolas', 'santa cruz', 'santa lucia',

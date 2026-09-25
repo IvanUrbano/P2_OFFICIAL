@@ -131,7 +131,7 @@ const FACILITY_MAP = {
   'santolan': ['santolan hc', 'dona betang hc'],
   'sumilang': ['sumilang hc'],
   'ugong': ['ugong hc'],
-  'kapasigan extension': ['kapasigan extension hc'],
+  'bagong katipunan': ['bagong katipunan hc'],
 };
 
 // ==================== DATE PARSING ====================

@@ -87,6 +87,16 @@ const initDb = async () => {
     } else {
       console.log('⚠️ Webhook logs migration not found, skipping.');
     }
+
+    // Fix incorrect "Kapasigan Extension" barangay -> real "Bagong Katipunan" (idempotent)
+    const bagongKatipunanMigPath = path.join(__dirname, 'db', 'migrations', '008_fix_bagong_katipunan.sql');
+    if (fs.existsSync(bagongKatipunanMigPath)) {
+      const bagongKatipunanSql = fs.readFileSync(bagongKatipunanMigPath, 'utf8');
+      await execSql(bagongKatipunanSql);
+      console.log('✅ Bagong Katipunan barangay fix migration completed successfully.');
+    } else {
+      console.log('⚠️ Bagong Katipunan barangay fix migration not found, skipping.');
+    }
   } catch (err) {
     console.error('❌ Database initialization error:', err.message);
   }
