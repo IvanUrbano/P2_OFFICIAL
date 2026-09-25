@@ -12,12 +12,15 @@ router.post('/send', authenticate, authorizeRoles('admin'), async (req, res) => 
       return res.status(400).json({ error: 'batchId is required' });
     }
 
-    const result = await sendWebhook(batchId);
+    // Pass userId to sendWebhook for audit tracking
+    const result = await sendWebhook(batchId, req.user.id);
 
     res.json({
       message: result.message,
       success: result.success,
       status: result.status,
+      recordsSent: result.recordsSent,
+      recordsAccepted: result.recordsAccepted,
     });
   } catch (error) {
     console.error('Webhook send error:', error);

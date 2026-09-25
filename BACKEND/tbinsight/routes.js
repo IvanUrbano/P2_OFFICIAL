@@ -11,6 +11,8 @@ const {
   createNotification, getUnreadCount, evaluateAllAlerts,
   evaluateCaseIncreaseAlerts,
 } = require('./alertEngine');
+const { buildAnalyticsMetrics, buildForecastingMetrics } = require('./insightDataBuilder');
+const { generateAnalyticsInsight, generateForecastingInsight } = require('./nlgEngine');
 
 const router = express.Router();
 
@@ -240,7 +242,7 @@ router.get('/cases', async (req, res) => {
     } = req.query;
 
     const safePage = Math.max(1, parseInt(page) || 1);
-    const safeLimit = Math.min(100, Math.max(1, parseInt(limit) || 20));
+    const safeLimit = Math.max(1, parseInt(limit) || 20);
     const offset = (safePage - 1) * safeLimit;
     const conditions = [];
     const params = [];
@@ -1064,14 +1066,16 @@ router.get('/gis/geojson', async (req, res) => {
          WHERE period = (SELECT MAX(period) FROM model_predictions)`;
     const forecastResult = await pool.query(forecastQuery, isValidYear ? [yearInt] : []);
 
-    // Fetch case counts — filtered by year if provided, otherwise all time
+    // Fetch case counts from tb_cases directly
     const caseQuery = isValidYear
-      ? `SELECT barangay_name, SUM(case_count)::INTEGER as total_cases
-         FROM monthly_case_summary
-         WHERE EXTRACT(YEAR FROM month) = $1
+      ? `SELECT barangay_name, COUNT(*)::INTEGER as total_cases
+         FROM tb_cases
+         WHERE date_of_diagnosis IS NOT NULL
+           AND EXTRACT(YEAR FROM date_of_diagnosis) = $1
          GROUP BY barangay_name`
-      : `SELECT barangay_name, SUM(case_count)::INTEGER as total_cases
-         FROM monthly_case_summary
+      : `SELECT barangay_name, COUNT(*)::INTEGER as total_cases
+         FROM tb_cases
+         WHERE date_of_diagnosis IS NOT NULL
          GROUP BY barangay_name`;
     const caseResult = await pool.query(caseQuery, isValidYear ? [yearInt] : []);
 
@@ -1240,13 +1244,19 @@ router.get('/gis/choropleth', async (req, res) => {
         COALESCE(brs.norm_trend, 0) as norm_trend,
         COALESCE(brs.norm_neighbor_risk, 0) as norm_neighbor_risk,
         COALESCE(brs.norm_forecast_error, 0) as norm_forecast_error,
-        brs.period
+        brs.period,
+        COALESCE(tc.total_cases, 0) as total_cases
       FROM barangays b
       LEFT JOIN barangay_risk_scores brs ON b.name = brs.barangay_name
         AND brs.period = (
           SELECT MAX(period) FROM barangay_risk_scores
           WHERE barangay_name = b.name
         )
+      LEFT JOIN (
+        SELECT barangay_name, COUNT(*)::INTEGER as total_cases
+        FROM tb_cases
+        GROUP BY barangay_name
+      ) tc ON b.name = tc.barangay_name
       ORDER BY b.name
     `);
 
@@ -1265,30 +1275,78 @@ router.get('/gis/choropleth', async (req, res) => {
 router.get('/forecasts', async (req, res) => {
   try {
     const { barangay } = req.query;
-    let query = `
-      SELECT
-        barangay_name, period, forecasted_count,
-        confidence_lower, confidence_upper,
-        risk_class, incidence_per_100k, model_version,
-        actual_count, forecast_error
-      FROM model_predictions
-      ORDER BY period DESC, barangay_name
-    `;
-    const params = [];
-    if (barangay) {
-      query = `
+
+    // Check if model_predictions has data
+    const countResult = await pool.query('SELECT COUNT(*) FROM model_predictions');
+    const hasPredictions = parseInt(countResult.rows[0].count) > 0;
+
+    if (hasPredictions) {
+      let query = `
         SELECT
           barangay_name, period, forecasted_count,
           confidence_lower, confidence_upper,
           risk_class, incidence_per_100k, model_version,
           actual_count, forecast_error
         FROM model_predictions
-        WHERE barangay_name = $1
         ORDER BY period DESC, barangay_name
       `;
-      params.push(barangay);
+      const params = [];
+      if (barangay) {
+        query = `
+          SELECT
+            barangay_name, period, forecasted_count,
+            confidence_lower, confidence_upper,
+            risk_class, incidence_per_100k, model_version,
+            actual_count, forecast_error
+          FROM model_predictions
+          WHERE barangay_name = $1
+          ORDER BY period DESC, barangay_name
+        `;
+        params.push(barangay);
+      }
+      const result = await pool.query(query, params);
+      return res.json({ forecasts: result.rows });
     }
-    const result = await pool.query(query, params);
+
+    // Fallback: aggregate monthly data from tb_cases when model_predictions is empty
+    // Use LAG() to compute a naive forecast (previous month's actual as next month's prediction)
+    let fallbackQuery = `
+      WITH monthly AS (
+        SELECT
+          barangay_name,
+          DATE_TRUNC('month', date_of_diagnosis)::DATE AS period,
+          COUNT(*)::INTEGER AS actual_count
+        FROM tb_cases
+        WHERE date_of_diagnosis IS NOT NULL
+    `;
+    const fallbackParams = [];
+    if (barangay) {
+      fallbackQuery += ` AND barangay_name = $1`;
+      fallbackParams.push(barangay);
+    }
+    fallbackQuery += `
+        GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
+      ),
+      with_lag AS (
+        SELECT
+          barangay_name, period, actual_count,
+          LAG(actual_count) OVER (PARTITION BY barangay_name ORDER BY period) AS prev_count
+        FROM monthly
+      )
+      SELECT
+        barangay_name, period,
+        COALESCE(prev_count, actual_count) AS forecasted_count,
+        GREATEST(COALESCE(prev_count, actual_count) - 2, 0) AS confidence_lower,
+        COALESCE(prev_count, actual_count) + 2 AS confidence_upper,
+        'Baseline' AS risk_class,
+        0 AS incidence_per_100k,
+        null AS model_version,
+        actual_count,
+        ABS(actual_count - COALESCE(prev_count, actual_count))::INTEGER AS forecast_error
+      FROM with_lag
+      ORDER BY period DESC, barangay_name
+    `;
+    const result = await pool.query(fallbackQuery, fallbackParams);
     res.json({ forecasts: result.rows });
   } catch (err) {
     console.error('Forecasts error:', err.message);
@@ -1983,20 +2041,46 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
 router.get('/forecast/backtest', async (req, res) => {
   try {
     const { barangay } = req.query;
-    let query = `
-      SELECT barangay_name, month, case_count
-      FROM monthly_case_summary
-      ORDER BY barangay_name, month
-    `;
+    const SEASONAL_PERIOD = 12;
+
+    // Try monthly_case_summary first, fall back to tb_cases directly
+    const countResult = await pool.query('SELECT COUNT(*) FROM monthly_case_summary');
+    const hasSummary = parseInt(countResult.rows[0].count) > 0;
+
+    let query;
     const params = [];
-    if (barangay) {
+    if (hasSummary) {
       query = `
         SELECT barangay_name, month, case_count
         FROM monthly_case_summary
-        WHERE barangay_name = $1
         ORDER BY barangay_name, month
       `;
-      params.push(barangay);
+      if (barangay) {
+        query = `
+          SELECT barangay_name, month, case_count
+          FROM monthly_case_summary
+          WHERE barangay_name = $1
+          ORDER BY barangay_name, month
+        `;
+        params.push(barangay);
+      }
+    } else {
+      query = `
+        SELECT
+          barangay_name,
+          DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
+          COUNT(*)::INTEGER AS case_count
+        FROM tb_cases
+        WHERE date_of_diagnosis IS NOT NULL
+      `;
+      if (barangay) {
+        query += ` AND barangay_name = $1`;
+        params.push(barangay);
+      }
+      query += `
+        GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
+        ORDER BY barangay_name, month
+      `;
     }
     const result = await pool.query(query, params);
 
@@ -2011,12 +2095,11 @@ router.get('/forecast/backtest', async (req, res) => {
       });
     }
 
-    // For each barangay, produce backtest predictions
+    // For each barangay, produce backtest predictions (seasonal naive)
     const backtestRows = [];
-    const SEASONAL_PERIOD = 12;
 
     for (const [name, pts] of Object.entries(byBarangay)) {
-      if (pts.length <= SEASONAL_PERIOD) continue; // need at least 13 months
+      if (pts.length <= SEASONAL_PERIOD) continue;
       for (let i = SEASONAL_PERIOD; i < pts.length; i++) {
         const actual = pts[i].case_count;
         const predicted = pts[i - SEASONAL_PERIOD].case_count;
@@ -2612,6 +2695,77 @@ router.delete('/interventions/:id', authenticateToken, authorizeRoles('admin'), 
   } catch (err) {
     console.error('Delete intervention error:', err.message);
     res.status(500).json({ error: 'Server error deleting intervention.' });
+  }
+});
+
+// ==================== NLG INSIGHTS ====================
+
+/**
+ * GET /api/tb/insights/analytics
+ * Generate NLG-based analytics insight from computed metrics.
+ * Query params: year, month, barangay, outcome, sex, ageGroup, bacteriological
+ */
+router.get('/insights/analytics', async (req, res) => {
+  try {
+    const { year, month, barangay, outcome, sex, ageGroup, bacteriological } = req.query;
+    const filters = {};
+    if (year) filters.year = year;
+    if (month) filters.month = month;
+    if (barangay) filters.barangay = barangay;
+    if (outcome) filters.outcome = outcome;
+    if (sex) filters.sex = sex;
+    if (ageGroup) filters.ageGroup = ageGroup;
+    if (bacteriological) filters.bacteriological = bacteriological;
+
+    const metrics = await buildAnalyticsMetrics(pool, filters);
+    const insight = generateAnalyticsInsight(metrics, filters);
+    res.json(insight);
+  } catch (err) {
+    console.error('Analytics insight error:', err.message);
+    res.status(500).json({ error: 'Server error generating analytics insight.' });
+  }
+});
+
+/**
+ * GET /api/tb/insights/forecasting
+ * Generate NLG-based forecasting insight from computed metrics.
+ * Query params: startYear, endYear, barangay, horizon
+ */
+router.get('/insights/forecasting', async (req, res) => {
+  try {
+    const { startYear, endYear, barangay, horizon } = req.query;
+    const filters = {};
+    if (startYear) filters.startYear = startYear;
+    if (endYear) filters.endYear = endYear;
+    if (barangay) filters.barangay = barangay;
+    if (horizon) filters.horizon = horizon;
+
+    const metrics = await buildForecastingMetrics(pool, filters);
+    const insight = generateForecastingInsight(metrics, filters);
+    res.json(insight);
+  } catch (err) {
+    console.error('Forecasting insight error:', err.message);
+    res.status(500).json({ error: 'Server error generating forecasting insight.' });
+  }
+});
+
+/**
+ * GET /api/tb/webhook-logs
+ * List recent webhook integration logs.
+ */
+router.get('/webhook-logs', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, source, batch_id, status, records_received, records_imported,
+             error_message, received_at, processed_at
+      FROM webhook_logs
+      ORDER BY received_at DESC
+      LIMIT 50
+    `);
+    res.json({ logs: result.rows });
+  } catch (err) {
+    console.error('Webhook logs error:', err.message);
+    res.status(500).json({ error: 'Server error fetching webhook logs.' });
   }
 });
 

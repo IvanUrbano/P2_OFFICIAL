@@ -1,4 +1,5 @@
 const db = require('../db/pasigSchema');
+const { getSourceRecordId } = require('./recordDuplicateDetector');
 
 const VALID_SEX = ['male', 'female'];
 const VALID_OUTCOME = [
@@ -63,37 +64,63 @@ async function validateBatch(batchId) {
     }
   }
 
-  await db.updateBatchValidation(batchId, results.valid, results.invalid);
-
   // Idempotency: delete existing validated records for this batch before re-inserting
+  const validRecords = results.validatedRecords.filter(r => r.is_valid);
+
+  // Compute source_record_id and record_status for each valid record
+  for (const r of validRecords) {
+    r.source_record_id = getSourceRecordId(r, r.source_type);
+    r.record_status = 'new';
+  }
+
   const client = await db.pool.connect();
   try {
     await client.query('BEGIN');
+
+    // Delete existing validated records for this batch
     await client.query('DELETE FROM validated_tb_cases WHERE batch_id = $1', [batchId]);
 
-    for (const record of results.validatedRecords) {
-      if (record.is_valid) {
-        await client.query(
-          `INSERT INTO validated_tb_cases
-           (batch_id, source_type, barangay_name, date_of_diagnosis, date_of_notification,
-            age, sex, city, screening_facility, treatment_facility, source_of_patient,
-            anatomical_site, registration_group, bacteriological_status, date_started_treatment,
-            outcome_status, date_of_outcome, record_created_at, date_of_screening,
-            validation_status, itis_case_id, is_valid, validation_errors, validation_warnings)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
-          [
-            batchId, record.source_type, record.barangay_name, record.date_of_diagnosis,
-            record.date_of_notification, record.age, record.sex, record.city,
-            record.screening_facility, record.treatment_facility, record.source_of_patient,
-            record.anatomical_site, record.registration_group, record.bacteriological_status,
-            record.date_started_treatment, record.outcome_status, record.date_of_outcome,
-            record.record_created_at, record.date_of_screening, record.validation_status,
-            record.itis_case_id, record.is_valid, JSON.stringify(record.errors),
-            JSON.stringify(record.warnings),
-          ]
-        );
-      }
+    // Insert validated records
+    const COLS = 27;
+    const chunkSize = 100;
+    for (let i = 0; i < validRecords.length; i += chunkSize) {
+      const chunk = validRecords.slice(i, i + chunkSize);
+      const placeholders = chunk.map((_, idx) => {
+        const base = idx * COLS;
+        return `(${Array.from({ length: COLS }, (_, c) => `$${base + c + 1}`).join(',')})`;
+      }).join(', ');
+      const flatParams = chunk.flatMap(r => [
+        batchId, r.source_type, r.barangay_name, r.date_of_diagnosis,
+        r.date_of_notification, r.age, r.sex, r.city,
+        r.screening_facility, r.treatment_facility, r.source_of_patient,
+        r.anatomical_site, r.registration_group, r.bacteriological_status,
+        r.date_started_treatment, r.outcome_status, r.date_of_outcome,
+        r.record_created_at, r.date_of_screening, r.validation_status,
+        r.itis_case_id, r.is_valid, JSON.stringify(r.errors),
+        JSON.stringify(r.warnings),
+        r.source_record_id || null, r.record_status || 'new', null,
+      ]);
+      await client.query(
+        `INSERT INTO validated_tb_cases
+         (batch_id, source_type, barangay_name, date_of_diagnosis, date_of_notification,
+          age, sex, city, screening_facility, treatment_facility, source_of_patient,
+          anatomical_site, registration_group, bacteriological_status, date_started_treatment,
+          outcome_status, date_of_outcome, record_created_at, date_of_screening,
+          validation_status, itis_case_id, is_valid, validation_errors, validation_warnings,
+          source_record_id, record_status, updated_by)
+         VALUES ${placeholders}`,
+        flatParams
+      );
     }
+
+    // Update batch status INSIDE the transaction so it rolls back on failure
+    await client.query(
+      `UPDATE import_batches
+       SET status = 'validated', valid_count = $1, error_count = $2, validated_at = NOW()
+       WHERE id = $3`,
+      [results.valid, results.invalid, batchId]
+    );
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -101,6 +128,8 @@ async function validateBatch(batchId) {
   } finally {
     client.release();
   }
+
+  results.summary = { total: validRecords.length, new: validRecords.length, updated: 0, duplicate: 0, error: 0 };
 
   return results;
 }

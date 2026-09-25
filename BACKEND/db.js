@@ -88,8 +88,48 @@ const initDb = async () => {
       console.log('⚠️ Webhook logs migration not found, skipping.');
     }
 
+    // Password hash: add password_hash column for Pasig Clone compatibility (idempotent)
+    const passwordHashMigPath = path.join(__dirname, 'db', 'migrations', '008_password_hash_column.sql');
+    if (fs.existsSync(passwordHashMigPath)) {
+      const passwordHashSql = fs.readFileSync(passwordHashMigPath, 'utf8');
+      await execSql(passwordHashSql);
+      console.log('✅ Password hash migration completed successfully.');
+    } else {
+      console.log('⚠️ Password hash migration not found, skipping.');
+    }
+
+    // Login security: login_attempts table + lockout fields on users (idempotent)
+    const loginSecurityMigPath = path.join(__dirname, 'db', 'migrations', '009_login_security.sql');
+    if (fs.existsSync(loginSecurityMigPath)) {
+      const loginSecuritySql = fs.readFileSync(loginSecurityMigPath, 'utf8');
+      await execSql(loginSecuritySql);
+      console.log('✅ Login security migration completed successfully.');
+    } else {
+      console.log('⚠️ Login security migration not found, skipping.');
+    }
+
+    // Audit logs: tracks password resets and other security events (idempotent)
+    const auditLogsMigPath = path.join(__dirname, 'db', 'migrations', '010_audit_logs.sql');
+    if (fs.existsSync(auditLogsMigPath)) {
+      const auditLogsSql = fs.readFileSync(auditLogsMigPath, 'utf8');
+      await execSql(auditLogsSql);
+      console.log('✅ Audit logs migration completed successfully.');
+    } else {
+      console.log('⚠️ Audit logs migration not found, skipping.');
+    }
+
+    // Password changed at: tracks when password was last changed (idempotent)
+    const passwordChangedMigPath = path.join(__dirname, 'db', 'migrations', '011_password_changed_at.sql');
+    if (fs.existsSync(passwordChangedMigPath)) {
+      const passwordChangedSql = fs.readFileSync(passwordChangedMigPath, 'utf8');
+      await execSql(passwordChangedSql);
+      console.log('✅ Password changed at migration completed successfully.');
+    } else {
+      console.log('⚠️ Password changed at migration not found, skipping.');
+    }
+
     // Fix incorrect "Kapasigan Extension" barangay -> real "Bagong Katipunan" (idempotent)
-    const bagongKatipunanMigPath = path.join(__dirname, 'db', 'migrations', '008_fix_bagong_katipunan.sql');
+    const bagongKatipunanMigPath = path.join(__dirname, 'db', 'migrations', '012_fix_bagong_katipunan.sql');
     if (fs.existsSync(bagongKatipunanMigPath)) {
       const bagongKatipunanSql = fs.readFileSync(bagongKatipunanMigPath, 'utf8');
       await execSql(bagongKatipunanSql);

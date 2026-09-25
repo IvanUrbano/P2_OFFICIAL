@@ -11,6 +11,24 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [lockoutSeconds, setLockoutSeconds] = useState(0);
   const [activeField, setActiveField] = useState(null);
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [showPasswordResetNotice, setShowPasswordResetNotice] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('tbinsight_remember_me');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.email || parsed.password) {
+          setFormData({ email: parsed.email || '', password: parsed.password || '' });
+          setRememberMe(true);
+        }
+      } catch (e) {
+        // ignore invalid JSON
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (lockoutSeconds <= 0) return;
@@ -37,13 +55,26 @@ export default function LoginPage() {
     setError('');
     try {
       const res = await API.post('/api/auth/login', formData);
-      localStorage.setItem('token', res.data.token);
+      if (rememberMe) {
+        localStorage.setItem('tbinsight_remember_me', JSON.stringify({ email: formData.email, password: formData.password }));
+      } else {
+        localStorage.removeItem('tbinsight_remember_me');
+      }
       localStorage.setItem('user', JSON.stringify(res.data.user));
-      navigate('/dashboard');
+      if (res.data.passwordRecentlyChanged) {
+        setShowPasswordResetNotice(true);
+      } else {
+        navigate('/dashboard');
+      }
     } catch (err) {
-      const isRateLimited = err.response?.status === 429;
-      setError(err.response?.data?.error || 'Invalid credentials. Please try again.');
-      if (isRateLimited && err.response?.data?.retryAfter) setLockoutSeconds(err.response.data.retryAfter);
+      const status = err.response?.status;
+      const data = err.response?.data;
+      setError(data?.error || 'Invalid credentials. Please try again.');
+      if (status === 429 && data?.retryAfter) {
+        setLockoutSeconds(data.retryAfter);
+      } else if (status === 423 && data?.retryAfter) {
+        setLockoutSeconds(data.retryAfter);
+      }
     } finally {
       setLoading(false);
     }
@@ -52,18 +83,13 @@ export default function LoginPage() {
   return (
     <div className="h-screen w-full flex overflow-hidden relative" style={{ background: '#f0f4f8' }}>
 
-      {/* ─── Full Background Image ─── */}
       <div className="absolute inset-0 z-0">
-        <img src="/images/BACKGROUND.png" alt="" className="w-full h-full" style={{ objectFit: 'cover', objectPosition: 'left bottom' }} />
+        <img src="/images/tbinsight-bg.png" alt="" className="w-full h-full" style={{ objectFit: 'cover', objectPosition: 'center 60%' }} />
       </div>
 
-      {/* ─── Form Content ─── */}
-      <div className="relative z-10 w-full flex items-center justify-center px-8">
+      <div className="relative z-10 w-full flex items-center justify-center px-4">
+        <div className="w-full max-w-[400px] p-8" style={{ background: '#ffffff', borderRadius: '5px', boxShadow: '0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08)' }}>
 
-        {/* White Card */}
-        <div className="w-full max-w-[400px] p-8 rounded-2xl" style={{ background: 'rgba(255,255,255,0.35)', backdropFilter: 'blur(8px)', boxShadow: '0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08)' }}>
-
-          {/* Logo */}
           <div className="mb-4">
             <Logo width={100} />
           </div>
@@ -81,11 +107,11 @@ export default function LoginPage() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Username or Email */}
             <div>
+              <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-wide" style={{ color: '#64748B' }}>Username or Email</label>
               <input
                 type="text" name="email" value={formData.email} onChange={handleChange} required
-                disabled={lockoutSeconds > 0 || loading} placeholder="Username or Email"
+                disabled={lockoutSeconds > 0 || loading} placeholder="Enter username or email"
                 onFocus={() => setActiveField('email')} onBlur={() => setActiveField(null)}
                 autoComplete="off"
                 className="w-full py-2.5 text-[13px] font-medium outline-none disabled:opacity-40 placeholder-gray-400 login-input"
@@ -101,12 +127,12 @@ export default function LoginPage() {
               />
             </div>
 
-            {/* Password */}
             <div>
+              <label className="block text-[11px] font-bold mb-1.5 uppercase tracking-wide" style={{ color: '#64748B' }}>Password</label>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'} name="password" value={formData.password} onChange={handleChange} required
-                  disabled={lockoutSeconds > 0 || loading} placeholder="Password"
+                  disabled={lockoutSeconds > 0 || loading} placeholder="Enter password"
                   onFocus={() => setActiveField('password')} onBlur={() => setActiveField(null)}
                   autoComplete="off"
                   className="w-full py-2.5 pr-8 text-[13px] font-medium outline-none disabled:opacity-40 placeholder-gray-400 login-input"
@@ -131,10 +157,25 @@ export default function LoginPage() {
             </div>
 
             <div className="flex items-center justify-between pt-1">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" className="w-3.5 h-3.5 rounded accent-[#0F2D52]" />
-                <span className="text-[12px] font-medium" style={{ color: '#64748B' }}>Remember me</span>
+              <label className="flex items-center gap-2 cursor-pointer select-none text-[12px] font-medium" style={{ color: '#64748B' }}>
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="w-4 h-4 rounded border-gray-300 accent-[#0F2D52] cursor-pointer"
+                />
+                <span>Remember password</span>
               </label>
+              <button
+                type="button"
+                onClick={() => setShowForgotModal(true)}
+                className="text-[12px] font-medium transition-colors cursor-pointer"
+                style={{ color: '#2E6FAF' }}
+                onMouseEnter={(e) => e.currentTarget.style.color = '#0F2D52'}
+                onMouseLeave={(e) => e.currentTarget.style.color = '#2E6FAF'}
+              >
+                Forgot password?
+              </button>
             </div>
 
             <button type="submit" disabled={loading || lockoutSeconds > 0}
@@ -153,11 +194,101 @@ export default function LoginPage() {
           </form>
 
           <div className="mt-5 text-center">
-            <p className="text-[10px] font-semibold" style={{ color: '#94A3B8' }}><i className="ri-shield-check-line mr-1" />Authorized users only</p>
+            <p className="text-[10px] font-semibold" style={{ color: '#94A3B8' }}>Authorized users only</p>
             <p className="text-[9px] mt-1" style={{ color: '#CBD5E1' }}>&copy; 2026 TBInsight</p>
           </div>
         </div>
       </div>
+
+      {showForgotModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => setShowForgotModal(false)}>
+          <div className="bg-white border border-gray-200 shadow-xl w-full max-w-[380px] mx-4 overflow-hidden" style={{ borderRadius: '5px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100" style={{ background: '#FAFCFF' }}>
+              <div className="flex items-center gap-2">
+                <i className="ri-information-line text-lg" style={{ color: '#0F2D52' }} />
+                <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Password Reset Assistance</h3>
+              </div>
+              <button
+                onClick={() => setShowForgotModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded cursor-pointer"
+              >
+                <i className="ri-close-line text-lg" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <p className="text-[13px] leading-relaxed" style={{ color: '#475569' }}>
+                Self-service password resets are restricted for security purposes.
+              </p>
+
+              <div className="p-3 border text-[12px] space-y-1" style={{ background: '#F8FAFC', borderColor: '#E2E8F0', color: '#334155', borderRadius: '5px' }}>
+                <div className="font-semibold flex items-center gap-1.5" style={{ color: '#0F2D52' }}>
+
+                  <span>Administrator Action Required</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-gray-500">
+                  Please contact your System Administrator to reset your password or issue temporary login credentials from the User Management console.
+                </p>
+              </div>
+            </div>
+
+            <div className="px-5 py-3.5 bg-gray-50 border-t border-gray-100 flex justify-end">
+              <button
+                onClick={() => setShowForgotModal(false)}
+                className="px-5 py-2 font-bold text-[12px] transition-colors cursor-pointer"
+                style={{ background: '#0F2D52', color: '#ffffff', borderRadius: '5px' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#174A7E'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#0F2D52'}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPasswordResetNotice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px]">
+          <div className="bg-white border border-gray-200 shadow-xl w-full max-w-[380px] mx-4 overflow-hidden" style={{ borderRadius: '5px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100" style={{ background: '#FAFCFF' }}>
+              <div className="flex items-center gap-2">
+                <i className="ri-shield-keyhole-line text-lg" style={{ color: '#0F2D52' }} />
+                <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Password Recently Reset</h3>
+              </div>
+              <button
+                onClick={() => { setShowPasswordResetNotice(false); navigate('/dashboard'); }}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded cursor-pointer"
+              >
+                <i className="ri-close-line text-lg" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <p className="text-[13px] leading-relaxed" style={{ color: '#475569' }}>
+                Your password was recently reset by a system administrator.
+              </p>
+
+              <div className="p-3 border text-[12px] space-y-1" style={{ background: '#F8FAFC', borderColor: '#E2E8F0', color: '#334155', borderRadius: '5px' }}>
+                <p className="text-[11px] leading-relaxed text-gray-500">
+                  For your security, we recommend updating your password to a new private password in Account Settings.
+                </p>
+              </div>
+            </div>
+
+            <div className="px-5 py-3.5 bg-gray-50 border-t border-gray-100 flex justify-end">
+              <button
+                onClick={() => { setShowPasswordResetNotice(false); navigate('/dashboard'); }}
+                className="px-5 py-2 font-bold text-[12px] transition-colors cursor-pointer"
+                style={{ background: '#0F2D52', color: '#ffffff', borderRadius: '5px' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#174A7E'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#0F2D52'}
+              >
+                Continue to Dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

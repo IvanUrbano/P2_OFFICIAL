@@ -8,6 +8,8 @@ import {
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import API from '../api/axios';
+import DashboardWelcomeInsightsSection from '../components/DashboardWelcomeInsightsSection';
+import { getDashboardInsight } from '../services/insightService';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
@@ -281,6 +283,11 @@ function useAnimatedNumber(target, duration = 600, decimals = 0) {
 export default function DashboardPage() {
   const navigate = useNavigate();
 
+  /* ── User ── */
+  const [user] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
+  });
+
   /* ── State ── */
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -297,6 +304,25 @@ export default function DashboardPage() {
   /* ── Refresh state ── */
   const [refreshing, setRefreshing] = useState(false);
   const [refreshCount, setRefreshCount] = useState(0);
+
+  /* ── NLG Dashboard Insight state ── */
+  const [dashboardInsight, setDashboardInsight] = useState(null);
+  const [dashboardInsightLoading, setDashboardInsightLoading] = useState(false);
+  const [dashboardInsightError, setDashboardInsightError] = useState(null);
+
+  const handleGenerateDashboardInsight = useCallback(async () => {
+    try {
+      setDashboardInsightLoading(true);
+      setDashboardInsightError(null);
+      const insight = await getDashboardInsight();
+      setDashboardInsight(insight);
+    } catch (err) {
+      if (import.meta.env.DEV) console.error('Dashboard insight failed:', err);
+      setDashboardInsightError('Unable to generate dashboard insight.');
+    } finally {
+      setDashboardInsightLoading(false);
+    }
+  }, []);
 
   /* ── Data fetching ── */
   const loadAll = useCallback(async () => {
@@ -332,15 +358,21 @@ export default function DashboardPage() {
   }, []);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => {
+    loadAll();
+    handleGenerateDashboardInsight();
+  }, [loadAll, handleGenerateDashboardInsight]);
 
   /* ── Refresh handler ── */
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     setRefreshCount((c) => c + 1);
-    await loadAll();
+    await Promise.all([
+      loadAll(),
+      handleGenerateDashboardInsight(),
+    ]);
     setRefreshing(false);
-  }, [loadAll]);
+  }, [loadAll, handleGenerateDashboardInsight]);
 
   /* ── 1. Total TB Cases ── */
   const totalCases = useMemo(() => {
@@ -727,10 +759,6 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="space-y-6">
-        {/* Header skeleton */}
-        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07)' }}>
-          <div className="px-6 py-3.5"><SkeletonBlock className="h-5 w-48" /><SkeletonBlock className="h-3 w-96 mt-2" /></div>
-        </div>
         {/* Metrics skeleton */}
         <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -740,6 +768,22 @@ export default function DashboardPage() {
               <SkeletonBlock className="h-3 w-20" />
             </div>
           ))}
+        </div>
+        {/* Welcome & Insights Section skeleton */}
+        <div className="flex flex-col md:flex-row gap-5">
+          <div className="w-full md:w-[58%] lg:w-[67%] rounded-2xl p-6" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+            <SkeletonBlock className="h-7 w-64 mb-3" />
+            <SkeletonBlock className="h-4 w-96 mb-6" />
+            <div className="grid grid-cols-2 gap-4 pt-4" style={{ borderTop: '1px solid #F1F5F9' }}>
+              <div><SkeletonBlock className="h-3 w-24 mb-2" /><SkeletonBlock className="h-5 w-36" /></div>
+              <div><SkeletonBlock className="h-3 w-24 mb-2" /><SkeletonBlock className="h-5 w-40" /></div>
+            </div>
+          </div>
+          <div className="w-full md:w-[42%] lg:w-[33%] rounded-2xl p-6" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+            <SkeletonBlock className="h-5 w-44 mb-4" />
+            <SkeletonBlock className="h-16 w-full mb-4" />
+            <SkeletonBlock className="h-4 w-32" />
+          </div>
         </div>
         {/* Chart skeletons */}
         <SkeletonCard />
@@ -761,45 +805,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ─── 1. Page Header ─── */}
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
-          <div>
-            <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Dashboard</h1>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Monitor tuberculosis cases, trends, treatment outcomes, barangay risk levels, forecasts, and alerts across Pasig City.</p>
-          </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
-              <i className="ri-database-2-line mr-1" />Data Source: Centralized TB Records
-            </span>
-            {lastUpdated && (
-              <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
-                <i className="ri-time-line mr-1" />
-                Last Updated: {lastUpdated.toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                {lastUpdatedRelative && <span className="ml-1.5 font-semibold" style={{ color: '#6B7FA3' }}>({lastUpdatedRelative})</span>}
-              </span>
-            )}
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold rounded-md transition"
-              style={{
-                background: '#F3F4F6',
-                color: '#0F2D52',
-                border: '1px solid #E2E8F0',
-                opacity: refreshing ? 0.6 : 1,
-                cursor: refreshing ? 'not-allowed' : 'pointer',
-              }}
-              onMouseEnter={e => { if (!refreshing) { e.currentTarget.style.background = '#E5E7EB'; } }}
-              onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}
-              title="Refresh dashboard data"
-            >
-              <i className={`ri-refresh-line text-sm ${refreshing ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-          </div>
-        </div>
-      </div>
 
       {/* ─── Empty State ─── */}
       {totalCases.total === 0 && forecastsData.length === 0 && alertsData.length === 0 ? (
@@ -897,6 +902,19 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+
+          {/* ─── Welcome + NLG Overall Insights Section ─── */}
+          <DashboardWelcomeInsightsSection
+            user={user}
+            lastUpdated={lastUpdated}
+            lastUpdatedRelative={lastUpdatedRelative}
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            insightData={dashboardInsight}
+            insightLoading={dashboardInsightLoading}
+            insightError={dashboardInsightError}
+            onRetryInsight={handleGenerateDashboardInsight}
+          />
 
           {/* ─── 4. TB Cases Trend + 5. Barangay Risk Overview ─── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

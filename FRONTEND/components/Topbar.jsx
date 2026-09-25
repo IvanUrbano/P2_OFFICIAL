@@ -13,7 +13,6 @@ const NAV_ITEMS = [
   { icon: 'ri-notification-3-line', label: 'Alerts & Notifications', path: '/alert' },
   { icon: 'ri-server-line', label: 'Data Integration', path: '/data-integration' },
   { icon: 'ri-first-aid-kit-line', label: 'Interventions', path: '/interventions' },
-  { icon: 'ri-user-3-line', label: 'Users', path: '/users', adminOnly: true },
 ];
 
 const NAV_ACCENT = {
@@ -26,7 +25,6 @@ const NAV_ACCENT = {
   '/alert': '#EF4444',
   '/data-integration': '#06B6D4',
   '/interventions': '#14B8A6',
-  '/users': '#6366F1',
 };
 
 export default function Topbar({ user }) {
@@ -87,8 +85,10 @@ export default function Topbar({ user }) {
     return () => clearInterval(interval);
   }, []);
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
+  const handleLogout = async () => {
+    try {
+      await API.post('/api/auth/logout');
+    } catch { /* ignore */ }
     localStorage.removeItem('user');
     localStorage.removeItem('tbinsight_session');
     navigate('/login');
@@ -109,311 +109,311 @@ export default function Topbar({ user }) {
           className="flex items-center justify-between px-6 lg:px-8"
           style={{ background: '#0B1D35', minHeight: '52px' }}
         >
-        {/* Left: Logo */}
-        <div
-          className="flex items-center gap-3 cursor-pointer shrink-0"
-          onClick={() => navigate('/dashboard')}
-        >
-          <Logo variant="icon" width={36} />
-          <div className="flex items-center gap-2.5">
-            <span className="text-lg font-extrabold tracking-tight" style={{ color: '#ffffff' }}>
-              TBInsight
-            </span>
-            <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>
-              Pasig City TB Surveillance
-            </span>
-          </div>
-        </div>
-
-        {/* Right: Last Synced + Icons + User */}
-        <div className="flex items-center gap-4">
-          {/* Last Synced */}
-          <div className="hidden md:flex items-center gap-2">
-            <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: 'rgba(59,130,246,0.2)' }}>
-              <i className="ri-refresh-line text-[11px]" style={{ color: '#60A5FA' }} />
+          {/* Left: Logo */}
+          <div
+            className="flex items-center gap-3 cursor-pointer shrink-0"
+            onClick={() => navigate('/dashboard')}
+          >
+            <Logo variant="icon" width={36} />
+            <div className="flex items-center gap-2.5">
+              <span className="text-lg font-extrabold tracking-tight" style={{ color: '#ffffff' }}>
+                TBInsight
+              </span>
+              <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>
+                Pasig City TB Surveillance
+              </span>
             </div>
-            <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
-              Last Synced: <span style={{ color: '#CBD5E1' }}>{formatSyncTime()}</span>
-            </span>
           </div>
 
-          {/* Separator */}
-          <div className="hidden md:block w-px h-5" style={{ background: 'rgba(255,255,255,0.1)' }} />
+          {/* Right: Last Synced + Icons + User */}
+          <div className="flex items-center gap-4">
+            {/* Last Synced */}
+            <div className="hidden md:flex items-center gap-2">
+              <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: 'rgba(59,130,246,0.2)' }}>
+                <i className="ri-refresh-line text-[11px]" style={{ color: '#60A5FA' }} />
+              </div>
+              <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+                Last Synced: <span style={{ color: '#CBD5E1' }}>{formatSyncTime()}</span>
+              </span>
+            </div>
 
-          {/* Notification Bell */}
-          <div className="relative" ref={bellRef}>
-            <button
-              onClick={() => setBellOpen(!bellOpen)}
-              title="Notifications"
-              className="relative w-9 h-9 flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
-              style={{ background: bellOpen ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
-            >
-              <i className="ri-notification-3-line text-base" />
-              {unreadCount > 0 && (
-                <span
-                  className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full flex items-center justify-center text-[9px] font-bold"
+            {/* Separator */}
+            <div className="hidden md:block w-px h-5" style={{ background: 'rgba(255,255,255,0.1)' }} />
+
+            {/* Notification Bell */}
+            <div className="relative" ref={bellRef}>
+              <button
+                onClick={() => setBellOpen(!bellOpen)}
+                title="Notifications"
+                className="relative w-9 h-9 flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
+                style={{ background: bellOpen ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
+              >
+                <i className="ri-notification-3-line text-base" />
+                {unreadCount > 0 && (
+                  <span
+                    className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full flex items-center justify-center text-[9px] font-bold"
+                    style={{
+                      background: '#EF4444',
+                      color: '#ffffff',
+                      padding: '0 4px',
+                      boxShadow: '0 0 6px rgba(239,68,68,0.5)',
+                      animation: 'bell-pulse 2s ease-in-out infinite',
+                    }}
+                  >
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Bell Dropdown */}
+              {bellOpen && (
+                <div
+                  className="absolute right-0 top-full mt-2 w-80 rounded-xl overflow-hidden z-[1200]"
                   style={{
-                    background: '#EF4444',
-                    color: '#ffffff',
-                    padding: '0 4px',
-                    boxShadow: '0 0 6px rgba(239,68,68,0.5)',
-                    animation: 'bell-pulse 2s ease-in-out infinite',
+                    background: '#ffffff',
+                    border: '1px solid #E2E8F0',
+                    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08)',
                   }}
                 >
-                  {unreadCount > 99 ? '99+' : unreadCount}
-                </span>
-              )}
-            </button>
-
-            {/* Bell Dropdown */}
-            {bellOpen && (
-              <div
-                className="absolute right-0 top-full mt-2 w-80 rounded-xl overflow-hidden z-[1200]"
-                style={{
-                  background: '#ffffff',
-                  border: '1px solid #E2E8F0',
-                  boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08)',
-                }}
-              >
-                <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid #E2E8F0' }}>
-                  <div>
-                    <p className="text-xs font-bold" style={{ color: '#0F2D52' }}>Notifications</p>
-                    {unreadCount > 0 && (
-                      <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>{unreadCount} unread</p>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => { navigate('/alert'); setBellOpen(false); }}
-                    className="text-[10px] font-semibold"
-                    style={{ color: '#0F2D52' }}
-                  >
-                    View All
-                  </button>
-                </div>
-
-                {recentNotifs.length === 0 ? (
-                  <div className="px-4 py-8 text-center">
-                    <i className="ri-notification-off-line text-xl" style={{ color: '#CBD5E1' }} />
-                    <p className="text-[11px] mt-2" style={{ color: '#94A3B8' }}>No new notifications</p>
-                  </div>
-                ) : (
-                  <div className="max-h-72 overflow-y-auto">
-                    {recentNotifs.map(n => {
-                      const severityColors = {
-                        critical: '#DC2626', high: '#EF4444', warning: '#D97706',
-                        medium: '#D97706', low: '#2E6FAF', info: '#6B7280', danger: '#DC2626',
-                      };
-                      const dotColor = severityColors[n.severity] || '#6B7280';
-                      const isAlert = n.type === 'alert';
-                      return (
-                        <div
-                          key={n.id}
-                          className="px-4 py-3 flex items-start gap-3 cursor-pointer transition-colors hover:bg-blue-50"
-                          style={{ borderBottom: '1px solid #F1F5F9' }}
-                          onClick={() => { navigate('/alert'); setBellOpen(false); }}
-                        >
-                          <span className="w-2 h-2 rounded-full mt-1.5 shrink-0" style={{ background: dotColor }} />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5 mb-0.5">
-                              <p className="text-[11px] font-bold truncate" style={{ color: '#0F2D52' }}>{n.title || n.alert_type || 'Notification'}</p>
-                              <span
-                                className="shrink-0 inline-flex items-center rounded px-1 py-px text-[8px] font-bold uppercase"
-                                style={{
-                                  background: isAlert ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.1)',
-                                  color: isAlert ? '#EF4444' : '#2563EB',
-                                }}
-                              >
-                                {isAlert ? 'Alert' : 'Notif'}
-                              </span>
-                            </div>
-                            <p className="text-[10px] mt-0.5 line-clamp-2" style={{ color: '#64748B' }}>{n.message}</p>
-                            <p className="text-[9px] mt-1" style={{ color: '#94A3B8' }}>
-                              {n.created_at ? (() => {
-                                const d = new Date(n.created_at);
-                                const mins = Math.floor((new Date() - d) / 60000);
-                                if (mins < 1) return 'Just now';
-                                if (mins < 60) return `${mins}m ago`;
-                                const hrs = Math.floor(mins / 60);
-                                if (hrs < 24) return `${hrs}h ago`;
-                                return `${Math.floor(hrs / 24)}d ago`;
-                              })() : ''}
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                <div className="px-4 py-2.5 text-center" style={{ borderTop: '1px solid #E2E8F0' }}>
-                  <button
-                    onClick={() => { navigate('/alert'); setBellOpen(false); }}
-                    className="text-[11px] font-semibold"
-                    style={{ color: '#0F2D52' }}
-                  >
-                    View All Notifications
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Settings */}
-          <button
-            onClick={() => navigate('/settings')}
-            className="w-9 h-9 hidden sm:flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
-            style={{ background: 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
-          >
-            <i className="ri-settings-3-line text-base" />
-          </button>
-
-          {/* User Avatar + Dropdown */}
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="flex items-center gap-2.5 cursor-pointer shrink-0 rounded-full pl-1 pr-3 py-1 transition-all hover:bg-white/5"
-              style={{
-                background: dropdownOpen ? 'rgba(255,255,255,0.1)' : 'transparent',
-              }}
-            >
-              <div
-                className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
-                style={{ background: '#10B981', color: '#ffffff' }}
-              >
-                {initials}
-              </div>
-              <div className="hidden lg:block text-left">
-                <p className="text-xs font-bold leading-tight" style={{ color: '#ffffff' }}>{displayName}</p>
-                <p className="text-[9px] leading-tight" style={{ color: '#64748B' }}>{displayEmail}</p>
-              </div>
-              <i
-                className="ri-arrow-down-s-line text-sm shrink-0 transition-transform"
-                style={{ color: '#64748B', transform: dropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
-              />
-            </button>
-
-            {dropdownOpen && (
-              <div
-                className="absolute right-0 top-full mt-2 w-60 rounded-xl overflow-hidden z-[1200]"
-                style={{
-                  background: '#ffffff',
-                  border: '1px solid #E2E8F0',
-                  boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08)',
-                }}
-              >
-                <div className="px-4 py-3" style={{ borderBottom: '1px solid #E2E8F0' }}>
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-                      style={{ background: '#10B981', color: '#ffffff' }}
-                    >
-                      {initials}
+                  <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid #E2E8F0' }}>
+                    <div>
+                      <p className="text-xs font-bold" style={{ color: '#0F2D52' }}>Notifications</p>
+                      {unreadCount > 0 && (
+                        <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>{unreadCount} unread</p>
+                      )}
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold truncate" style={{ color: '#0F2D52' }}>{displayName}</p>
-                      <p className="text-[10px] truncate" style={{ color: '#94A3B8' }}>{displayEmail}</p>
-                    </div>
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <span
-                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold"
-                      style={{
-                        background: isAdmin ? 'rgba(37,99,235,0.1)' : 'rgba(0,216,246,0.15)',
-                        color: isAdmin ? '#2563EB' : '#00A9D8',
-                      }}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: isAdmin ? '#2563EB' : '#00A9D8' }} />
-                      {userRole}
-                    </span>
-                    <span className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>{displayPosition}</span>
-                  </div>
-                </div>
-
-                <div className="py-1">
-                  {[
-                    { icon: 'ri-user-settings-line', label: 'My Profile', color: '#2563EB', action: () => { navigate('/profile'); setDropdownOpen(false); } },
-                    ...(isAdmin ? [{ icon: 'ri-settings-3-line', label: 'Settings', color: '#64748B', action: () => { navigate('/settings'); setDropdownOpen(false); } }] : []),
-                    { icon: 'ri-question-line', label: 'Help & Support', color: '#64748B', action: () => setDropdownOpen(false) },
-                  ].map((item) => (
                     <button
-                      key={item.label}
-                      onClick={item.action}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-colors hover:bg-blue-50"
-                      style={{ color: '#334155' }}
+                      onClick={() => { navigate('/alert'); setBellOpen(false); }}
+                      className="text-[10px] font-semibold"
+                      style={{ color: '#0F2D52' }}
                     >
-                      <i className={`${item.icon} text-sm`} style={{ color: item.color }} />
-                      {item.label}
+                      View All
                     </button>
-                  ))}
-                </div>
+                  </div>
 
-                <div className="py-1" style={{ borderTop: '1px solid #E2E8F0' }}>
-                  <button
-                    onClick={handleLogout}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-colors hover:bg-red-50"
-                    style={{ color: '#EF4444' }}
-                  >
-                    <i className="ri-logout-box-r-line text-sm" />
-                    Sign Out
-                  </button>
+                  {recentNotifs.length === 0 ? (
+                    <div className="px-4 py-8 text-center">
+                      <i className="ri-notification-off-line text-xl" style={{ color: '#CBD5E1' }} />
+                      <p className="text-[11px] mt-2" style={{ color: '#94A3B8' }}>No new notifications</p>
+                    </div>
+                  ) : (
+                    <div className="max-h-72 overflow-y-auto">
+                      {recentNotifs.map(n => {
+                        const severityColors = {
+                          critical: '#DC2626', high: '#EF4444', warning: '#D97706',
+                          medium: '#D97706', low: '#2E6FAF', info: '#6B7280', danger: '#DC2626',
+                        };
+                        const dotColor = severityColors[n.severity] || '#6B7280';
+                        const isAlert = n.type === 'alert';
+                        return (
+                          <div
+                            key={n.id}
+                            className="px-4 py-3 flex items-start gap-3 cursor-pointer transition-colors hover:bg-blue-50"
+                            style={{ borderBottom: '1px solid #F1F5F9' }}
+                            onClick={() => { navigate('/alert'); setBellOpen(false); }}
+                          >
+                            <span className="w-2 h-2 rounded-full mt-1.5 shrink-0" style={{ background: dotColor }} />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                <p className="text-[11px] font-bold truncate" style={{ color: '#0F2D52' }}>{n.title || n.alert_type || 'Notification'}</p>
+                                <span
+                                  className="shrink-0 inline-flex items-center rounded px-1 py-px text-[8px] font-bold uppercase"
+                                  style={{
+                                    background: isAlert ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.1)',
+                                    color: isAlert ? '#EF4444' : '#2563EB',
+                                  }}
+                                >
+                                  {isAlert ? 'Alert' : 'Notif'}
+                                </span>
+                              </div>
+                              <p className="text-[10px] mt-0.5 line-clamp-2" style={{ color: '#64748B' }}>{n.message}</p>
+                              <p className="text-[9px] mt-1" style={{ color: '#94A3B8' }}>
+                                {n.created_at ? (() => {
+                                  const d = new Date(n.created_at);
+                                  const mins = Math.floor((new Date() - d) / 60000);
+                                  if (mins < 1) return 'Just now';
+                                  if (mins < 60) return `${mins}m ago`;
+                                  const hrs = Math.floor(mins / 60);
+                                  if (hrs < 24) return `${hrs}h ago`;
+                                  return `${Math.floor(hrs / 24)}d ago`;
+                                })() : ''}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div className="px-4 py-2.5 text-center" style={{ borderTop: '1px solid #E2E8F0' }}>
+                    <button
+                      onClick={() => { navigate('/alert'); setBellOpen(false); }}
+                      className="text-[11px] font-semibold"
+                      style={{ color: '#0F2D52' }}
+                    >
+                      View All Notifications
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
+
+            {/* Settings */}
+            <button
+              onClick={() => navigate('/settings')}
+              className="w-9 h-9 hidden sm:flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
+              style={{ background: 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
+            >
+              <i className="ri-settings-3-line text-base" />
+            </button>
+
+            {/* User Avatar + Dropdown */}
+            <div className="relative" ref={dropdownRef}>
+              <button
+                onClick={() => setDropdownOpen(!dropdownOpen)}
+                className="flex items-center gap-2.5 cursor-pointer shrink-0 rounded-full pl-1 pr-3 py-1 transition-all hover:bg-white/5"
+                style={{
+                  background: dropdownOpen ? 'rgba(255,255,255,0.1)' : 'transparent',
+                }}
+              >
+                <div
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
+                  style={{ background: '#10B981', color: '#ffffff' }}
+                >
+                  {initials}
+                </div>
+                <div className="hidden lg:block text-left">
+                  <p className="text-xs font-bold leading-tight" style={{ color: '#ffffff' }}>{displayName}</p>
+                  <p className="text-[9px] leading-tight" style={{ color: '#64748B' }}>{displayEmail}</p>
+                </div>
+                <i
+                  className="ri-arrow-down-s-line text-sm shrink-0 transition-transform"
+                  style={{ color: '#64748B', transform: dropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                />
+              </button>
+
+              {dropdownOpen && (
+                <div
+                  className="absolute right-0 top-full mt-2 w-60 rounded-xl overflow-hidden z-[1200]"
+                  style={{
+                    background: '#ffffff',
+                    border: '1px solid #E2E8F0',
+                    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08)',
+                  }}
+                >
+                  <div className="px-4 py-3" style={{ borderBottom: '1px solid #E2E8F0' }}>
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+                        style={{ background: '#10B981', color: '#ffffff' }}
+                      >
+                        {initials}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold truncate" style={{ color: '#0F2D52' }}>{displayName}</p>
+                        <p className="text-[10px] truncate" style={{ color: '#94A3B8' }}>{displayEmail}</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold"
+                        style={{
+                          background: isAdmin ? 'rgba(37,99,235,0.1)' : 'rgba(0,216,246,0.15)',
+                          color: isAdmin ? '#2563EB' : '#00A9D8',
+                        }}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: isAdmin ? '#2563EB' : '#00A9D8' }} />
+                        {userRole}
+                      </span>
+                      <span className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>{displayPosition}</span>
+                    </div>
+                  </div>
+
+                  <div className="py-1">
+                    {[
+                      { icon: 'ri-user-settings-line', label: 'My Profile', color: '#2563EB', action: () => { navigate('/profile'); setDropdownOpen(false); } },
+                      ...(isAdmin ? [{ icon: 'ri-settings-3-line', label: 'Settings', color: '#64748B', action: () => { navigate('/settings'); setDropdownOpen(false); } }] : []),
+
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        onClick={item.action}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-colors hover:bg-blue-50"
+                        style={{ color: '#334155' }}
+                      >
+                        <i className={`${item.icon} text-sm`} style={{ color: item.color }} />
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="py-1" style={{ borderTop: '1px solid #E2E8F0' }}>
+                    <button
+                      onClick={handleLogout}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-colors hover:bg-red-50"
+                      style={{ color: '#EF4444' }}
+                    >
+                      <i className="ri-logout-box-r-line text-sm" />
+                      Sign Out
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* ── Tier 2: Navigation Bar ── */}
-      <nav
-        className="flex items-center gap-0.5 px-6 lg:px-8 overflow-x-auto"
-        style={{
-          background: '#0B1D35',
-          borderTop: '1px solid rgba(255,255,255,0.06)',
-          paddingBottom: '2px',
-        }}
-      >
-        {visibleNavItems.map((item) => {
-          const isActive = location.pathname === item.path;
-          const accent = NAV_ACCENT[item.path] || '#3B82F6';
-          return (
-            <button
-              key={item.path}
-              onClick={() => navigate(item.path)}
-              className="relative flex items-center gap-1.5 whitespace-nowrap text-[12px] font-semibold transition-all duration-200 cursor-pointer"
-              style={{
-                padding: '10px 14px',
-                color: isActive ? '#ffffff' : 'rgba(255,255,255,0.55)',
-                background: isActive ? 'rgba(255,255,255,0.07)' : 'transparent',
-              }}
-              onMouseEnter={(e) => {
-                if (!isActive) {
-                  e.currentTarget.style.color = 'rgba(255,255,255,0.85)';
-                  e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!isActive) {
-                  e.currentTarget.style.color = 'rgba(255,255,255,0.55)';
-                  e.currentTarget.style.background = 'transparent';
-                }
-              }}
-            >
-              <i
-                className={`${item.icon} text-[13px]`}
-                style={{ color: isActive ? accent : 'inherit' }}
-              />
-              <span>{item.label}</span>
-              {/* Active indicator line */}
-              {isActive && (
-                <div
-                  className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
-                  style={{ background: accent }}
+        {/* ── Tier 2: Navigation Bar ── */}
+        <nav
+          className="flex items-center gap-0.5 px-6 lg:px-8 overflow-x-auto"
+          style={{
+            background: '#0B1D35',
+            borderTop: '1px solid rgba(255,255,255,0.06)',
+            paddingBottom: '2px',
+          }}
+        >
+          {visibleNavItems.map((item) => {
+            const isActive = location.pathname === item.path;
+            const accent = NAV_ACCENT[item.path] || '#3B82F6';
+            return (
+              <button
+                key={item.path}
+                onClick={() => navigate(item.path)}
+                className="relative flex items-center gap-1.5 whitespace-nowrap text-[12px] font-semibold transition-all duration-200 cursor-pointer"
+                style={{
+                  padding: '10px 14px',
+                  color: isActive ? '#ffffff' : 'rgba(255,255,255,0.55)',
+                  background: isActive ? 'rgba(255,255,255,0.07)' : 'transparent',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) {
+                    e.currentTarget.style.color = 'rgba(255,255,255,0.85)';
+                    e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) {
+                    e.currentTarget.style.color = 'rgba(255,255,255,0.55)';
+                    e.currentTarget.style.background = 'transparent';
+                  }
+                }}
+              >
+                <i
+                  className={`${item.icon} text-[13px]`}
+                  style={{ color: isActive ? accent : 'inherit' }}
                 />
-              )}
-            </button>
-          );
-        })}
-      </nav>
+                <span>{item.label}</span>
+                {/* Active indicator line */}
+                {isActive && (
+                  <div
+                    className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
+                    style={{ background: accent }}
+                  />
+                )}
+              </button>
+            );
+          })}
+        </nav>
       </header>
 
     </>

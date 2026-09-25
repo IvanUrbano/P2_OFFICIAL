@@ -33,7 +33,7 @@ async function rebuildAllAggregations(client) {
       DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE validation_status = 'Validated'
+    WHERE validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated'
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
   `);
   counts.monthly = monthlyResult.rowCount;
@@ -58,7 +58,7 @@ async function rebuildAllAggregations(client) {
       END AS age_group,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE validation_status = 'Validated'
+    WHERE validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated'
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), sex,
       CASE
         WHEN age IS NULL THEN 'Unknown'
@@ -83,7 +83,7 @@ async function rebuildAllAggregations(client) {
       COALESCE(outcome_status, 'Unknown') AS outcome_status,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE validation_status = 'Validated'
+    WHERE validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated'
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), COALESCE(outcome_status, 'Unknown')
   `);
   counts.outcomes = outcomeResult.rowCount;
@@ -98,7 +98,7 @@ async function rebuildAllAggregations(client) {
       DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE validation_status = 'Validated' AND screening_facility IS NOT NULL AND screening_facility != ''
+    WHERE validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated' AND screening_facility IS NOT NULL AND screening_facility != ''
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), screening_facility
   `);
   counts.facilities = facilityResult.rowCount;
@@ -113,7 +113,7 @@ async function rebuildAllAggregations(client) {
       COALESCE(bacteriological_status, 'Unknown') AS bacteriological_status,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE validation_status = 'Validated'
+    WHERE validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated'
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), COALESCE(bacteriological_status, 'Unknown')
   `);
   counts.bacteriological = bacterioResult.rowCount;

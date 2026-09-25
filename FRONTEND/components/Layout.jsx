@@ -1,25 +1,48 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate, Outlet } from 'react-router-dom';
 import Topbar from './Topbar';
 
-/**
- * Layout wraps every protected page.
- * - Guards auth (redirects to /login if no user in localStorage)
- * - Renders Topbar (with nav) + page content via <Outlet />
- */
+const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
 export default function Layout() {
   const navigate = useNavigate();
-  const [user] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('user') || 'null');
-    } catch {
-      return null;
-    }
-  });
+  const [user, setUser] = useState(null);
+  const timerRef = useRef(null);
 
   useEffect(() => {
-    if (!user) navigate('/login');
-  }, [navigate, user]);
+    try {
+      const stored = JSON.parse(localStorage.getItem('user') || 'null');
+      if (stored) setUser(stored);
+      else navigate('/login');
+    } catch {
+      navigate('/login');
+    }
+  }, [navigate]);
+
+  const logout = useCallback(async () => {
+    try {
+      const API = (await import('../src/api/axios')).default;
+      await API.post('/api/auth/logout');
+    } catch { /* ignore */ }
+    localStorage.removeItem('user');
+    navigate('/login');
+  }, [navigate]);
+
+  const resetTimer = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(logout, INACTIVITY_TIMEOUT_MS);
+  }, [logout]);
+
+  useEffect(() => {
+    if (!user) return;
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
+    events.forEach((e) => document.addEventListener(e, resetTimer, { passive: true }));
+    resetTimer();
+    return () => {
+      events.forEach((e) => document.removeEventListener(e, resetTimer));
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [user, resetTimer]);
 
   if (!user) return null;
 
