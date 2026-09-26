@@ -22,7 +22,9 @@
 const pool = require('../db');
 const { forecast, classify, thresholds: callThresholds, healthCheck, evaluate } = require('./mlClient');
 const {
+  monthKey,
   computeRiskScore,
+  classifyByTertile,
   computeNeighborRisks,
   computeHistoricalBias,
   classifyTrend,
@@ -35,6 +37,62 @@ const DEFAULT_THRESHOLDS = {
   low_max: 150.0,
   med_max: 350.0,
 };
+
+// Leading months whose city-wide total is below this share of the median month
+// are treated as stray records (e.g. one old case) and dropped from the calendar.
+const LEADING_TRIM_SHARE = 0.2;
+
+/**
+ * Put every barangay on ONE shared monthly calendar with zero-filled gaps.
+ *
+ * monthly_case_summary has no row for a month with zero cases, so raw series
+ * have gaps. Lags, trend windows and neighbor comparisons all assume
+ * consecutive months, so gaps must be filled before features are computed.
+ *
+ * @param {Array} monthlyRows - [{barangay_name, month, case_count}]
+ * @param {string[]} barangayNames - Barangays to build series for
+ * @returns {{calendar: string[], seriesByBarangay: Object}} series are
+ *   [{barangay_name, month: 'YYYY-MM-01', case_count}] in calendar order
+ */
+function buildDenseSeries(monthlyRows, barangayNames) {
+  const totals = new Map();
+  const counts = {};
+  for (const r of monthlyRows) {
+    const m = monthKey(r.month);
+    const c = Number(r.case_count);
+    totals.set(m, (totals.get(m) || 0) + c);
+    (counts[r.barangay_name] ??= {})[m] = (counts[r.barangay_name][m] || 0) + c;
+  }
+  const sortedMonths = [...totals.keys()].sort();
+  if (sortedMonths.length === 0) return { calendar: [], seriesByBarangay: {} };
+
+  const positive = [...totals.values()].filter(v => v > 0).sort((a, b) => a - b);
+  const mid = Math.floor(positive.length / 2);
+  const median = positive.length === 0
+    ? 0
+    : positive.length % 2 ? positive[mid] : (positive[mid - 1] + positive[mid]) / 2;
+  const first = sortedMonths.find(m => totals.get(m) >= LEADING_TRIM_SHARE * median) || sortedMonths[0];
+  const last = sortedMonths[sortedMonths.length - 1];
+
+  const calendar = [];
+  let [y, mo] = first.split('-').map(Number);
+  const [ly, lmo] = last.split('-').map(Number);
+  while (y < ly || (y === ly && mo <= lmo)) {
+    calendar.push(`${y}-${String(mo).padStart(2, '0')}-01`);
+    mo += 1;
+    if (mo > 12) { mo = 1; y += 1; }
+  }
+
+  const seriesByBarangay = {};
+  for (const name of barangayNames) {
+    seriesByBarangay[name] = calendar.map(m => ({
+      barangay_name: name,
+      month: m,
+      case_count: counts[name]?.[m] || 0,
+    }));
+  }
+  return { calendar, seriesByBarangay };
+}
 
 /**
  * Run the full prediction pipeline.
@@ -113,38 +171,15 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     client.release();
 
     // Determine forecast period (next month from latest)
-    const months = [...new Set(monthlyRows.map(r => r.month.toISOString().slice(0, 10)))].sort();
-    const latestMonth = months[months.length - 1];
+    const { calendar, seriesByBarangay } = buildDenseSeries(monthlyRows, barangays.map(b => b.name));
+    const latestMonth = calendar[calendar.length - 1];
     results.period = period || _nextMonth(latestMonth);
     console.log(`📊 Pipeline period: ${results.period} (latest data: ${latestMonth})`);
 
     // ── Step 3: Build series for /forecast ──
-    // Group by barangay → [{barangay_name, month, case_count}]
-    const seriesByBarangay = {};
-    for (const row of monthlyRows) {
-      const name = row.barangay_name;
-      if (!seriesByBarangay[name]) seriesByBarangay[name] = [];
-      seriesByBarangay[name].push({
-        barangay_name: name,
-        month: row.month.toISOString().slice(0, 10),
-        case_count: row.case_count,
-      });
-    }
-
-    const forecastSeries = [];
-    for (const b of barangays) {
-      const pts = seriesByBarangay[b.name] || [];
-      if (pts.length > 0) {
-        forecastSeries.push(...pts);
-      } else {
-        // Barangay with no cases — add a zero row so it appears in results
-        forecastSeries.push({
-          barangay_name: b.name,
-          month: latestMonth,
-          case_count: 0,
-        });
-      }
-    }
+    // Dense, zero-filled series on the shared calendar (every barangay appears,
+    // including those with no cases).
+    const forecastSeries = barangays.flatMap(b => seriesByBarangay[b.name]);
 
     // ── Step 4: Call Python /forecast ──
     let forecastResults = [];
@@ -329,10 +364,12 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
 
         // Build monthly snapshot training rows from historical data
         const trainRows = await _buildTrainingRows(client, populationMap, thresholds);
+        results.trainingRows = trainRows.length;
         console.log(`📋 Training rows: ${trainRows.length} monthly snapshots`);
 
         const classifyResponse = await classify(thresholds, trainRows, predictRows);
         classifyResults = classifyResponse.predictions || [];
+        results.classifierMethod = classifyResponse.method || 'random_forest';
         results.classificationsCount = classifyResults.length;
         console.log(`🏷️  Classification: ${classifyResults.length} barangays processed`);
       } catch (err) {
@@ -389,6 +426,12 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
         norm_forecast_error: normError,
       };
     });
+
+    // The displayed class is the tertile of the weighted score across barangays (computeRiskScore's
+    // fixed 33/66 cutoffs would put nearly everything in Medium — see classifyByTertile).
+    const scoreTiers = classifyByTertile(riskScores.map(r => r.risk_score));
+    riskScores.forEach((r, i) => { r.risk_class = scoreTiers.classes[i]; });
+    results.scoreThresholds = { low_max: scoreTiers.low_max, med_max: scoreTiers.med_max };
     results.riskScoresCount = riskScores.length;
 
     // ── Step 8: Generate alerts ──
@@ -437,22 +480,30 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
       'arima-v1.0-rf-v1.0'
     );
 
-    // Record pipeline run in model_metadata
+    // Record pipeline run in model_metadata.
+    // training_months = distinct months on the shared calendar (NOT the barangay-month row count).
+    results.barangaysProcessed = barangays.length;
     await txClient.query(
       `INSERT INTO model_metadata (run_type, model_version, training_months, metrics, config)
        VALUES ($1, $2, $3, $4, $5)`,
       [
         'pipeline',
         'arima-v1.0-rf-v1.0',
-        monthlyRows.length,
+        calendar.length,
         JSON.stringify({
           barangaysProcessed: results.barangaysProcessed,
+          dataStart: calendar[0],
+          dataEnd: latestMonth,
+          trainingRows: results.trainingRows ?? 0,
+          classifierMethod: results.classifierMethod ?? 'rule_based',
+          forecastMethods: [...new Set(forecastResults.map(f => f.method))],
           forecastsCount: results.forecastsCount,
           classificationsCount: results.classificationsCount,
           alertsCount: results.alertsCount,
         }),
         JSON.stringify({
           thresholds: results.thresholds,
+          scoreThresholds: results.scoreThresholds,
           period: results.period,
         }),
       ]
@@ -464,7 +515,6 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     }
 
     results.status = 'completed';
-    results.barangaysProcessed = barangays.length;
     console.log(`✅ Pipeline complete: ${results.barangaysProcessed} barangays, ` +
                 `${results.alertsCount} alerts, period ${results.period}`);
 
@@ -565,7 +615,7 @@ function _nextMonth(dateStr) {
  *   - historical_bias: AVG(|actual - forecasted|) from past predictions (0 if no history)
  */
 async function _buildTrainingRows(_client, populationMap, thresholds) {
-  // Fetch all monthly data sorted by month (use pool directly — client is released)
+  // Fetch all monthly data (use pool directly — client is released)
   const result = await pool.query(
     `SELECT barangay_name, month, case_count
      FROM monthly_case_summary
@@ -573,20 +623,6 @@ async function _buildTrainingRows(_client, populationMap, thresholds) {
   );
 
   if (result.rows.length === 0) return [];
-
-  // Group by barangay, sorted by month ascending
-  const byBarangay = {};
-  for (const row of result.rows) {
-    const name = row.barangay_name;
-    if (!byBarangay[name]) byBarangay[name] = [];
-    byBarangay[name].push({
-      month: row.month.toISOString().slice(0, 10),
-      case_count: row.case_count,
-    });
-  }
-
-  // Get all unique months sorted
-  const allMonths = [...new Set(result.rows.map(r => r.month.toISOString().slice(0, 10)))].sort();
 
   // Fetch past predictions with actual_count for historical_bias computation
   let pastPredictions = [];
@@ -602,105 +638,91 @@ async function _buildTrainingRows(_client, populationMap, thresholds) {
     // table might be empty on first run
   }
 
-  // Build historical bias map: { barangay_name -> [absolute_errors] }
+  // Average absolute forecast error per barangay
   const biasByName = {};
   for (const row of pastPredictions) {
-    const name = row.barangay_name;
-    if (!biasByName[name]) biasByName[name] = [];
-    const absErr = Math.abs(row.actual_count - row.forecasted_count);
-    biasByName[name].push(absErr);
+    (biasByName[row.barangay_name] ??= []).push(Math.abs(row.actual_count - row.forecasted_count));
   }
-  // Convert to averages
   const historicalBiasAvg = {};
   for (const [name, errs] of Object.entries(biasByName)) {
     historicalBiasAvg[name] = errs.reduce((a, b) => a + b, 0) / errs.length;
   }
 
-  const ROLLING_WINDOW = 12;
+  const { seriesByBarangay } = buildDenseSeries(result.rows, Object.keys(populationMap));
+  return buildTrainingRows(seriesByBarangay, populationMap, historicalBiasAvg);
+}
+
+/**
+ * Pure: turn dense per-barangay series into RF training rows (one per
+ * barangay-month that has a full look-back window before it).
+ *
+ * Window: 12 months when there are at least 18 months of history; otherwise
+ * half the history (min 3), so short histories still yield training rows
+ * instead of none.
+ *
+ * Features mirror what is computed at prediction time, in the same units:
+ *   - forecasted_incidence: annualized incidence of the window's mean monthly count
+ *   - neighbor_risk: mean incidence of the other barangays in the target month,
+ *     min-max normalized across barangays within that month
+ * The label source `incidence` is the target month's annualized incidence.
+ *
+ * @param {Object} seriesByBarangay - from buildDenseSeries (all same length)
+ * @param {Object} populationMap - {name: population}
+ * @param {Object} historicalBiasAvg - {name: mean abs forecast error}
+ */
+function buildTrainingRows(seriesByBarangay, populationMap, historicalBiasAvg = {}) {
+  const names = Object.keys(seriesByBarangay);
+  const maxLen = Math.max(0, ...names.map(n => seriesByBarangay[n].length));
+  const window = maxLen >= 18 ? 12 : Math.max(3, Math.floor(maxLen / 2));
+  if (maxLen <= window) return [];
+
   const trainRows = [];
+  for (let i = window; i < maxLen; i++) {
+    // Incidence of every barangay in the target month (for neighbor_risk)
+    const monthInc = {};
+    for (const name of names) {
+      const pt = seriesByBarangay[name][i];
+      monthInc[name] = pt ? _computeIncidence(pt.case_count, populationMap[name] || 1000) : 0;
+    }
+    const incSum = Object.values(monthInc).reduce((a, b) => a + b, 0);
 
-  for (const name of Object.keys(byBarangay)) {
-    const months = byBarangay[name];
-    const pop = populationMap[name] || 1000;
+    const monthRows = [];
+    for (const name of names) {
+      const months = seriesByBarangay[name];
+      if (months.length <= i) continue;
+      const pop = populationMap[name] || 1000;
+      const windowCounts = months.slice(i - window, i).map(w => w.case_count);
 
-    // Need at least ROLLING_WINDOW + 1 months to create one training row
-    if (months.length < ROLLING_WINDOW + 1) continue;
+      const meanCount = windowCounts.reduce((a, b) => a + b, 0) / windowCounts.length;
+      const seasonalityFlag = _detectSeasonality(months.slice(0, i + 1)) ? 1 : 0;
 
-    // For each valid target month (index ROLLING_WINDOW onwards)
-    for (let i = ROLLING_WINDOW; i < months.length; i++) {
-      const targetMonth = months[i];
-
-      // Rolling window: the 12 months before the target month
-      const window = months.slice(i - ROLLING_WINDOW, i);
-      const windowCounts = window.map(w => w.case_count);
-
-      // 1. forecasted_incidence: annualized from window
-      const totalCount = windowCounts.reduce((a, b) => a + b, 0);
-      const annualized = (totalCount / windowCounts.length) * 12;
-      const forecastedIncidence = _computeIncidence(annualized, pop);
-
-      // 2. recent_trend: slope over the window
-      const slope = _linearSlope(windowCounts);
-
-      // 3. seasonality_flag: need ≥24 months of history up to this point
-      const historyUpToTarget = months.slice(0, i + 1);
-      const seasonalityFlag = _detectSeasonality(historyUpToTarget) ? 1 : 0;
-
-      // 4. lag features: case counts from 1-3 months ago
-      const lag1m = i >= 1 ? months[i - 1].case_count : 0;
-      const lag2m = i >= 2 ? months[i - 2].case_count : 0;
-      const lag3m = i >= 3 ? months[i - 3].case_count : 0;
-
-      // 5. neighbor_risk: average incidence of OTHER barangays in the target month
-      let neighborRisk = 0;
-      const otherIncidences = [];
-      for (const [otherName, otherMonths] of Object.entries(byBarangay)) {
-        if (otherName === name) continue;
-        const otherMonthData = otherMonths.find(m => m.month === targetMonth.month);
-        if (otherMonthData) {
-          const otherPop = populationMap[otherName] || 1000;
-          otherIncidences.push(_computeIncidence(otherMonthData.case_count, otherPop));
-        }
-      }
-      if (otherIncidences.length > 0) {
-        neighborRisk = otherIncidences.reduce((a, b) => a + b, 0) / otherIncidences.length;
-      }
-
-      // 6. historical_bias: average past forecast errors for this barangay
-      const histBias = historicalBiasAvg[name] || 0;
-
-      // Incidence for the target month (this becomes the label via tertile thresholds)
-      const incidence = _computeIncidence(targetMonth.case_count, pop);
-
-      trainRows.push({
-        features: {
-          forecasted_incidence: forecastedIncidence,
-          recent_trend: slope,
-          seasonality_flag: seasonalityFlag,
-          lag_1m: lag1m,
-          lag_2m: lag2m,
-          lag_3m: lag3m,
-          neighbor_risk: neighborRisk,
-          historical_bias: histBias,
+      monthRows.push({
+        rawNeighbor: names.length > 1 ? (incSum - monthInc[name]) / (names.length - 1) : 0,
+        row: {
+          features: {
+            forecasted_incidence: _computeIncidence(meanCount, pop),
+            recent_trend: _linearSlope(windowCounts),
+            seasonality_flag: seasonalityFlag,
+            lag_1m: months[i - 1].case_count,
+            lag_2m: months[i - 2].case_count,
+            lag_3m: months[i - 3].case_count,
+            neighbor_risk: 0,
+            historical_bias: historicalBiasAvg[name] || 0,
+          },
+          incidence: monthInc[name],
         },
-        incidence,
       });
     }
-  }
 
-  // Normalize neighbor_risk to [0, 1] across all training rows
-  if (trainRows.length > 0) {
-    const nrValues = trainRows.map(r => r.features.neighbor_risk);
-    const nrMin = Math.min(...nrValues);
-    const nrMax = Math.max(...nrValues);
-    const nrRange = nrMax - nrMin;
-    for (const row of trainRows) {
-      row.features.neighbor_risk = nrRange > 0
-        ? (row.features.neighbor_risk - nrMin) / nrRange
-        : 0;
+    // Normalize neighbor_risk to [0, 1] within the month, as done at prediction time
+    const raws = monthRows.map(r => r.rawNeighbor);
+    const min = Math.min(...raws);
+    const range = Math.max(...raws) - min;
+    for (const { rawNeighbor, row } of monthRows) {
+      row.features.neighbor_risk = range > 0 ? (rawNeighbor - min) / range : 0;
+      trainRows.push(row);
     }
   }
-
   return trainRows;
 }
 
@@ -728,4 +750,6 @@ function _ruleBasedClassify(predictRows, thresholds) {
 module.exports = {
   runPipeline,
   DEFAULT_THRESHOLDS,
+  buildDenseSeries,
+  buildTrainingRows,
 };

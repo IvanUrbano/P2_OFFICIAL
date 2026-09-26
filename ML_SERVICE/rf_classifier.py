@@ -26,8 +26,11 @@ from sklearn.metrics import (
 )
 
 from config import (
+    RF_LARGE_SAMPLE,
     RF_MAX_DEPTH,
     RF_N_ESTIMATORS,
+    RF_SMALL_MAX_DEPTH,
+    RF_SMALL_N_ESTIMATORS,
     RF_RANDOM_STATE,
     RF_MIN_SAMPLES_SPLIT,
     RF_MIN_SAMPLES_LEAF,
@@ -85,9 +88,11 @@ def classify_incidence_tertile(
         low_max = thresholds["tertile_low_max"]
         high_min = thresholds["tertile_high_min"]
 
+    # Same boundaries as thresholds.classify_incidence and the Express rule fallback:
+    # Low <= low_max, High > med_max
     if incidence_per_100k <= low_max:
         return "Low"
-    elif incidence_per_100k >= high_min:
+    elif incidence_per_100k > high_min:
         return "High"
     else:
         return "Medium"
@@ -96,6 +101,19 @@ def classify_incidence_tertile(
 def _vec(features: dict) -> list[float]:
     """Convert feature dict to ordered vector."""
     return [float(features.get(f, 0)) for f in FEATURES]
+
+
+def _make_rf(n_samples: int) -> RandomForestClassifier:
+    """Random forest sized to the amount of training data."""
+    large = n_samples >= RF_LARGE_SAMPLE
+    return RandomForestClassifier(
+        n_estimators=RF_N_ESTIMATORS if large else RF_SMALL_N_ESTIMATORS,
+        max_depth=RF_MAX_DEPTH if large else RF_SMALL_MAX_DEPTH,
+        min_samples_split=RF_MIN_SAMPLES_SPLIT,
+        min_samples_leaf=RF_MIN_SAMPLES_LEAF,
+        random_state=RF_RANDOM_STATE,
+        class_weight="balanced",
+    )
 
 
 def train_and_predict(
@@ -129,15 +147,7 @@ def train_and_predict(
         for r in train
     ]
 
-    # Train RF (tuned for ~700+ monthly snapshot samples)
-    clf = RandomForestClassifier(
-        n_estimators=RF_N_ESTIMATORS,
-        max_depth=RF_MAX_DEPTH,
-        min_samples_split=RF_MIN_SAMPLES_SPLIT,
-        min_samples_leaf=RF_MIN_SAMPLES_LEAF,
-        random_state=RF_RANDOM_STATE,
-        class_weight="balanced",
-    )
+    clf = _make_rf(len(X_train))
     clf.fit(X_train, y_train)
 
     # Predict
@@ -311,14 +321,7 @@ def walk_forward_rf(
         ]
 
         # Train and predict
-        clf = RandomForestClassifier(
-            n_estimators=RF_N_ESTIMATORS,
-            max_depth=RF_MAX_DEPTH,
-            min_samples_split=RF_MIN_SAMPLES_SPLIT,
-            min_samples_leaf=RF_MIN_SAMPLES_LEAF,
-            random_state=RF_RANDOM_STATE,
-            class_weight="balanced",
-        )
+        clf = _make_rf(len(X_train))
         clf.fit(X_train, y_train)
         y_test_pred = clf.predict(X_test)
 

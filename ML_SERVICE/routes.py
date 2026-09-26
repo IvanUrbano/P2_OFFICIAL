@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Header, Depends
 
-from config import ML_API_KEY, MODEL_VERSION
+from config import ARIMA_MIN_HISTORY_NONSEASONAL, ML_API_KEY, MODEL_VERSION, RF_MIN_TRAIN_ROWS
 from models import (
     ClassifyRequest,
     ClassifyResponse,
@@ -39,7 +39,7 @@ from models import (
     RfEvaluation,
     RfStep,
 )
-from arima_forecast import forecast_all, compute_trend, detect_seasonality, backtest_mae, walk_forward_arima
+from arima_forecast import parallel_map, forecast_all, compute_trend, detect_seasonality, backtest_mae, walk_forward_arima
 from rf_classifier import (
     train_and_predict,
     classify_risk_simple,
@@ -117,14 +117,24 @@ async def run_forecast(req: ForecastRequest):
         df = pd.DataFrame(series_data)
         df["month"] = pd.to_datetime(df["month"])
 
-        forecast_outs = []
+        # Backtest MAE per barangay (temporal, no shuffle), fitted in parallel
+        counts_by_name = {}
         for fc in forecasts_raw:
             name = fc["barangay_name"]
             barangay_df = df[df["barangay_name"] == name].sort_values("month")
-            counts = barangay_df["case_count"].tolist()
+            # Fill missing months with 0 so the backtest sees the same series as the forecast
+            counts_by_name[name] = (
+                barangay_df.set_index("month")["case_count"].resample("MS").sum().tolist()
+            )
+        names = list(counts_by_name)
+        maes = dict(zip(names, parallel_map(
+            backtest_mae, [(counts_by_name[n], 6, req.seasonal_m) for n in names]
+        )))
 
-            # Compute backtest MAE (temporal, no shuffle)
-            mae = backtest_mae(counts, horizon=6, seasonal_m=req.seasonal_m)
+        forecast_outs = []
+        for fc in forecasts_raw:
+            name = fc["barangay_name"]
+            mae = maes[name]
 
             # Build prediction points — one per forecast month
             points = []
@@ -178,12 +188,17 @@ async def run_classify(req: ClassifyRequest):
         # Convert predict rows to dict format
         predict = [{"barangay_name": r.barangay_name, "features": r.features} for r in req.predict]
 
-        # Train RF and predict
-        if train:
+        # Train the RF only with enough rows; otherwise classify by the incidence thresholds.
+        # (classify_risk_simple reads a flat feature dict, so merge the name and features.)
+        if len(train) >= RF_MIN_TRAIN_ROWS:
+            method = "random_forest"
             preds = train_and_predict(train, predict, low_max, med_max)
         else:
-            # No training data — fall back to rule-based classification
-            preds = classify_risk_simple(predict, {"low_max": low_max, "med_max": med_max})
+            method = "rule_based"
+            preds = classify_risk_simple(
+                [{"barangay_name": p["barangay_name"], **p["features"]} for p in predict],
+                {"low_max": low_max, "med_max": med_max},
+            )
 
         # Convert to response models
         classifications = [
@@ -198,6 +213,8 @@ async def run_classify(req: ClassifyRequest):
         return ClassifyResponse(
             predictions=classifications,
             model_version=MODEL_VERSION,
+            method=method,
+            n_train=len(train),
         )
     except HTTPException:
         raise
@@ -351,8 +368,10 @@ async def evaluate_models(req: EvaluateRequest):
         for name in df["barangay_name"].unique():
             barangay_df = df[df["barangay_name"] == name].sort_values("month")
             counts = barangay_df["case_count"].tolist()
-            if len(counts) > req.min_train:
-                result = walk_forward_arima(counts, min_train=req.min_train)
+            # Shorter series get a proportionally smaller warm-up so they can still be evaluated
+            min_train = min(req.min_train, max(ARIMA_MIN_HISTORY_NONSEASONAL, len(counts) // 2))
+            if len(counts) > min_train:
+                result = walk_forward_arima(counts, min_train=min_train)
                 arima_results.append(result)
 
         # Aggregate ARIMA results: use the mean across barangays
@@ -373,9 +392,13 @@ async def evaluate_models(req: EvaluateRequest):
         # ── RF walk-forward ──
         n_barangays = len(df["barangay_name"].unique())
         train = [{"features": r.features, "incidence": r.incidence} for r in req.train]
+        # min_train is in MONTHS; walk_forward_rf counts rows (one per barangay per month).
+        # Cap the warm-up at half the available months so short histories can be evaluated.
+        n_months = len(train) // max(n_barangays, 1)
+        rf_min_train = min(req.min_train, max(2, n_months // 2)) * max(n_barangays, 1)
         rf_result = walk_forward_rf(
             train,
-            min_train=req.min_train,
+            min_train=rf_min_train,
             low_max=req.thresholds.low_max,
             med_max=req.thresholds.med_max,
             n_barangays=n_barangays,

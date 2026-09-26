@@ -65,6 +65,11 @@ function clearWebhookCache() {
     .forEach(k => delete require.cache[k]);
 }
 
+/* ─── Raw body capture (mirrors server.js: the HMAC is verified over the raw request body) ─── */
+const RAW_BODY_CAPTURE = {
+  verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); },
+};
+
 /* ─── Helper: generate HMAC signature ─── */
 function generateSignature(payload) {
   const signature = crypto
@@ -127,7 +132,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const res = await request(app)
@@ -142,7 +147,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload();
@@ -163,7 +168,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = { schema_version: '1.0', source: 'pasig-clone', sheets: 'not-an-array' };
@@ -180,7 +185,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload({ source: 'unknown' });
@@ -216,7 +221,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload();
@@ -247,7 +252,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     // Record with missing required fields
@@ -287,8 +292,8 @@ describe('Webhook Endpoint', () => {
       if (sql.includes('SELECT name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }] };
       }
-      if (sql.includes("SELECT id FROM webhook_logs WHERE batch_id") && sql.includes("processed")) {
-        return { rows: [{ id: 1 }] }; // Already processed
+      if (sql.includes("FROM webhook_logs WHERE batch_id")) {
+        return { rows: [{ id: 1, status: 'processed' }] }; // Already processed
       }
       return { rows: [] };
     };
@@ -296,7 +301,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload();
@@ -335,7 +340,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload();
@@ -353,7 +358,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload({ batch_id: 'abc123' });
@@ -370,7 +375,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload();
@@ -388,7 +393,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload({ schema_version: '2.0' });
@@ -416,7 +421,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload({
@@ -452,7 +457,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload({
@@ -497,7 +502,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload({
@@ -543,7 +548,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload({
@@ -596,7 +601,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload({
@@ -653,7 +658,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload({
@@ -708,7 +713,7 @@ describe('Webhook Endpoint', () => {
     clearWebhookCache();
     const webhook = require('../tbinsight/webhook');
     const app = express();
-    app.use(express.json());
+    app.use(express.json(RAW_BODY_CAPTURE));
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload();

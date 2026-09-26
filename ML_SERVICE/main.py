@@ -9,6 +9,12 @@ import logging
 import os
 import sys
 
+# ARIMA fits run in parallel worker processes (see config.ML_N_JOBS). Each process must use a
+# single math-library thread, otherwise workers oversubscribe the CPU and run slower than serial.
+# Must be set before numpy is imported.
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
+
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 

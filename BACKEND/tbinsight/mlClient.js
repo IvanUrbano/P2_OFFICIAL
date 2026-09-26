@@ -18,8 +18,9 @@ if (!ML_API_KEY) {
   console.warn('⚠️ ML_API_KEY not set — ML service calls will fail');
 }
 
-// Timeout for ML calls (ARIMA can be slow on first run)
-const ML_TIMEOUT_MS = 60_000;
+// Timeout for ML calls. /forecast fits an ARIMA model per barangay (30 fits + backtests), which
+// takes well over a minute on a single core (e.g. Render's free plan).
+const ML_TIMEOUT_MS = Number(process.env.ML_TIMEOUT_MS) || 300_000;
 
 /**
  * Generic POST to the ML service

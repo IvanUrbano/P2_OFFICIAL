@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import API from '../api/axios';
 import SkeletonBlock from '../../components/SkeletonBlock';
 
@@ -33,30 +33,66 @@ export default function DataIntegrationPage() {
   const [error, setError] = useState('');
   const [selectedSync, setSelectedSync] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [batchToUndo, setBatchToUndo] = useState(null);
+  const [undoing, setUndoing] = useState(false);
+  const [notice, setNotice] = useState(null);
+  const [undoHistory, setUndoHistory] = useState([]);
+
+  const isAdmin = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem('user') || '{}')?.role === 'admin';
+    } catch {
+      return false;
+    }
+  }, []);
 
   const fetchData = useCallback(async () => {
     try {
-      const [statusRes, historyRes, statsRes, webhookRes] = await Promise.all([
+      const [statusRes, historyRes, statsRes, webhookRes, undoRes] = await Promise.all([
         API.get('/api/tb/integration/status').catch(() => ({ data: {} })),
         API.get('/api/tb/integration/sync-history').catch(() => ({ data: { batches: [] } })),
         API.get('/api/tb/integration/stats').catch(() => ({ data: {} })),
         API.get('/api/tb/webhook-logs').catch(() => ({ data: { logs: [] } })),
+        isAdmin
+          ? API.get('/api/tb/integration/undo-history').catch(() => ({ data: { entries: [] } }))
+          : Promise.resolve({ data: { entries: [] } }),
       ]);
       setStatus(statusRes.data);
       setSyncHistory(historyRes.data.batches || []);
       setStats(statsRes.data);
       setWebhookLogs(webhookRes.data.logs || []);
+      setUndoHistory(undoRes.data.entries || []);
     } catch {
       setError('Unable to load integration status.');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [isAdmin]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const handleRefresh = () => { setRefreshing(true); setError(''); fetchData(); };
+
+  const handleUndo = async () => {
+    if (!batchToUndo?.batch_id) return;
+    setUndoing(true);
+    try {
+      const res = await API.delete(`/api/tb/integration/batches/${batchToUndo.batch_id}`);
+      const d = res.data.deleted || {};
+      setNotice({
+        type: 'success',
+        text: `Import ${batchToUndo.batch_id.slice(0, 8)} undone: ${(d.cases || 0).toLocaleString()} cases and ${(d.rawRows || 0).toLocaleString()} raw rows removed, dashboard totals rebuilt. Re-run the prediction pipeline to refresh forecasts and risk scores.`,
+      });
+      setBatchToUndo(null);
+      await fetchData();
+    } catch (err) {
+      setNotice({ type: 'error', text: err.response?.data?.error || 'Unable to undo this import.' });
+      setBatchToUndo(null);
+    } finally {
+      setUndoing(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -99,6 +135,19 @@ export default function DataIntegrationPage() {
       {error && (
         <div className="px-4 py-3 rounded-xl text-xs flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.12)' }}>
           <i className="ri-error-warning-line" /> {error}
+        </div>
+      )}
+
+      {notice && (
+        <div
+          className="px-4 py-3 rounded-xl text-xs flex items-start gap-2"
+          style={notice.type === 'success'
+            ? { background: 'rgba(16,185,129,0.06)', color: '#047857', border: '1px solid rgba(16,185,129,0.2)' }
+            : { background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.12)' }}
+        >
+          <i className={notice.type === 'success' ? 'ri-check-line mt-0.5' : 'ri-error-warning-line mt-0.5'} />
+          <span className="flex-1">{notice.text}</span>
+          <button onClick={() => setNotice(null)} aria-label="Dismiss"><i className="ri-close-line" /></button>
         </div>
       )}
 
@@ -198,7 +247,7 @@ export default function DataIntegrationPage() {
           <table className="w-full">
             <thead>
               <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
-                {['Date', 'Source', 'Batch ID', 'Received', 'Imported', 'Status'].map((h) => (
+                {['Date', 'Source', 'Batch ID', 'Received', 'Imported', 'Status', ...(isAdmin ? ['Action'] : [])].map((h) => (
                   <th key={h} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#64748B' }}>{h}</th>
                 ))}
               </tr>
@@ -206,7 +255,7 @@ export default function DataIntegrationPage() {
             <tbody>
               {webhookLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-16 text-center">
+                  <td colSpan={isAdmin ? 7 : 6} className="px-5 py-16 text-center">
                     <i className="ri-webhook-line text-xl mb-2 block" style={{ color: '#CBD5E1' }} />
                     <p className="text-xs" style={{ color: '#94A3B8' }}>No webhook logs available. Webhooks will appear here once the Pasig Clone system sends data.</p>
                   </td>
@@ -225,12 +274,60 @@ export default function DataIntegrationPage() {
                   <td className="px-5 py-3 text-xs" style={{ color: '#64748B' }}>{(log.records_received || 0).toLocaleString()}</td>
                   <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#047857' }}>{(log.records_imported || 0).toLocaleString()}</td>
                   <td className="px-5 py-3"><SyncStatusBadge status={log.status} /></td>
+                  {isAdmin && (
+                    <td className="px-5 py-3">
+                      {log.batch_id && (
+                        <button
+                          onClick={() => setBatchToUndo(log)}
+                          className="px-3 py-1.5 text-[11px] font-semibold flex items-center gap-1.5 transition"
+                          style={{ background: '#FEF2F2', color: '#991B1B', border: '1px solid #FECACA', borderRadius: 4 }}
+                          title="Delete this import and everything it added"
+                        >
+                          <i className="ri-arrow-go-back-line text-xs" /> Undo import
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* ── Undo History (admin) ── */}
+      {isAdmin && undoHistory.length > 0 && (
+        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
+          <div className="px-6 py-4" style={{ background: '#0F2D52' }}>
+            <h2 className="text-sm font-bold" style={{ color: '#ffffff' }}>Undo History</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
+                  {['Undone', 'By', 'Batch ID', 'Cases Removed', 'Raw Rows Removed'].map((h) => (
+                    <th key={h} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#64748B' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {undoHistory.map((entry, idx) => (
+                  <tr key={entry.id} style={{ borderBottom: '1px solid #F1F5F9', background: idx % 2 === 0 ? '#ffffff' : '#FAFBFC' }}>
+                    <td className="px-5 py-3 text-xs" style={{ color: '#94A3B8' }}>
+                      <div>{formatDate(entry.created_at)}</div>
+                      <div className="text-[10px]">{formatTime(entry.created_at)}</div>
+                    </td>
+                    <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#0F2D52' }}>{entry.username}</td>
+                    <td className="px-5 py-3 text-xs font-mono" style={{ color: '#64748B' }} title={entry.batch_id}>{entry.batch_id?.slice(0, 8) || '—'}</td>
+                    <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#991B1B' }}>{(entry.details?.deleted?.cases || 0).toLocaleString()}</td>
+                    <td className="px-5 py-3 text-xs" style={{ color: '#64748B' }}>{(entry.details?.deleted?.rawRows || 0).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ── Recent Synchronization Table ── */}
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
@@ -305,6 +402,53 @@ export default function DataIntegrationPage() {
           ))}
         </div>
       </div>
+
+      {/* ── Undo Import Confirmation ── */}
+      {batchToUndo && (
+        <div className="fixed inset-0 z-[1300] flex items-center justify-center" style={{ background: 'rgba(15, 45, 82, 0.35)' }} onClick={() => !undoing && setBatchToUndo(null)}>
+          <div className="relative w-full max-w-md mx-4 rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 20px 60px rgba(15, 45, 82, 0.25)' }} onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4" style={{ background: '#991B1B' }}>
+              <h3 className="text-sm font-bold" style={{ color: '#ffffff' }}>Undo this import?</h3>
+            </div>
+            <div className="px-6 py-5 space-y-3">
+              <div className="flex items-center justify-between gap-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
+                <span className="text-xs" style={{ color: '#94A3B8' }}>Batch</span>
+                <span className="text-xs font-mono font-semibold" style={{ color: '#0F2D52' }}>{batchToUndo.batch_id}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
+                <span className="text-xs" style={{ color: '#94A3B8' }}>Received</span>
+                <span className="text-xs font-semibold" style={{ color: '#0F2D52' }}>{formatDate(batchToUndo.received_at)} {formatTime(batchToUndo.received_at)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
+                <span className="text-xs" style={{ color: '#94A3B8' }}>Records imported</span>
+                <span className="text-xs font-semibold" style={{ color: '#0F2D52' }}>{(batchToUndo.records_imported || 0).toLocaleString()}</span>
+              </div>
+              <p className="text-xs leading-relaxed pt-1" style={{ color: '#64748B' }}>
+                This permanently deletes every case and raw row this batch added, removes its log entry, and rebuilds the dashboard totals. It cannot be undone.
+                Forecasts, risk scores and alerts are not recalculated; run the prediction pipeline afterward.
+              </p>
+            </div>
+            <div className="px-6 py-4 flex gap-3" style={{ borderTop: '1px solid #E2E8F0' }}>
+              <button
+                onClick={() => setBatchToUndo(null)}
+                disabled={undoing}
+                className="flex-1 py-2.5 text-xs font-semibold"
+                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUndo}
+                disabled={undoing}
+                className="flex-1 py-2.5 text-xs font-semibold"
+                style={{ background: '#DC2626', color: '#ffffff', borderRadius: 4, opacity: undoing ? 0.7 : 1 }}
+              >
+                {undoing ? 'Deleting...' : 'Delete import'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Sync Detail Modal ── */}
       {selectedSync && (

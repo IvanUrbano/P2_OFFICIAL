@@ -6,7 +6,7 @@
       "type": "Feature",
       "properties": {
         "name": "Bagong Ilog",
-        "population": 26512,
+        "population": 21345,
         "centroid": [
           121.06771111111112,
           14.5679
@@ -446,7 +446,7 @@
       "type": "Feature",
       "properties": {
         "name": "Bagong Katipunan",
-        "population": 945,
+        "population": 892,
         "centroid": [
           121.0748853,
           14.5585616
@@ -806,7 +806,7 @@
       "type": "Feature",
       "properties": {
         "name": "Bambang",
-        "population": 13786,
+        "population": 21827,
         "centroid": [
           121.07821666666666,
           14.556716666666667
@@ -1274,7 +1274,7 @@
       "type": "Feature",
       "properties": {
         "name": "Buting",
-        "population": 11234,
+        "population": 10861,
         "centroid": [
           121.06580000000002,
           14.556616666666669
@@ -1682,7 +1682,7 @@
       "type": "Feature",
       "properties": {
         "name": "Caniogan",
-        "population": 15892,
+        "population": 29464,
         "centroid": [
           121.08333076923078,
           14.570353846153848
@@ -2162,7 +2162,7 @@
       "type": "Feature",
       "properties": {
         "name": "Dela Paz",
-        "population": 28456,
+        "population": 20782,
         "centroid": [
           121.09927857142857,
           14.614900000000002
@@ -2814,7 +2814,7 @@
       "type": "Feature",
       "properties": {
         "name": "Kalawaan",
-        "population": 18234,
+        "population": 33732,
         "centroid": [
           121.0895,
           14.550540000000002
@@ -3330,7 +3330,7 @@
       "type": "Feature",
       "properties": {
         "name": "Kapasigan",
-        "population": 12567,
+        "population": 5007,
         "centroid": [
           121.07326,
           14.56432
@@ -3622,7 +3622,7 @@
       "type": "Feature",
       "properties": {
         "name": "Kapitolyo",
-        "population": 21345,
+        "population": 9662,
         "centroid": [
           121.0566777777778,
           14.572566666666667
@@ -4062,7 +4062,7 @@
       "type": "Feature",
       "properties": {
         "name": "Malinao",
-        "population": 14567,
+        "population": 5050,
         "centroid": [
           121.0791,
           14.55884
@@ -4454,7 +4454,7 @@
       "type": "Feature",
       "properties": {
         "name": "Manggahan",
-        "population": 32145,
+        "population": 92423,
         "centroid": [
           121.09374545454544,
           14.60219090909091
@@ -5518,7 +5518,7 @@
       "type": "Feature",
       "properties": {
         "name": "Maybunga",
-        "population": 27890,
+        "population": 47802,
         "centroid": [
           121.09054999999998,
           14.578185714285718
@@ -6146,7 +6146,7 @@
       "type": "Feature",
       "properties": {
         "name": "Oranbo",
-        "population": 9876,
+        "population": 3421,
         "centroid": [
           121.064175,
           14.577549999999999
@@ -6418,7 +6418,7 @@
       "type": "Feature",
       "properties": {
         "name": "Palatiw",
-        "population": 16789,
+        "population": 28852,
         "centroid": [
           121.08581250000002,
           14.5646125
@@ -7018,7 +7018,7 @@
       "type": "Feature",
       "properties": {
         "name": "Pinagbuhatan",
-        "population": 45678,
+        "population": 171659,
         "centroid": [
           121.08978333333333,
           14.556433333333333
@@ -8358,7 +8358,7 @@
       "type": "Feature",
       "properties": {
         "name": "Pineda",
-        "population": 19234,
+        "population": 20459,
         "centroid": [
           121.05439000000001,
           14.568639999999998
@@ -8870,7 +8870,7 @@
       "type": "Feature",
       "properties": {
         "name": "Rosario",
-        "population": 34567,
+        "population": 77632,
         "centroid": [
           121.08676153846152,
           14.58593076923077
@@ -9606,7 +9606,7 @@
       "type": "Feature",
       "properties": {
         "name": "Sagad",
-        "population": 8765,
+        "population": 6332,
         "centroid": [
           121.07718333333332,
           14.56615
@@ -9990,7 +9990,7 @@
       "type": "Feature",
       "properties": {
         "name": "San Antonio",
-        "population": 23456,
+        "population": 12307,
         "centroid": [
           121.05795,
           14.582840000000001
@@ -10282,7 +10282,7 @@
       "type": "Feature",
       "properties": {
         "name": "San Joaquin",
-        "population": 18901,
+        "population": 14510,
         "centroid": [
           121.07508888888889,
           14.5528
@@ -10994,7 +10994,7 @@
       "type": "Feature",
       "properties": {
         "name": "San Jose",
-        "population": 15678,
+        "population": 1905,
         "centroid": [
           121.07224000000001,
           14.56114
@@ -11294,7 +11294,7 @@
       "type": "Feature",
       "properties": {
         "name": "San Miguel",
-        "population": 12345,
+        "population": 42181,
         "centroid": [
           121.08688571428571,
           14.566971428571426
@@ -12166,7 +12166,7 @@
       "type": "Feature",
       "properties": {
         "name": "San Nicolas",
-        "population": 11234,
+        "population": 2724,
         "centroid": [
           121.0801625,
           14.5617125
@@ -12670,7 +12670,7 @@
       "type": "Feature",
       "properties": {
         "name": "Santa Cruz",
-        "population": 9876,
+        "population": 5883,
         "centroid": [
           121.08171999999999,
           14.56328
@@ -12878,7 +12878,7 @@
       "type": "Feature",
       "properties": {
         "name": "Santa Lucia",
-        "population": 13456,
+        "population": 45916,
         "centroid": [
           121.09838333333333,
           14.584966666666666
@@ -13478,7 +13478,7 @@
       "type": "Feature",
       "properties": {
         "name": "Santa Rosa",
-        "population": 10234,
+        "population": 1036,
         "centroid": [
           121.06856,
           14.55942
@@ -13686,7 +13686,7 @@
       "type": "Feature",
       "properties": {
         "name": "Santo Tomas",
-        "population": 8765,
+        "population": 13542,
         "centroid": [
           121.07978333333334,
           14.56505
@@ -14118,7 +14118,7 @@
       "type": "Feature",
       "properties": {
         "name": "Santolan",
-        "population": 21567,
+        "population": 60797,
         "centroid": [
           121.08341666666665,
           14.616641666666666
@@ -14626,7 +14626,7 @@
       "type": "Feature",
       "properties": {
         "name": "Sumilang",
-        "population": 11234,
+        "population": 4546,
         "centroid": [
           121.0728,
           14.558019999999999
@@ -14962,7 +14962,7 @@
       "type": "Feature",
       "properties": {
         "name": "Ugong",
-        "population": 16789,
+        "population": 30159,
         "centroid": [
           121.06909230769232,
           14.581184615384615

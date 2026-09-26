@@ -2,11 +2,14 @@
 TBInsight ML Service — ARIMA Forecasting
 
 Per-barangay time-series forecasting using pmdarima (auto_arima).
-Fallback to seasonal-naive or exponential smoothing for sparse/short series.
+Seasonal ARIMA needs two full annual cycles (24 months). With 10-23 months a
+non-seasonal ARIMA is fitted instead (seasonality cannot be learned from under
+two cycles). Below 10 months or for sparse series, exponential smoothing is used.
 
 Design spec:
   - ARIMA per barangay with seasonal=True, m=12 (monthly, annual seasonality)
-  - Fallback for series < 24 months or > 50% zeros
+  - Seasonal ARIMA for >= 24 months, non-seasonal for 10-23, fallback below 10 or > 50% zeros
+  - All barangays share one monthly calendar so forecasts target the same month
   - Returns forecasted_count + confidence intervals
 """
 
@@ -15,10 +18,15 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from pmdarima import auto_arima
 
 from config import (
+    ARIMA_LEADING_TRIM_SHARE,
     ARIMA_MIN_HISTORY,
+    ARIMA_MIN_HISTORY_NONSEASONAL,
+    FALLBACK_METHOD,
+    ML_N_JOBS,
     ARIMA_SEASONAL_PERIOD,
     ARIMA_SPARSE_THRESHOLD,
     MODEL_VERSION,
@@ -27,11 +35,21 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
+def parallel_map(fn, arg_tuples: list[tuple]) -> list:
+    """
+    Apply fn(*args) to each tuple, across worker processes when there is enough work.
+    ARIMA fits are independent per barangay and dominate the request time.
+    """
+    if ML_N_JOBS <= 1 or len(arg_tuples) < 3:
+        return [fn(*args) for args in arg_tuples]
+    return Parallel(n_jobs=ML_N_JOBS)(delayed(fn)(*args) for args in arg_tuples)
+
+
 def _needs_fallback(series: pd.Series) -> bool:
     """Determine if a series should use fallback instead of ARIMA."""
-    # Too short for ARIMA
-    if len(series) < ARIMA_MIN_HISTORY:
-        logger.info(f"Series too short ({len(series)} < {ARIMA_MIN_HISTORY}), using fallback")
+    # Too short for any ARIMA
+    if len(series) < ARIMA_MIN_HISTORY_NONSEASONAL:
+        logger.info(f"Series too short ({len(series)} < {ARIMA_MIN_HISTORY_NONSEASONAL}), using fallback")
         return True
 
     # Too sparse (many zeros)
@@ -95,11 +113,16 @@ def _exponential_smoothing_forecast(series: pd.Series, forecast_horizon: int = 1
         return _seasonal_naive_forecast(series, forecast_horizon)
 
 
-def _arima_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
-    """Run ARIMA forecast using pmdarima auto_arima."""
-    try:
-        model = auto_arima(
-            series.values.astype(float),
+def _fit_arima(values):
+    """
+    Fit auto_arima. Seasonal only when there are two full annual cycles;
+    otherwise a small non-seasonal model (orders capped to avoid overfitting
+    short series).
+    """
+    values = np.asarray(values, dtype=float)
+    if len(values) >= ARIMA_MIN_HISTORY:
+        return auto_arima(
+            values,
             seasonal=True,
             m=ARIMA_SEASONAL_PERIOD,
             stepwise=True,
@@ -108,6 +131,30 @@ def _arima_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
             max_order=8,
             trace=False,
         )
+    return auto_arima(
+        values,
+        seasonal=False,
+        stepwise=True,
+        suppress_warnings=True,
+        error_action="ignore",
+        max_p=2,
+        max_q=2,
+        max_order=4,
+        trace=False,
+    )
+
+
+def _fallback_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
+    """Fallback for series too short or too sparse for ARIMA (see FALLBACK_METHOD)."""
+    if FALLBACK_METHOD == "seasonal_naive":
+        return _seasonal_naive_forecast(series, forecast_horizon)
+    return _exponential_smoothing_forecast(series, forecast_horizon)
+
+
+def _arima_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
+    """Run ARIMA forecast using pmdarima auto_arima."""
+    try:
+        model = _fit_arima(series.values)
 
         forecast, conf_int = model.predict(
             n_periods=forecast_horizon,
@@ -122,8 +169,8 @@ def _arima_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
             "method": "arima",
         }
     except Exception as e:
-        logger.warning(f"ARIMA failed, falling back to exponential_smoothing: {e}")
-        return _exponential_smoothing_forecast(series, forecast_horizon)
+        logger.warning(f"ARIMA failed, using fallback: {e}")
+        return _fallback_forecast(series, forecast_horizon)
 
 
 def forecast_barangay(
@@ -152,7 +199,7 @@ def forecast_barangay(
 
     # Choose method based on series characteristics
     if _needs_fallback(series):
-        result = _seasonal_naive_forecast(series, forecast_horizon)
+        result = _fallback_forecast(series, forecast_horizon)
     else:
         result = _arima_forecast(series, forecast_horizon)
 
@@ -181,6 +228,24 @@ def forecast_barangay(
     }
 
 
+def _trim_leading_months(wide: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop leading months holding only stray records.
+
+    Imports can carry a handful of old cases (e.g. one case two years before the
+    real data starts). Left in, they stretch every series with near-empty months,
+    which trips the sparsity check and distorts the ARIMA fit. Leading months
+    whose city-wide total is under ARIMA_LEADING_TRIM_SHARE of the median month
+    are dropped.
+    """
+    totals = wide.sum(axis=1)
+    positive = totals[totals > 0]
+    if positive.empty:
+        return wide
+    real = totals[totals >= ARIMA_LEADING_TRIM_SHARE * float(positive.median())]
+    return wide.loc[real.index[0]:]
+
+
 def forecast_all(
     series_data: list[dict],
     forecast_horizon: int = 1,
@@ -192,30 +257,29 @@ def forecast_all(
         series_data: List of dicts with barangay_name, month, case_count
         forecast_horizon: Number of months to forecast
 
+    All barangays are placed on ONE shared monthly calendar (missing months
+    count as 0), so every forecast targets the month after the latest month in
+    the data. Without this, a barangay whose last case was months ago would
+    forecast that older month instead of the pipeline period.
+
     Returns:
         List of forecast results per barangay
     """
-    # Convert to DataFrame
     df = pd.DataFrame(series_data)
     if df.empty:
         return []
 
-    # Parse month column
-    df["month"] = pd.to_datetime(df["month"])
+    df["month"] = pd.to_datetime(df["month"]).dt.to_period("M").dt.to_timestamp()
+    wide = df.pivot_table(
+        index="month", columns="barangay_name", values="case_count",
+        aggfunc="sum", fill_value=0,
+    ).sort_index()
+    wide = wide.reindex(pd.date_range(wide.index[0], wide.index[-1], freq="MS"), fill_value=0)
+    wide = _trim_leading_months(wide)
 
-    results = []
-    grouped = df.groupby("barangay_name")
-
-    for barangay_name, group in grouped:
-        # Sort by month and set as index
-        group_sorted = group.sort_values("month").set_index("month")
-        ts = group_sorted["case_count"]
-
-        # Resample to monthly frequency (fill missing months with 0)
-        ts = ts.resample("MS").sum().fillna(0)
-
-        result = forecast_barangay(barangay_name, ts, forecast_horizon)
-        results.append(result)
+    jobs = [(name, wide[name].astype(float), forecast_horizon) for name in wide.columns]
+    results = parallel_map(forecast_barangay, jobs)
+    for barangay_name, result in zip(wide.columns, results):
         n_preds = len(result["predictions"])
         logger.info(
             f"Forecast for {barangay_name}: {n_preds} months "
@@ -271,41 +335,33 @@ def backtest_mae(
 
     NEVER shuffles months — temporal ordering only.
 
+    The holdout shrinks for short series so at least
+    ARIMA_MIN_HISTORY_NONSEASONAL months remain for fitting.
+
     Args:
         counts: Monthly case counts
-        horizon: Number of months to hold out for testing
+        horizon: Maximum number of months to hold out for testing
         seasonal_m: Seasonal period (12 for monthly)
 
     Returns:
         MAE (float) if series is long enough, None otherwise
     """
-    if len(counts) <= horizon + seasonal_m:
+    horizon = min(horizon, len(counts) - ARIMA_MIN_HISTORY_NONSEASONAL)
+    if horizon < 1:
         return None
 
     train = counts[:-horizon]
     actual = np.asarray(counts[-horizon:], dtype=float)
 
     try:
-        model = auto_arima(
-            train,
-            seasonal=True,
-            m=seasonal_m,
-            stepwise=True,
-            suppress_warnings=True,
-            error_action="ignore",
-            max_order=8,
-            trace=False,
-        )
+        model = _fit_arima(train)
         forecast = model.predict(n_periods=horizon)
         forecast = np.asarray(forecast, dtype=float)
         return float(np.mean(np.abs(actual - forecast)))
     except Exception:
-        # If ARIMA fails on train set, try seasonal naive
-        if len(train) >= seasonal_m:
-            season = np.asarray(train[-seasonal_m:], dtype=float)
-            forecast = np.array([season[i % seasonal_m] for i in range(horizon)])
-            return float(np.mean(np.abs(actual - forecast)))
-        return None
+        # If ARIMA fails on the train set, score the fallback method instead
+        fallback = _fallback_forecast(pd.Series(train, dtype=float), horizon)
+        return float(np.mean(np.abs(actual - np.asarray(fallback["forecasted_count"]))))
 
 
 def walk_forward_arima(
@@ -349,23 +405,11 @@ def walk_forward_arima(
         actual = float(counts[i])
 
         try:
-            model = auto_arima(
-                train,
-                seasonal=True,
-                m=seasonal_m,
-                stepwise=True,
-                suppress_warnings=True,
-                error_action="ignore",
-                max_order=8,
-                trace=False,
-            )
-            predicted = float(model.predict(n_periods=1)[0])
+            model = _fit_arima(train)
+            predicted = max(0.0, float(model.predict(n_periods=1)[0]))
         except Exception:
-            # Fallback: seasonal naive (repeat last year's value for this month)
-            if len(train) >= seasonal_m:
-                predicted = float(train[-seasonal_m])
-            else:
-                predicted = float(train[-1]) if train else 0.0
+            fallback = _fallback_forecast(pd.Series(train, dtype=float), 1)
+            predicted = float(fallback["forecasted_count"][0])
 
         error = abs(actual - predicted)
         errors.append(error)

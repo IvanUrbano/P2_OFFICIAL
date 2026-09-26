@@ -33,8 +33,9 @@ def test_features_are_the_fixed_eight():
 
 def test_compute_incidence_normal():
     """Normal incidence calculation."""
+    # Monthly cases are annualized (x12): 100 / 50000 * 100000 * 12
     result = compute_incidence(100, 50000)
-    assert abs(result - 200.0) < 0.01
+    assert abs(result - 2400.0) < 0.01
 
 
 def test_compute_incidence_zero_population():
@@ -74,10 +75,11 @@ def test_classify_incidence_tertile_boundary_low_medium():
 
 def test_classify_incidence_tertile_boundary_medium_high():
     """Boundary between Medium and High."""
-    result_medium = classify_incidence_tertile(349.0)
-    result_high = classify_incidence_tertile(350.0)
-    assert result_medium == "Medium"
-    assert result_high == "High"
+    # High is strictly above the cut point, matching thresholds.classify_incidence
+    # and the Express rule-based fallback.
+    assert classify_incidence_tertile(349.0) == "Medium"
+    assert classify_incidence_tertile(350.0) == "Medium"
+    assert classify_incidence_tertile(350.1) == "High"
 
 
 def test_classify_incidence_tertile_custom_thresholds():

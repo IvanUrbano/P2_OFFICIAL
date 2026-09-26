@@ -53,6 +53,44 @@ function computeRiskScore({ incidence, trend, neighborRisk, forecastError, maxIn
 }
 
 /**
+ * Normalize a month value to a 'YYYY-MM-01' key.
+ *
+ * pg returns DATE columns as JS Dates at LOCAL midnight, so the local getters
+ * give the right calendar month in any server timezone. (toISOString() shifts
+ * back a day east of UTC — e.g. December 2025 became '2025-11-30' in Manila.)
+ */
+function monthKey(value) {
+  if (typeof value === 'string') return value.slice(0, 7) + '-01';
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+/**
+ * Assign Low/Medium/High to a set of risk scores by tertile: the bottom third of scores is Low,
+ * the top third High. (Fixed cutoffs on the 0-100 scale do not work here: every component is
+ * scaled by the current maximum, so scores bunch up and nearly everything lands in Medium.)
+ *
+ * Boundaries match the incidence thresholds: Low if score <= low_max, High if score > med_max,
+ * with cut points at the 1/3 and 2/3 percentiles (linear interpolation).
+ *
+ * @param {number[]} scores
+ * @returns {{ classes: string[], low_max: number|null, med_max: number|null }}
+ */
+function classifyByTertile(scores) {
+  if (scores.length === 0) return { classes: [], low_max: null, med_max: null };
+  const sorted = [...scores].sort((a, b) => a - b);
+  const percentile = (p) => {
+    const pos = (sorted.length - 1) * p;
+    const lo = Math.floor(pos);
+    const hi = Math.ceil(pos);
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+  };
+  const low_max = percentile(1 / 3);
+  const med_max = percentile(2 / 3);
+  const classes = scores.map(s => (s <= low_max ? 'Low' : s > med_max ? 'High' : 'Medium'));
+  return { classes, low_max, med_max };
+}
+
+/**
  * Compute neighbor risk for all barangays.
  * neighbor_risk for barangay X = average incidence of all OTHER barangays,
  * normalized to [0, 1] using min-max across all barangays.
@@ -239,7 +277,7 @@ async function storeResults(client, period, forecasts, classifications, riskScor
        FROM monthly_case_summary`
     );
     for (const row of acResult.rows) {
-      const key = `${row.barangay_name}||${row.month.toISOString().slice(0, 10)}`;
+      const key = `${row.barangay_name}||${monthKey(row.month)}`;
       actualCountsByPeriod[key] = row.case_count;
     }
   } catch {
@@ -334,7 +372,9 @@ async function storeResults(client, period, forecasts, classifications, riskScor
 }
 
 module.exports = {
+  monthKey,
   computeRiskScore,
+  classifyByTertile,
   computeNeighborRisks,
   computeHistoricalBias,
   classifyTrend,
