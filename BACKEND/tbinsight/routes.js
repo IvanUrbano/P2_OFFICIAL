@@ -479,7 +479,7 @@ router.get('/dashboard/summary', async (req, res) => {
       paramIdx++;
     }
     if (barangay) {
-      conditions.push(`TRIM(c.barangay_name) = $${paramIdx}`);
+      conditions.push(`TRIM(barangay_name) = $${paramIdx}`);
       params.push(barangay);
       paramIdx++;
     }
