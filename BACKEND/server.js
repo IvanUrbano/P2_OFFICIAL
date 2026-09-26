@@ -97,7 +97,6 @@ app.use('/api', slowRequestTimeout(60_000));
 // Extend timeout for long-running endpoints (up to 10 minutes for large file processing)
 app.use('/api/tb/pipeline', slowRequestTimeout(600_000));
 app.use('/api/tb/evaluate', slowRequestTimeout(600_000));
-app.use('/api/tb/import', slowRequestTimeout(600_000));
 
 // ==================== WEBHOOK RAW BODY CAPTURE ====================
 // CRITICAL: Use raw body parser with VERY LARGE limit BEFORE custom middleware
@@ -161,8 +160,7 @@ if (process.env.NODE_ENV !== 'production') {
         tbInsight: {
           barangays: 'GET /api/tb/barangays',
           facilities: 'GET /api/tb/facilities',
-          import: 'POST /api/tb/import',
-          importHistory: 'GET /api/tb/import-history',
+          webhook: 'POST /api/webhook/pasig-clone (case data from Pasig Clone)',
           dashboard: 'GET /api/tb/dashboard/summary',
           monthly: 'GET /api/tb/dashboard/monthly',
           choropleth: 'GET /api/tb/gis/choropleth',

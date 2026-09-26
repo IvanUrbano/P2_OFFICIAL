@@ -15,8 +15,8 @@ async function seedBarangays() {
     await client.query('BEGIN');
 
     for (const feature of geojson.features) {
-      const { name, population } = feature.properties;
-      const [lon, lat] = feature.geometry.coordinates;
+      const { name, population, centroid } = feature.properties;
+      const [lon, lat] = centroid;
 
       await client.query(
         `INSERT INTO barangays (name, population, centroid_lon, centroid_lat)

@@ -1,8 +1,6 @@
 const express = require('express');
 const pool = require('../db');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
-const { parseCaseFile } = require('./parseCaseFile');
-const { importCases, getImportHistory, getBatchErrors, getBatchSummary } = require('./importCases');
 const { rebuildAggregations } = require('./aggregateMonthly');
 const { seedAll, seedBarangaysGeom, getBarangays, getHealthFacilities, findBarangay } = require('./barangays');
 const { runPipeline } = require('./pipeline');
@@ -106,111 +104,8 @@ router.post('/barangays/seed-geom', authenticateToken, authorizeRoles('admin'), 
 });
 
 // ==================== IMPORT ====================
-
-/**
- * POST /api/tb/import
- * Upload CSV/Excel file → parse, validate, store raw + cleaned + aggregate
- */
-router.post('/import', authenticateToken, authorizeRoles('admin'), async (req, res) => {
-  try {
-    // Check if file is present
-    if (!req.files || !req.files.file) {
-      return res.status(400).json({ error: 'No file uploaded. Use multipart/form-data with field "file".' });
-    }
-
-    const file = req.files.file;
-
-    // Get valid barangays for validation
-    const barangaysResult = await pool.query('SELECT name FROM barangays');
-    const validBarangays = new Set(
-      barangaysResult.rows.map(r => r.name.toLowerCase())
-    );
-
-    // Parse the file
-    const parsed = parseCaseFile(file.data, file.name, validBarangays);
-
-    if (parsed.totalRows === 0) {
-      return res.status(400).json({ error: 'File is empty or has no valid data rows.' });
-    }
-
-    // Import into database
-    const result = await importCases(parsed.rows, file.name);
-
-    // Rebuild aggregations from cleaned data
-    let aggregations = null;
-    if (result.importedCount > 0) {
-      aggregations = await rebuildAggregations();
-    }
-
-    // Create notification for successful import
-    if (result.importedCount > 0) {
-      try {
-        await createNotification(pool, {
-          title: 'Records Imported Successfully',
-          message: `${result.importedCount} TB records were successfully imported from ${file.name}.`,
-          sourceModule: 'tb_records',
-          relatedRecordId: result.batchId,
-          relatedEntityType: 'batch',
-        });
-        // Auto-evaluate all alert types after import
-        const now = new Date();
-        const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-        await evaluateAllAlerts(pool, currentPeriod);
-      } catch (notifErr) {
-        console.error('Import notification error:', notifErr.message);
-      }
-    }
-
-    res.status(201).json({
-      message: 'File imported successfully.',
-      batch: {
-        id: result.batchId,
-        sourceFile: file.name,
-        totalRows: result.totalCount,
-        imported: result.importedCount,
-        errors: result.errorCount,
-      },
-      validation: {
-        errors: parsed.errors,
-        warnings: parsed.warnings,
-      },
-      aggregations,
-    });
-  } catch (err) {
-    console.error('Import error:', err.message);
-    res.status(500).json({ error: 'Server error during import.' });
-  }
-});
-
-/**
- * GET /api/tb/import-history
- * List past imports
- */
-router.get('/import-history', authenticateToken, authorizeRoles('admin'), async (req, res) => {
-  try {
-    const history = await getImportHistory();
-    res.json({ imports: history });
-  } catch (err) {
-    console.error('Import history error:', err.message);
-    res.status(500).json({ error: 'Server error fetching import history.' });
-  }
-});
-
-/**
- * GET /api/tb/import/:batchId/errors
- * Get validation errors for a specific batch
- */
-router.get('/import/:batchId/errors', authenticateToken, authorizeRoles('admin'), async (req, res) => {
-  try {
-    const { batchId } = req.params;
-    const errors = await getBatchErrors(batchId);
-    const summary = await getBatchSummary(batchId);
-    res.json({ batchId, summary, errors });
-  } catch (err) {
-    console.error('Batch errors error:', err.message);
-    res.status(500).json({ error: 'Server error fetching batch errors.' });
-  }
-});
+// Case data enters TBInsight only through the signed Pasig Clone webhook
+// (POST /api/webhook/pasig-clone). Upload, cleaning and validation happen in Pasig Clone.
 
 // ==================== CASE RECORDS ====================
 

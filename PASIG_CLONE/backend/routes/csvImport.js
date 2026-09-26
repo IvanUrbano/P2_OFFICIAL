@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { parseMultiSheetExcel } = require('../services/multiSheetParser');
+const { parseRegistryFile } = require('../services/multiSheetParser');
 const { calculateFileHash } = require('../utils/fileHash');
 const { logAuditEvent } = require('../utils/auditLogger');
 const db = require('../db/pasigSchema');
@@ -20,10 +20,10 @@ router.post('/import', authenticate, authorizeRoles('admin', 'staff'), async (re
       return res.status(400).json({ error: 'File too large. Maximum size is 500MB.' });
     }
 
-    // Validate file extension — only .xlsx and .xls are supported
+    // Validate file extension — Excel workbooks (DSTB + MN sheets) or a CSV export of one sheet
     const ext = file.name.split('.').pop().toLowerCase();
-    if (!['xlsx', 'xls'].includes(ext)) {
-      return res.status(400).json({ error: 'Unsupported file type. Only .xlsx and .xls files are accepted.' });
+    if (!['xlsx', 'xls', 'csv'].includes(ext)) {
+      return res.status(400).json({ error: 'Unsupported file type. Only .xlsx, .xls and .csv files are accepted.' });
     }
 
     // ========== STEP 1: DUPLICATE FILE DETECTION ==========
@@ -71,11 +71,39 @@ router.post('/import', authenticate, authorizeRoles('admin', 'staff'), async (re
     }
 
     // ========== STEP 2: PARSE AND CREATE BATCH ==========
-    const parsed = await parseMultiSheetExcel(file.data, file.name);
+    let parsed;
+    try {
+      parsed = await parseRegistryFile(file.data, file.name);
+    } catch (parseErr) {
+      console.error('❌ File parse error:', parseErr.message);
+      return res.status(400).json({
+        error: ext === 'xls'
+          ? 'Could not read this .xls file. Open it in Excel and save it as .xlsx or .csv, then upload again.'
+          : 'Could not read this file. Make sure it is a valid Excel workbook or CSV file.',
+      });
+    }
+
+    if (parsed.totalRecords === 0) {
+      return res.status(400).json({
+        error: parsed.sheets.length === 0
+          ? 'No header row found. The file needs column headers such as Brgy, Age, Sex and Date of Diagnosis.'
+          : 'The file has headers but no case rows.',
+      });
+    }
 
     const warnings = [];
-    if (parsed.dstbCount === 0) warnings.push('Required DSTB sheet missing');
-    if (parsed.mnCount === 0) warnings.push('Required MN sheet missing');
+    if (parsed.fileType === 'csv') {
+      const sheet = parsed.sheets[0];
+      warnings.push(`CSV read as ${sheet.source_type} records (header on row ${sheet.header_row}). Upload the other sheet as a separate CSV if needed.`);
+    } else {
+      if (parsed.dstbCount === 0) warnings.push('DSTB sheet missing or has no rows');
+      if (parsed.mnCount === 0) warnings.push('MN sheet missing or has no rows');
+    }
+    for (const sheet of parsed.sheets) {
+      if (sheet.unmapped_headers && sheet.unmapped_headers.length > 0) {
+        warnings.push(`${sheet.sheet_name}: columns not imported — ${sheet.unmapped_headers.join(', ')}`);
+      }
+    }
 
     await client.query('BEGIN');
 
@@ -129,6 +157,7 @@ router.post('/import', authenticate, authorizeRoles('admin', 'staff'), async (re
         name: s.sheet_name,
         sourceType: s.source_type,
         recordCount: s.record_count,
+        headerRow: s.header_row,
       })),
       warnings: warnings.length > 0 ? warnings : undefined,
     });

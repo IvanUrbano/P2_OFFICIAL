@@ -3,7 +3,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import API from '../api/axios';
 
 const NAV_ITEMS = [
-  { icon: 'ri-pie-chart-fill', label: 'Dashboard', path: '/dashboard' },
+  { icon: 'ri-hospital-line', label: 'Health Facilities', path: '/facilities' },
   { icon: 'ri-stethoscope-line', label: 'TB Records', path: '/records' },
   { icon: 'ri-upload-cloud-2-line', label: 'Data Import', path: '/import' },
   { icon: 'ri-checkbox-circle-line', label: 'Validation', path: '/validation' },
@@ -14,7 +14,7 @@ const NAV_ITEMS = [
 ];
 
 const NAV_ACCENT = {
-  '/dashboard': '#3B82F6',
+  '/facilities': '#3B82F6',
   '/records': '#10B981',
   '/import': '#8B5CF6',
   '/validation': '#F97316',
@@ -112,7 +112,7 @@ export default function Layout() {
       {/* ── Tier 1: Brand Bar ── */}
       <header className="sticky top-0 z-[1100] w-full shrink-0">
         <div className="flex items-center justify-between px-6 lg:px-8" style={{ background: '#0B1D35', minHeight: '52px' }}>
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/dashboard')}>
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/facilities')}>
             <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.15)' }}>
               <span className="text-sm font-extrabold" style={{ color: '#ffffff' }}>P2</span>
             </div>

@@ -194,3 +194,15 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
+
+-- MN-specific fields carried through to TBInsight (idempotent; safe on existing databases)
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS type TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS province TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS region TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS referred_to_dots TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS referral_status TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS microscopy_result TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS microscopy_release_date DATE;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS rdt_result TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS rdt_release_date DATE;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS outcome_reason TEXT;

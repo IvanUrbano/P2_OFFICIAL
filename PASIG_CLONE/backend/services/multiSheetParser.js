@@ -1,5 +1,3 @@
-const ExcelJS = require('exceljs');
-
 const MONTH_ABBR = {
   jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
   jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
@@ -7,77 +5,58 @@ const MONTH_ABBR = {
 
 function normalizeHeader(header) {
   if (!header) return '';
-  return String(header).trim().toLowerCase();
+  return String(header).replace(/ /g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+/**
+ * Map spreadsheet header text to system field names.
+ * Order matters: the more specific checks (dates, "outcome reason") run before the general ones.
+ * Handles the real registry headers, e.g. "Date Started Tx", "Bacteriologic Status",
+ * "Screening/Diagnosing Health Facility", "Outcome/Status", "Date of Outcome/Status".
+ */
 function buildColumnMap(rawHeaders, sourceType) {
   const map = {};
 
   for (let i = 0; i < rawHeaders.length; i++) {
-    const header = String(rawHeaders[i] || '');
-    const normalized = normalizeHeader(header);
+    const n = normalizeHeader(rawHeaders[i]);
+    if (!n) continue;
 
-    if (normalized === 'no.' || normalized === 'no') continue;
+    if (n === 'no.' || n === 'no' || n === '#' || n === 'no. #') continue;
 
-    if (normalized.includes('notification') && normalized.includes('date')) {
-      map[i] = 'date_of_notification';
-    } else if (normalized.includes('screening') && normalized.includes('date')) {
-      map[i] = 'date_of_screening';
-    } else if (normalized.includes('diagnosis') && normalized.includes('date')) {
-      map[i] = 'date_of_diagnosis';
-    } else if (normalized.includes('treatment') && normalized.includes('started')) {
-      map[i] = 'date_started_treatment';
-    } else if (normalized.includes('outcome') && normalized.includes('date')) {
-      map[i] = 'date_of_outcome';
-    } else if (normalized.includes('record') && normalized.includes('created')) {
-      map[i] = 'record_created_at';
-    } else if (normalized === 'age') {
-      map[i] = 'age';
-    } else if (normalized === 'sex') {
-      map[i] = 'sex';
-    } else if (normalized.includes('barangay') || normalized === 'brgy') {
-      map[i] = 'barangay_name';
-    } else if (normalized.includes('city') || normalized.includes('municipality')) {
-      map[i] = 'city';
-    } else if (normalized.includes('treatment') && (normalized.includes('health') || normalized.includes('facility'))) {
-      map[i] = 'treatment_facility';
-    } else if (normalized.includes('screening') && (normalized.includes('health') || normalized.includes('facility'))) {
-      map[i] = 'screening_facility';
-    } else if (normalized.includes('source') && normalized.includes('patient')) {
-      map[i] = 'source_of_patient';
-    } else if (normalized.includes('anatomical')) {
-      map[i] = 'anatomical_site';
-    } else if (normalized.includes('registration')) {
-      map[i] = 'registration_group';
-    } else if (normalized.includes('bacteriological')) {
-      map[i] = 'bacteriological_status';
-    } else if (normalized.includes('outcome') && !normalized.includes('date')) {
-      map[i] = 'outcome_status';
-    } else if (normalized.includes('validation') && sourceType === 'DSTB') {
-      map[i] = 'validation_status';
-    } else if (normalized.includes('itis') && normalized.includes('lite')) {
-      map[i] = 'itis_case_id';
-    } else if (normalized === 'type') {
-      map[i] = 'type';
-    } else if (normalized.includes('province')) {
-      map[i] = 'province';
-    } else if (normalized.includes('region')) {
-      map[i] = 'region';
-    } else if (normalized.includes('referred') || normalized.includes('dots')) {
-      map[i] = 'referred_to_dots';
-    } else if (normalized.includes('referral') && normalized.includes('status')) {
-      map[i] = 'referral_status';
-    } else if (normalized.includes('microscopy') && normalized.includes('result')) {
-      map[i] = 'microscopy_result';
-    } else if (normalized.includes('microscopy') && normalized.includes('date')) {
-      map[i] = 'microscopy_release_date';
-    } else if (normalized.includes('rdt') && normalized.includes('result')) {
-      map[i] = 'rdt_result';
-    } else if (normalized.includes('rdt') && normalized.includes('date')) {
-      map[i] = 'rdt_release_date';
-    } else if (normalized.includes('outcome') && normalized.includes('reason')) {
-      map[i] = 'outcome_reason';
-    }
+    let field = null;
+    if (n.includes('itis') && n.includes('lite')) field = 'itis_case_id';
+    else if (n.includes('microscopy') && n.includes('date')) field = 'microscopy_release_date';
+    else if (n.includes('microscopy') && n.includes('result')) field = 'microscopy_result';
+    else if (n.includes('rdt') && n.includes('date')) field = 'rdt_release_date';
+    else if (n.includes('rdt') && n.includes('result')) field = 'rdt_result';
+    else if (n.includes('notification') && n.includes('date')) field = 'date_of_notification';
+    else if (n.includes('screening') && n.includes('date')) field = 'date_of_screening';
+    else if ((n.includes('diagnosis') && n.includes('date')) || n === 'date diagnosed') field = 'date_of_diagnosis';
+    else if (n.includes('date') && n.includes('start') && (n.includes('tx') || n.includes('treatment'))) field = 'date_started_treatment';
+    else if (n.includes('treatment') && n.includes('started')) field = 'date_started_treatment';
+    else if (n.includes('outcome') && n.includes('date')) field = 'date_of_outcome';
+    else if (n.includes('record') && n.includes('created')) field = 'record_created_at';
+    else if (n.includes('outcome') && n.includes('reason')) field = 'outcome_reason';
+    else if (n === 'age' || n === 'age (years)' || n === 'age(yrs)') field = 'age';
+    else if (n === 'sex' || n === 'gender') field = 'sex';
+    else if (n.includes('barangay') || n === 'brgy' || n === 'brgy.' || n === 'bgy') field = 'barangay_name';
+    else if (n.includes('city') || n.includes('municipality')) field = 'city';
+    else if (n.includes('treatment') && (n.includes('health') || n.includes('facility'))) field = 'treatment_facility';
+    else if ((n.includes('screening') || n.includes('diagnosing')) && (n.includes('health') || n.includes('facility'))) field = 'screening_facility';
+    else if (n.includes('source') && n.includes('patient')) field = 'source_of_patient';
+    else if (n.includes('anatomical')) field = 'anatomical_site';
+    else if (n.includes('registration')) field = 'registration_group';
+    else if (n.includes('bacteriolog')) field = 'bacteriological_status';
+    else if (n.includes('outcome')) field = 'outcome_status';
+    else if (n.includes('validation') && sourceType === 'DSTB') field = 'validation_status';
+    else if (n === 'type') field = 'type';
+    else if (n.includes('province')) field = 'province';
+    else if (n.includes('region')) field = 'region';
+    else if (n.includes('referral') && n.includes('status')) field = 'referral_status';
+    else if (n.includes('referred') || n.includes('dots')) field = 'referred_to_dots';
+
+    // First matching column wins; later duplicate headers are ignored.
+    if (field && !Object.values(map).includes(field)) map[i] = field;
   }
 
   return map;
@@ -98,10 +77,10 @@ function parseDate(dateVal) {
     return `${isoMatch[1]}-${String(isoMatch[2]).padStart(2, '0')}-${String(isoMatch[3]).padStart(2, '0')}`;
   }
 
-  // Try DD-Mon-YY or DD-Mon-YYYY (e.g., "07-Jan-23", "16-Dec-25")
+  // DD-Mon-YY or DD-Mon-YYYY (e.g., "07-Jan-23", "16-Dec-25")
   const ddmMonMatch = str.match(/^(\d{1,2})\-([A-Za-z]{3})\-(\d{2,4})$/);
   if (ddmMonMatch) {
-    const [_, day, monStr, yearStr] = ddmMonMatch;
+    const [, day, monStr, yearStr] = ddmMonMatch;
     const monthNum = MONTH_ABBR[monStr.toLowerCase()];
     if (monthNum) {
       let y = parseInt(yearStr);
@@ -146,115 +125,265 @@ function detectSheetType(sheetName) {
   return null; // Unknown sheet — skip
 }
 
+/**
+ * For CSV files (no sheet names): decide DSTB vs MN from the file name, then the headers.
+ * MN registries carry "ITIS Lite Case No." / microscopy / RDT columns; DSTB ones do not.
+ */
+function detectTypeFromHeaders(headers, filename = '') {
+  const byName = detectSheetType(String(filename).replace(/\.[^.]+$/, '').replace(/[_]/g, ' '));
+  if (byName) return byName;
+  const h = headers.map(normalizeHeader).join(' | ');
+  if ((h.includes('itis') && h.includes('lite')) || h.includes('microscopy') || h.includes('rdt')) return 'MN';
+  return 'DSTB';
+}
+
+// Header words that identify the header row of a registry sheet.
+const HEADER_HINTS = ['brgy', 'barangay', 'age', 'sex', 'diagnosis', 'outcome', 'facility', 'itis'];
+
+/**
+ * Find the header row: the first row (within the first 20) where at least three
+ * different cells are short header-like labels containing a known header word.
+ * Registries often have title rows above it (the DSTB sheet's headers are on row 6),
+ * and a long title such as "Cases by Age and Sex" must not count as a header row.
+ */
+function findHeaderRow(rows) {
+  const limit = Math.min(20, rows.length);
+  for (let r = 0; r < limit; r++) {
+    const cells = (rows[r] || []).map(c => normalizeHeader(plainCellValue(c)));
+    const headerCells = cells.filter(c => c && c.length <= 45 && HEADER_HINTS.some(h => c === h || c.includes(h)));
+    if (headerCells.length >= 3) return r;
+  }
+  return -1;
+}
+
+/**
+ * Convert an ExcelJS cell value into a plain value (Date, number or string).
+ */
+function plainCellValue(v) {
+  if (v === null || v === undefined) return null;
+  if (v instanceof Date) return v;
+  if (typeof v === 'object') {
+    if ('result' in v) return plainCellValue(v.result); // formula
+    if (Array.isArray(v.richText)) return v.richText.map(t => t.text).join('');
+    if ('text' in v) return v.text; // hyperlink
+    if ('error' in v) return null;
+    return String(v);
+  }
+  return v;
+}
+
+/**
+ * Shared row parser for Excel sheets and CSV files.
+ * @param {Array<Array>} rows - 2D array of cell values (row 0 = first line of the sheet)
+ * @param {string} sheetName
+ * @param {'DSTB'|'MN'} sourceType
+ * @returns {{ records: Array, headerRow: number, mappedColumns: string[], unmappedHeaders: string[] }}
+ */
+function parseSheetRows(rows, sheetName, sourceType) {
+  const headerIdx = findHeaderRow(rows);
+  if (headerIdx < 0) {
+    return { records: [], headerRow: null, mappedColumns: [], unmappedHeaders: [] };
+  }
+
+  const rawHeaders = (rows[headerIdx] || []).map(h => (h === null || h === undefined ? '' : String(plainCellValue(h))));
+  const columnMap = buildColumnMap(rawHeaders, sourceType);
+  const mappedIdx = new Set(Object.keys(columnMap).map(Number));
+  const unmappedHeaders = rawHeaders
+    .map((h, i) => ({ h: String(h).trim(), i }))
+    .filter(({ h, i }) => h && !mappedIdx.has(i) && !['no.', 'no', '#'].includes(h.toLowerCase()))
+    .map(({ h }) => h);
+
+  const records = [];
+  for (let r = headerIdx + 1; r < rows.length; r++) {
+    const values = (rows[r] || []).map(plainCellValue);
+    const nonEmpty = values.filter(v => v !== null && v !== undefined && String(v).trim() !== '');
+    if (nonEmpty.length === 0) continue; // blank line
+    const first = String(values[0] ?? '').trim().toUpperCase();
+    if (first === 'TOTAL' || first === 'GRAND TOTAL') continue;
+
+    const mapped = { source_type: sourceType, validation_status: null, itis_case_id: null };
+    for (const [colIndex, field] of Object.entries(columnMap)) {
+      const val = values[Number(colIndex)];
+      if (val !== undefined && val !== null && String(val).trim() !== '') {
+        mapped[field] = val instanceof Date || typeof val === 'number' ? val : String(val).trim();
+      }
+    }
+
+    // Row must carry at least one case field (skips stray notes under the table)
+    const hasCaseData = ['barangay_name', 'date_of_diagnosis', 'age', 'sex', 'itis_case_id']
+      .some(f => mapped[f] !== undefined && mapped[f] !== null);
+    if (!hasCaseData) continue;
+
+    // Keep original values in raw storage as JSON-safe values; dates -> YYYY-MM-DD
+    for (const f of ['date_of_screening', 'date_of_diagnosis', 'date_of_notification',
+      'date_started_treatment', 'date_of_outcome', 'microscopy_release_date', 'rdt_release_date']) {
+      if (mapped[f] instanceof Date) mapped[f] = parseDate(mapped[f]);
+    }
+    if (mapped.record_created_at !== undefined) {
+      const d = parseDate(mapped.record_created_at);
+      mapped.record_created_at = d ? new Date(d).toISOString() : null;
+    }
+    if (typeof mapped.age === 'number') mapped.age = Math.floor(mapped.age);
+
+    mapped.row_number = r + 1; // 1-based, matches the spreadsheet row
+    mapped.sheet_name = sheetName;
+    records.push(mapped);
+  }
+
+  return {
+    records,
+    headerRow: headerIdx + 1,
+    mappedColumns: Object.values(columnMap),
+    unmappedHeaders,
+  };
+}
+
+// ---------- CSV ----------
+
+/**
+ * RFC 4180 CSV parser: quoted fields, escaped quotes (""), commas/newlines inside quotes,
+ * CRLF or LF line endings, UTF-8 BOM. Auto-detects ; or tab delimiters (Excel regional exports).
+ */
+function parseCsvText(text) {
+  let s = String(text);
+  if (s.charCodeAt(0) === 0xfeff) s = s.slice(1);
+
+  const firstLine = s.split(/\r?\n/, 1)[0] || '';
+  const counts = { ',': 0, ';': 0, '\t': 0 };
+  let inQ = false;
+  for (const ch of firstLine) {
+    if (ch === '"') inQ = !inQ;
+    else if (!inQ && ch in counts) counts[ch]++;
+  }
+  const delim = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][1] > 0
+    ? Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]
+    : ',';
+
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (s[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delim) {
+      row.push(field); field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && s[i + 1] === '\n') i++;
+      row.push(field); rows.push(row); row = []; field = '';
+    } else {
+      field += ch;
+    }
+  }
+  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function decodeCsvBuffer(buffer) {
+  const utf8 = buffer.toString('utf8');
+  // Fall back to latin1 when the file is not valid UTF-8 (e.g. "Ñ" saved by old Excel)
+  return utf8.includes('�') ? buffer.toString('latin1') : utf8;
+}
+
+function parseCsvFile(fileBuffer, filename) {
+  const rows = parseCsvText(decodeCsvBuffer(fileBuffer));
+  const headerIdx = findHeaderRow(rows);
+  const headers = headerIdx >= 0 ? rows[headerIdx] : [];
+  const sourceType = detectTypeFromHeaders(headers, filename);
+  const sheetName = sourceType;
+  const parsed = parseSheetRows(rows, sheetName, sourceType);
+
+  const result = { filename, sheets: [], totalRecords: 0, dstbCount: 0, mnCount: 0, fileType: 'csv' };
+  if (parsed.headerRow) {
+    result.sheets.push({
+      sheet_name: sheetName,
+      source_type: sourceType,
+      record_count: parsed.records.length,
+      header_row: parsed.headerRow,
+      unmapped_headers: parsed.unmappedHeaders,
+      records: parsed.records,
+    });
+    result.totalRecords = parsed.records.length;
+    if (sourceType === 'DSTB') result.dstbCount = parsed.records.length;
+    else result.mnCount = parsed.records.length;
+  }
+  return result;
+}
+
+// ---------- Excel ----------
+
+function worksheetToRows(sheet) {
+  const rows = [];
+  sheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+    const values = [];
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      values[colNumber - 1] = cell.value;
+    });
+    rows[rowNumber - 1] = values;
+  });
+  for (let i = 0; i < rows.length; i++) if (!rows[i]) rows[i] = [];
+  return rows;
+}
+
 async function parseMultiSheetExcel(fileBuffer, filename) {
+  const ExcelJS = require('exceljs');
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(fileBuffer);
 
-  const result = {
-    filename,
-    sheets: [],
-    totalRecords: 0,
-    dstbCount: 0,
-    mnCount: 0,
-  };
+  const result = { filename, sheets: [], totalRecords: 0, dstbCount: 0, mnCount: 0, fileType: 'xlsx' };
 
   workbook.eachSheet((sheet) => {
     const sourceType = detectSheetType(sheet.name);
     if (!sourceType) return;
 
-    let headerRowIndex = null;
-    for (let r = 1; r <= Math.min(5, sheet.rowCount); r++) {
-      const row = sheet.getRow(r);
-      const firstCell = row.getCell(1).text;
-      if (firstCell && (
-        firstCell.trim() === 'No.' ||
-        firstCell.trim().toUpperCase().includes('ITIS') ||
-        firstCell.trim().toLowerCase().includes('validation') ||
-        firstCell.trim().toLowerCase().includes('date') ||
-        firstCell.trim().toLowerCase().includes('age')
-      )) {
-        headerRowIndex = r;
-        break;
-      }
-    }
+    const parsed = parseSheetRows(worksheetToRows(sheet), sheet.name, sourceType);
+    if (!parsed.headerRow) return;
 
-    if (!headerRowIndex) return;
-
-    const headerRow = sheet.getRow(headerRowIndex);
-    const rawHeaders = [];
-    headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-      rawHeaders[colNumber - 1] = cell.text;
-    });
-
-    const columnMap = buildColumnMap(rawHeaders, sourceType);
-    const records = [];
-
-    for (let r = headerRowIndex + 1; r <= sheet.rowCount; r++) {
-      const row = sheet.getRow(r);
-      const firstCell = row.getCell(1).text;
-      if (!firstCell || firstCell.trim() === '' || firstCell.trim().toUpperCase() === 'TOTAL') continue;
-
-      const values = [];
-      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-        values[colNumber - 1] = cell.value;
-      });
-
-      const mapped = {
-        source_type: sourceType,
-        validation_status: null,
-        itis_case_id: null,
-      };
-
-      for (const [colIndex, field] of Object.entries(columnMap)) {
-        const val = values[parseInt(colIndex)];
-        if (val !== undefined && val !== null) {
-          mapped[field] = val instanceof Date ? val : String(val).trim();
-        }
-      }
-
-      mapped.date_of_screening = parseDate(mapped.date_of_screening);
-      mapped.date_of_diagnosis = parseDate(mapped.date_of_diagnosis);
-      mapped.date_of_notification = parseDate(mapped.date_of_notification);
-      mapped.date_started_treatment = parseDate(mapped.date_started_treatment);
-      mapped.date_of_outcome = parseDate(mapped.date_of_outcome);
-      mapped.record_created_at = mapped.record_created_at
-        ? parseDate(mapped.record_created_at)
-          ? new Date(parseDate(mapped.record_created_at)).toISOString()
-          : null
-        : null;
-
-      mapped.age = mapped.age ? parseInt(mapped.age) : null;
-      mapped.sex = normalizeSex(mapped.sex);
-      mapped.row_number = r;
-      mapped.sheet_name = sheet.name;
-
-      records.push(mapped);
-    }
-
-    const sheetData = {
+    result.sheets.push({
       sheet_name: sheet.name,
       source_type: sourceType,
-      record_count: records.length,
-      records,
-    };
-
-    result.sheets.push(sheetData);
-    result.totalRecords += records.length;
-
-    if (sourceType === 'DSTB') {
-      result.dstbCount += records.length;
-    } else {
-      result.mnCount += records.length;
-    }
+      record_count: parsed.records.length,
+      header_row: parsed.headerRow,
+      unmapped_headers: parsed.unmappedHeaders,
+      records: parsed.records,
+    });
+    result.totalRecords += parsed.records.length;
+    if (sourceType === 'DSTB') result.dstbCount += parsed.records.length;
+    else result.mnCount += parsed.records.length;
   });
 
   return result;
 }
 
+/**
+ * Parse any supported registry file (.xlsx, .xls*, .csv) into the same structure.
+ * (*) .xls is only readable when it is actually an .xlsx saved with the old extension;
+ *     true legacy .xls files must be re-saved as .xlsx or .csv.
+ */
+async function parseRegistryFile(fileBuffer, filename) {
+  const ext = String(filename).split('.').pop().toLowerCase();
+  if (ext === 'csv' || ext === 'txt') return parseCsvFile(fileBuffer, filename);
+  return parseMultiSheetExcel(fileBuffer, filename);
+}
+
 module.exports = {
+  parseRegistryFile,
   parseMultiSheetExcel,
+  parseCsvFile,
+  parseCsvText,
+  parseSheetRows,
+  findHeaderRow,
   buildColumnMap,
   parseDate,
   normalizeSex,
   detectSheetType,
+  detectTypeFromHeaders,
 };

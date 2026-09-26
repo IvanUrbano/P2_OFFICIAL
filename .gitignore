@@ -1,47 +1,27 @@
+# Dependencies
 node_modules/
 
-# Environment files (never commit secrets)
+# Environment variables
 .env
-.env.*
-!.env.example
-!.env.production.example
-BACKEND/.env
-BACKEND/.env.*
-!BACKEND/.env.example
-PASIG_CLONE/backend/.env
-PASIG_CLONE/backend/.env.*
-!PASIG_CLONE/backend/.env.example
+.env.local
+.env.*.local
 
-# Python
-__pycache__/
-*.pyc
+# Logs
+*.log
+logs/
 
-.DS_Store
+# Build output
 dist/
 build/
+.vite/
 
-# Database dumps
-*.dump
+# Uploads (runtime files)
+uploads/
 
-# Large geometry backup files
-BACKEND/data/geometry-backup-*.geojson
-BACKEND/data/*-backup-*.geojson
+# OS
+.DS_Store
+Thumbs.db
 
-# Env backup files with real credentials
-*.env.prod-backup
-*.env.backup
-
-# Session notes (may contain sensitive info)
-SESSION_NOTES.md
-
-# Scratch/debug utilities
-scratch_*
-check_*
-_tmp_*
-test_insert.js
-BACKEND/_tmp_*.js
-BACKEND/check_*.js
-BACKEND/scratch_*.js
-
-# Terminal artifacts
-cls
+# Editor
+.vscode/
+.idea/

@@ -1,4 +1,28 @@
+# Dependencies
 node_modules/
-uploads/
+
+# Environment variables
 .env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+_err.log
+server.log
+server_err.log
+
+# Uploads (runtime files)
+uploads/
+
+# Build output
 dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# One-off scripts (keep in dev, never commit)
+cleanup_*.js
+cleanup_*.sql

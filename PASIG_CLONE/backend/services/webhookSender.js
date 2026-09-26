@@ -3,6 +3,9 @@ const fetch = require('node-fetch');
 const config = require('../config');
 const db = require('../db/pasigSchema');
 const { logAuditEvent } = require('../utils/auditLogger');
+const { PASIG_BARANGAYS, isPasigCity } = require('./dataCleaner');
+
+const PASIG_BARANGAY_SET = new Set(PASIG_BARANGAYS.map(n => n.toLowerCase()));
 
 function signPayload(payload, secret) {
   const body = JSON.stringify(payload);
@@ -13,12 +16,25 @@ function signPayload(payload, secret) {
   return `sha256=${signature}`;
 }
 
+// DATE columns come back from pg as JS Dates at local midnight. JSON.stringify would turn
+// them into UTC timestamps (e.g. 2025-01-05 in Manila -> "2025-01-04T16:00:00.000Z"),
+// which TBInsight would store as the previous day. Send plain YYYY-MM-DD instead.
+function toYmd(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (v instanceof Date) {
+    if (isNaN(v.getTime())) return null;
+    return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
+  }
+  const m = String(v).match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
 function formatRecord(record) {
   return {
     barangay_name: record.barangay_name,
-    date_of_diagnosis: record.date_of_diagnosis,
-    date_of_notification: record.date_of_notification,
-    date_of_screening: record.date_of_screening,
+    date_of_diagnosis: toYmd(record.date_of_diagnosis),
+    date_of_notification: toYmd(record.date_of_notification),
+    date_of_screening: toYmd(record.date_of_screening),
     age: record.age,
     sex: record.sex,
     city: record.city,
@@ -28,23 +44,23 @@ function formatRecord(record) {
     anatomical_site: record.anatomical_site,
     registration_group: record.registration_group,
     bacteriological_status: record.bacteriological_status,
-    date_started_treatment: record.date_started_treatment,
+    date_started_treatment: toYmd(record.date_started_treatment),
     outcome_status: record.outcome_status,
-    date_of_outcome: record.date_of_outcome,
+    date_of_outcome: toYmd(record.date_of_outcome),
     record_created_at: record.record_created_at,
     source_type: record.source_type,
     validation_status: record.validation_status,
     itis_case_id: record.itis_case_id,
-    type: record.type,
-    province: record.province,
-    region: record.region,
-    referred_to_dots: record.referred_to_dots,
-    referral_status: record.referral_status,
-    microscopy_result: record.microscopy_result,
-    microscopy_release_date: record.microscopy_release_date,
-    rdt_result: record.rdt_result,
-    rdt_release_date: record.rdt_release_date,
-    outcome_reason: record.outcome_reason,
+    type: record.type ?? null,
+    province: record.province ?? null,
+    region: record.region ?? null,
+    referred_to_dots: record.referred_to_dots ?? null,
+    referral_status: record.referral_status ?? null,
+    microscopy_result: record.microscopy_result ?? null,
+    microscopy_release_date: toYmd(record.microscopy_release_date),
+    rdt_result: record.rdt_result ?? null,
+    rdt_release_date: toYmd(record.rdt_release_date),
+    outcome_reason: record.outcome_reason ?? null,
   };
 }
 
@@ -52,18 +68,11 @@ function formatRecord(record) {
  * Check if a record is from Pasig City
  */
 function isPasigRecord(record) {
-  const normalizedCity = String(record.city || '').trim().toLowerCase();
-  if (normalizedCity === 'pasig city' || normalizedCity === 'pasig') return true;
-
-  const PASIG_BARANGAYS = new Set([
-    'bagong ilog', 'bambang', 'buting', 'caniogan', 'dela paz',
-    'kalawaan', 'kapasigan', 'kapasigan extension', 'kapitolyo', 'malinao', 'manggahan',
-    'maybunga', 'oranbo', 'palatiw', 'pinagbuhatan', 'pineda',
-    'rosario', 'sagad', 'san antonio', 'san joaquin', 'san jose',
-    'san miguel', 'san nicolas', 'santa cruz', 'santa lucia',
-    'santa rosa', 'santo tomas', 'santolan', 'sumilang', 'ugong',
-  ]);
-  return PASIG_BARANGAYS.has(String(record.barangay_name || '').trim().toLowerCase());
+  // Records were cleaned before validation, so barangay names are already canonical.
+  const barangay = String(record.barangay_name || '').trim().toLowerCase();
+  if (!PASIG_BARANGAY_SET.has(barangay)) return false;
+  const city = String(record.city || '').trim();
+  return !city || isPasigCity(city);
 }
 
 /**
@@ -316,4 +325,4 @@ async function sendWebhook(batchId, userId) {
   }
 }
 
-module.exports = { sendWebhook, signPayload, formatRecord };
+module.exports = { sendWebhook, signPayload, formatRecord, isPasigRecord, toYmd };

@@ -116,8 +116,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
         if (canonicalBgy) {
           record.barangay_name = canonicalBgy;
         } else {
-          // Barangay not in Pasig — skip this record
-          totalRecords++;
+          // Barangay not in Pasig — skip this record (already counted in totalRecords above)
           errorCount++;
           errors.push({ row: record.row_number || totalRecords, source_type, errors: ['Unknown barangay: not a Pasig City barangay'] });
           continue;

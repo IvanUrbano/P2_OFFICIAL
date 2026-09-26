@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import Logo from '../../components/Logo';
 
+// Pasig Clone (data import / validation / sync). Set VITE_PASIG_CLONE_URL for deployments.
+const PASIG_CLONE_URL = import.meta.env.VITE_PASIG_CLONE_URL || 'http://localhost:5174';
+
 export default function LoginPage() {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({ email: '', password: '' });
@@ -192,6 +195,20 @@ export default function LoginPage() {
                   : 'Sign In'}
             </button>
           </form>
+
+          <a
+            href={PASIG_CLONE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-4 w-full py-2.5 rounded-lg font-semibold text-[12px] flex items-center justify-center gap-2 transition-colors"
+            style={{ border: '1px solid #E2E8F0', color: '#2E6FAF', background: '#ffffff' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = '#F8FAFC'; e.currentTarget.style.color = '#0F2D52'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = '#ffffff'; e.currentTarget.style.color = '#2E6FAF'; }}
+          >
+            <i className="ri-upload-cloud-2-line text-sm" />
+            Go to Pasig Clone (data import)
+            <i className="ri-external-link-line text-xs" />
+          </a>
 
           <div className="mt-5 text-center">
             <p className="text-[10px] font-semibold" style={{ color: '#94A3B8' }}>Authorized users only</p>

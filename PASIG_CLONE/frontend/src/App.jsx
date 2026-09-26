@@ -5,7 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import AdminRoute from './components/AdminRoute';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
-import DashboardPage from './pages/DashboardPage';
+import HealthFacilitiesPage from './pages/HealthFacilitiesPage';
 import TBRecordsPage from './pages/TBRecordsPage';
 import DataImportPage from './pages/DataImportPage';
 import ValidationPage from './pages/ValidationPage';
@@ -24,7 +24,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
-              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/facilities" element={<HealthFacilitiesPage />} />
               <Route path="/records" element={<TBRecordsPage />} />
               <Route path="/import" element={<DataImportPage />} />
               <Route path="/validation" element={<ValidationPage />} />
@@ -36,7 +36,7 @@ export default function App() {
               </Route>
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/profile" element={<ProfilePage />} />
-              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              <Route path="*" element={<Navigate to="/facilities" replace />} />
             </Route>
           </Route>
         </Routes>

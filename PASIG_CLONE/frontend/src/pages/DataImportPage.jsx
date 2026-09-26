@@ -73,7 +73,14 @@ export default function DataImportPage() {
 
   const handleFile = (e) => {
     const f = e.target.files?.[0];
-    if (f) { setFile(f); setError(''); setResult(null); setDuplicateInfo(null); }
+    if (!f) return;
+    const ext = f.name.split('.').pop().toLowerCase();
+    if (!['xlsx', 'xls', 'csv'].includes(ext)) {
+      setFile(null);
+      setError('Unsupported file type. Choose an .xlsx, .xls or .csv file.');
+      return;
+    }
+    setFile(f); setError(''); setResult(null); setDuplicateInfo(null);
   };
 
   const handleUpload = async () => {
@@ -173,15 +180,15 @@ export default function DataImportPage() {
               <span>Upload Tuberculosis Records File</span>
             </div>
             <p className="text-xs text-gray-500 leading-relaxed mb-4">
-              Upload an Excel registry file (.xlsx) containing TB patient records. Rows will be processed for validation before sync.
+              Upload an Excel registry file (.xlsx with DSTB and MN sheets) or a CSV export of one sheet. Rows are cleaned and validated before sync.
             </p>
 
             <label
               className="flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-10 text-center cursor-pointer transition hover:opacity-80"
               style={{ borderColor: file ? '#10B981' : 'rgba(46,111,175,0.35)', background: file ? 'rgba(16,185,129,0.04)' : 'rgba(46,111,175,0.04)' }}
             >
-              <input ref={fileRef} type="file" accept=".xlsx,.xls" className="sr-only" onChange={handleFile} />
-              <i className={file ? 'ri-file-excel-2-line text-3xl' : 'ri-file-upload-line text-3xl'} style={{ color: file ? '#10B981' : '#2E6FAF' }} />
+              <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="sr-only" onChange={handleFile} />
+              <i className={file ? (file.name.toLowerCase().endsWith('.csv') ? 'ri-file-text-line text-3xl' : 'ri-file-excel-2-line text-3xl') : 'ri-file-upload-line text-3xl'} style={{ color: file ? '#10B981' : '#2E6FAF' }} />
               {file ? (
                 <>
                   <span className="text-sm font-bold" style={{ color: '#0F2D52' }}>{file.name}</span>
@@ -192,7 +199,7 @@ export default function DataImportPage() {
               ) : (
                 <>
                   <span className="text-sm font-bold" style={{ color: '#0F2D52' }}>Click or drag file to choose</span>
-                  <span className="text-[11px]" style={{ color: '#64748B' }}>Excel format (.xlsx, .xls)</span>
+                  <span className="text-[11px]" style={{ color: '#64748B' }}>Excel (.xlsx, .xls) or CSV (.csv)</span>
                 </>
               )}
             </label>
@@ -261,6 +268,16 @@ export default function DataImportPage() {
                   </div>
                 ))}
               </div>
+              {Array.isArray(result.warnings) && result.warnings.length > 0 && (
+                <div className="mt-4 px-3.5 py-2.5 rounded-lg text-xs" style={{ background: '#FFFBEB', color: '#92400E', border: '1px solid #FCD34D' }}>
+                  {result.warnings.map((w, i) => (
+                    <div key={i} className="flex items-start gap-2 py-0.5">
+                      <i className="ri-information-line text-sm shrink-0" />
+                      <span>{w}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               <button onClick={() => navigate(`/validation?batchId=${result.batch?.id}`)} className="mt-4 px-4 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer" style={{ background: '#10B981', color: '#ffffff' }}>
                 Continue to Validation &rarr;
               </button>

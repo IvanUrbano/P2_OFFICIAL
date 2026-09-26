@@ -39,10 +39,17 @@ router.post('/validate/:batchId', authenticate, authorizeRoles('admin', 'staff')
         valid: results.valid,
         invalid: results.invalid,
         warnings: results.warnings,
+        cleaned: results.cleaned,
+        nonPasig: results.nonPasig,
+        skippedBlank: results.skippedBlank,
         validatedBy: req.user.username,
         validatedAt: new Date().toISOString(),
       },
       errors: results.errors,
+      warningDetails: results.validatedRecords
+        .filter(r => r.warnings && r.warnings.length > 0)
+        .slice(0, 200)
+        .map(r => ({ row: r.row_number, source_type: r.source_type, warnings: r.warnings })),
     });
   } catch (error) {
     console.error('❌ Validation error:', error);

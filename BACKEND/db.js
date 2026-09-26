@@ -137,6 +137,58 @@ const initDb = async () => {
     } else {
       console.log('⚠️ Bagong Katipunan barangay fix migration not found, skipping.');
     }
+
+    // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,
+    // undoing two earlier over-broad attempts, and keep only the Kapasigan Extension ->
+    // Bagong Katipunan rename/population fix (idempotent)
+    const restoreBoundariesMigPath = path.join(__dirname, 'db', 'migrations', '013_restore_original_boundaries.sql');
+    if (fs.existsSync(restoreBoundariesMigPath)) {
+      const restoreBoundariesSql = fs.readFileSync(restoreBoundariesMigPath, 'utf8');
+      await execSql(restoreBoundariesSql);
+      console.log('✅ Restore original barangay boundaries migration completed successfully.');
+    } else {
+      console.log('⚠️ Restore original barangay boundaries migration not found, skipping.');
+    }
+
+    // Force-sync barangay geometries directly from the GeoJSON file.
+    // This always runs last and guarantees the DB matches the file,
+    // overriding any earlier migration that may have corrupted the geometries.
+    const geojsonPath = path.join(__dirname, 'data', 'pasig-barangays.geojson');
+    if (fs.existsSync(geojsonPath)) {
+      const geojson = JSON.parse(fs.readFileSync(geojsonPath, 'utf8'));
+      const client = await pool.connect();
+      try {
+        let synced = 0;
+        for (const feature of geojson.features) {
+          const { name, population, centroid } = feature.properties;
+          const geometry = JSON.stringify(feature.geometry);
+          const [lon, lat] = centroid;
+          await client.query(
+            `INSERT INTO barangays (name, population, centroid_lon, centroid_lat)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (name) DO UPDATE SET
+               population = EXCLUDED.population,
+               centroid_lon = EXCLUDED.centroid_lon,
+               centroid_lat = EXCLUDED.centroid_lat`,
+            [name, population || 0, lon, lat]
+          );
+          await client.query(
+            `INSERT INTO barangays_geom (name, population, geom)
+             VALUES ($1, $2, ST_SetSRID(ST_GeomFromGeoJSON($3), 4326))
+             ON CONFLICT (name) DO UPDATE SET
+               population = EXCLUDED.population,
+               geom = EXCLUDED.geom`,
+            [name, population || 0, geometry]
+          );
+          synced++;
+        }
+        console.log(`✅ Force-synced ${synced} barangay geometries from GeoJSON file.`);
+      } finally {
+        client.release();
+      }
+    } else {
+      console.log('⚠️ pasig-barangays.geojson not found, skipping geometry sync.');
+    }
   } catch (err) {
     console.error('❌ Database initialization error:', err.message);
   }
@@ -155,4 +207,3 @@ pool.connect()
   });
 
 module.exports = pool;
-
