@@ -98,7 +98,7 @@ async function rebuildAllAggregations(client) {
       DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated' AND screening_facility IS NOT NULL AND screening_facility != ''
+    WHERE (validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated') AND screening_facility IS NOT NULL AND screening_facility != ''
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), screening_facility
   `);
   counts.facilities = facilityResult.rowCount;

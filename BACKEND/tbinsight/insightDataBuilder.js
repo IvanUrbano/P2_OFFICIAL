@@ -366,15 +366,13 @@ async function buildForecastingMetrics(pool, filters = {}) {
     // 2. Risk classifications
     pool.query(`
       SELECT
-        mp.barangay_name,
-        mp.risk_class,
-        mp.risk_score
-      FROM model_predictions mp
-      JOIN barangay_risk_scores brs
-        ON mp.barangay_name = brs.barangay_name AND mp.period = brs.period
-      WHERE mp.risk_class IS NOT NULL
-        ${filters.barangay ? `AND TRIM(mp.barangay_name) = $${idx}` : ''}
-      GROUP BY mp.barangay_name, mp.risk_class, mp.risk_score
+        brs.barangay_name,
+        brs.risk_class,
+        brs.risk_score
+      FROM barangay_risk_scores brs
+      WHERE brs.risk_class IS NOT NULL
+        ${filters.barangay ? `AND TRIM(brs.barangay_name) = $1` : ''}
+      ORDER BY brs.risk_score DESC
     `, filters.barangay ? [filters.barangay] : []),
 
     // 3. Latest model metadata

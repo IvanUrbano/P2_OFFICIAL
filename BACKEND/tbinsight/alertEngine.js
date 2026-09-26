@@ -254,6 +254,7 @@ async function evaluateTreatmentAlerts(poolOrClient, period) {
     [period]
   );
 
+  if (!result.rows.length) return created;
   const { success_count, total_count } = result.rows[0];
   if (!total_count || total_count === 0) return created;
 
