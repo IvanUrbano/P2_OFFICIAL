@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Free-form context for an event (e.g. which batch an import undo removed and how many rows)
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS details JSONB;
+
 CREATE INDEX IF NOT EXISTS idx_audit_logs_username ON audit_logs(username);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);

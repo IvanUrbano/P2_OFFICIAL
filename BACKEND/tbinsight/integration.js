@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { rebuildAllAggregations } = require('./aggregateMonthly');
 
 // ==================== INTEGRATION STATUS ====================
 router.get('/status', authenticateToken, async (req, res) => {
@@ -173,6 +174,108 @@ router.get('/sync/:batchId', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Sync detail error:', err.message);
     res.status(500).json({ error: 'Unable to load sync details.' });
+  }
+});
+
+// ==================== UNDO A BATCH IMPORT ====================
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * DELETE /api/tb/integration/batches/:batchId  (admin only)
+ *
+ * Undo an import: removes everything the batch brought in — cleaned cases (tb_cases),
+ * raw rows (tb_cases_raw) and its webhook log entry (so the same batch id can be sent
+ * again) — then rebuilds the aggregated tables from the remaining cases, all in ONE
+ * transaction. If anything fails, nothing is deleted.
+ *
+ * Predictions (forecasts, risk scores, alerts) are NOT recomputed here; they were built
+ * from the removed data, so the response flags them as stale and the pipeline should be re-run.
+ */
+router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  const { batchId } = req.params;
+  if (!UUID_RE.test(batchId)) {
+    return res.status(400).json({ error: 'Invalid batch id.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const cases = await client.query('DELETE FROM tb_cases WHERE batch_id = $1', [batchId]);
+    const raw = await client.query('DELETE FROM tb_cases_raw WHERE batch_id = $1', [batchId]);
+    const logs = await client.query(
+      `DELETE FROM webhook_logs WHERE batch_id = $1
+       RETURNING source, records_received, records_imported, received_at`,
+      [batchId]
+    );
+
+    if (cases.rowCount === 0 && raw.rowCount === 0 && logs.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Batch not found.' });
+    }
+
+    await rebuildAllAggregations(client);
+
+    // Permanent record of the undo. Written inside the transaction on purpose: if the audit
+    // row cannot be saved, the whole undo rolls back instead of deleting data untraceably.
+    const original = logs.rows[0] || {};
+    await client.query(
+      `INSERT INTO audit_logs (user_id, username, action, target_username, result, ip_address, details)
+       VALUES ($1, $2, 'IMPORT_UNDO', $3, 'SUCCESS', $4, $5)`,
+      [
+        req.user?.id || null,
+        req.user?.username || 'unknown',
+        batchId,
+        req.ip || null,
+        JSON.stringify({
+          batchId,
+          source: original.source || null,
+          originalReceivedAt: original.received_at || null,
+          recordsReceived: original.records_received ?? null,
+          recordsImported: original.records_imported ?? null,
+          deleted: { cases: cases.rowCount, rawRows: raw.rowCount, logs: logs.rowCount },
+        }),
+      ]
+    );
+    await client.query('COMMIT');
+
+    console.log(
+      `🗑️  Batch ${batchId} undone by ${req.user?.username || req.user?.id || 'unknown'}: ` +
+      `${cases.rowCount} cases, ${raw.rowCount} raw rows, ${logs.rowCount} log entries removed`
+    );
+    res.json({
+      success: true,
+      batchId,
+      deleted: { cases: cases.rowCount, rawRows: raw.rowCount, logs: logs.rowCount },
+      aggregatesRebuilt: true,
+      predictionsStale: true,
+    });
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch { /* connection already gone */ }
+    console.error('Batch undo error:', err.message);
+    res.status(500).json({ error: 'Unable to undo this import. Nothing was deleted.' });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * GET /api/tb/integration/undo-history  (admin only)
+ * Permanent record of undone imports, newest first.
+ */
+router.get('/undo-history', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, username, target_username AS batch_id, details, created_at
+       FROM audit_logs
+       WHERE action = 'IMPORT_UNDO'
+       ORDER BY created_at DESC
+       LIMIT 50`
+    );
+    res.json({ entries: result.rows });
+  } catch (err) {
+    console.error('Undo history error:', err.message);
+    res.status(500).json({ error: 'Unable to load undo history.' });
   }
 });
 
