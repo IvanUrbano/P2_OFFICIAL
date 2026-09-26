@@ -1,5 +1,12 @@
 const pool = require('../db');
 
+// Which tb_cases rows feed the aggregates (and therefore the dashboard and ML pipeline):
+// every record located in Pasig City, whether or not it is marked Validated (project
+// decision: "Not Validated" notifications are counted). Records classified 'Non-Pasig'
+// (e.g. a Manila patient whose barangay shares a name with a Pasig one) are kept in tb_cases
+// for traceability but never counted.
+const COUNTED_CASES = `COALESCE(location_classification, 'Pasig City') <> 'Non-Pasig'`;
+
 /**
  * Age group mapping: maps age to age bracket
  */
@@ -24,7 +31,7 @@ function getAgeGroup(age) {
 async function rebuildAllAggregations(client) {
   const counts = {};
 
-  // 1. Monthly case summary (Pasig City only, validated records only)
+  // 1. Monthly case summary (Pasig City only; validation status does not matter)
   await client.query('DELETE FROM monthly_case_summary');
   const monthlyResult = await client.query(`
     INSERT INTO monthly_case_summary (barangay_name, month, case_count)
@@ -33,7 +40,7 @@ async function rebuildAllAggregations(client) {
       DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated'
+    WHERE ${COUNTED_CASES}
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
   `);
   counts.monthly = monthlyResult.rowCount;
@@ -58,7 +65,7 @@ async function rebuildAllAggregations(client) {
       END AS age_group,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated'
+    WHERE ${COUNTED_CASES}
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), sex,
       CASE
         WHEN age IS NULL THEN 'Unknown'
@@ -83,7 +90,7 @@ async function rebuildAllAggregations(client) {
       COALESCE(outcome_status, 'Unknown') AS outcome_status,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated'
+    WHERE ${COUNTED_CASES}
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), COALESCE(outcome_status, 'Unknown')
   `);
   counts.outcomes = outcomeResult.rowCount;
@@ -98,7 +105,7 @@ async function rebuildAllAggregations(client) {
       DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE (validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated') AND screening_facility IS NOT NULL AND screening_facility != ''
+    WHERE ${COUNTED_CASES} AND screening_facility IS NOT NULL AND screening_facility != ''
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), screening_facility
   `);
   counts.facilities = facilityResult.rowCount;
@@ -113,7 +120,7 @@ async function rebuildAllAggregations(client) {
       COALESCE(bacteriological_status, 'Unknown') AS bacteriological_status,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE validation_status IS NULL OR validation_status = '' OR validation_status = 'Validated'
+    WHERE ${COUNTED_CASES}
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), COALESCE(bacteriological_status, 'Unknown')
   `);
   counts.bacteriological = bacterioResult.rowCount;

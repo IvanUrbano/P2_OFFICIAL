@@ -129,6 +129,11 @@ class ClassifyResponse(BaseModel):
     """Response from classification endpoint."""
     predictions: list[ClassifyOut]
     model_version: str
+    method: str = Field(
+        default="random_forest",
+        description="'random_forest' if the RF was trained, 'rule_based' if there were too few training rows"
+    )
+    n_train: int = Field(default=0, description="Training rows received")
 
 
 # ==================== /pipeline ====================

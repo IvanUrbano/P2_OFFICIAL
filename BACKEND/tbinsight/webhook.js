@@ -126,11 +126,15 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
 
         if (validation.valid) {
           const normalizedCity = String(record.city || '').trim().toLowerCase();
-          let locationClassification =
-            normalizedCity === 'pasig city' || normalizedCity === 'pasig'
-              ? 'Pasig City'
-              : null;
-          if (!locationClassification) {
+          // An explicit city wins: barangay names repeat across Metro Manila (e.g. Santa Cruz),
+          // so a matching Pasig barangay name alone does not make the patient a Pasig case.
+          // Without a city, fall back to the barangay lookup.
+          let locationClassification;
+          if (normalizedCity === 'pasig city' || normalizedCity === 'pasig') {
+            locationClassification = 'Pasig City';
+          } else if (normalizedCity) {
+            locationClassification = 'Non-Pasig';
+          } else {
             locationClassification = validBarangays.has(String(record.barangay_name || '').trim().toLowerCase())
               ? 'Pasig City'
               : 'Non-Pasig';

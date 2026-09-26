@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi.testclient import TestClient
 from main import app
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-API-Key": os.environ["ML_API_KEY"]})
 
 
 # ==================== Health ====================
@@ -80,8 +80,8 @@ def test_forecast_normal():
     assert f["predictions"][0]["yhat"] >= 0
     assert f["predictions"][0]["yhat_lower"] <= f["predictions"][0]["yhat"]
     assert f["predictions"][0]["yhat_upper"] >= f["predictions"][0]["yhat"]
-    # backtest_mae should be null for 12-month series (too short for 6-month holdout)
-    assert f["backtest_mae"] is None
+    # 12 months: the backtest holdout shrinks so at least 10 months remain for fitting
+    assert f["backtest_mae"] is not None and f["backtest_mae"] >= 0
     print(f"  PASS: test_forecast_normal (method={f['method']})")
 
 
