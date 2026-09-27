@@ -30,16 +30,23 @@
  */
 function computeRiskScore({ incidence, trend, neighborRisk, forecastError, maxIncidence, maxTrend, maxError }) {
   // Normalize each component to [0, 1]
-  const normIncidence = maxIncidence > 0 ? Math.min(incidence / maxIncidence, 1) : 0;
+  const incidenceAvailable = incidence !== null && incidence !== undefined;
+  const normIncidence = incidenceAvailable && maxIncidence > 0 ? Math.min(incidence / maxIncidence, 1) : 0;
   const normTrend = maxTrend > 0 ? Math.min(Math.abs(trend) / maxTrend, 1) : 0;
   const normError = maxError > 0 ? Math.min(forecastError / maxError, 1) : 0;
 
-  // Weighted sum
-  const score =
-    0.45 * normIncidence +
-    0.25 * normTrend +
-    0.20 * neighborRisk +
-    0.10 * normError;
+  let score;
+  if (!incidenceAvailable) {
+    // Redistribute incidence weight (0.45) proportionally to other components
+    // Remaining weights: trend=0.25, neighbor=0.20, error=0.10, total=0.55
+    score = (0.25 / 0.55) * normTrend + (0.20 / 0.55) * neighborRisk + (0.10 / 0.55) * normError;
+  } else {
+    score =
+      0.45 * normIncidence +
+      0.25 * normTrend +
+      0.20 * neighborRisk +
+      0.10 * normError;
+  }
 
   const riskScore = Math.round(score * 100 * 100) / 100; // 2 decimal places
 
@@ -267,7 +274,7 @@ async function storeResults(client, period, forecasts, classifications, riskScor
   // Clear ALL previous results (each pipeline run replaces all prior forecasts)
   await client.query('DELETE FROM model_predictions WHERE period = ANY($1)', [periodList]);
   await client.query('DELETE FROM barangay_risk_scores WHERE period = $1', [period]);
-  await client.query("DELETE FROM alerts WHERE alert_type = 'high_risk_escalation' AND status != 'resolved'");
+  await client.query("DELETE FROM alerts WHERE alert_type = 'high_risk_escalation' AND status != 'resolved' AND period = $1", [period]);
 
   // Batch-fetch actual counts per barangay per period from monthly_case_summary
   let actualCountsByPeriod = {};

@@ -152,6 +152,10 @@ ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS rdt_result TEXT;
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS rdt_release_date DATE;
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS outcome_reason TEXT;
 
+-- Manual TB entry attribution — Clone-only provenance, never synced to TBInsight
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS entered_by_user_id INTEGER;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS entered_by_facility_id INTEGER;
+
 ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS initiated_by INTEGER;
 ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS initiated_at TIMESTAMP;
 

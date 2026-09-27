@@ -15,11 +15,12 @@ const cardStyle = (t) => ({
 export default function UsersPage() {
   const { t } = useTheme();
   const [users, setUsers] = useState([]);
+  const [facilities, setFacilities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ username: '', email: '', role: 'staff' });
+  const [form, setForm] = useState({ username: '', email: '', role: 'staff', facility_id: '' });
   const [formError, setFormError] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [createConfirm, setCreateConfirm] = useState(null);
@@ -27,6 +28,15 @@ export default function UsersPage() {
   const [resetLoading, setResetLoading] = useState(false);
   const [generatedPassword, setGeneratedPassword] = useState(null);
   const [createdUser, setCreatedUser] = useState(null);
+  const [editUser, setEditUser] = useState(null);
+  const [editForm, setEditForm] = useState({ role: 'staff', facility_id: '' });
+  const [editError, setEditError] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+
+  const facilityLabel = (id) => {
+    const f = facilities.find((x) => x.id === Number(id));
+    return f ? `${f.name} (${f.barangay_name})` : '—';
+  };
 
   const fetchUsers = async () => {
     try {
@@ -39,18 +49,28 @@ export default function UsersPage() {
     }
   };
 
-  useEffect(() => { fetchUsers(); }, []);
+  useEffect(() => {
+    fetchUsers();
+    API.get('/api/facilities')
+      .then((res) => setFacilities(res.data.facilities || []))
+      .catch(() => setFacilities([]));
+  }, []);
 
   const handleCreate = async () => {
     if (!createConfirm) return;
     setFormError('');
     setCreating(true);
     try {
-      const res = await API.post('/api/auth/register', { username: createConfirm.username.trim(), email: createConfirm.email.trim(), role: createConfirm.role });
+      const res = await API.post('/api/auth/register', {
+        username: createConfirm.username.trim(),
+        email: createConfirm.email.trim(),
+        role: createConfirm.role,
+        facility_id: createConfirm.facility_id === '' ? null : Number(createConfirm.facility_id),
+      });
       setCreatedUser(res.data.user);
       setGeneratedPassword(res.data.tempPassword);
       setCreateConfirm(null);
-      setForm({ username: '', email: '', role: 'staff' });
+      setForm({ username: '', email: '', role: 'staff', facility_id: '' });
       setShowCreate(false);
       fetchUsers();
     } catch (err) {
@@ -58,6 +78,35 @@ export default function UsersPage() {
       setCreateConfirm(null);
     } finally {
       setCreating(false);
+    }
+  };
+
+  const openEdit = (u) => {
+    setEditUser(u);
+    setEditForm({ role: u.role, facility_id: u.facility_id ?? '' });
+    setEditError('');
+    setError('');
+  };
+
+  const handleEdit = async () => {
+    if (!editUser) return;
+    setEditError('');
+    if (editForm.role === 'staff' && editForm.facility_id === '') {
+      setEditError('A registered health facility is required for staff accounts.');
+      return;
+    }
+    setEditSaving(true);
+    try {
+      await API.put(`/api/auth/users/${editUser.id}`, {
+        role: editForm.role,
+        facility_id: editForm.facility_id === '' ? null : Number(editForm.facility_id),
+      });
+      setEditUser(null);
+      fetchUsers();
+    } catch (err) {
+      setEditError(err.response?.data?.error || 'Failed to update user.');
+    } finally {
+      setEditSaving(false);
     }
   };
 
@@ -114,13 +163,19 @@ export default function UsersPage() {
         <div style={cardStyle(t)} className="p-6">
           <h2 className="text-sm font-bold mb-4" style={{ color: t.text }}>Create New User</h2>
           {formError && <div className="mb-4 px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B' }}>{formError}</div>}
-          <form onSubmit={(e) => { e.preventDefault(); if (!form.username.trim() || !form.email.trim()) { setFormError('Username and email are required.'); return; } setCreateConfirm({ ...form }); }} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <form onSubmit={(e) => { e.preventDefault(); if (!form.username.trim() || !form.email.trim()) { setFormError('Username and email are required.'); return; } if (form.role === 'staff' && form.facility_id === '') { setFormError('A registered health facility is required for staff accounts.'); return; } setFormError(''); setCreateConfirm({ ...form }); }} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <input type="text" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="Username" className="px-3 py-2 text-xs rounded-lg outline-none" style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }} />
             <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" className="px-3 py-2 text-xs rounded-lg outline-none" style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }} />
-            <div className="flex gap-2">
+            <div className="flex gap-2 sm:col-span-2">
               <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className="flex-1 px-3 py-2 text-xs rounded-lg outline-none" style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}>
                 <option value="staff">Staff</option>
                 <option value="admin">Admin</option>
+              </select>
+              <select value={form.facility_id} onChange={(e) => setForm({ ...form, facility_id: e.target.value })} className="flex-1 px-3 py-2 text-xs rounded-lg outline-none" style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}>
+                <option value="" disabled={form.role === 'staff'}>{form.role === 'staff' ? 'Select facility…' : 'No facility (optional)'}</option>
+                {facilities.map((f) => (
+                  <option key={f.id} value={f.id}>{f.name} ({f.barangay_name})</option>
+                ))}
               </select>
               <button type="submit" disabled={creating} className="px-4 py-2 text-xs font-semibold rounded-lg disabled:opacity-50" style={{ background: '#0F2D52', color: '#ffffff' }}>Create</button>
               <button type="button" onClick={() => setShowCreate(false)} className="px-3 py-2 text-xs font-semibold rounded-lg" style={{ border: `1px solid ${t.borderStrong}`, color: t.textSecondary }}>Cancel</button>
@@ -137,7 +192,7 @@ export default function UsersPage() {
             <table className="w-full">
               <thead>
                 <tr style={{ borderBottom: `1px solid ${t.borderStrong}` }}>
-                  {['Username', 'Email', 'Role', 'Created', 'Actions'].map((h) => (
+                  {['Username', 'Email', 'Role', 'Facility', 'Created', 'Actions'].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wide" style={{ color: t.textMuted }}>{h}</th>
                   ))}
                 </tr>
@@ -148,9 +203,11 @@ export default function UsersPage() {
                     <td className="px-4 py-3 text-xs font-semibold" style={{ color: t.text }}>{u.username}</td>
                     <td className="px-4 py-3 text-xs" style={{ color: t.textSecondary }}>{u.email}</td>
                     <td className="px-4 py-3"><StatusBadge status={u.role} /></td>
+                    <td className="px-4 py-3 text-xs" style={{ color: t.textSecondary }}>{u.facility_name || '—'}</td>
                     <td className="px-4 py-3 text-xs" style={{ color: t.textSecondary }}>{u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1">
+                        <button onClick={() => openEdit(u)} className="px-2 py-1 text-[10px] font-semibold rounded" style={{ color: '#2E6FAF' }}>Edit</button>
                         <button onClick={() => { setResetConfirm(u); setError(''); }} className="px-2 py-1 text-[10px] font-semibold rounded" style={{ color: '#2E6FAF' }}>Reset Password</button>
                         <button onClick={() => setDeleteConfirm(u)} className="px-2 py-1 text-[10px] font-semibold rounded" style={{ color: '#EF4444' }}>Delete</button>
                       </div>
@@ -172,6 +229,7 @@ export default function UsersPage() {
               <p><span className="text-gray-500">Username:</span> <strong>{createConfirm.username}</strong></p>
               <p><span className="text-gray-500">Email:</span> <strong>{createConfirm.email}</strong></p>
               <p><span className="text-gray-500">Role:</span> <strong>{createConfirm.role}</strong></p>
+              <p><span className="text-gray-500">Facility:</span> <strong>{createConfirm.facility_id ? facilityLabel(createConfirm.facility_id) : '—'}</strong></p>
             </div>
             <p className="text-[10px] text-gray-500 text-center mb-4">A secure temporary password will be generated.</p>
             <div className="flex gap-2 justify-end">
@@ -203,6 +261,32 @@ export default function UsersPage() {
             <div className="flex gap-2 justify-end">
               <button onClick={() => setResetConfirm(null)} disabled={resetLoading} className="px-4 py-2 text-xs font-semibold text-gray-600 border border-gray-300 rounded-lg disabled:opacity-50">Cancel</button>
               <button onClick={handleResetPassword} disabled={resetLoading} className="px-4 py-2 text-xs font-semibold text-white bg-[#0F2D52] rounded-lg disabled:opacity-50">{resetLoading ? 'Resetting...' : 'Reset Password'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm">
+            <h3 className="text-sm font-bold text-gray-900 mb-2">Edit User</h3>
+            <p className="text-xs text-gray-500 mb-4">Update role or health facility for <strong>{editUser.username}</strong>.</p>
+            {editError && <div className="mb-3 px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.12)' }}>{editError}</div>}
+            <div className="space-y-3 mb-4">
+              <select value={editForm.role} onChange={(e) => setEditForm({ ...editForm, role: e.target.value })} className="w-full px-3 py-2 text-xs rounded-lg outline-none" style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}>
+                <option value="staff">Staff</option>
+                <option value="admin">Admin</option>
+              </select>
+              <select value={String(editForm.facility_id)} onChange={(e) => setEditForm({ ...editForm, facility_id: e.target.value })} className="w-full px-3 py-2 text-xs rounded-lg outline-none" style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }}>
+                <option value="" disabled={editForm.role === 'staff'}>{editForm.role === 'staff' ? 'Select facility…' : 'No facility'}</option>
+                {facilities.map((f) => (
+                  <option key={f.id} value={f.id}>{f.name} ({f.barangay_name})</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setEditUser(null)} disabled={editSaving} className="px-4 py-2 text-xs font-semibold text-gray-600 border border-gray-300 rounded-lg disabled:opacity-50">Cancel</button>
+              <button onClick={handleEdit} disabled={editSaving} className="px-4 py-2 text-xs font-semibold text-white bg-[#0F2D52] rounded-lg disabled:opacity-50">{editSaving ? 'Saving...' : 'Save Changes'}</button>
             </div>
           </div>
         </div>

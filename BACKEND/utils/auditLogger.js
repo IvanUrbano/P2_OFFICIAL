@@ -14,12 +14,13 @@ const pool = require('../db');
  * @param {string}  [params.targetUsername] - Username of the affected user
  * @param {string}  [params.result]     - 'SUCCESS' or 'FAILURE'
  * @param {string}  [params.ipAddress]  - IP address of the request
+ * @param {Object|string} [params.details] - Extra structured context (stored as jsonb)
  */
-async function logAuditEvent({ userId, username, action, targetUserId, targetUsername, result, ipAddress }) {
+async function logAuditEvent({ userId, username, action, targetUserId, targetUsername, result, ipAddress, details }) {
   try {
     await pool.query(
-      `INSERT INTO audit_logs (user_id, username, action, target_user_id, target_username, result, ip_address)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO audit_logs (user_id, username, action, target_user_id, target_username, result, ip_address, details)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         userId || null,
         username || 'system',
@@ -28,6 +29,7 @@ async function logAuditEvent({ userId, username, action, targetUserId, targetUse
         targetUsername || null,
         result || 'SUCCESS',
         ipAddress || null,
+        details == null ? null : (typeof details === 'string' ? details : JSON.stringify(details)),
       ]
     );
   } catch (err) {

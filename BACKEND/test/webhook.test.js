@@ -442,6 +442,100 @@ describe('Webhook Endpoint', () => {
     assert.ok(res.body.error.includes('source_type'));
   });
 
+  it('accepts MANUAL sheet with a valid record', async () => {
+    mockQueryFn = async (sql, params) => {
+      if (sql.includes('SELECT name FROM barangays')) {
+        return { rows: [{ name: 'san antonio' }] };
+      }
+      if (sql.includes('INSERT INTO tb_cases')) {
+        return { rows: [] };
+      }
+      if (sql.includes('INSERT INTO webhook_logs')) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    };
+    mockConnectFn = async () => ({
+      query: async () => {},
+      release: () => {},
+    });
+
+    clearWebhookCache();
+    const webhook = require('../tbinsight/webhook');
+    const app = express();
+    app.use(express.json(RAW_BODY_CAPTURE));
+    app.use('/api/webhook', webhook);
+
+    const payload = buildPayload({
+      sheets: [
+        {
+          sheet_name: 'MANUAL',
+          source_type: 'MANUAL',
+          record_count: 1,
+          records: [
+            {
+              barangay_name: 'San Antonio',
+              date_of_diagnosis: '2025-03-01',
+              sex: 'Male',
+              age: 28,
+              source_type: 'MANUAL',
+            },
+          ],
+        },
+      ],
+    });
+
+    const res = await request(app)
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.importedCount, 1);
+    assert.equal(res.body.errorCount, 0);
+  });
+
+  it('accepts MANUAL sheet with zero records', async () => {
+    mockQueryFn = async (sql) => {
+      if (sql.includes('SELECT name FROM barangays')) {
+        return { rows: [{ name: 'san antonio' }] };
+      }
+      return { rows: [] };
+    };
+    mockConnectFn = async () => ({
+      query: async () => {},
+      release: () => {},
+    });
+
+    clearWebhookCache();
+    const webhook = require('../tbinsight/webhook');
+    const app = express();
+    app.use(express.json(RAW_BODY_CAPTURE));
+    app.use('/api/webhook', webhook);
+
+    const payload = buildPayload({
+      sheets: [
+        {
+          sheet_name: 'MANUAL',
+          source_type: 'MANUAL',
+          record_count: 0,
+          records: [],
+        },
+      ],
+    });
+
+    const res = await request(app)
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.importedCount, 0);
+    assert.equal(res.body.errorCount, 0);
+  });
+
   it('rejects payload with record_count mismatch', async () => {
     mockQueryFn = async (sql) => {
       if (sql.includes('SELECT name FROM barangays')) {

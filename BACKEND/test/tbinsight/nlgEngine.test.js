@@ -12,6 +12,7 @@ const assert = require('node:assert');
 const {
   generateAnalyticsInsight,
   generateForecastingInsight,
+  generateGisInsight,
 } = require('../../tbinsight/nlgEngine');
 
 // ==================== ANALYTICS INSIGHT ====================
@@ -163,19 +164,17 @@ describe('generateAnalyticsInsight', () => {
     assert.ok(result.sections[4].text.includes('relatively balanced'));
   });
 
-  it('generates treatment text below target', () => {
+  it('generates treatment text with rate value', () => {
     const result = generateAnalyticsInsight(baseMetrics);
     const section = result.sections[5];
     assert.strictEqual(section.id, 'treatment');
     assert.ok(section.text.includes('82%'));
-    assert.ok(section.text.includes('below'));
   });
 
-  it('generates treatment text above target', () => {
-    const metrics = { ...baseMetrics, treatment: { ...baseMetrics.treatment, successRate: 90 } };
+  it('generates treatment text for null rate', () => {
+    const metrics = { ...baseMetrics, treatment: { ...baseMetrics.treatment, successRate: null } };
     const result = generateAnalyticsInsight(metrics);
-    assert.ok(result.sections[5].text.includes('90%'));
-    assert.ok(result.sections[5].text.includes('exceeding'));
+    assert.ok(result.sections[5].text.includes('unavailable'));
   });
 
   it('builds basedOn string with barangay filter', () => {
@@ -336,5 +335,176 @@ describe('generateForecastingInsight', () => {
     const result = generateForecastingInsight(baseMetrics, { barangay: 'San Jose', horizon: '3' });
     assert.ok(result.meta.basedOn.includes('San Jose'));
     assert.ok(result.meta.basedOn.includes('3-Month Forecast'));
+  });
+});
+
+// ==================== GIS INSIGHT ====================
+
+describe('generateGisInsight', () => {
+  const baseMetrics = {
+    riskCounts: { High: 4, Medium: 10, Low: 14, 'No Data': 2 },
+    topHotspots: [
+      { name: 'San Jose', risk_class: 'High', risk_score: 82.5, incidence_per_100k: 120.4 },
+      { name: 'Manggahan', risk_class: 'High', risk_score: 77.1, incidence_per_100k: 98.2 },
+    ],
+    concentration: {
+      totalCases: 500,
+      top5CaseSharePct: 62,
+      top5: [
+        { name: 'San Jose', total_cases: 60 },
+        { name: 'Manggahan', total_cases: 55 },
+        { name: 'Pinagbuhatan', total_cases: 50 },
+        { name: 'Sta. Cruz', total_cases: 45 },
+        { name: 'Dela Paz', total_cases: 40 },
+      ],
+    },
+    casesVsRiskPatterns: {
+      highRiskLowerCaseCount: 2,
+      highCaseCountLowerRisk: 1,
+      highRiskLowerCase: [{ name: 'Oranbo' }, { name: 'Dulo' }],
+    },
+    trendCounts: { Increasing: 12, Decreasing: 9, Stable: 9 },
+    coverage: { scoredBarangays: 30, totalBarangays: 30, periodYear: 2025 },
+    incidence: { available: true, periodYear: 2025, periodYearHasPopulation: true, barangaysWithIncidence: 30 },
+    focus: { name: 'San Jose', risk_class: 'High', risk_score: 82.5, rank: 1, total_scored: 30 },
+  };
+
+  const sectionId = (result, id) => result.sections.find((s) => s.id === id);
+
+  it('returns correct type and meta structure', () => {
+    const result = generateGisInsight(baseMetrics, { barangay: 'San Jose' });
+    assert.strictEqual(result.type, 'gis');
+    assert.ok(result.meta.basedOn.includes('San Jose'));
+    assert.ok(result.meta.basedOn.includes('Risk Period 2025'));
+    assert.ok(result.meta.generatedAt);
+  });
+
+  it('builds basedOn with All Barangays default', () => {
+    const result = generateGisInsight(baseMetrics);
+    assert.ok(result.meta.basedOn.includes('All Barangays'));
+  });
+
+  it('returns exactly 6 sections with the expected ids in order', () => {
+    const result = generateGisInsight(baseMetrics);
+    assert.strictEqual(result.sections.length, 6);
+    assert.deepStrictEqual(
+      result.sections.map((s) => s.id),
+      ['riskOverview', 'topHotspots', 'caseConcentration', 'casesVsRiskPatterns', 'trendDistribution', 'overallSummary']
+    );
+  });
+
+  it('each section has required fields', () => {
+    const result = generateGisInsight(baseMetrics);
+    for (const section of result.sections) {
+      assert.ok(section.id, 'Section missing id');
+      assert.ok(section.title, `Section ${section.id} missing title`);
+      assert.ok(section.text, `Section ${section.id} missing text`);
+      assert.ok(section.icon, `Section ${section.id} missing icon`);
+    }
+  });
+
+  it('last section is overallSummary', () => {
+    const result = generateGisInsight(baseMetrics);
+    assert.strictEqual(result.sections[5].id, 'overallSummary');
+  });
+
+  it('risk overview uses actual High/Medium/Low/No Data labels and period year', () => {
+    const result = generateGisInsight(baseMetrics);
+    const text = sectionId(result, 'riskOverview').text;
+    assert.ok(text.includes('**High**'));
+    assert.ok(text.includes('**Medium**'));
+    assert.ok(text.includes('**Low**'));
+    assert.ok(text.includes('**No Data**'));
+    assert.ok(text.includes('2025'));
+    assert.ok(text.includes('**San Jose** is classified **High**'));
+  });
+
+  it('top hotspots includes incidence per 100k when incidence is available', () => {
+    const result = generateGisInsight(baseMetrics);
+    const text = sectionId(result, 'topHotspots').text;
+    assert.ok(text.includes('**San Jose**'));
+    assert.ok(text.includes('per 100,000 population'));
+  });
+
+  it('case concentration reports top 5 share', () => {
+    const result = generateGisInsight(baseMetrics);
+    const text = sectionId(result, 'caseConcentration').text;
+    assert.ok(text.includes('**62%**'));
+    assert.ok(text.includes('5 barangays'));
+    assert.ok(text.includes('San Jose'));
+  });
+
+  it('cases vs risk patterns reports mismatch counts with methodology wording when incidence available', () => {
+    const result = generateGisInsight(baseMetrics);
+    const text = sectionId(result, 'casesVsRiskPatterns').text;
+    assert.ok(text.includes('**2**'));
+    assert.ok(text.includes('**1**'));
+    assert.ok(text.includes('population-adjusted incidence, trend, neighboring barangay risk, and forecast error'));
+    assert.ok(text.includes('Oranbo'));
+  });
+
+  it('cases vs risk patterns uses cautious wording when incidence is unavailable', () => {
+    const metrics = { ...baseMetrics, incidence: { available: false, periodYear: 2025 } };
+    const result = generateGisInsight(metrics);
+    const text = sectionId(result, 'casesVsRiskPatterns').text;
+    assert.ok(text.includes('draws on indicators beyond raw case volume'));
+    assert.ok(!text.includes('population-adjusted incidence'));
+  });
+
+  it('cases vs risk patterns reports alignment when there are no mismatches', () => {
+    const metrics = {
+      ...baseMetrics,
+      casesVsRiskPatterns: { highRiskLowerCaseCount: 0, highCaseCountLowerRisk: 0 },
+    };
+    const result = generateGisInsight(metrics);
+    assert.ok(sectionId(result, 'casesVsRiskPatterns').text.includes('closely aligned'));
+  });
+
+  it('trend distribution reports counts per trend direction', () => {
+    const result = generateGisInsight(baseMetrics);
+    const text = sectionId(result, 'trendDistribution').text;
+    assert.ok(text.includes('**30** classified barangays'));
+    assert.ok(text.includes('**12**'));
+    assert.ok(text.includes('**Increasing**'));
+    assert.ok(text.includes('**Decreasing**'));
+    assert.ok(text.includes('**Stable**'));
+  });
+
+  it('includes incidence-unavailable guard with the matching year everywhere relevant', () => {
+    const metrics = { ...baseMetrics, incidence: { available: false, periodYear: 2025 } };
+    const result = generateGisInsight(metrics);
+    const guard = 'Incidence interpretation is unavailable for 2025 because matching-year population reference data is not configured.';
+    assert.ok(sectionId(result, 'riskOverview').text.includes(guard));
+    assert.ok(sectionId(result, 'overallSummary').text.includes(guard));
+    assert.ok(!sectionId(result, 'topHotspots').text.includes('per 100,000'));
+  });
+
+  it('omits incidence claims entirely when population is unavailable', () => {
+    const metrics = { ...baseMetrics, incidence: { available: false, periodYear: 2025 } };
+    const result = generateGisInsight(metrics);
+    for (const section of result.sections) {
+      assert.ok(!section.text.includes('per 100,000'), `${section.id} must not cite incidence`);
+    }
+  });
+
+  it('generates no-data texts when metrics are empty', () => {
+    const result = generateGisInsight({});
+    assert.ok(sectionId(result, 'riskOverview').text.includes('No risk classifications'));
+    assert.ok(sectionId(result, 'topHotspots').text.includes('No barangays'));
+    assert.ok(sectionId(result, 'caseConcentration').text.includes('No reported case data'));
+    assert.ok(sectionId(result, 'trendDistribution').text.includes('No classified barangays'));
+    assert.ok(sectionId(result, 'overallSummary').text.includes('No risk classifications'));
+  });
+
+  it('does not show incidence guard when no classifications exist', () => {
+    const result = generateGisInsight({ incidence: { available: false, periodYear: 2025 } });
+    assert.ok(!sectionId(result, 'overallSummary').text.includes('Incidence interpretation is unavailable'));
+  });
+
+  it('overall summary reflects increasing majority', () => {
+    const result = generateGisInsight(baseMetrics);
+    assert.ok(sectionId(result, 'overallSummary').text.includes('increasing than a decreasing'));
+    assert.ok(sectionId(result, 'overallSummary').text.includes('4 barangay(s)'));
+    assert.ok(sectionId(result, 'overallSummary').text.includes('62%'));
   });
 });

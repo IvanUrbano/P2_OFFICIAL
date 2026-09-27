@@ -12,6 +12,11 @@ const SECTION_ICONS = {
   highRiskAreas: '\ud83c\udfaf',
   confidence: '\ud83d\udcd0',
   overallSummary: '\ud83d\udcdd',
+  riskOverview: '\ud83c\udf0d',
+  topHotspots: '\ud83d\udccd',
+  caseConcentration: '\ud83e\udde6',
+  casesVsRiskPatterns: '\ud83e\udde9',
+  trendDistribution: '\ud83d\udcc8',
 };
 
 function AiInsightPanel({
@@ -25,7 +30,9 @@ function AiInsightPanel({
   const title =
     type === 'forecasting'
       ? 'NLG-GENERATED FORECASTING INSIGHT'
-      : 'NLG-GENERATED ANALYTICS INSIGHT';
+      : type === 'gis'
+        ? 'NLG-GENERATED GIS INSIGHT'
+        : 'NLG-GENERATED ANALYTICS INSIGHT';
 
   // Loading state
   if (loading) {

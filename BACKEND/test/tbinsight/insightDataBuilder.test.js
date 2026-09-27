@@ -264,7 +264,7 @@ describe('buildAnalyticsMetrics', () => {
       { rows: [] },
       { rows: [] },
       { rows: [] },
-      // outcomeRes
+      // outcomeRes (for outcomeBreakdown)
       { rows: [
         { outcome_status: 'CURED', total: 50 },
         { outcome_status: 'TREATMENT COMPLETED', total: 30 },
@@ -273,10 +273,12 @@ describe('buildAnalyticsMetrics', () => {
         { outcome_status: 'NOT EVALUATED', total: 5 },
       ]},
       { rows: [{ total_cases: 100, barangays_with_data: 1, earliest_date: null, latest_date: null }] },
+      // cohortResult (for TSR from previous year treatment-start cohort)
+      { rows: [{ total_patients: 95, cured_count: 50, completed_count: 30 }] },
     ]);
 
-    const result = await buildAnalyticsMetrics(pool);
-    // Success = (50+30) / (50+30+10+5) = 80/95 = 84.2%
+    const result = await buildAnalyticsMetrics(pool, { year: 2025 });
+    // TSR = (50+30) / 95 = 84.2%
     assert.ok(result.treatment.successRate > 80, `Expected > 80, got ${result.treatment.successRate}`);
     assert.ok(result.treatment.successRate < 90, `Expected < 90, got ${result.treatment.successRate}`);
     assert.strictEqual(result.treatment.outcomeBreakdown['CURED'], 50);

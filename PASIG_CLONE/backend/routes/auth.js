@@ -28,7 +28,7 @@ const loginLimiter = rateLimit({
 // ==================== REGISTER (Admin Only) ====================
 router.post('/register', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
-    const { username, email, role } = req.body;
+    const { username, email, role, facility_id } = req.body;
     const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
     const cleanUsername = username?.trim().toLowerCase();
@@ -40,7 +40,7 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
 
     const userRole = role || 'staff';
     if (!['admin', 'staff'].includes(userRole)) {
-      return res.status(400).json({ error: 'Role must be admin or staff.' });
+      return res.status(400).json({ error: 'Invalid role. Must be admin or staff.' });
     }
 
     const existing = await db.authPool.query(
@@ -51,14 +51,30 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
       return res.status(409).json({ error: 'Username or email already exists.' });
     }
 
+    // Facility assignment: required for staff, optional (NULL) for admin.
+    let facilityId = null;
+    if (facility_id !== undefined && facility_id !== null && facility_id !== '') {
+      const facResult = await db.authPool.query(
+        'SELECT id FROM health_facilities WHERE id = $1',
+        [Number(facility_id)]
+      );
+      if (facResult.rows.length === 0) {
+        return res.status(400).json({ error: 'Unknown health facility. Select a registered facility.' });
+      }
+      facilityId = Number(facility_id);
+    } else if (userRole === 'staff') {
+      return res.status(400).json({ error: 'A registered health facility is required for staff accounts.' });
+    }
+
     // Generate secure temporary password
     const tempPassword = generateTempPassword();
 
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
     const result = await db.authPool.query(
-      `INSERT INTO users (username, email, password_hash, role, password_changed_at)
-       VALUES ($1, $2, $3, $4, NOW()) RETURNING id, username, email, role, created_at`,
-      [cleanUsername, cleanEmail, hashedPassword, userRole]
+      `INSERT INTO users (username, email, password_hash, role, facility_id, password_changed_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING id, username, email, role, facility_id, created_at`,
+      [cleanUsername, cleanEmail, hashedPassword, userRole, facilityId]
     );
 
     const newUser = result.rows[0];
@@ -72,6 +88,7 @@ router.post('/register', authenticate, authorizeRoles('admin'), async (req, res)
       targetUsername: newUser.username,
       result: 'SUCCESS',
       ipAddress,
+      details: { role: userRole, facilityId },
     });
 
     res.status(201).json({
@@ -280,12 +297,95 @@ router.put('/password', authenticate, async (req, res) => {
 router.get('/users', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const result = await db.authPool.query(
-      'SELECT id, username, email, role, created_at FROM users ORDER BY created_at DESC'
+      `SELECT u.id, u.username, u.email, u.role, u.created_at, u.facility_id,
+              hf.name AS facility_name, hf.barangay_name AS facility_barangay, hf.facility_type
+       FROM users u
+       LEFT JOIN health_facilities hf ON u.facility_id = hf.id
+       ORDER BY u.created_at DESC`
     );
     res.json({ users: result.rows });
   } catch (error) {
     console.error('Fetch users error:', error.message);
     res.status(500).json({ error: 'Failed to fetch users.' });
+  }
+});
+
+// ==================== UPDATE USER ROLE / FACILITY (Admin Only) ====================
+router.put('/users/:id', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role, facility_id } = req.body;
+    const ipAddress = req.ip || req.connection?.remoteAddress || null;
+
+    const existingResult = await db.authPool.query(
+      'SELECT id, username, role, facility_id FROM users WHERE id = $1',
+      [id]
+    );
+    if (existingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    const existing = existingResult.rows[0];
+
+    const targetRole = role !== undefined && role !== null && role !== '' ? role : existing.role;
+    if (!['admin', 'staff'].includes(targetRole)) {
+      return res.status(400).json({ error: 'Invalid role. Must be admin or staff.' });
+    }
+    const roleChanged = targetRole !== existing.role;
+
+    // Resolve the facility for the updated account:
+    // - facility_id supplied explicitly (including null) wins;
+    // - staff accounts keep their facility (and must have one — Admin→Staff without one fails);
+    // - role change to admin without a supplied facility clears the facility to NULL.
+    let nextFacilityId;
+    if (facility_id !== undefined) {
+      nextFacilityId = facility_id === null || facility_id === '' ? null : Number(facility_id);
+    } else if (targetRole === 'staff') {
+      nextFacilityId = existing.facility_id ?? null;
+      if (nextFacilityId === null) {
+        return res.status(400).json({ error: 'A registered health facility is required for staff accounts.' });
+      }
+    } else {
+      // targetRole === 'admin', no facility supplied in this update
+      nextFacilityId = roleChanged ? null : (existing.facility_id ?? null);
+    }
+
+    if (nextFacilityId !== null) {
+      const facResult = await db.authPool.query(
+        'SELECT id FROM health_facilities WHERE id = $1',
+        [nextFacilityId]
+      );
+      if (facResult.rows.length === 0) {
+        return res.status(400).json({ error: 'Unknown health facility. Select a registered facility.' });
+      }
+    }
+
+    const result = await db.authPool.query(
+      `UPDATE users SET role = $1, facility_id = $2, updated_at = NOW()
+       WHERE id = $3
+       RETURNING id, username, email, role, facility_id, created_at`,
+      [targetRole, nextFacilityId, id]
+    );
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'UPDATE_USER',
+      targetUserId: result.rows[0].id,
+      targetUsername: result.rows[0].username,
+      result: 'SUCCESS',
+      ipAddress,
+      details: {
+        fromRole: existing.role,
+        toRole: targetRole,
+        fromFacilityId: existing.facility_id ?? null,
+        toFacilityId: nextFacilityId,
+      },
+    });
+
+    res.json({ message: 'User updated successfully.', user: result.rows[0] });
+  } catch (error) {
+    console.error('Update user error:', error.message);
+    res.status(500).json({ error: 'Failed to update user.' });
   }
 });
 

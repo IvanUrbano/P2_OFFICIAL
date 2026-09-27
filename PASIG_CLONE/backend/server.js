@@ -20,6 +20,7 @@ const { initSchema } = require('./db/pasigSchema');
 const authRoutes = require('./routes/auth');
 const csvImportRoutes = require('./routes/csvImport');
 const validationRoutes = require('./routes/validation');
+const manualEntryRoutes = require('./routes/manualEntry');
 const webhookRoutes = require('./routes/webhook');
 const facilitiesRoutes = require('./routes/facilities');
  
@@ -50,6 +51,7 @@ app.use(cookieParser());
 app.use('/api/auth', authRoutes);
 app.use('/api/data', csvImportRoutes);
 app.use('/api/data', validationRoutes);
+app.use('/api/data', manualEntryRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/facilities', facilitiesRoutes);
  

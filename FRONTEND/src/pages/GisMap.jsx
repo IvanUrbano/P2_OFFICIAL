@@ -7,6 +7,8 @@ import {
   CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import API from '../api/axios';
+import AiInsightPanel from '../components/AiInsightPanel';
+import { getGisInsight } from '../services/insightService';
 
 const RISK_COLORS = {
   High: '#EF4444',
@@ -158,7 +160,24 @@ export default function GisMap() {
   const [refreshing, setRefreshing] = useState(false);
   const [filterYear, setFilterYear] = useState('');
   const [availableYears, setAvailableYears] = useState([]);
+  const [gisInsight, setGisInsight] = useState(null);
+  const [gisInsightLoading, setGisInsightLoading] = useState(false);
+  const [gisInsightError, setGisInsightError] = useState(null);
   const closeButtonRef = useRef(null);
+
+  const handleGenerateGisInsight = useCallback(async () => {
+    try {
+      setGisInsightLoading(true);
+      setGisInsightError(null);
+      const insight = await getGisInsight({ barangay: filterBarangay || undefined });
+      setGisInsight(insight);
+    } catch (err) {
+      if (import.meta.env.DEV) console.error('GIS insight generation failed:', err);
+      setGisInsightError('Unable to generate insight.');
+    } finally {
+      setGisInsightLoading(false);
+    }
+  }, [filterBarangay]);
 
   // Auto-focus close button when modal opens and handle Escape key
   useEffect(() => {
@@ -1020,6 +1039,43 @@ export default function GisMap() {
           </div>
         );
       })()}
+
+      {/* ── NLG GIS Insight Panel ── */}
+      {!isFullscreen && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+          <div className="lg:col-span-2 rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E8ECF1', boxShadow: '0 4px 24px rgba(15,45,82,0.06)' }}>
+            <div className="px-6 py-5">
+              <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: '#2563EB' }}>Map Interpretation</p>
+              <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>About This Map</h3>
+              <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
+                The panel on the right generates a natural-language interpretation of the current risk distribution, hotspots, and case patterns shown on the map.
+              </p>
+              <div className="mt-4 grid grid-cols-3 gap-3">
+                {[
+                  { label: 'Focus', value: filterBarangay || 'All Barangays' },
+                  { label: 'Year Filter', value: filterYear || 'Latest' },
+                  { label: 'Risk Level Filter', value: filterRiskLevel || 'All' },
+                ].map((item) => (
+                  <div key={item.label} className="rounded-lg px-3 py-2" style={{ background: '#F8FAFC', border: '1px solid #E8ECF1' }}>
+                    <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>{item.label}</p>
+                    <p className="text-[13px] font-bold truncate" style={{ color: '#0F2D52' }}>{item.value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div>
+            <AiInsightPanel
+              type="gis"
+              data={gisInsight}
+              loading={gisInsightLoading}
+              error={gisInsightError}
+              onRetry={handleGenerateGisInsight}
+              onGenerate={handleGenerateGisInsight}
+            />
+          </div>
+        </div>
+      )}
 
       {/* ── Barangay Side Modal (Profile + Analytics tabs) ── */}
       {selectedBarangayName && (

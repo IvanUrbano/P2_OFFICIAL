@@ -86,7 +86,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
     for (const sheet of sheets) {
       const { source_type, records } = sheet;
 
-      if (!source_type || !['DSTB', 'MN'].includes(source_type)) {
+      if (!source_type || !['DSTB', 'MN', 'MANUAL'].includes(source_type)) {
         await client.query('ROLLBACK');
         console.error(`   ❌ Invalid source_type: ${source_type}`);
         return res.status(400).json({ error: `Invalid source_type: "${source_type}"` });
