@@ -89,7 +89,7 @@ export default function TBRecordsPage() {
   useEffect(() => {
     fetchRecords();
     try { setUser(JSON.parse(localStorage.getItem('user') || 'null')); } catch { setUser(null); }
-    API.get('/api/facilities').then(r => setFacilities(r.data || [])).catch(() => {});
+    API.get('/api/facilities').then(r => setFacilities(r.data?.facilities || [])).catch(() => {});
     API.get('/api/data/manual-options').then(r => setOptions(r.data || {})).catch(() => {});
   }, []);
 
@@ -159,6 +159,7 @@ export default function TBRecordsPage() {
   const srcOptions = options.source_of_patient?.length ? options.source_of_patient : STATIC_SRC;
   const anatOptions = options.anatomical_site?.length ? options.anatomical_site : STATIC_ANAT;
   const bactOptions = options.bacteriological_status?.length ? options.bacteriological_status : STATIC_BACT;
+  const facilityList = Array.isArray(facilities) ? facilities : [];
 
   const filtered = records.filter((r) => {
     const matchSearch = !search || [r.barangay_name, r.city, r.source_type, r.sex].some(f => f?.toLowerCase().includes(search.toLowerCase()));
@@ -368,7 +369,7 @@ export default function TBRecordsPage() {
                 <label className="block text-xs font-bold mb-1" style={labelStyle}>Screening Facility</label>
                 <select value={form.screening_facility} onChange={e => setField('screening_facility', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                   <option value="">Select facility…</option>
-                  {facilities.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                  {facilityList.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
                   <option value="__other__">Other (type below)</option>
                 </select>
                 {form.screening_facility === '__other__' && (
@@ -381,7 +382,7 @@ export default function TBRecordsPage() {
                 <label className="block text-xs font-bold mb-1" style={labelStyle}>Treatment Facility</label>
                 <select value={form.treatment_facility} onChange={e => setField('treatment_facility', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                   <option value="">Select facility…</option>
-                  {facilities.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                  {facilityList.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
                   <option value="__other__">Other (type below)</option>
                 </select>
                 {form.treatment_facility === '__other__' && (
