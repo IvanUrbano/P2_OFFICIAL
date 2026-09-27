@@ -22,6 +22,34 @@ const STATUS_TABS = [
   { key: 'pending', title: 'Pending', desc: 'Awaiting review' },
 ];
 
+const PASIG_BARANGAYS = [
+  'Bagong Ilog','Bambang','Buting','Caniogan','Dela Paz','Kalawaan','Kapitolyo','Malinao',
+  'Manggahan','Maybunga','Oranbo','Palatiw','Pasig','Pinagbuhatan','Pineda','Rosario',
+  'Sagad','San Antonio','San Joaquin','San Jose','San Miguel','San Nicolas','Santa Cruz',
+  'Santa Lucia','Santa Rosa','Santolan','Santo Tomas','Sumilang','Ugong','Union',
+];
+
+const EMPTY_FORM = {
+  barangay_name: '', date_of_screening: '', date_of_diagnosis: '', date_of_notification: '',
+  date_started_treatment: '', date_of_outcome: '', age: '', sex: '',
+  screening_facility: '', treatment_facility: '', screening_facility_other: '', treatment_facility_other: '',
+  source_of_patient: '', registration_group: '', anatomical_site: '', bacteriological_status: '',
+  outcome_status: '', itis_case_id: '',
+};
+
+const OUTCOME_OPTIONS = [
+  'ON TREATMENT','CURED','TREATMENT COMPLETED','DIED','LOST TO FOLLOW-UP',
+  'TREATMENT FAILED','NOT EVALUATED','REFUSED','EXCLUDED',
+];
+
+const STATIC_REG = ['NEW','OTHER','PREVIOUS TX OUTCOME UNKNOWN','RELAPSE','TX AFTER FAILURE','TX AFTER LOST TO FF-UP'];
+const STATIC_SRC = ['COMMUNITY','OTHER PUBLIC FACILITY','PRIVATE FACILITY','PUBLIC HEALTH CENTER'];
+const STATIC_ANAT = ['P','EP'];
+const STATIC_BACT = ['SMEAR POSITIVE','SMEAR NEGATIVE','XPERT MTB/RIF DETECTED','XPERT MTB/RIF NOT DETECTED'];
+
+const inputStyle = { background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52', borderRadius: 4 };
+const labelStyle = { color: '#0F2D52' };
+
 export default function TBRecordsPage() {
   const { t } = useTheme();
   const navigate = useNavigate();
@@ -32,6 +60,16 @@ export default function TBRecordsPage() {
   const [filter, setFilter] = useState('all');
   const [page, setPage] = useState(1);
   const perPage = 20;
+
+  // Add-record form state
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ ...EMPTY_FORM });
+  const [formErrors, setFormErrors] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState(null);
+  const [facilities, setFacilities] = useState([]);
+  const [options, setOptions] = useState({ registration_group: [], source_of_patient: [], anatomical_site: [], bacteriological_status: [] });
+  const [user, setUser] = useState(null);
 
   const fetchRecords = async () => {
     setLoading(true);
@@ -46,7 +84,79 @@ export default function TBRecordsPage() {
     }
   };
 
-  useEffect(() => { fetchRecords(); }, []);
+  useEffect(() => {
+    fetchRecords();
+    try { setUser(JSON.parse(localStorage.getItem('user') || 'null')); } catch { setUser(null); }
+    API.get('/api/facilities').then(r => setFacilities(r.data || [])).catch(() => {});
+    API.get('/api/data/manual-options').then(r => setOptions(r.data || {})).catch(() => {});
+  }, []);
+
+  const canAdd = user && (user.role === 'admin' || user.role === 'staff');
+
+  const openForm = () => { setForm({ ...EMPTY_FORM }); setFormErrors([]); setResult(null); setShowForm(true); };
+  const closeForm = () => { setShowForm(false); setFormErrors([]); setResult(null); };
+
+  const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const validate = () => {
+    const errs = [];
+    if (!form.barangay_name) errs.push('Barangay is required');
+    if (!form.date_of_diagnosis) errs.push('Date of Diagnosis is required');
+    if (form.age === '' || form.age === null || form.age === undefined) errs.push('Age is required');
+    if (!form.sex) errs.push('Sex is required');
+    if (form.date_of_outcome && form.date_of_diagnosis && form.date_of_outcome < form.date_of_diagnosis) {
+      errs.push('Date of Outcome cannot be earlier than Date of Diagnosis');
+    }
+    if (form.date_of_outcome && form.date_started_treatment && form.date_of_outcome < form.date_started_treatment) {
+      errs.push('Date of Outcome cannot be earlier than Date Started Treatment');
+    }
+    return errs;
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const errs = validate();
+    if (errs.length) { setFormErrors(errs); return; }
+    setFormErrors([]);
+    setSaving(true);
+    setResult(null);
+    const screening = form.screening_facility === '__other__' ? form.screening_facility_other : form.screening_facility;
+    const treatment = form.treatment_facility === '__other__' ? form.treatment_facility_other : form.treatment_facility;
+    const payload = {
+      barangay_name: form.barangay_name,
+      date_of_diagnosis: form.date_of_diagnosis || null,
+      date_of_screening: form.date_of_screening || null,
+      date_of_notification: form.date_of_notification || null,
+      date_started_treatment: form.date_started_treatment || null,
+      date_of_outcome: form.date_of_outcome || null,
+      age: form.age === '' ? null : Number(form.age),
+      sex: form.sex || null,
+      screening_facility: screening || null,
+      treatment_facility: treatment || null,
+      source_of_patient: form.source_of_patient || null,
+      registration_group: form.registration_group || null,
+      anatomical_site: form.anatomical_site || null,
+      bacteriological_status: form.bacteriological_status || null,
+      outcome_status: form.outcome_status || null,
+      itis_case_id: form.itis_case_id || null,
+    };
+    try {
+      const res = await API.post('/api/data/manual-entry', payload);
+      setResult({ type: 'success', message: res.data.message || 'TB record created.', sync: res.data.sync });
+      fetchRecords();
+    } catch (err) {
+      const data = err.response?.data;
+      if (data?.errors) { setFormErrors(data.errors); }
+      else { setFormErrors([data?.error || 'Failed to create TB record.']); }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const regOptions = options.registration_group?.length ? options.registration_group : STATIC_REG;
+  const srcOptions = options.source_of_patient?.length ? options.source_of_patient : STATIC_SRC;
+  const anatOptions = options.anatomical_site?.length ? options.anatomical_site : STATIC_ANAT;
+  const bactOptions = options.bacteriological_status?.length ? options.bacteriological_status : STATIC_BACT;
 
   const filtered = records.filter((r) => {
     const matchSearch = !search || [r.barangay_name, r.city, r.source_type, r.sex].some(f => f?.toLowerCase().includes(search.toLowerCase()));
@@ -77,9 +187,16 @@ export default function TBRecordsPage() {
             <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>TB Records</h1>
             <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>View and manage imported tuberculosis records.</p>
           </div>
-          <button onClick={() => navigate('/import')} className="px-4 py-2 text-xs font-semibold shrink-0 flex items-center gap-2" style={{ background: '#0F2D52', color: '#ffffff', borderRadius: 4, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}>
-            Import Data
-          </button>
+          <div className="flex gap-2 shrink-0">
+            {canAdd && (
+              <button onClick={openForm} className="px-4 py-2 text-xs font-semibold flex items-center gap-2" style={{ background: '#16A34A', color: '#ffffff', borderRadius: 4, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#15803D'; }} onMouseLeave={e => { e.currentTarget.style.background = '#16A34A'; }}>
+                + Add TB Record
+              </button>
+            )}
+            <button onClick={() => navigate('/import')} className="px-4 py-2 text-xs font-semibold flex items-center gap-2" style={{ background: '#0F2D52', color: '#ffffff', borderRadius: 4, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}>
+              Import Data
+            </button>
+          </div>
         </div>
 
         {/* Tabs */}
@@ -164,6 +281,182 @@ export default function TBRecordsPage() {
           </div>
         )}
       </div>
+
+      {/* ── Slide-over: Add TB Record ── */}
+      {showForm && (
+        <div className="fixed inset-0 z-50 flex justify-end" style={{ background: 'rgba(15,23,42,0.3)' }} onClick={closeForm}>
+          <div className="w-full max-w-lg h-full overflow-y-auto" style={{ background: '#ffffff' }} onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4" style={{ background: '#0F2D52', color: '#ffffff' }}>
+              <div>
+                <h2 className="text-sm font-extrabold">Add TB Record</h2>
+                <p className="text-[11px] mt-0.5 opacity-70">Manually enter a new tuberculosis case record.</p>
+              </div>
+              <button onClick={closeForm} className="text-white/70 hover:text-white text-lg">✕</button>
+            </div>
+
+            {/* Result Banner */}
+            {result && (
+              <div className="mx-6 mt-4 px-4 py-3 rounded-lg text-xs font-semibold" style={{ background: result.sync?.status === 'synced' ? '#DCFCE7' : '#FEF9C3', color: result.sync?.status === 'synced' ? '#166534' : '#854D0E' }}>
+                {result.message}
+                {result.sync?.status === 'failed' && <span className="block text-[11px] font-normal mt-0.5 opacity-80">Sync failed — record saved. Retry from Sync page.</span>}
+              </div>
+            )}
+
+            {/* Errors */}
+            {formErrors.length > 0 && (
+              <div className="mx-6 mt-4 px-4 py-3 rounded-lg text-xs" style={{ background: '#FEF2F2', color: '#991B1B' }}>
+                <ul className="list-disc pl-4 space-y-0.5">{formErrors.map((e, i) => <li key={i}>{e}</li>)}</ul>
+              </div>
+            )}
+
+            {/* Form */}
+            <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+              {/* Barangay */}
+              <div>
+                <label className="block text-xs font-bold mb-1" style={labelStyle}>Barangay *</label>
+                <select value={form.barangay_name} onChange={e => setField('barangay_name', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                  <option value="">Select barangay…</option>
+                  {PASIG_BARANGAYS.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+
+              {/* Dates row 1: screening + diagnosis */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Date of Screening</label>
+                  <input type="date" value={form.date_of_screening} onChange={e => setField('date_of_screening', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Date of Diagnosis *</label>
+                  <input type="date" value={form.date_of_diagnosis} onChange={e => setField('date_of_diagnosis', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} />
+                </div>
+              </div>
+
+              {/* Dates row 2: notification + treatment start */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Date of Notification</label>
+                  <input type="date" value={form.date_of_notification} onChange={e => setField('date_of_notification', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Date Started Treatment</label>
+                  <input type="date" value={form.date_started_treatment} onChange={e => setField('date_started_treatment', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} />
+                </div>
+              </div>
+
+              {/* Age + Sex */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Age *</label>
+                  <input type="number" min="0" max="120" value={form.age} onChange={e => setField('age', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} placeholder="0–120" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Sex *</label>
+                  <select value={form.sex} onChange={e => setField('sex', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                    <option value="">Select…</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Screening Facility */}
+              <div>
+                <label className="block text-xs font-bold mb-1" style={labelStyle}>Screening Facility</label>
+                <select value={form.screening_facility} onChange={e => setField('screening_facility', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                  <option value="">Select facility…</option>
+                  {facilities.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                  <option value="__other__">Other (type below)</option>
+                </select>
+                {form.screening_facility === '__other__' && (
+                  <input type="text" value={form.screening_facility_other} onChange={e => setField('screening_facility_other', e.target.value)} placeholder="Enter facility name" className="w-full px-3 py-2 text-xs outline-none mt-1" style={inputStyle} />
+                )}
+              </div>
+
+              {/* Treatment Facility */}
+              <div>
+                <label className="block text-xs font-bold mb-1" style={labelStyle}>Treatment Facility</label>
+                <select value={form.treatment_facility} onChange={e => setField('treatment_facility', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                  <option value="">Select facility…</option>
+                  {facilities.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                  <option value="__other__">Other (type below)</option>
+                </select>
+                {form.treatment_facility === '__other__' && (
+                  <input type="text" value={form.treatment_facility_other} onChange={e => setField('treatment_facility_other', e.target.value)} placeholder="Enter facility name" className="w-full px-3 py-2 text-xs outline-none mt-1" style={inputStyle} />
+                )}
+              </div>
+
+              {/* Source of Patient */}
+              <div>
+                <label className="block text-xs font-bold mb-1" style={labelStyle}>Source of Patient</label>
+                <select value={form.source_of_patient} onChange={e => setField('source_of_patient', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                  <option value="">Select…</option>
+                  {srcOptions.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+
+              {/* Registration Group + Anatomical Site */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Registration Group</label>
+                  <select value={form.registration_group} onChange={e => setField('registration_group', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                    <option value="">Select…</option>
+                    {regOptions.map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Anatomical Site</label>
+                  <select value={form.anatomical_site} onChange={e => setField('anatomical_site', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                    <option value="">Select…</option>
+                    {anatOptions.map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Bacteriological Status */}
+              <div>
+                <label className="block text-xs font-bold mb-1" style={labelStyle}>Bacteriological Status</label>
+                <select value={form.bacteriological_status} onChange={e => setField('bacteriological_status', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                  <option value="">Select…</option>
+                  {bactOptions.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+
+              {/* Outcome Status + Date of Outcome */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Outcome Status</label>
+                  <select value={form.outcome_status} onChange={e => setField('outcome_status', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                    <option value="">Select…</option>
+                    {OUTCOME_OPTIONS.map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Date of Outcome</label>
+                  <input type="date" value={form.date_of_outcome} onChange={e => setField('date_of_outcome', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} />
+                </div>
+              </div>
+
+              {/* ITIS Case ID (optional, for MN) */}
+              <div>
+                <label className="block text-xs font-bold mb-1" style={labelStyle}>ITIS Case ID <span className="font-normal opacity-60">(optional)</span></label>
+                <input type="text" value={form.itis_case_id} onChange={e => setField('itis_case_id', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} placeholder="For MN records" />
+              </div>
+
+              {/* Submit */}
+              <div className="flex gap-3 pt-2">
+                <button type="submit" disabled={saving} className="flex-1 px-4 py-2.5 text-xs font-bold rounded-md disabled:opacity-50 transition-colors" style={{ background: '#16A34A', color: '#ffffff' }}>
+                  {saving ? 'Saving…' : 'Save Record'}
+                </button>
+                <button type="button" onClick={closeForm} className="px-4 py-2.5 text-xs font-bold rounded-md transition-colors" style={{ border: '1px solid #CBD5E1', background: '#ffffff', color: '#0F2D52' }}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
