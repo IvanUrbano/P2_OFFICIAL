@@ -23,10 +23,12 @@ const STATUS_TABS = [
 ];
 
 const PASIG_BARANGAYS = [
-  'Bagong Ilog','Bambang','Buting','Caniogan','Dela Paz','Kalawaan','Kapitolyo','Malinao',
-  'Manggahan','Maybunga','Oranbo','Palatiw','Pasig','Pinagbuhatan','Pineda','Rosario',
-  'Sagad','San Antonio','San Joaquin','San Jose','San Miguel','San Nicolas','Santa Cruz',
-  'Santa Lucia','Santa Rosa','Santolan','Santo Tomas','Sumilang','Ugong','Union',
+  'Bagong Ilog', 'Bagong Katipunan', 'Bambang', 'Buting', 'Caniogan', 'Dela Paz',
+  'Kalawaan', 'Kapasigan', 'Kapitolyo', 'Malinao', 'Manggahan', 'Maybunga',
+  'Oranbo', 'Palatiw', 'Pinagbuhatan', 'Pineda', 'Rosario', 'Sagad',
+  'San Antonio', 'San Joaquin', 'San Jose', 'San Miguel', 'San Nicolas',
+  'Santa Cruz', 'Santa Lucia', 'Santa Rosa', 'Santo Tomas', 'Santolan',
+  'Sumilang', 'Ugong',
 ];
 
 const EMPTY_FORM = {
