@@ -103,29 +103,42 @@ async function sendWebhook(batchId, userId) {
 
     const dstbRecords = pasigRecords.filter(r => r.source_type === 'DSTB');
     const mnRecords = pasigRecords.filter(r => r.source_type === 'MN');
+    const manualRecords = pasigRecords.filter(r => r.source_type === 'MANUAL');
+
+    // entered_by_* provenance is Clone-only — formatRecord must never include it
+    // (confirmed: formatRecord serializes the fixed field list below, not the row).
+    const sheets = [
+      {
+        sheet_name: 'DSTB',
+        source_type: 'DSTB',
+        record_count: dstbRecords.length,
+        records: dstbRecords.map(formatRecord),
+      },
+      {
+        sheet_name: 'MN',
+        source_type: 'MN',
+        record_count: mnRecords.length,
+        records: mnRecords.map(formatRecord),
+      },
+    ];
+    if (manualRecords.length > 0) {
+      sheets.push({
+        sheet_name: 'MANUAL',
+        source_type: 'MANUAL',
+        record_count: manualRecords.length,
+        records: manualRecords.map(formatRecord),
+      });
+    }
 
     const payload = {
       schema_version: '1.0',
       source: 'pasig-clone',
       batch_id: batchId,
       timestamp: new Date().toISOString(),
-      sheets: [
-        {
-          sheet_name: 'DSTB',
-          source_type: 'DSTB',
-          record_count: dstbRecords.length,
-          records: dstbRecords.map(formatRecord),
-        },
-        {
-          sheet_name: 'MN',
-          source_type: 'MN',
-          record_count: mnRecords.length,
-          records: mnRecords.map(formatRecord),
-        },
-      ],
+      sheets,
     };
 
-    const recordsSent = dstbRecords.length + mnRecords.length;
+    const recordsSent = dstbRecords.length + mnRecords.length + manualRecords.length;
 
     // ========== Mark sync as in-progress ==========
     await client.query('BEGIN');

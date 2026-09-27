@@ -16,6 +16,9 @@ export default function Profile() {
   const displayName = storedUser?.username ?? 'System Admin';
   const displayEmail = storedUser?.email ?? 'admin@pasigcity.gov.ph';
   const displayPosition = storedUser?.position ?? 'System Administrator';
+  const facility = storedUser?.facility
+    ? storedUser.facility.name + (storedUser.facility.barangay_name ? ` (${storedUser.facility.barangay_name})` : '')
+    : null;
   const initials = storedUser?.username
     ? storedUser.username.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2)
     : 'AD';
@@ -74,6 +77,7 @@ export default function Profile() {
             { label: 'Email', value: displayEmail, icon: 'ri-mail-line' },
             { label: 'Position', value: displayPosition, icon: 'ri-briefcase-line' },
             { label: 'Role', value: userRole, icon: 'ri-shield-user-line' },
+            { label: 'Facility', value: facility ?? '—', icon: 'ri-hospital-line' },
           ].map((field) => (
             <div key={field.label} className="flex items-center gap-3 py-2" style={{ borderBottom: '1px solid #f1f5f9' }}>
               <i className={`${field.icon} text-base`} style={{ color: '#94A3B8' }} />

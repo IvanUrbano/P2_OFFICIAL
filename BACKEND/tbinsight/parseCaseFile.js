@@ -200,13 +200,17 @@ function parseDate(dateVal) {
     }
   }
 
-  // Try US format (MM/DD/YYYY or M/D/YYYY)
-  const usMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-  if (usMatch) {
-    const [_, month, day, year] = usMatch;
+  // Try numeric format (MM/DD/YYYY or DD/MM/YYYY)
+  const numMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (numMatch) {
+    const [_, first, second, year] = numMatch;
     const y = parseInt(year);
-    const m = parseInt(month);
-    const d = parseInt(day);
+    let m = parseInt(first);
+    let d = parseInt(second);
+    // Heuristic: if first number > 12, it must be DD/MM/YYYY
+    if (m > 12 && d >= 1 && d <= 12) {
+      [m, d] = [d, m]; // swap month and day
+    }
     if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
       return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     }

@@ -78,7 +78,12 @@ describe('buildTrainingRows', () => {
   const twelve = (level) => Array(12).fill(level);
   const build = (counts, pops) => {
     const { seriesByBarangay } = buildDenseSeries(rowsFor(counts), Object.keys(counts));
-    return buildTrainingRows(seriesByBarangay, pops);
+    // Convert flat {name: number} to {name: {population, available}} format
+    const popMap = {};
+    for (const [name, pop] of Object.entries(pops)) {
+      popMap[name] = { population: pop, available: true };
+    }
+    return buildTrainingRows(seriesByBarangay, popMap);
   };
 
   it('yields rows from 12 months of history (window shrinks to 6)', () => {

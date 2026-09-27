@@ -332,7 +332,9 @@ export default function Topbar({ user }) {
                   <div className="py-1">
                     {[
                       { icon: 'ri-user-settings-line', label: 'My Profile', color: '#2563EB', action: () => { navigate('/profile'); setDropdownOpen(false); } },
-                      ...(isAdmin ? [{ icon: 'ri-settings-3-line', label: 'Settings', color: '#64748B', action: () => { navigate('/settings'); setDropdownOpen(false); } }] : []),
+                      ...(isAdmin ? [
+                        { icon: 'ri-settings-3-line', label: 'Settings', color: '#64748B', action: () => { navigate('/settings'); setDropdownOpen(false); } },
+                      ] : []),
 
                     ].map((item) => (
                       <button

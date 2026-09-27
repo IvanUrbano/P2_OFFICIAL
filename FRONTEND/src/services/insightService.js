@@ -30,6 +30,13 @@ export async function getDashboardInsight() {
   return res.data;
 }
 
+export async function getGisInsight(filters = {}) {
+  const params = {};
+  if (filters.barangay) params.barangay = filters.barangay;
+  const res = await API.get('/api/tb/insights/gis', { params });
+  return res.data;
+}
+
 export async function getWebhookLogs() {
   const res = await API.get('/api/tb/webhook-logs');
   return res.data;

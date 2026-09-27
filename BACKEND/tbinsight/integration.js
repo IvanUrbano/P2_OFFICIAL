@@ -201,7 +201,12 @@ router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), a
   try {
     await client.query('BEGIN');
 
-    const cases = await client.query('DELETE FROM tb_cases WHERE batch_id = $1', [batchId]);
+    // Guard: manually entered cases (source_type='MANUAL') are never part of an
+    // import batch (they get a per-record batch_id only as a schema requirement).
+    const cases = await client.query(
+      `DELETE FROM tb_cases WHERE batch_id = $1 AND COALESCE(source_type, '') <> 'MANUAL'`,
+      [batchId]
+    );
     const raw = await client.query('DELETE FROM tb_cases_raw WHERE batch_id = $1', [batchId]);
     const logs = await client.query(
       `DELETE FROM webhook_logs WHERE batch_id = $1

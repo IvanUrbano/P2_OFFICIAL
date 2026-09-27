@@ -1,0 +1,42 @@
+TBInsight - Population Reference Data Import Template
+For future population reference years. Complete the information below then enter one population value for each Pasig City barangay.
+
+REFERENCE INFORMATION
+Reference Year *,Example: 2026
+Source / Organization *,Enter the actual organization/source
+Dataset / Reference Name *,Enter the dataset report or document name
+Notes (Optional),Additional context or remarks
+
+No.,Barangay Name,Population *
+1,Bagong Ilog,
+2,Bagong Katipunan,
+3,Bambang,
+4,Buting,
+5,Caniogan,
+6,Dela Paz,
+7,Kalawaan,
+8,Kapasigan,
+9,Kapitolyo,
+10,Malinao,
+11,Manggahan,
+12,Maybunga,
+13,Oranbo,
+14,Palatiw,
+15,Pinagbuhatan,
+16,Pineda,
+17,Rosario,
+18,Sagad,
+19,San Antonio,
+20,San Joaquin,
+21,San Jose,
+22,San Miguel,
+23,San Nicolas,
+24,Santa Cruz,
+25,Santa Lucia,
+26,Santa Rosa,
+27,Santo Tomas,
+28,Santolan,
+29,Sumilang,
+30,Ugong,
+IMPORTANT: Do not rename barangays leave required population values blank enter zero/negative values or replace missing values using another year's population.
+Required for an ACTIVE population reference: valid reference year source organization dataset/reference name and population values for all 30 recognized barangays.

@@ -6,6 +6,7 @@ import {
 } from 'recharts';
 import API from '../api/axios';
 import AiInsightPanel from '../components/AiInsightPanel';
+import TreatmentCascadeCard from '../components/TreatmentCascadeCard';
 import { getAnalyticsInsight } from '../services/insightService';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
@@ -177,6 +178,8 @@ export default function Analytics() {
   const [insightData, setInsightData] = useState(null);
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightError, setInsightError] = useState(null);
+  const [cascadeData, setCascadeData] = useState(null);
+  const [cascadeLoading, setCascadeLoading] = useState(false);
 
   /* ── Data fetching ── */
   const loadAll = useCallback(async () => {
@@ -255,6 +258,38 @@ export default function Analytics() {
       setInsightLoading(false);
     }
   }, [aYear, aMonth, aBarangay]);
+
+  /* ── Treatment Cascade — shared backend calculation with active filters ── */
+  const activeCascadeFilters = useMemo(() => {
+    const f = {};
+    if (aYear) f.year = aYear;
+    if (aMonth) f.month = aMonth;
+    if (aBarangay) f.barangay = aBarangay;
+    if (aSex) f.sex = aSex;
+    if (aAgeGroup) f.ageGroup = aAgeGroup;
+    if (aBact) f.bacteriological = aBact;
+    if (aOutcome) f.outcome = aOutcome;
+    return f;
+  }, [aYear, aMonth, aBarangay, aSex, aAgeGroup, aBact, aOutcome]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setCascadeLoading(true);
+        const res = await API.get('/api/tb/treatment-cascade', { params: activeCascadeFilters });
+        if (!cancelled) setCascadeData(res.data);
+      } catch (err) {
+        if (!cancelled) {
+          if (import.meta.env.DEV) console.error('Cascade fetch failed:', err);
+          setCascadeData(null);
+        }
+      } finally {
+        if (!cancelled) setCascadeLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeCascadeFilters]);
 
   /* ── Remove a single filter chip ── */
   const removeFilter = useCallback((key) => {
@@ -444,6 +479,33 @@ export default function Analytics() {
       [`Prev (${Number(aYear) - 1})`]: prevMap[item.key]?.[`Prev (${Number(aYear) - 1})`] || 0,
     }));
   }, [compareYear, trendData, previousYearTrendData, aYear]);
+
+  /* ── Year-over-Year Trending ──
+     YoY% = (current − previous) / previous × 100; previous = 0 → null (N/A). */
+  const yoyData = useMemo(() => {
+    const counts = new Map();
+    filteredCases.forEach((c) => {
+      if (!c.date_of_diagnosis) return;
+      const year = new Date(c.date_of_diagnosis).getFullYear();
+      if (Number.isNaN(year)) return;
+      counts.set(year, (counts.get(year) || 0) + 1);
+    });
+    const years = [...counts.keys()].sort((a, b) => a - b);
+    const rows = years.map((year, i) => {
+      const cases = counts.get(year);
+      let yoyPct = null;
+      if (i > 0) {
+        const prev = counts.get(years[i - 1]);
+        if (prev > 0) yoyPct = Math.round(((cases - prev) / prev) * 100 * 10) / 10;
+      }
+      return { year, cases, yoyPct };
+    });
+    const valid = rows.filter((r) => r.yoyPct != null);
+    const avg = valid.length
+      ? Math.round((valid.reduce((s, r) => s + r.yoyPct, 0) / valid.length) * 10) / 10
+      : null;
+    return { rows, avg };
+  }, [filteredCases]);
 
   /* ── TB Cases by Barangay ── */
   const barangayData = useMemo(() => {
@@ -772,6 +834,13 @@ export default function Analytics() {
             </div>
           </div>
 
+          {/* ─── Treatment Cascade (shared backend calculation) ─── */}
+          <TreatmentCascadeCard
+            data={cascadeData}
+            loading={cascadeLoading}
+            description="Diagnosis-to-outcome progression for the active filters."
+          />
+
           {/* ─── TB Cases Trend (with YoY Comparison) ─── */}
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
             <div className="flex items-center justify-between px-5 py-4">
@@ -831,6 +900,65 @@ export default function Analytics() {
               ) : (
                 <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No trend data available for the selected filters.</p>
               )}
+            </div>
+          </div>
+
+          {/* ─── Year-over-Year Trending ─── */}
+          <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+            <div className="flex items-center justify-between px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="w-1 h-8 rounded-full" style={{ background: '#7C3AED' }} />
+                <div>
+                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Year-over-Year Trending</h3>
+                  <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Annual case counts and change versus the previous year.</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Average YoY Change</p>
+                <p
+                  className="text-lg font-extrabold"
+                  style={{ color: yoyData.avg == null ? '#94A3B8' : yoyData.avg > 0 ? '#DC2626' : yoyData.avg < 0 ? '#047857' : '#64748B' }}
+                >
+                  {yoyData.avg == null ? 'N/A' : `${yoyData.avg > 0 ? '+' : ''}${yoyData.avg}%`}
+                </p>
+              </div>
+            </div>
+            <div className="px-5 pb-5">
+              {yoyData.rows.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr style={{ background: '#0F2D52', color: '#ffffff' }}>
+                        <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider">Year</th>
+                        <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-right">Cases</th>
+                        <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-right">YoY Change</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...yoyData.rows].reverse().map((row) => (
+                        <tr key={row.year} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                          <td className="px-3 py-2 text-[12px] font-bold" style={{ color: '#0F2D52' }}>{row.year}</td>
+                          <td className="px-3 py-2 text-[12px] text-right font-semibold" style={{ color: '#475569' }}>{row.cases.toLocaleString()}</td>
+                          <td className="px-3 py-2 text-right">
+                            {row.yoyPct == null ? (
+                              <span className="text-[11px] font-bold" style={{ color: '#94A3B8' }}>N/A</span>
+                            ) : (
+                              <span className="text-[11px] font-bold" style={{ color: row.yoyPct > 0 ? '#DC2626' : row.yoyPct < 0 ? '#047857' : '#64748B' }}>
+                                {row.yoyPct > 0 ? '+' : ''}{row.yoyPct}%
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-sm text-center py-8" style={{ color: '#94A3B8' }}>No yearly data available for the selected filters.</p>
+              )}
+              <p className="text-[9px] mt-2" style={{ color: '#CBD5E1' }}>
+                YoY% = (current − previous) / previous × 100. A zero previous-year count shows N/A.
+              </p>
             </div>
           </div>
 

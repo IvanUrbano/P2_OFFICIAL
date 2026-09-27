@@ -2,15 +2,23 @@ const express = require('express');
 const pool = require('../db');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { rebuildAggregations } = require('./aggregateMonthly');
-const { seedAll, seedBarangaysGeom, getBarangays, getHealthFacilities, findBarangay } = require('./barangays');
+const { seedAll, seedBarangaysGeom, getBarangays, findBarangay } = require('./barangays');
 const { runPipeline } = require('./pipeline');
 const { healthCheck: mlHealthCheck, evaluate: mlEvaluate, forecast: mlForecast } = require('./mlClient');
 const {
   createNotification, getUnreadCount, evaluateAllAlerts,
   evaluateCaseIncreaseAlerts,
 } = require('./alertEngine');
-const { buildAnalyticsMetrics, buildForecastingMetrics } = require('./insightDataBuilder');
-const { generateAnalyticsInsight, generateForecastingInsight } = require('./nlgEngine');
+const { buildAnalyticsMetrics, buildForecastingMetrics, buildGisMetrics } = require('./insightDataBuilder');
+const { generateAnalyticsInsight, generateForecastingInsight, generateGisInsight } = require('./nlgEngine');
+const { computeTreatmentCascade } = require('./treatmentCascade');
+const {
+  getPopulation, getPopulationMap, calculateAnnualizedIncidence,
+  getAvailablePopulationYears, getPopulationReferences, getPopulationByYear,
+  validatePopulationData, savePopulationData, updatePopulationRecord,
+  parsePopulationExcel, parsePopulationCsv,
+  GEOJSON_REFERENCE_YEAR,
+} = require('./populationService');
 
 const router = express.Router();
 
@@ -575,9 +583,24 @@ router.get('/dashboard/metrics', async (req, res) => {
     const totalCases = row.total_cases || 0;
     const onTreatmentCount = row.on_treatment_count || 0;
     const curedCount = row.cured_count || 0;
-    const successRate = row.total_outcomes > 0
-      ? Math.round((row.successful_count / row.total_outcomes) * 100)
-      : 0;
+
+    // Client TSR formula: cohort = patients who started treatment in previous year
+    const currentYear = new Date().getFullYear();
+    const cohortYear = currentYear - 1;
+    const cohortResult = await pool.query(`
+      SELECT
+        COUNT(*)::INTEGER AS total_patients,
+        SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
+        SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count
+      FROM tb_cases
+      WHERE EXTRACT(YEAR FROM date_started_treatment) = $1
+    `, [cohortYear]);
+
+    const cohort = cohortResult.rows[0] || {};
+    const cohortTotal = cohort.total_patients || 0;
+    const successRate = cohortTotal > 0
+      ? Math.round(((cohort.cured_count + cohort.completed_count) / cohortTotal) * 100)
+      : null;
 
     // Trend: current month vs previous month
     const currentMonth = row.current_month_cases || 0;
@@ -1789,7 +1812,7 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
     }
     for (const [name, months] of Object.entries(byBarangay)) {
       const totalCases = months.reduce((sum, m) => sum + m.case_count, 0);
-      const pop = populationMap[name] || 1000;
+      const pop = populationMap[name] || 0;
       const annualized = (totalCases / months.length) * 12;
       const incidence = (annualized / pop) * 100_000;
       barangayIncidences.push(incidence);
@@ -1813,7 +1836,7 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
     const allMonths = [...new Set(monthlyResult.rows.map(r => r.month.toISOString().slice(0, 10)))].sort();
 
     for (const [name, months] of Object.entries(byBarangay)) {
-      const pop = populationMap[name] || 1000;
+      const pop = populationMap[name] || 0;
       const sorted = months.sort((a, b) => a.month.localeCompare(b.month));
 
       if (sorted.length < ROLLING_WINDOW + 1) continue;
@@ -1867,7 +1890,7 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
           if (otherName === name) continue;
           const otherMonthData = otherMonths.find(m => m.month === targetMonth.month);
           if (otherMonthData) {
-            const otherPop = populationMap[otherName] || 1000;
+            const otherPop = populationMap[otherName] || 0;
             otherIncidences.push((otherMonthData.case_count / otherPop) * 100_000);
           }
         }
@@ -2217,9 +2240,25 @@ router.get('/reports/summary', async (req, res) => {
     const summaryRow = summaryRes.rows[0] || {};
     const totalCases = summaryRow.total_cases || 0;
     const activeCases = summaryRow.active_cases || 0;
-    const evaluatedCount = summaryRow.evaluated_count || 0;
-    const successfulCount = summaryRow.successful_count || 0;
-    const successRate = evaluatedCount > 0 ? Number(((successfulCount / evaluatedCount) * 100).toFixed(1)) : null;
+
+    // Client TSR formula: cohort = patients who started treatment in year Y-1
+    const cohortYear = yr - 1;
+    const cohortResult = await pool.query(`
+      SELECT
+        COUNT(*)::INTEGER AS total_patients,
+        SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
+        SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count
+      FROM tb_cases
+      WHERE EXTRACT(YEAR FROM date_started_treatment) = $1
+    `, [cohortYear]);
+
+    const cohort = cohortResult.rows[0] || {};
+    const cohortTotal = cohort.total_patients || 0;
+    const cohortCured = cohort.cured_count || 0;
+    const cohortCompleted = cohort.completed_count || 0;
+    const successRate = cohortTotal > 0
+      ? Number((((cohortCured + cohortCompleted) / cohortTotal) * 100).toFixed(1))
+      : null;
 
     // Compute outcomes with percentages
     const outcomes = outcomesRes.rows.map(r => ({
@@ -2645,6 +2684,55 @@ router.get('/insights/forecasting', async (req, res) => {
 });
 
 /**
+ * GET /api/tb/insights/gis
+ * Generate NLG-based GIS/map insight from risk scores + case distribution.
+ * Query params: barangay (optional highlight)
+ */
+router.get('/insights/gis', async (req, res) => {
+  try {
+    const { barangay } = req.query;
+    const filters = {};
+    if (barangay) filters.barangay = barangay;
+
+    const metrics = await buildGisMetrics(pool, filters);
+    const insight = generateGisInsight(metrics, filters);
+    res.json(insight);
+  } catch (err) {
+    console.error('GIS insight error:', err.message);
+    res.status(500).json({ error: 'Server error generating GIS insight.' });
+  }
+});
+
+/**
+ * GET /api/tb/treatment-cascade
+ * Shared treatment cascade calculation for Dashboard and Analytics.
+ * Query params: year, month, barangay, sex, ageGroup, bacteriological, outcome
+ *
+ * Stage rates (started_pct, evaluated_pct, successful_outcome_pct_of_*) are
+ * cascade progression percentages — NOT the Treatment Success Rate (TSR).
+ * TSR is a separate previous-year cohort calculation (see /dashboard/metrics).
+ */
+router.get('/treatment-cascade', async (req, res) => {
+  try {
+    const { year, month, barangay, sex, ageGroup, bacteriological, outcome } = req.query;
+    const filters = {};
+    if (year) filters.year = year;
+    if (month) filters.month = month;
+    if (barangay) filters.barangay = barangay;
+    if (sex) filters.sex = sex;
+    if (ageGroup) filters.ageGroup = ageGroup;
+    if (bacteriological) filters.bacteriological = bacteriological;
+    if (outcome) filters.outcome = outcome;
+
+    const cascade = await computeTreatmentCascade(pool, filters);
+    res.json(cascade);
+  } catch (err) {
+    console.error('Treatment cascade error:', err.message);
+    res.status(500).json({ error: 'Server error computing treatment cascade.' });
+  }
+});
+
+/**
  * GET /api/tb/webhook-logs
  * List recent webhook integration logs.
  */
@@ -2661,6 +2749,276 @@ router.get('/webhook-logs', async (req, res) => {
   } catch (err) {
     console.error('Webhook logs error:', err.message);
     res.status(500).json({ error: 'Server error fetching webhook logs.' });
+  }
+});
+
+// ==================== POPULATION REFERENCE DATA ====================
+
+/**
+ * GET /api/tb/population/years
+ * Get available population reference years.
+ */
+router.get('/population/years', authenticateToken, async (req, res) => {
+  try {
+    const years = await getAvailablePopulationYears();
+    res.json({ years });
+  } catch (err) {
+    console.error('Population years error:', err.message);
+    res.status(500).json({ error: 'Server error fetching population years.' });
+  }
+});
+
+/**
+ * GET /api/tb/population
+ * Get all population reference years with metadata.
+ */
+router.get('/population', authenticateToken, async (req, res) => {
+  try {
+    const references = await getPopulationReferences();
+    res.json({ references });
+  } catch (err) {
+    console.error('Population references error:', err.message);
+    res.status(500).json({ error: 'Server error fetching population references.' });
+  }
+});
+
+/**
+ * GET /api/tb/population/template/csv
+ * Download CSV population template.
+ */
+router.get('/population/template/csv', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const templatePath = path.join(__dirname, '..', 'data', 'population-template.csv');
+    if (!fs.existsSync(templatePath)) {
+      return res.status(404).json({ error: 'Template not found.' });
+    }
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=population-template.csv');
+    res.send(fs.readFileSync(templatePath, 'utf8'));
+  } catch (err) {
+    console.error('CSV template error:', err.message);
+    res.status(500).json({ error: 'Server error generating template.' });
+  }
+});
+
+/**
+ * GET /api/tb/population/template/xlsx
+ * Download XLSX population template.
+ */
+router.get('/population/template/xlsx', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const templatePath = path.join(__dirname, '..', 'data', 'TBInsight_Population_Reference_Template.xlsx');
+    if (!fs.existsSync(templatePath)) {
+      return res.status(404).json({ error: 'Template not found.' });
+    }
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=TBInsight_Population_Reference_Template.xlsx');
+    res.send(fs.readFileSync(templatePath));
+  } catch (err) {
+    console.error('XLSX template error:', err.message);
+    res.status(500).json({ error: 'Server error generating template.' });
+  }
+});
+
+/**
+ * GET /api/tb/population/:year
+ * Get population for a specific reference year.
+ */
+router.get('/population/:year', authenticateToken, async (req, res) => {
+  try {
+    const { year } = req.params;
+    const yearNum = Number(year);
+    if (!yearNum || yearNum < 2000 || yearNum > 2100) {
+      return res.status(400).json({ error: 'Invalid reference year.' });
+    }
+    const data = await getPopulationByYear(yearNum);
+    res.json({ year: yearNum, data });
+  } catch (err) {
+    console.error('Population by year error:', err.message);
+    res.status(500).json({ error: 'Server error fetching population data.' });
+  }
+});
+
+/**
+ * POST /api/tb/population/validate
+ * Validate population data before saving.
+ * Supports both JSON body (manual/CSV) and file upload (CSV/XLSX).
+ */
+router.post('/population/validate', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  try {
+    let reference_year, records, source_organization, source_reference, notes;
+
+    // Check if file upload (multipart)
+    if (req.files && req.files.file) {
+      const file = req.files.file;
+      const ext = file.name.split('.').pop().toLowerCase();
+
+      if (ext === 'xlsx' || ext === 'xls') {
+        // XLSX: extract reference info from Excel
+        const parsed = parsePopulationExcel(file.data);
+        reference_year = parsed.reference_year;
+        source_organization = parsed.source_organization;
+        source_reference = parsed.source_reference;
+        notes = parsed.notes;
+        records = parsed.records;
+      } else if (ext === 'csv') {
+        // CSV: extract reference info from file (form fields override if provided)
+        const parsed = parsePopulationCsv(file.data.toString('utf8'));
+        reference_year = req.body.reference_year || parsed.reference_year;
+        source_organization = req.body.source_organization || parsed.source_organization;
+        source_reference = req.body.source_reference || parsed.source_reference;
+        notes = req.body.notes || parsed.notes;
+        records = parsed.records;
+      } else {
+        return res.status(400).json({ error: 'Unsupported file format. Use .csv or .xlsx' });
+      }
+    } else {
+      // JSON body (manual entry)
+      reference_year = req.body.reference_year;
+      records = req.body.records;
+    }
+
+    if (!reference_year || !records || !Array.isArray(records)) {
+      return res.status(400).json({ error: 'reference_year and records are required.' });
+    }
+    const yearNum = Number(reference_year);
+    if (!yearNum || yearNum < 2000 || yearNum > 2100) {
+      return res.status(400).json({ error: 'Invalid reference year.' });
+    }
+    if (yearNum === GEOJSON_REFERENCE_YEAR) {
+      return res.status(400).json({ error: `Year ${GEOJSON_REFERENCE_YEAR} is managed by the existing GeoJSON reference.` });
+    }
+    const validation = await validatePopulationData(yearNum, records);
+    res.json({ validation, reference_year: yearNum, source_organization, source_reference, notes });
+  } catch (err) {
+    console.error('Population validation error:', err.message);
+    res.status(500).json({ error: 'Server error validating population data.' });
+  }
+});
+
+/**
+ * POST /api/tb/population
+ * Save population data for a reference year.
+ * Supports both JSON body (manual/CSV) and file upload (CSV/XLSX).
+ */
+router.post('/population', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  try {
+    let reference_year, source_organization, source_reference, notes, records;
+
+    // Check if file upload (multipart)
+    if (req.files && req.files.file) {
+      const file = req.files.file;
+      const ext = file.name.split('.').pop().toLowerCase();
+
+      if (ext === 'xlsx' || ext === 'xls') {
+        // XLSX: extract reference info from Excel
+        const parsed = parsePopulationExcel(file.data);
+        reference_year = parsed.reference_year;
+        source_organization = parsed.source_organization;
+        source_reference = parsed.source_reference;
+        notes = parsed.notes;
+        records = parsed.records;
+      } else if (ext === 'csv') {
+        // CSV: extract reference info from file (form fields override if provided)
+        const parsed = parsePopulationCsv(file.data.toString('utf8'));
+        reference_year = req.body.reference_year || parsed.reference_year;
+        source_organization = req.body.source_organization || parsed.source_organization;
+        source_reference = req.body.source_reference || parsed.source_reference;
+        notes = req.body.notes || parsed.notes;
+        records = parsed.records;
+      } else {
+        return res.status(400).json({ error: 'Unsupported file format. Use .csv or .xlsx' });
+      }
+    } else {
+      // JSON body (manual entry)
+      reference_year = req.body.reference_year;
+      source_organization = req.body.source_organization;
+      source_reference = req.body.source_reference;
+      notes = req.body.notes;
+      records = req.body.records;
+    }
+
+    if (!reference_year || !source_organization || !source_reference || !records || !Array.isArray(records)) {
+      return res.status(400).json({ error: 'reference_year, source_organization, source_reference, and records are required.' });
+    }
+    const yearNum = Number(reference_year);
+    if (!yearNum || yearNum < 2000 || yearNum > 2100) {
+      return res.status(400).json({ error: 'Invalid reference year.' });
+    }
+    if (yearNum === GEOJSON_REFERENCE_YEAR) {
+      return res.status(400).json({ error: `Year ${GEOJSON_REFERENCE_YEAR} is managed by the existing GeoJSON reference.` });
+    }
+
+    const validation = await validatePopulationData(yearNum, records);
+    if (validation.invalid.length > 0 || validation.unmatched.length > 0 || validation.duplicates.length > 0) {
+      return res.status(400).json({ error: 'Validation failed.', validation });
+    }
+
+    const result = await savePopulationData(yearNum, source_organization, source_reference, notes, validation.valid_records, req.user?.id);
+
+    // Log audit event
+    try {
+      const { logAuditEvent } = require('../utils/auditLogger');
+      await logAuditEvent({
+        userId: req.user?.id,
+        username: req.user?.username,
+        action: 'POPULATION_REFERENCE_CREATE',
+        targetUserId: null,
+        targetUsername: null,
+        result: 'SUCCESS',
+        ipAddress: req.ip || null,
+      });
+    } catch (auditErr) {
+      console.warn('Audit log failed for population save:', auditErr.message);
+    }
+
+    res.status(201).json({ message: 'Population data saved.', result, validation });
+  } catch (err) {
+    console.error('Population save error:', err.message);
+    res.status(500).json({ error: 'Server error saving population data.' });
+  }
+});
+
+/**
+ * PUT /api/tb/population/:id
+ * Update a single population record.
+ */
+router.put('/population/:id', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { population } = req.body;
+    if (!population || isNaN(population) || parseInt(population) <= 0) {
+      return res.status(400).json({ error: 'Valid population value is required.' });
+    }
+    const record = await updatePopulationRecord(id, population, req.user?.id);
+    if (!record) {
+      return res.status(404).json({ error: 'Population record not found.' });
+    }
+
+    // Log audit event
+    try {
+      const { logAuditEvent } = require('../utils/auditLogger');
+      await logAuditEvent({
+        userId: req.user?.id,
+        username: req.user?.username,
+        action: 'POPULATION_REFERENCE_UPDATE',
+        targetUserId: null,
+        targetUsername: null,
+        result: 'SUCCESS',
+        ipAddress: req.ip || null,
+      });
+    } catch (auditErr) {
+      console.warn('Audit log failed for population update:', auditErr.message);
+    }
+
+    res.json({ message: 'Population record updated.', record });
+  } catch (err) {
+    console.error('Population update error:', err.message);
+    res.status(500).json({ error: 'Server error updating population record.' });
   }
 });
 

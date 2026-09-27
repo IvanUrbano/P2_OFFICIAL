@@ -7,6 +7,7 @@
  * Exports:
  *   generateAnalyticsInsight(metrics, filters) -> { type, sections, meta }
  *   generateForecastingInsight(metrics, filters) -> { type, sections, meta }
+ *   generateGisInsight(metrics, filters) -> { type, sections, meta }
  */
 
 const MONTH_NAMES = [
@@ -118,12 +119,10 @@ function buildDemographics(m) {
 function buildTreatment(m) {
   const rate = m.treatment.successRate;
   let text;
-  if (rate > 85) {
-    text = `Treatment success rate is **${rate}%**, **exceeding** the DOH target of 85%.`;
-  } else if (rate < 85) {
-    text = `Treatment success rate is **${rate}%**, **below** the DOH target of 85%.`;
+  if (rate === null || rate === undefined) {
+    text = 'Treatment success rate cannot be calculated because previous-year treatment cohort data are unavailable.';
   } else {
-    text = `Treatment success rate is **${rate}%**, **meeting** the 85% target.`;
+    text = `Treatment success rate is **${rate}%**.`;
   }
   return { id: 'treatment', title: 'Treatment', icon: '💊', text };
 }
@@ -142,10 +141,10 @@ function buildAnalyticsOverallSummary(m) {
   } else {
     parts.push('No barangays are currently classified as high-risk.');
   }
-  if (m.treatment.successRate >= 85) {
-    parts.push('Treatment success is at or above the 85% target, indicating favorable current treatment outcomes.');
+  if (m.treatment.successRate === null || m.treatment.successRate === undefined) {
+    parts.push('Treatment success rate is not available due to missing previous-year cohort data.');
   } else {
-    parts.push('Treatment success remains below the 85% target, indicating areas that may require closer monitoring.');
+    parts.push(`Treatment success rate is ${m.treatment.successRate}%.`);
   }
   return { id: 'overallSummary', title: 'Overall Summary', icon: '📝', text: parts.join(' ') };
 }
@@ -312,4 +311,175 @@ function generateForecastingInsight(metrics, filters = {}) {
   };
 }
 
-module.exports = { generateAnalyticsInsight, generateForecastingInsight };
+// ============================================================
+//  GIS INSIGHT — 6 sections
+// ============================================================
+
+/**
+ * Guard: when matching-year population reference data is unavailable for the
+ * risk period, no incidence-based interpretation may be generated.
+ */
+function incidenceUnavailableNote(m) {
+  const year = m.coverage?.periodYear ?? m.incidence?.periodYear;
+  if (year) {
+    return `Incidence interpretation is unavailable for ${year} because matching-year population reference data is not configured.`;
+  }
+  return 'Incidence interpretation is unavailable for the current map period because matching-year population reference data is not configured.';
+}
+
+function buildGisRiskOverview(m) {
+  const rc = m.riskCounts || {};
+  const cov = m.coverage || {};
+  const total = cov.totalBarangays || 0;
+  let text;
+  if (total === 0 || (cov.scoredBarangays || 0) === 0) {
+    text =
+      'No risk classifications have been generated for the map yet. Run the prediction pipeline to classify barangays.';
+  } else {
+    text = `Across **${total}** barangays, **${rc.High || 0}** are classified **High**, **${rc.Medium || 0}** **Medium**, **${rc.Low || 0}** **Low**, and **${rc['No Data'] || 0}** have **No Data**${cov.periodYear ? ` (latest risk period: **${cov.periodYear}**)` : ''}.`;
+    if (m.focus) {
+      const f = m.focus;
+      text += ` Focused barangay **${f.name}** is classified **${f.risk_class}**${f.risk_score != null ? ` with a risk score of **${f.risk_score}**` : ''}${f.rank ? ` (rank ${f.rank} of ${f.total_scored} classified barangays)` : ''}.`;
+    }
+    if (m.incidence && m.incidence.available === false) {
+      text += ` ${incidenceUnavailableNote(m)}`;
+    }
+  }
+  return { id: 'riskOverview', title: 'Risk Overview', icon: '🗺️', text };
+}
+
+function buildGisTopHotspots(m) {
+  const spots = m.topHotspots || [];
+  if (spots.length === 0) {
+    return {
+      id: 'topHotspots',
+      title: 'Top Hotspots',
+      icon: '📍',
+      text: 'No barangays currently have risk scores for this period.',
+    };
+  }
+  const names = spots.map((s) => `**${s.name}** (${s.risk_class}, score ${s.risk_score})`).join(', ');
+  let text = `The highest-risk barangays are ${names}, ranked by the weighted risk index.`;
+  const incidenceAvailable = m.incidence && m.incidence.available === true;
+  if (incidenceAvailable && spots[0].incidence_per_100k != null) {
+    text += ` The leading hotspot, **${spots[0].name}**, records an incidence of **${spots[0].incidence_per_100k} per 100,000 population**.`;
+  }
+  return { id: 'topHotspots', title: 'Top Hotspots', icon: '📍', text };
+}
+
+function buildGisCaseConcentration(m) {
+  const c = m.concentration || {};
+  if (!c.totalCases || c.top5CaseSharePct === null || c.top5CaseSharePct === undefined) {
+    return {
+      id: 'caseConcentration',
+      title: 'Case Concentration',
+      icon: '🥧',
+      text: 'No reported case data is available to assess case concentration.',
+    };
+  }
+  const top5Count = (c.top5 || []).reduce((s, r) => s + (r.total_cases || 0), 0);
+  const names = (c.top5 || []).map((r) => r.name).join(', ');
+  const text = `**${c.top5CaseSharePct}%** of all reported TB cases (**${top5Count}** of **${c.totalCases}**) are concentrated in 5 barangays: ${names}.`;
+  return { id: 'caseConcentration', title: 'Case Concentration', icon: '🥧', text };
+}
+
+function buildGisCasesVsRiskPatterns(m) {
+  const p = m.casesVsRiskPatterns || {};
+  const highLow = p.highRiskLowerCaseCount || 0;
+  const caseLow = p.highCaseCountLowerRisk || 0;
+  if (highLow === 0 && caseLow === 0) {
+    return {
+      id: 'casesVsRiskPatterns',
+      title: 'Cases vs Risk Patterns',
+      icon: '🧩',
+      text: 'Risk classifications and raw case volumes are closely aligned across barangays for this period.',
+    };
+  }
+  let text = `**${highLow}** barangay(s) show **High** risk despite below-median case counts, while **${caseLow}** barangay(s) report top-quarter case counts without a **High** classification.`;
+  const incidenceAvailable = m.incidence && m.incidence.available === true;
+  if (incidenceAvailable) {
+    text += ' This reflects that risk classification incorporates population-adjusted incidence, trend, neighboring barangay risk, and forecast error — not raw case volume alone.';
+  } else {
+    text += ' This indicates that risk classification draws on indicators beyond raw case volume.';
+  }
+  const hlNames = (p.highRiskLowerCase || []).slice(0, 3).map((r) => r.name);
+  if (hlNames.length > 0) {
+    text += ` High-risk/lower-case barangays include ${hlNames.join(', ')}.`;
+  }
+  return { id: 'casesVsRiskPatterns', title: 'Cases vs Risk Patterns', icon: '🧩', text };
+}
+
+function buildGisTrendDistribution(m) {
+  const t = m.trendCounts || {};
+  const scored = (m.coverage && m.coverage.scoredBarangays) || 0;
+  if (scored === 0) {
+    return {
+      id: 'trendDistribution',
+      title: 'Trend Distribution',
+      icon: '📈',
+      text: 'No classified barangays are available to summarize case trends.',
+    };
+  }
+  const text = `Among **${scored}** classified barangays, **${t.Increasing || 0}** show an **Increasing** trend, **${t.Decreasing || 0}** a **Decreasing** trend, and **${t.Stable || 0}** a **Stable** trend.`;
+  return { id: 'trendDistribution', title: 'Trend Distribution', icon: '📈', text };
+}
+
+function buildGisOverallSummary(m) {
+  const rc = m.riskCounts || {};
+  const cov = m.coverage || {};
+  const parts = [];
+  if ((cov.scoredBarangays || 0) === 0) {
+    parts.push('No risk classifications are available yet for this map period.');
+  } else {
+    parts.push(`${rc.High || 0} barangay(s) are classified High risk${cov.periodYear ? ` in the ${cov.periodYear} risk period` : ''}.`);
+    if (m.concentration && m.concentration.top5CaseSharePct != null) {
+      parts.push(`${m.concentration.top5CaseSharePct}% of reported cases are concentrated in the top 5 barangays.`);
+    }
+    const t = m.trendCounts || {};
+    if ((t.Increasing || 0) > (t.Decreasing || 0)) {
+      parts.push('More barangays show an increasing than a decreasing case trend.');
+    } else if ((t.Decreasing || 0) > (t.Increasing || 0)) {
+      parts.push('More barangays show a decreasing than an increasing case trend.');
+    } else {
+      parts.push('Increasing and decreasing case trends are evenly balanced across barangays.');
+    }
+  }
+  if (m.incidence && m.incidence.available === false && (cov.scoredBarangays || 0) > 0) {
+    parts.push(incidenceUnavailableNote(m));
+  }
+  return { id: 'overallSummary', title: 'Overall Summary', icon: '📝', text: parts.join(' ') };
+}
+
+/**
+ * Generate GIS insight sections from computed metrics.
+ * Section ids: riskOverview, topHotspots, caseConcentration,
+ *              casesVsRiskPatterns, trendDistribution, overallSummary
+ */
+function generateGisInsight(metrics, filters = {}) {
+  const sections = [
+    buildGisRiskOverview(metrics),
+    buildGisTopHotspots(metrics),
+    buildGisCaseConcentration(metrics),
+    buildGisCasesVsRiskPatterns(metrics),
+    buildGisTrendDistribution(metrics),
+    buildGisOverallSummary(metrics),
+  ];
+
+  const parts = [];
+  if (filters.barangay) parts.push(filters.barangay);
+  else parts.push('All Barangays');
+  if (metrics.coverage && metrics.coverage.periodYear) {
+    parts.push(`Risk Period ${metrics.coverage.periodYear}`);
+  }
+
+  return {
+    type: 'gis',
+    sections,
+    meta: {
+      basedOn: parts.join(' • '),
+      generatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+module.exports = { generateAnalyticsInsight, generateForecastingInsight, generateGisInsight };

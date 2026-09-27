@@ -41,6 +41,11 @@ async function logAuditEvent({ userId, username, action, targetUserId, targetUse
     await db.authPool.query('CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)');
     await db.authPool.query('CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at)');
 
+    // The shared auth DB's audit_logs was created by TBInsight migration 010
+    // without resource columns — CREATE IF NOT EXISTS above is a no-op there.
+    await db.authPool.query('ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS resource_type TEXT');
+    await db.authPool.query('ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS resource_id TEXT');
+
     await db.authPool.query(
       `INSERT INTO audit_logs (user_id, username, action, target_user_id, target_username, resource_type, resource_id, result, ip_address, details)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,

@@ -9,6 +9,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import API from '../api/axios';
 import DashboardWelcomeInsightsSection from '../components/DashboardWelcomeInsightsSection';
+import TreatmentCascadeCard from '../components/TreatmentCascadeCard';
 import { getDashboardInsight } from '../services/insightService';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
@@ -300,6 +301,7 @@ export default function DashboardPage() {
   const [barangays, setBarangays] = useState([]);
   const [pipelineStatus, setPipelineStatus] = useState(null);
   const [demographicsData, setDemographicsData] = useState([]);
+  const [cascadeData, setCascadeData] = useState(null);
 
   /* ── Refresh state ── */
   const [refreshing, setRefreshing] = useState(false);
@@ -328,7 +330,7 @@ export default function DashboardPage() {
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [summaryRes, monthlyRes, outcomesRes, forecastsRes, alertsRes, riskRes, brgyRes, pipelineRes, demoRes] =
+      const [summaryRes, monthlyRes, outcomesRes, forecastsRes, alertsRes, riskRes, brgyRes, pipelineRes, demoRes, cascadeRes] =
         await Promise.all([
           API.get('/api/tb/dashboard/summary'),
           API.get('/api/tb/dashboard/monthly'),
@@ -339,6 +341,7 @@ export default function DashboardPage() {
           API.get('/api/tb/barangays').catch(() => ({ data: { barangays: [] } })),
           API.get('/api/tb/pipeline/status').catch(() => ({ data: { latest_run: null } })),
           API.get('/api/tb/dashboard/demographics').catch(() => ({ data: { demographics: [] } })),
+          API.get('/api/tb/treatment-cascade').catch(() => ({ data: null })),
         ]);
       setLastUpdatedDate(summaryRes.data.summary?.latest_date || null);
       setMonthlyData(monthlyRes.data.monthly || []);
@@ -349,6 +352,7 @@ export default function DashboardPage() {
       setBarangays(brgyRes.data.barangays || []);
       setPipelineStatus(pipelineRes.data.latest_run || null);
       setDemographicsData(demoRes.data.demographics || []);
+      setCascadeData(cascadeRes.data || null);
     } catch (err) {
       if (import.meta.env.DEV) console.error('Dashboard fetch error:', err);
       setError('Dashboard data could not be retrieved. Please try again.');
@@ -1051,6 +1055,9 @@ export default function DashboardPage() {
               )}
             </SectionCard>
           </div>
+
+          {/* ─── Treatment Cascade (shared backend calculation) ─── */}
+          <TreatmentCascadeCard data={cascadeData} loading={loading} />
 
           {/* ─── 7. Demographics — Sex + Treatment Outcomes ─── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

@@ -31,6 +31,7 @@ const {
   generateAlerts,
   storeResults,
 } = require('./scoring');
+const { getPopulationMap, calculateAnnualizedIncidence, GEOJSON_REFERENCE_YEAR } = require('./populationService');
 
 // Default thresholds — overridden by auto-calibration from real data on each run
 const DEFAULT_THRESHOLDS = {
@@ -133,7 +134,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
 
     // ── Step 1: Query reference data ──
     const barangaysResult = await client.query(
-      'SELECT name, population FROM barangays ORDER BY name'
+      'SELECT name FROM barangays ORDER BY name'
     );
     let barangays = barangaysResult.rows;
 
@@ -150,10 +151,10 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
       console.log(`🔍 Filtered to ${barangays.length} barangays: ${barangayFilter.join(', ')}`);
     }
 
-    const populationMap = {};
-    for (const b of barangays) {
-      populationMap[b.name] = b.population;
-    }
+    // Determine reporting year from period for year-specific population lookup
+    const reportingYear = new Date(period).getFullYear();
+    console.log(`📊 Using population reference year: ${reportingYear}`);
+    const popMap = await getPopulationMap(reportingYear);
 
     // ── Step 2: Query L3 monthly case summary ──
     const monthlyResult = await client.query(
@@ -265,7 +266,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
         const sorted = pts.sort((a, c) => a.month.localeCompare(c.month));
         predictedCount = sorted.length > 0 ? sorted[sorted.length - 1].case_count : 0;
       }
-      const inc = _computeIncidence(predictedCount, populationMap[b.name] || 1000);
+      const inc = _computeIncidence(predictedCount, popMap[b.name]?.available ? popMap[b.name].population : null);
       return { name: b.name, incidence_per_100k: inc };
     });
     const neighborRisks = computeNeighborRisks(barangayIncidences);
@@ -304,7 +305,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
     // 5d. Build prediction feature rows
     const predictRows = barangays.map(b => {
       const name = b.name;
-      const pop = populationMap[name] || 1000;
+      const pop = popMap[name]?.available ? popMap[name].population : null;
       const fc = forecastResults.find(f => f.barangay_name === name);
       let predictedCount = fc?.predictions?.[0]?.yhat;
       // Fallback: if ARIMA failed, use actual case count from latest month
@@ -363,7 +364,7 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
         results.thresholds = thresholds;
 
         // Build monthly snapshot training rows from historical data
-        const trainRows = await _buildTrainingRows(client, populationMap, thresholds);
+        const trainRows = await _buildTrainingRows(client, popMap, thresholds);
         results.trainingRows = trainRows.length;
         console.log(`📋 Training rows: ${trainRows.length} monthly snapshots`);
 
@@ -532,9 +533,10 @@ async function runPipeline({ period, thresholds: thresholdsOverride, forecastHor
 /**
  * Compute ANNUAL incidence per 100k from monthly case count and population.
  * WHO standard is annual incidence per 100,000 population.
+ * Returns null if population is unavailable (NOT zero).
  */
 function _computeIncidence(monthlyCases, population) {
-  if (!population || population <= 0) return 0;
+  if (population === null || population === undefined || population <= 0) return null;
   return ((monthlyCases * 12) / population) * 100_000;
 }
 
@@ -614,7 +616,7 @@ function _nextMonth(dateStr) {
  *   - neighbor_risk: average incidence of OTHER barangays in the same month, normalized
  *   - historical_bias: AVG(|actual - forecasted|) from past predictions (0 if no history)
  */
-async function _buildTrainingRows(_client, populationMap, thresholds) {
+async function _buildTrainingRows(_client, popMap, thresholds) {
   // Fetch all monthly data (use pool directly — client is released)
   const result = await pool.query(
     `SELECT barangay_name, month, case_count
@@ -648,8 +650,8 @@ async function _buildTrainingRows(_client, populationMap, thresholds) {
     historicalBiasAvg[name] = errs.reduce((a, b) => a + b, 0) / errs.length;
   }
 
-  const { seriesByBarangay } = buildDenseSeries(result.rows, Object.keys(populationMap));
-  return buildTrainingRows(seriesByBarangay, populationMap, historicalBiasAvg);
+  const { seriesByBarangay } = buildDenseSeries(result.rows, Object.keys(popMap));
+  return buildTrainingRows(seriesByBarangay, popMap, historicalBiasAvg);
 }
 
 /**
@@ -667,10 +669,10 @@ async function _buildTrainingRows(_client, populationMap, thresholds) {
  * The label source `incidence` is the target month's annualized incidence.
  *
  * @param {Object} seriesByBarangay - from buildDenseSeries (all same length)
- * @param {Object} populationMap - {name: population}
+ * @param {Object} popMap - {name: { population, available, ... }}
  * @param {Object} historicalBiasAvg - {name: mean abs forecast error}
  */
-function buildTrainingRows(seriesByBarangay, populationMap, historicalBiasAvg = {}) {
+function buildTrainingRows(seriesByBarangay, popMap, historicalBiasAvg = {}) {
   const names = Object.keys(seriesByBarangay);
   const maxLen = Math.max(0, ...names.map(n => seriesByBarangay[n].length));
   const window = maxLen >= 18 ? 12 : Math.max(3, Math.floor(maxLen / 2));
@@ -682,15 +684,15 @@ function buildTrainingRows(seriesByBarangay, populationMap, historicalBiasAvg = 
     const monthInc = {};
     for (const name of names) {
       const pt = seriesByBarangay[name][i];
-      monthInc[name] = pt ? _computeIncidence(pt.case_count, populationMap[name] || 1000) : 0;
+      monthInc[name] = pt ? _computeIncidence(pt.case_count, popMap[name]?.available ? popMap[name].population : null) : null;
     }
-    const incSum = Object.values(monthInc).reduce((a, b) => a + b, 0);
+    const incSum = Object.values(monthInc).reduce((a, b) => a + (b || 0), 0);
 
     const monthRows = [];
     for (const name of names) {
       const months = seriesByBarangay[name];
       if (months.length <= i) continue;
-      const pop = populationMap[name] || 1000;
+      const pop = popMap[name]?.available ? popMap[name].population : null;
       const windowCounts = months.slice(i - window, i).map(w => w.case_count);
 
       const meanCount = windowCounts.reduce((a, b) => a + b, 0) / windowCounts.length;

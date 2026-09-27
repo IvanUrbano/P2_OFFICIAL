@@ -1,7 +1,7 @@
-﻿import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import API from "../api/axios";
 
-/* ─── Debounce hook ─── */
+/* --- Debounce hook --- */
 function useDebounce(value, delay = 400) {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -11,7 +11,7 @@ function useDebounce(value, delay = 400) {
   return debounced;
 }
 
-/* ─── Status → accent color ─── */
+/* --- Status ? accent color --- */
 const statusColors = {
   "ON TREATMENT": { bg: '#FFFBEB', text: '#92400E', dot: '#B45309' },
   "TREATMENT COMPLETED": { bg: '#EFF6FF', text: '#1E40AF', dot: '#2563EB' },
@@ -59,12 +59,12 @@ const DetailRow = ({ label, value }) => {
   return (
     <div className="flex items-center justify-between gap-4">
       <span className="text-xs" style={{ color: '#94A3B8' }}>{label}</span>
-      <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{displayValue != null ? displayValue : "—"}</span>
+      <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{displayValue != null ? displayValue : "�"}</span>
     </div>
   );
 };
 
-/* ─── Filter select for sidebar ─── */
+/* --- Filter select for sidebar --- */
 function FilterSelect({ label, value, onChange, options, placeholder }) {
   const formatOption = (opt) => {
     if (!opt) return '';
@@ -138,88 +138,7 @@ export default function TBRecords() {
   const [sortDirection, setSortDirection] = useState("desc");
   const [exporting, setExporting] = useState(false);
 
-  /* ─── Derived active filter list ─── */
-  const activeFilters = [
-    { key: 'year', label: 'Year', value: selectedYear },
-    { key: 'month', label: 'Month', value: selectedMonth },
-    { key: 'barangay', label: 'Barangay', value: selectedBarangay },
-    { key: 'outcome', label: 'Outcome', value: selectedOutcomeStatus },
-    { key: 'facility', label: 'Facility', value: selectedFacility },
-    { key: 'sex', label: 'Sex', value: selectedSex },
-    { key: 'bacteriological', label: 'Bacteriological', value: selectedBacteriologicalStatus },
-    { key: 'validation', label: 'Validation', value: selectedValidationStatus },
-    { key: 'source', label: 'Source Type', value: selectedSourceType },
-    { key: 'location', label: 'Location', value: selectedLocationClassification },
-  ].filter(f => f.value);
-
-  const activeFilterCount = activeFilters.length;
-
-  /* ─── Filter setter map for chips ─── */
-  const filterSetters = {
-    year: setSelectedYear,
-    month: setSelectedMonth,
-    barangay: setSelectedBarangay,
-    outcome: setSelectedOutcomeStatus,
-    facility: setSelectedFacility,
-    sex: setSelectedSex,
-    bacteriological: setSelectedBacteriologicalStatus,
-    validation: setSelectedValidationStatus,
-    source: setSelectedSourceType,
-    location: setSelectedLocationClassification,
-  };
-
-  const removeFilter = (key) => {
-    if (filterSetters[key]) filterSetters[key]("");
-    setCurrentPage(1);
-  };
-
-  const clearAllFilters = () => {
-    setSearchTerm(""); setSelectedYear(""); setSelectedMonth("");
-    setSelectedBarangay(""); setSelectedOutcomeStatus(""); setSelectedFacility("");
-    setSelectedSex(""); setSelectedBacteriologicalStatus(""); setSelectedValidationStatus("");
-    setSelectedSourceType(""); setSelectedLocationClassification("");
-    setSortField("date_of_diagnosis");
-    setSortDirection("desc");
-    setCurrentPage(1);
-  };
-
-  /* ─── Sort handler (2-state toggle: desc ↔ asc) ─── */
-  const handleSort = (field) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === "desc" ? "asc" : "desc");
-    } else {
-      setSortField(field);
-      setSortDirection("asc");
-    }
-    setCurrentPage(1);
-  };
-
-  /* ─── CSV Export handler ─── */
-  const handleExport = async () => {
-    setExporting(true);
-    try {
-      const params = buildFilterParams();
-      const qs = params.toString();
-      const url = `/api/tb/cases/export${qs ? `?${qs}` : ''}`;
-      const res = await API.get(url, { responseType: 'blob' });
-      const blob = res.data;
-      const objectUrl = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = objectUrl;
-      link.download = 'tb_records_export.csv';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 100);
-    } catch (err) {
-      if (import.meta.env.DEV) console.error("Export failed:", err);
-      alert("Export failed. Please try again.");
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  /* ─── Advanced Filters Modal helpers ─── */
+  /* --- Advanced Filters Modal helpers --- */
   const openAdvancedFilters = () => {
     setPendingFilters({
       year: selectedYear,
@@ -259,7 +178,7 @@ export default function TBRecords() {
     setPendingFilters({ year: "", month: "", barangay: "", outcome: "", facility: "", sex: "", bacteriological: "", validation: "", source: "", location: "" });
   };
 
-  /* ─── Format chip display ─── */
+  /* --- Format chip display --- */
   const formatChipValue = (key, value) => {
     if (!value) return "";
     if (key === 'year') return value;
@@ -267,7 +186,7 @@ export default function TBRecords() {
     return value.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
   };
 
-  /* ─── Shared filter params builder ─── */
+  /* --- Shared filter params builder --- */
   const buildFilterParams = useCallback(() => {
     const params = new URLSearchParams();
     if (debouncedSearch) params.append("search", debouncedSearch);
@@ -287,7 +206,7 @@ export default function TBRecords() {
     return params;
   }, [debouncedSearch, selectedBarangay, selectedYear, selectedMonth, selectedOutcomeStatus, selectedFacility, selectedSex, selectedBacteriologicalStatus, selectedValidationStatus, selectedSourceType, selectedLocationClassification]);
 
-  /* ─── Fetch metrics (filter-aware) ─── */
+  /* --- Fetch metrics (filter-aware) --- */
   const fetchMetrics = useCallback(async () => {
     try {
       const params = buildFilterParams();
@@ -320,8 +239,88 @@ export default function TBRecords() {
   }, [buildFilterParams]);
 
   useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
+  /* --- Derived active filter list --- */
+  const activeFilters = [
+    { key: 'year', label: 'Year', value: selectedYear },
+    { key: 'month', label: 'Month', value: selectedMonth },
+    { key: 'barangay', label: 'Barangay', value: selectedBarangay },
+    { key: 'outcome', label: 'Outcome', value: selectedOutcomeStatus },
+    { key: 'facility', label: 'Facility', value: selectedFacility },
+    { key: 'sex', label: 'Sex', value: selectedSex },
+    { key: 'bacteriological', label: 'Bacteriological', value: selectedBacteriologicalStatus },
+    { key: 'validation', label: 'Validation', value: selectedValidationStatus },
+    { key: 'source', label: 'Source Type', value: selectedSourceType },
+    { key: 'location', label: 'Location', value: selectedLocationClassification },
+  ].filter(f => f.value);
 
-  /* ─── Fetch barangays ─── */
+  const activeFilterCount = activeFilters.length;
+
+  /* --- Filter setter map for chips --- */
+  const filterSetters = {
+    year: setSelectedYear,
+    month: setSelectedMonth,
+    barangay: setSelectedBarangay,
+    outcome: setSelectedOutcomeStatus,
+    facility: setSelectedFacility,
+    sex: setSelectedSex,
+    bacteriological: setSelectedBacteriologicalStatus,
+    validation: setSelectedValidationStatus,
+    source: setSelectedSourceType,
+    location: setSelectedLocationClassification,
+  };
+
+  const removeFilter = (key) => {
+    if (filterSetters[key]) filterSetters[key]("");
+    setCurrentPage(1);
+  };
+
+  const clearAllFilters = () => {
+    setSearchTerm(""); setSelectedYear(""); setSelectedMonth("");
+    setSelectedBarangay(""); setSelectedOutcomeStatus(""); setSelectedFacility("");
+    setSelectedSex(""); setSelectedBacteriologicalStatus(""); setSelectedValidationStatus("");
+    setSelectedSourceType(""); setSelectedLocationClassification("");
+    setSortField("date_of_diagnosis");
+    setSortDirection("desc");
+    setCurrentPage(1);
+  };
+
+  /* --- Sort handler (2-state toggle: desc ? asc) --- */
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === "desc" ? "asc" : "desc");
+    } else {
+      setSortField(field);
+      setSortDirection("asc");
+    }
+    setCurrentPage(1);
+  };
+
+  /* --- CSV Export handler --- */
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const params = buildFilterParams();
+      const qs = params.toString();
+      const url = `/api/tb/cases/export${qs ? `?${qs}` : ''}`;
+      const res = await API.get(url, { responseType: 'blob' });
+      const blob = res.data;
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = 'tb_records_export.csv';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 100);
+    } catch (err) {
+      if (import.meta.env.DEV) console.error("Export failed:", err);
+      alert("Export failed. Please try again.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  /* --- Fetch barangays --- */
   useEffect(() => {
     const controller = new AbortController();
     const fetchBarangays = async () => {
@@ -336,7 +335,7 @@ export default function TBRecords() {
     return () => controller.abort();
   }, []);
 
-  /* ─── Fetch facilities ─── */
+  /* --- Fetch facilities --- */
   useEffect(() => {
     const controller = new AbortController();
     const fetchFacilities = async () => {
@@ -352,7 +351,7 @@ export default function TBRecords() {
     return () => controller.abort();
   }, []);
 
-  /* ─── Fetch filter options (sex, bacteriological status, outcome status, validation, source, location) ─── */
+  /* --- Fetch filter options (sex, bacteriological status, outcome status, validation, source, location) --- */
   useEffect(() => {
     const controller = new AbortController();
     const fetchFilterOptions = async () => {
@@ -379,7 +378,7 @@ export default function TBRecords() {
     return () => controller.abort();
   }, []);
 
-  /* ─── Fetch cases ─── */
+  /* --- Fetch cases --- */
   useEffect(() => {
     let cancelled = false;
     const fetchCases = async () => {
@@ -412,7 +411,7 @@ export default function TBRecords() {
   return (
     <div className="flex flex-col gap-5">
 
-      {/* ── Metric Cards ── */}
+      {/* -- Metric Cards -- */}
       <div>
         <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.12), 0 2px 8px rgba(15, 45, 82, 0.08)' }}>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
@@ -521,11 +520,11 @@ export default function TBRecords() {
         </div>
       </div>
 
-      {/* ── Table Card ── */}
+      {/* -- Table Card -- */}
       <div>
         <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
 
-          {/* ── Header ── */}
+          {/* -- Header -- */}
           <div className="flex flex-col gap-3 px-6 py-2 sm:flex-row sm:items-center sm:justify-between" style={{ borderBottom: '1px solid #DBEAFE' }}>
             {/* Left: Title */}
             <div>
@@ -576,7 +575,7 @@ export default function TBRecords() {
             </div>
           </div>
 
-          {/* ── Active Filter Chips ── */}
+          {/* -- Active Filter Chips -- */}
           {activeFilterCount > 0 && (
             <div className="flex flex-wrap items-center gap-2 px-6 py-3" style={{ borderBottom: '1px solid #E2E8F0' }}>
               {activeFilters.map((f) => (
@@ -592,7 +591,7 @@ export default function TBRecords() {
                     style={{ color: '#94A3B8', borderRadius: 4 }}
                     aria-label={`Remove ${f.label} filter`}
                   >
-                    ×
+                    �
                   </button>
                 </span>
               ))}
@@ -608,7 +607,7 @@ export default function TBRecords() {
             </div>
           )}
 
-          {/* ── Table (scrollable) ── */}
+          {/* -- Table (scrollable) -- */}
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
             <table className="w-full text-left text-sm" style={{ borderCollapse: 'collapse' }}>
               <thead>
@@ -702,9 +701,9 @@ export default function TBRecords() {
                           <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: record.source_type === 'DSTB' ? '#EFF6FF' : '#F0FDF4', color: record.source_type === 'DSTB' ? '#1E40AF' : '#166534' }}>
                             {record.source_type}
                           </span>
-                        ) : '—'}
+                        ) : '�'}
                       </td>
-                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.bacteriological_status ? record.bacteriological_status.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
+                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.bacteriological_status ? record.bacteriological_status.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : '�'}</td>
                       <td className="px-3 py-2" style={{ borderRight: '1px solid #E2E8F0' }}>
                         <StatusBadge status={record.outcome_status} />
                       </td>
@@ -724,7 +723,7 @@ export default function TBRecords() {
             </table>
           </div>
 
-          {/* ── Pagination ── */}
+          {/* -- Pagination -- */}
           <div className="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between" style={{ borderTop: '1px solid #E2E8F0' }}>
             <div className="flex items-center gap-3">
               <p className="text-xs font-semibold" style={{ color: '#94A3B8' }}>
@@ -733,7 +732,7 @@ export default function TBRecords() {
                     <i className="ri-loader-4-line text-xs animate-spin" /> Loading records...
                   </span>
                 ) : (
-                  <>Showing {pagination.total === 0 ? 0 : (currentPage - 1) * pagination.limit + 1}–{Math.min(currentPage * pagination.limit, pagination.total)} of {pagination.total} records</>
+                  <>Showing {pagination.total === 0 ? 0 : (currentPage - 1) * pagination.limit + 1}�{Math.min(currentPage * pagination.limit, pagination.total)} of {pagination.total} records</>
                 )}
               </p>
               <div className="flex items-center gap-1.5">
@@ -758,7 +757,7 @@ export default function TBRecords() {
                 style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-                ‹
+                �
               </button>
               {(() => {
                 const totalPages = pagination.totalPages || 1;
@@ -792,7 +791,7 @@ export default function TBRecords() {
                 style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-                ›
+                �
               </button>
             </div>
           </div>
@@ -800,7 +799,7 @@ export default function TBRecords() {
         </div>
       </div>
 
-      {/* ── Advanced Filters Sidebar ── */}
+      {/* -- Advanced Filters Sidebar -- */}
       {showAdvancedFilters && (
         <div className="fixed inset-0 z-[1200] flex justify-end bg-slate-950/20 backdrop-blur-sm">
           <div className="absolute inset-0" onClick={() => setShowAdvancedFilters(false)} />
@@ -922,7 +921,7 @@ export default function TBRecords() {
         </div>
       )}
 
-      {/* ── Record detail modal ── */}
+      {/* -- Record detail modal -- */}
       {selectedRecord && (
         <div className="fixed inset-0 z-[1200] flex justify-end bg-slate-950/20 backdrop-blur-sm">
           <div className="absolute inset-0" onClick={() => setSelectedRecord(null)} />

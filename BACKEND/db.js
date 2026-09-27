@@ -138,6 +138,36 @@ const initDb = async () => {
       console.log('⚠️ Bagong Katipunan barangay fix migration not found, skipping.');
     }
 
+    // Barangay population: year-specific population reference data table (idempotent)
+    const popMigPath = path.join(__dirname, 'db', 'migrations', '015_barangay_population.sql');
+    if (fs.existsSync(popMigPath)) {
+      const popSql = fs.readFileSync(popMigPath, 'utf8');
+      await execSql(popSql);
+      console.log('✅ Barangay population migration completed successfully.');
+    } else {
+      console.log('⚠️ Barangay population migration not found, skipping.');
+    }
+
+    // Phase 2A: users.facility_id — Staff accounts assigned to a health facility (idempotent)
+    const userFacMigPath = path.join(__dirname, 'db', 'migrations', '016_user_facility.sql');
+    if (fs.existsSync(userFacMigPath)) {
+      const userFacSql = fs.readFileSync(userFacMigPath, 'utf8');
+      await execSql(userFacSql);
+      console.log('✅ User facility assignment migration completed successfully.');
+    } else {
+      console.log('⚠️ User facility assignment migration not found, skipping.');
+    }
+
+    // Phase 2B: tb_cases.entered_by_* — manual entry provenance (idempotent)
+    const manualEntryMigPath = path.join(__dirname, 'db', 'migrations', '017_manual_entry.sql');
+    if (fs.existsSync(manualEntryMigPath)) {
+      const manualEntrySql = fs.readFileSync(manualEntryMigPath, 'utf8');
+      await execSql(manualEntrySql);
+      console.log('✅ Manual entry provenance migration completed successfully.');
+    } else {
+      console.log('⚠️ Manual entry provenance migration not found, skipping.');
+    }
+
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,
     // undoing two earlier over-broad attempts, and keep only the Kapasigan Extension ->
     // Bagong Katipunan rename/population fix (idempotent)

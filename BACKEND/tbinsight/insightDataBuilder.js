@@ -7,7 +7,10 @@
  * Exports:
  *   buildAnalyticsMetrics(pool, filters) -> metrics object
  *   buildForecastingMetrics(pool, filters) -> metrics object
+ *   buildGisMetrics(pool, filters) -> metrics object
  */
+
+const { getAvailablePopulationYears } = require('./populationService');
 
 /**
  * Build WHERE clause fragments from filter params.
@@ -274,24 +277,35 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
     percentage: totalAge > 0 ? Math.round((ageRows[0].total / totalAge) * 1000) / 10 : 0,
   } : null;
 
-  // --- Treatment outcomes ---
+  // --- Treatment outcomes (Client TSR formula) ---
+  // TSR = (Cured + Completed) / Total patients from treatment-start cohort Y-1 × 100
+  // Cohort: patients with date_started_treatment in year Y-1
   const outcomeRows = outcomeRes.rows;
   const outcomeBreakdown = {};
-  let curedCount = 0;
-  let completedCount = 0;
-  let evaluatedCount = 0;
   for (const r of outcomeRows) {
     outcomeBreakdown[r.outcome_status] = r.total;
-    const up = (r.outcome_status || '').toUpperCase();
-    if (up === 'CURED') curedCount = r.total;
-    if (up === 'TREATMENT COMPLETED') completedCount = r.total;
-    if (up !== 'NOT EVALUATED' && up !== 'UNKNOWN' && r.outcome_status) {
-      evaluatedCount += r.total;
-    }
   }
-  const successRate = evaluatedCount > 0
-    ? Math.round(((curedCount + completedCount) / evaluatedCount) * 1000) / 10
-    : 0;
+
+  const reportingYear = filters.year ? Number(filters.year) : new Date().getFullYear();
+  const cohortYear = reportingYear - 1;
+
+  const cohortResult = await pool.query(`
+    SELECT
+      COUNT(*)::INTEGER AS total_patients,
+      SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
+      SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count
+    FROM tb_cases
+    WHERE EXTRACT(YEAR FROM date_started_treatment) = $1
+  `, [cohortYear]);
+
+  const cohort = cohortResult.rows[0] || {};
+  const totalPatients = cohort.total_patients || 0;
+  const curedCount = cohort.cured_count || 0;
+  const completedCount = cohort.completed_count || 0;
+
+  const successRate = totalPatients > 0
+    ? Math.round(((curedCount + completedCount) / totalPatients) * 1000) / 10
+    : null;
 
   // --- Summary ---
   const summary = {
@@ -478,4 +492,199 @@ async function buildForecastingMetrics(pool, filters = {}) {
   };
 }
 
-module.exports = { buildAnalyticsMetrics, buildForecastingMetrics };
+// ============================================================
+//  GIS METRICS — choropleth/risk distribution for map insight
+// ============================================================
+
+/**
+ * Compute GIS/map metrics from the latest barangay_risk_scores period.
+ *
+ * Uses the system's actual risk labels (High / Medium / Low / No Data)
+ * and trend labels (Increasing / Decreasing / Stable) — never introduces
+ * alternative labels.
+ *
+ * Incidence availability is checked explicitly: if the risk period's year
+ * has no matching population reference (or incidence values are missing),
+ * metrics.incidence.available = false so the NLG layer skips any
+ * incidence-based interpretation.
+ *
+ * @param {object} pool
+ * @param {object} filters - { barangay?: string } optional focus barangay
+ */
+async function buildGisMetrics(pool, filters = {}) {
+  // --- Latest risk period ---
+  const latestRes = await pool.query(
+    'SELECT MAX(period) AS period FROM barangay_risk_scores'
+  );
+  const latestPeriod = latestRes.rows[0]?.period || null;
+
+  // --- Barangay rows: risk scores (latest period) + lifetime case counts ---
+  const rowsRes = await pool.query(
+    `SELECT
+       b.name,
+       b.population,
+       brs.risk_score,
+       brs.risk_class,
+       brs.incidence_per_100k,
+       brs.trend_direction,
+       COALESCE(tc.total_cases, 0)::INTEGER AS total_cases
+     FROM barangays b
+     LEFT JOIN barangay_risk_scores brs
+       ON brs.barangay_name = b.name AND brs.period = $1
+     LEFT JOIN (
+       SELECT barangay_name, COUNT(*)::INTEGER AS total_cases
+       FROM tb_cases GROUP BY barangay_name
+     ) tc ON tc.barangay_name = b.name
+     ORDER BY b.name`,
+    [latestPeriod]
+  );
+  const rows = rowsRes.rows;
+
+  const periodYear = latestPeriod ? new Date(latestPeriod).getFullYear() : null;
+
+  // --- Risk distribution (actual system labels) ---
+  const riskCounts = { High: 0, Medium: 0, Low: 0, 'No Data': 0 };
+  for (const r of rows) {
+    const label = r.risk_class || 'No Data';
+    riskCounts[label] = (riskCounts[label] || 0) + 1;
+  }
+  const scored = rows.filter((r) => r.risk_class && r.risk_class !== 'No Data');
+  const noDataBarangays = rows
+    .filter((r) => !r.risk_class || r.risk_class === 'No Data')
+    .map((r) => r.name);
+
+  // --- Incidence availability guard ---
+  const withIncidence = rows.filter(
+    (r) => r.incidence_per_100k !== null && r.incidence_per_100k !== undefined
+  ).length;
+  let availableYears = [];
+  try {
+    availableYears = await getAvailablePopulationYears();
+  } catch {
+    availableYears = [];
+  }
+  const periodYearHasPopulation =
+    periodYear === null ? false : availableYears.includes(periodYear);
+  const incidenceAvailable =
+    Boolean(latestPeriod) && withIncidence > 0 && periodYearHasPopulation;
+
+  // --- Top hotspots (by risk score) ---
+  const byRisk = [...scored].sort(
+    (a, b) => (b.risk_score || 0) - (a.risk_score || 0)
+  );
+  const topHotspots = byRisk.slice(0, 5).map((r) => ({
+    name: r.name,
+    risk_score: r.risk_score,
+    risk_class: r.risk_class,
+    incidence_per_100k: r.incidence_per_100k, // raw — may be null
+    trend_direction: r.trend_direction || 'Stable',
+    total_cases: r.total_cases,
+  }));
+
+  // --- Case concentration (top 5 barangays by raw case count) ---
+  const totalCases = rows.reduce((s, r) => s + (r.total_cases || 0), 0);
+  const byCases = [...rows].sort((a, b) => (b.total_cases || 0) - (a.total_cases || 0));
+  const top5Cases = byCases.slice(0, 5);
+  const top5CaseCount = top5Cases.reduce((s, r) => s + (r.total_cases || 0), 0);
+  const concentration = {
+    totalCases,
+    top5CaseSharePct:
+      totalCases > 0
+        ? Math.round((top5CaseCount / totalCases) * 100 * 10) / 10
+        : null,
+    top5: top5Cases.map((r) => ({ name: r.name, total_cases: r.total_cases })),
+  };
+
+  // --- Cases vs risk patterns (neutral — model-aware, not "mismatch") ---
+  const sortedCounts = rows
+    .map((r) => r.total_cases || 0)
+    .sort((a, b) => a - b);
+  const medianCases = sortedCounts.length
+    ? sortedCounts[Math.floor(sortedCounts.length / 2)]
+    : 0;
+  const p75Cases = sortedCounts.length
+    ? sortedCounts[Math.floor((sortedCounts.length - 1) * 0.75)]
+    : 0;
+
+  const highRiskLowerCase = scored
+    .filter((r) => r.risk_class === 'High' && (r.total_cases || 0) < medianCases)
+    .map((r) => ({
+      name: r.name,
+      risk_score: r.risk_score,
+      total_cases: r.total_cases,
+    }));
+  const highCaseLowerRisk = scored
+    .filter(
+      (r) =>
+        r.risk_class !== 'High' &&
+        (r.total_cases || 0) >= p75Cases &&
+        (r.total_cases || 0) > 0
+    )
+    .map((r) => ({
+      name: r.name,
+      risk_class: r.risk_class,
+      risk_score: r.risk_score,
+      total_cases: r.total_cases,
+    }));
+
+  const casesVsRiskPatterns = {
+    medianCases,
+    p75Cases,
+    highRiskLowerCaseCount: highRiskLowerCase.length,
+    highCaseCountLowerRisk: highCaseLowerRisk.length,
+    highRiskLowerCase,
+    highCaseLowerRisk,
+  };
+
+  // --- Trend distribution (actual labels) ---
+  const trendCounts = { Increasing: 0, Decreasing: 0, Stable: 0 };
+  for (const r of scored) {
+    const d = r.trend_direction || 'Stable';
+    trendCounts[d] = (trendCounts[d] || 0) + 1;
+  }
+
+  // --- Optional focus barangay ---
+  let focus = null;
+  if (filters.barangay) {
+    const f = rows.find(
+      (r) => r.name.toLowerCase() === String(filters.barangay).toLowerCase()
+    );
+    if (f) {
+      focus = {
+        name: f.name,
+        risk_class: f.risk_class || 'No Data',
+        risk_score: f.risk_score,
+        incidence_per_100k: f.incidence_per_100k,
+        trend_direction: f.trend_direction || 'Stable',
+        total_cases: f.total_cases,
+        population: f.population,
+        rank: byRisk.findIndex((r) => r.name === f.name) + 1 || null,
+        total_scored: byRisk.length,
+      };
+    }
+  }
+
+  return {
+    riskCounts,
+    topHotspots,
+    concentration,
+    casesVsRiskPatterns,
+    trendCounts,
+    coverage: {
+      scoredBarangays: scored.length,
+      totalBarangays: rows.length,
+      noDataBarangays,
+      period: latestPeriod,
+      periodYear,
+    },
+    incidence: {
+      available: incidenceAvailable,
+      periodYear,
+      periodYearHasPopulation,
+      barangaysWithIncidence: withIncidence,
+    },
+    focus,
+  };
+}
+
+module.exports = { buildAnalyticsMetrics, buildForecastingMetrics, buildGisMetrics };
