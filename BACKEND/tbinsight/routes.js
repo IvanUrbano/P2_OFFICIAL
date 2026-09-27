@@ -1891,14 +1891,14 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
           const otherMonthData = otherMonths.find(m => m.month === targetMonth.month);
           if (otherMonthData) {
             const otherPop = populationMap[otherName] || 0;
-            otherIncidences.push((otherMonthData.case_count / otherPop) * 100_000);
+            otherIncidences.push(((otherMonthData.case_count * 12) / otherPop) * 100_000);
           }
         }
         if (otherIncidences.length > 0) {
           neighborRisk = otherIncidences.reduce((a, b) => a + b, 0) / otherIncidences.length;
         }
 
-        const incidence = (targetMonth.case_count / pop) * 100_000;
+        const incidence = ((targetMonth.case_count * 12) / pop) * 100_000;
 
         trainRows.push({
           month: targetMonth.month,
