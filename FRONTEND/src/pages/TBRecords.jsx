@@ -18,6 +18,11 @@ const statusColors = {
   "CURED": { bg: '#ECFDF5', text: '#047857', dot: '#059669' },
   "DIED": { bg: '#FEF2F2', text: '#991B1B', dot: '#B91C1C' },
   "LOST TO FOLLOW-UP": { bg: '#F3F4F6', text: '#374151', dot: '#6B7280' },
+  "LOST TO FF-UP": { bg: '#F3F4F6', text: '#374151', dot: '#6B7280' },
+  "TREATMENT FAILED": { bg: '#FEF2F2', text: '#991B1B', dot: '#B91C1C' },
+  "FAILED": { bg: '#FEF2F2', text: '#991B1B', dot: '#B91C1C' },
+  "DIAGNOSED": { bg: '#F0F9FF', text: '#0369A1', dot: '#0284C7' },
+  "SCREENED": { bg: '#ECFEFF', text: '#0E7490', dot: '#0891B2' },
   "EXCLUDED": { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' },
   "NOT EVALUATED": { bg: '#F5F3FF', text: '#5B21B6', dot: '#7C3AED' },
   "PENDING": { bg: '#FFFBEB', text: '#92400E', dot: '#B45309' },
@@ -97,7 +102,8 @@ const ALL_MONTHS = ["January","February","March","April","May","June","July","Au
 const ALL_YEARS = ["2026","2025","2024","2023"];
 const ALL_OUTCOME_STATUSES = [
   "ON TREATMENT", "CURED", "TREATMENT COMPLETED",
-  "DIED", "LOST TO FOLLOW-UP", "EXCLUDED", "NOT EVALUATED",
+  "DIED", "LOST TO FOLLOW-UP", "LOST TO FF-UP", "TREATMENT FAILED",
+  "EXCLUDED", "NOT EVALUATED", "DIAGNOSED", "SCREENED",
 ];
 const ALL_SEX_OPTIONS = ["Male", "Female"];
 const ALL_VALIDATION_STATUSES = ["Validated", "Not Validated"];

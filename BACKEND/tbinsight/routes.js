@@ -540,7 +540,7 @@ router.get('/dashboard/summary', async (req, res) => {
         SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER as cured_count,
         SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER as treatment_completed_count,
         SUM(CASE WHEN UPPER(outcome_status) = 'DIED' THEN 1 ELSE 0 END)::INTEGER as died_count,
-        SUM(CASE WHEN UPPER(outcome_status) = 'LOST TO FOLLOW-UP' THEN 1 ELSE 0 END)::INTEGER as ltfu_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN ('LOST TO FF-UP','LOST TO FOLLOW-UP') THEN 1 ELSE 0 END)::INTEGER as ltfu_count,
         SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER as successful_count,
         COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(outcome_status) != 'NOT EVALUATED')::INTEGER as total_outcomes,
         SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as current_month_cases,
