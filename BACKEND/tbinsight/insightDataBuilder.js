@@ -10,7 +10,7 @@
  *   buildGisMetrics(pool, filters) -> metrics object
  */
 
-const { getAvailablePopulationYears } = require('./populationService');
+const { getAvailablePopulationYears, computeYearIncidence, GEOJSON_REFERENCE_YEAR } = require('./populationService');
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 
 /**
@@ -500,17 +500,22 @@ async function buildGisMetrics(pool, filters = {}) {
     'SELECT MAX(period) AS period FROM barangay_risk_scores'
   );
   const latestPeriod = latestRes.rows[0]?.period || null;
+  const periodYear = latestPeriod ? new Date(latestPeriod).getFullYear() : null;
+  // Snapshots are keyed by (assessment year + 1)-01-01, so the assessment
+  // year the snapshot (and its incidence) actually refers to is periodYear - 1.
+  const assessmentYear = periodYear != null ? periodYear - 1 : null;
 
-  // --- Barangay rows: risk scores (latest period) + lifetime case counts ---
+  // --- Barangay rows: risk scores (latest period) + lifetime + year case counts ---
   const rowsRes = await pool.query(
     `SELECT
        b.name,
        b.population,
        brs.risk_score,
        brs.risk_class,
-       brs.incidence_per_100k,
+       brs.incidence_per_100k AS legacy_pipeline_incidence,
        brs.trend_direction,
-       COALESCE(tc.total_cases, 0)::INTEGER AS total_cases
+       COALESCE(tc.total_cases, 0)::INTEGER AS total_cases,
+       COALESCE(yc.year_cases, 0)::INTEGER AS year_cases
      FROM barangays b
      LEFT JOIN barangay_risk_scores brs
        ON brs.barangay_name = b.name AND brs.period = $1
@@ -518,12 +523,43 @@ async function buildGisMetrics(pool, filters = {}) {
        SELECT barangay_name, COUNT(*)::INTEGER AS total_cases
        FROM tb_cases GROUP BY barangay_name
      ) tc ON tc.barangay_name = b.name
+     LEFT JOIN (
+       SELECT barangay_name, COUNT(*)::INTEGER AS year_cases
+       FROM tb_cases
+       WHERE date_of_diagnosis IS NOT NULL
+         AND EXTRACT(YEAR FROM date_of_diagnosis) = $2
+       GROUP BY barangay_name
+     ) yc ON yc.barangay_name = b.name
      ORDER BY b.name`,
-    [latestPeriod]
+    [latestPeriod, assessmentYear]
   );
-  const rows = rowsRes.rows;
 
-  const periodYear = latestPeriod ? new Date(latestPeriod).getFullYear() : null;
+  // STRICT year-matched population for the assessment year: the GeoJSON
+  // reference population only applies to GEOJSON_REFERENCE_YEAR; any other
+  // year needs an exact barangay_population row or incidence is null (N/A).
+  // Never substitute another year's population.
+  const popMap = {};
+  if (assessmentYear === GEOJSON_REFERENCE_YEAR) {
+    for (const r of rowsRes.rows) popMap[r.name] = r.population;
+  } else if (assessmentYear != null) {
+    try {
+      const popRes = await pool.query(
+        `SELECT barangay_name, population FROM barangay_population
+         WHERE reference_year = $1 AND status = 'ACTIVE'`,
+        [assessmentYear]
+      );
+      for (const r of popRes.rows) popMap[r.barangay_name] = r.population;
+    } catch {
+      // population lookup failure → all null below (incidence unavailable)
+    }
+  }
+
+  // Year-specific incidence (authoritative, matches the GIS table/choropleth).
+  // The pipeline-stored value is retained as legacy_pipeline_incidence only.
+  const rows = rowsRes.rows.map((r) => ({
+    ...r,
+    incidence_per_100k: computeYearIncidence(r.year_cases, popMap[r.name]),
+  }));
 
   // --- Risk distribution (actual system labels) ---
   const riskCounts = { High: 0, Medium: 0, Low: 0, 'No Data': 0 };
@@ -537,6 +573,9 @@ async function buildGisMetrics(pool, filters = {}) {
     .map((r) => r.name);
 
   // --- Incidence availability guard ---
+  // Population must exist for the ASSESSMENT year (periodYear - 1), which is
+  // the year the computed incidence actually refers to — not the snapshot's
+  // (Y+1)-01-01 period year, which never has a population reference.
   const withIncidence = rows.filter(
     (r) => r.incidence_per_100k !== null && r.incidence_per_100k !== undefined
   ).length;
@@ -547,7 +586,7 @@ async function buildGisMetrics(pool, filters = {}) {
     availableYears = [];
   }
   const periodYearHasPopulation =
-    periodYear === null ? false : availableYears.includes(periodYear);
+    assessmentYear === null ? false : availableYears.includes(assessmentYear);
   const incidenceAvailable =
     Boolean(latestPeriod) && withIncidence > 0 && periodYearHasPopulation;
 
@@ -662,7 +701,9 @@ async function buildGisMetrics(pool, filters = {}) {
     },
     incidence: {
       available: incidenceAvailable,
-      periodYear,
+      // The year the incidence figures refer to (assessment year), which is
+      // what any population-reference guard must check against.
+      periodYear: assessmentYear,
       periodYearHasPopulation,
       barangaysWithIncidence: withIncidence,
     },

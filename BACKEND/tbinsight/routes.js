@@ -18,6 +18,7 @@ const {
   getAvailablePopulationYears, getPopulationReferences, getPopulationByYear,
   validatePopulationData, savePopulationData, updatePopulationRecord,
   parsePopulationExcel, parsePopulationCsv,
+  computeYearIncidence,
   GEOJSON_REFERENCE_YEAR,
 } = require('./populationService');
 
@@ -977,6 +978,15 @@ router.get('/gis/geojson', async (req, res) => {
     // specific year has no snapshot at all yet" for the frontend's label.
     const requestedYearHasSnapshot = isValidYear ? riskResult.rows.length > 0 : null;
 
+    // Effective incidence year — ONLY from an explicit ?year filter.
+    // Snapshots are keyed by (assessment year + 1)-01-01 (period 2026-01-01
+    // = assessed through end of 2025). With no year selected ("All Years")
+    // there is NO single year for cases/population: incidence stays null
+    // (rendered N/A) rather than dividing lifetime totals by one year's
+    // population. The latest snapshot is still used below for risk class /
+    // confidence, but clearly labeled as the latest assessment in the UI.
+    const incidenceYear = isValidYear ? yearInt : null;
+
     // Forecasts follow the SAME per-year exact lookup as risk (Y+1-01-01):
     // a historical snapshot deliberately skips ARIMA (see
     // pipeline.js:runHistoricalSnapshots), so a past year genuinely has no
@@ -1000,8 +1010,13 @@ router.get('/gis/geojson', async (req, res) => {
            WHERE period = (SELECT MAX(period) FROM model_predictions)`
         );
 
-    // Fetch case counts from tb_cases directly
-    const caseQuery = isValidYear
+    // Case counts: a selected year filters cases to THAT year. With no
+    // explicit year ("All Years") totals are LIFETIME — and because
+    // incidenceYear is also null in that mode, population and incidence
+    // both stay null: multi-year case totals are never divided by a
+    // single-year population (no fabricated cross-period incidence).
+    const effectiveCaseYear = isValidYear ? yearInt : null;
+    const caseQuery = effectiveCaseYear !== null
       ? `SELECT barangay_name, COUNT(*)::INTEGER as total_cases
          FROM tb_cases
          WHERE date_of_diagnosis IS NOT NULL
@@ -1011,7 +1026,31 @@ router.get('/gis/geojson', async (req, res) => {
          FROM tb_cases
          WHERE date_of_diagnosis IS NOT NULL
          GROUP BY barangay_name`;
-    const caseResult = await pool.query(caseQuery, isValidYear ? [yearInt] : []);
+    const caseResult = await pool.query(
+      caseQuery, effectiveCaseYear !== null ? [effectiveCaseYear] : []
+    );
+
+    // Year-specific population for incidence — STRICT year matching
+    // (incidenceYear computed above). When the reference year (2025) is
+    // selected, population comes from the GeoJSON barangays_geom table. For
+    // any other year, an EXACT barangay_population row for that year is
+    // required; if no exact-year row exists, population stays null and
+    // incidence renders N/A. A population from a different year is never
+    // substituted, because that would misrepresent incidence for the
+    // selected year.
+    let yearPopMap = {};
+    if (incidenceYear !== null) {
+      if (incidenceYear === GEOJSON_REFERENCE_YEAR) {
+        for (const row of geoResult.rows) yearPopMap[row.name] = row.population;
+      } else {
+        const popResult = await pool.query(
+          `SELECT barangay_name, population FROM barangay_population
+           WHERE reference_year = $1 AND status = 'ACTIVE'`,
+          [incidenceYear]
+        );
+        for (const row of popResult.rows) yearPopMap[row.barangay_name] = row.population;
+      }
+    }
 
     // Build lookup maps
     const riskMap = {};
@@ -1031,13 +1070,29 @@ router.get('/gis/geojson', async (req, res) => {
         type: 'Feature',
         properties: {
           name: row.name,
-          population: row.population,
+          // Year-matched population (same rule as incidence): reference
+          // (GeoJSON) population only for the reference year, exact-year
+          // rows otherwise, null when the effective year has no population
+          // record — never another year's figure. With no year context at
+          // all (no filter and no risk snapshot) the GeoJSON reference
+          // population is shown as the geography attribute it is, with
+          // incidence null regardless.
+          population: incidenceYear !== null
+            ? (yearPopMap[row.name] ?? null)
+            : row.population,
           centroid: [row.centroid_lon, row.centroid_lat],
           risk_score: risk.risk_score || 0,
           risk_class: risk.risk_class || 'No Data',
-          // Preserve null (no matching-year population) — never coalesce to
-          // 0, which would claim a real, lowest-possible incidence.
-          incidence_per_100k: risk.incidence_per_100k ?? null,
+          // Authoritative year-specific GIS incidence: cases in the selected
+          // (or risk-assessment) year over the STRICTLY year-matched
+          // population × 100,000. Zero cases with a valid population yields
+          // 0 (a real lowest value); a missing exact-year population yields
+          // null → rendered as N/A. Never substitutes another year's
+          // population. (The pipeline-stored annualized-month value is kept
+          // separately below as legacy_pipeline_incidence.)
+          incidence_per_100k: computeYearIncidence(
+            cases.total_cases || 0, yearPopMap[row.name]
+          ),
           trend_direction: risk.trend_direction || 'Stable',
           forecasted_count: forecast.forecasted_count || 0,
           confidence_lower: forecast.confidence_lower || 0,
@@ -1061,6 +1116,13 @@ router.get('/gis/geojson', async (req, res) => {
           // The actual RF input values used for this classification —
           // "indicators used," never presented as a causal explanation.
           rf_features: risk.features ?? null,
+          // LEGACY pipeline value: annualized latest-calendar-month
+          // calculation ((latest month × 12) / population × 100k). NOT the
+          // authoritative year-specific incidence — see incidence_per_100k
+          // above. Kept only for research/audit traceability. Backlog: audit
+          // / rename / deprecate this field so it cannot be accidentally
+          // reused later as annual incidence.
+          legacy_pipeline_incidence: risk.incidence_per_100k ?? null,
         },
         geometry: row.geometry,
       };
@@ -1090,6 +1152,10 @@ router.get('/gis/geojson', async (req, res) => {
         risk_assessment_period: riskAssessmentPeriod,
         requested_year: isValidYear ? yearInt : null,
         requested_year_has_snapshot: requestedYearHasSnapshot,
+        // Year that cases/population/incidence are locked to — null in
+        // "All Years" mode (no year filter), where incidence is N/A by
+        // design rather than a cross-period figure.
+        incidence_year: incidenceYear,
       },
       outline: {
         type: 'MultiPolygon',
@@ -1189,15 +1255,47 @@ router.get('/gis/areas', async (req, res) => {
  */
 router.get('/gis/choropleth', async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT
+    // Year contract: risk snapshot, case count, and population must all
+    // correspond to the SAME year — never mixed across years.
+    // If ?year=YYYY is provided, use it. Otherwise default to the latest
+    // risk-assessment year.
+    const requestedYear = req.query.year ? parseInt(req.query.year, 10) : null;
+    const validRequestedYear = requestedYear && !isNaN(requestedYear) &&
+      requestedYear >= 2000 && requestedYear <= 2099;
+
+    // Derive the effective year when no valid year was requested. Risk
+    // snapshots are keyed by (assessment year + 1)-01-01 — a snapshot stored
+    // at period 2026-01-01 IS the assessment made through end of 2025 — so
+    // the latest period's year minus 1 is the assessment year that the risk
+    // snapshot, cases, and population below must all be locked to.
+    const periodYearResult = await pool.query(
+      `SELECT EXTRACT(YEAR FROM MAX(period))::INTEGER AS y FROM barangay_risk_scores`
+    );
+    const latestPeriodYear = periodYearResult.rows[0]?.y;
+    let effectiveYear;
+    if (validRequestedYear) {
+      effectiveYear = requestedYear;
+    } else if (latestPeriodYear) {
+      effectiveYear = latestPeriodYear - 1;
+    } else {
+      effectiveYear = new Date().getFullYear();
+    }
+
+    const isRefYear = effectiveYear === GEOJSON_REFERENCE_YEAR;
+
+    // Population: reference year (2025) uses the GeoJSON barangays table;
+    // any other year requires an EXACT barangay_population row for that year
+    // (never substitute another year's population). The LEFT JOIN keeps all
+    // barangays while allowing a null exact-year population → incidence N/A.
+    const result = await pool.query(
+      `SELECT
         b.name,
         b.centroid_lon,
         b.centroid_lat,
-        b.population,
+        ${isRefYear ? 'b.population' : 'bp.population'} AS population,
         COALESCE(brs.risk_score, 0) as risk_score,
         COALESCE(brs.risk_class, 'No Data') as risk_class,
-        brs.incidence_per_100k,
+        brs.incidence_per_100k AS legacy_pipeline_incidence,
         COALESCE(brs.trend_direction, 'Stable') as trend_direction,
         COALESCE(brs.norm_incidence, 0) as norm_incidence,
         COALESCE(brs.norm_trend, 0) as norm_trend,
@@ -1207,19 +1305,31 @@ router.get('/gis/choropleth', async (req, res) => {
         COALESCE(tc.total_cases, 0) as total_cases
       FROM barangays b
       LEFT JOIN barangay_risk_scores brs ON b.name = brs.barangay_name
-        AND brs.period = (
-          SELECT MAX(period) FROM barangay_risk_scores
-          WHERE barangay_name = b.name
-        )
+        AND brs.period = $2::date
       LEFT JOIN (
         SELECT barangay_name, COUNT(*)::INTEGER as total_cases
         FROM tb_cases
+        WHERE date_of_diagnosis IS NOT NULL
+          AND EXTRACT(YEAR FROM date_of_diagnosis) = $1
         GROUP BY barangay_name
       ) tc ON b.name = tc.barangay_name
-      ORDER BY b.name
-    `);
+      ${isRefYear ? '' : `LEFT JOIN barangay_population bp
+        ON b.name = bp.barangay_name
+        AND bp.reference_year = $1 AND bp.status = 'ACTIVE'`}
+      ORDER BY b.name`,
+      [effectiveYear, `${effectiveYear + 1}-01-01`]
+    );
 
-    res.json({ choropleth: result.rows });
+    // Year-specific incidence: same-year cases over same-year population ×
+    // 100,000. Zero cases with valid population → 0; missing exact-year
+    // population → null (N/A). The legacy pipeline value is exposed under a
+    // distinct key so it can never be mistaken for authoritative incidence.
+    const choropleth = result.rows.map(r => ({
+      ...r,
+      incidence_per_100k: computeYearIncidence(r.total_cases, r.population),
+    }));
+
+    res.json({ choropleth, year: effectiveYear });
   } catch (err) {
     console.error('Choropleth error:', err.message);
     res.status(500).json({ error: 'Server error fetching choropleth data.' });

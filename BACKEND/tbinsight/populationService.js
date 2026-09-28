@@ -98,6 +98,18 @@ function calculateAnnualizedIncidence(monthlyCases, population) {
   return ((monthlyCases * 12) / population) * 100000;
 }
 
+// Year-specific GIS incidence: cases in a given year over the STRICTLY
+// year-matched population × 100,000, rounded to 2 decimals.
+// - Valid population + positive cases → correct incidence
+// - Valid population + zero cases → 0 (a real lowest value, not missing data)
+// - Missing/invalid population (null, undefined, <= 0) → null (rendered N/A)
+// The caller must supply a population already matched to the case year;
+// cross-year population substitution is never allowed here.
+function computeYearIncidence(yearCases, yearPopulation) {
+  const inc = calculateIncidence(yearCases || 0, yearPopulation);
+  return inc === null ? null : Math.round(inc * 100) / 100;
+}
+
 // ==================== YEARS ====================
 
 async function getAvailablePopulationYears() {
@@ -386,6 +398,7 @@ module.exports = {
   getPopulationMap,
   calculateIncidence,
   calculateAnnualizedIncidence,
+  computeYearIncidence,
   getAvailablePopulationYears,
   getPopulationReferences,
   getPopulationByYear,
