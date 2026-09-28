@@ -26,11 +26,15 @@ const OUTCOME_COLORS = {
   'CURED': '#047857',
   'TREATMENT COMPLETED': '#2E6FAF',
   'ON TREATMENT': '#92400E',
+  'TREATMENT FAILED': '#991B1B',
   'FAILED': '#991B1B',
   'DIED': '#7F1D1D',
+  'LOST TO FF-UP': '#6B7280',
   'LOST TO FOLLOW-UP': '#6B7280',
   'EXCLUDED': '#64748B',
   'NOT EVALUATED': '#94A3B8',
+  'DIAGNOSED': '#0369A1',
+  'SCREENED': '#0E7490',
 };
 
 const AGE_GROUP_ORDER = ['0-14', '15-24', '25-34', '35-44', '45-54', '55-64', '65+'];
@@ -54,11 +58,12 @@ const MONTHS = [
 
 const OUTCOMES = [
   'All Outcomes', 'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT',
-  'FAILED', 'DIED', 'LOST TO FOLLOW-UP', 'EXCLUDED', 'NOT EVALUATED',
+  'TREATMENT FAILED', 'FAILED', 'DIED',
+  'LOST TO FF-UP', 'LOST TO FOLLOW-UP',
+  'EXCLUDED', 'NOT EVALUATED', 'DIAGNOSED', 'SCREENED',
 ];
 
 const ACTIVE_OUTCOMES = ['ON TREATMENT'];
-const SUCCESS_OUTCOMES = ['CURED', 'TREATMENT COMPLETED'];
 
 /* ─── Helper Components ──────────────────────────────────────────────── */
 
@@ -148,7 +153,6 @@ export default function Analytics() {
   const [allCases, setAllCases] = useState([]);
   const [barangays, setBarangays] = useState([]);
   const [riskData, setRiskData] = useState([]);
-  const [forecastsData, setForecastsData] = useState([]);
   const [filterOptions, setFilterOptions] = useState({ sex: [], bacteriological_status: [], outcome_status: [] });
 
   /* Filter state */
@@ -179,18 +183,19 @@ export default function Analytics() {
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightError, setInsightError] = useState(null);
   const [cascadeData, setCascadeData] = useState(null);
+  const [tsrData, setTsrData] = useState(null);
+  const [prevTsrData, setPrevTsrData] = useState(null);
   const [cascadeLoading, setCascadeLoading] = useState(false);
 
   /* ── Data fetching ── */
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [firstPageRes, brgyRes, riskRes, filterRes, fcRes] = await Promise.all([
+      const [firstPageRes, brgyRes, riskRes, filterRes] = await Promise.all([
         API.get('/api/tb/cases?limit=1'),
         API.get('/api/tb/barangays'),
         API.get('/api/tb/gis/choropleth'),
         API.get('/api/tb/filter-options').catch(() => ({ data: {} })),
-        API.get('/api/tb/forecasts').catch(() => ({ data: { forecasts: [] } })),
       ]);
       const totalCases = firstPageRes.data.pagination?.total || 0;
       const allCasesRes = totalCases > 0
@@ -200,7 +205,6 @@ export default function Analytics() {
       setBarangays(brgyRes.data.barangays || brgyRes.data || []);
       setRiskData(riskRes.data.choropleth || []);
       setFilterOptions(filterRes.data || {});
-      setForecastsData(fcRes.data.forecasts || []);
     } catch (err) {
       if (import.meta.env.DEV) console.error('Analytics fetch error:', err);
       setError('Failed to load analytics data. Make sure the backend is running.');
@@ -291,6 +295,52 @@ export default function Analytics() {
     return () => { cancelled = true; };
   }, [activeCascadeFilters]);
 
+  /* ── Treatment Success Rate — shared backend cohort calculation ──
+   * GET /api/tb/treatment-success-rate: (Cured+Completed) / patients whose
+   * treatment started in year (aYear||currentYear)-1, optionally scoped to
+   * aBarangay. Replaces a previous client-side calculation that filtered by
+   * diagnosis date with no cohort — a different metric that disagreed with
+   * the AI-generated insight text on this same page under the same label. */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const params = {};
+        if (aYear) params.year = aYear;
+        if (aBarangay) params.barangay = aBarangay;
+        const res = await API.get('/api/tb/treatment-success-rate', { params });
+        if (!cancelled) setTsrData(res.data);
+      } catch (err) {
+        if (!cancelled) {
+          if (import.meta.env.DEV) console.error('TSR fetch failed:', err);
+          setTsrData(null);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [aYear, aBarangay]);
+
+  // Previous year's TSR, for the YoY trend badge — only meaningful when a
+  // specific year is selected (mirrors previousMetrics' own aYear gate).
+  useEffect(() => {
+    if (!aYear) { setPrevTsrData(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const params = { year: String(Number(aYear) - 1) };
+        if (aBarangay) params.barangay = aBarangay;
+        const res = await API.get('/api/tb/treatment-success-rate', { params });
+        if (!cancelled) setPrevTsrData(res.data);
+      } catch (err) {
+        if (!cancelled) {
+          if (import.meta.env.DEV) console.error('Previous-year TSR fetch failed:', err);
+          setPrevTsrData(null);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [aYear, aBarangay]);
+
   /* ── Remove a single filter chip ── */
   const removeFilter = useCallback((key) => {
     const setters = {
@@ -366,49 +416,51 @@ export default function Analytics() {
   const metrics = useMemo(() => {
     const total = filteredCases.length;
     const active = filteredCases.filter((c) => ACTIVE_OUTCOMES.includes((c.outcome_status || '').toUpperCase())).length;
-    const withOutcome = filteredCases.filter((c) => c.outcome_status && c.outcome_status !== 'NOT EVALUATED');
-    const success = withOutcome.filter((c) => SUCCESS_OUTCOMES.includes(c.outcome_status.toUpperCase())).length;
-    const successRate = withOutcome.length > 0 ? ((success / withOutcome.length) * 100).toFixed(1) : '0.0';
-    // High-Risk Barangays: filter by selected barangay if set, otherwise count all
-    let highRisk = 0;
-    const highRiskSet = new Set();
+    // Treatment Success Rate: from GET /api/tb/treatment-success-rate (the
+    // cohort-based methodology — Cured+Completed / patients whose treatment
+    // started in year Y-1). Previously computed here as
+    // success/withOutcome from the currently-filtered, diagnosis-date-based
+    // case list — a DIFFERENT metric that disagreed with the AI-generated
+    // insight text on this same page under the same label. `null` (never
+    // '0.0') when the cohort is empty.
+    const successRate = tsrData?.successRate != null ? tsrData.successRate.toFixed(1) : null;
+    // High-Risk Barangays: sourced ONLY from riskData (barangay_risk_scores
+    // via /gis/choropleth) — the authoritative, RF-classified table. A
+    // previous version of this preferred forecastsData (model_predictions)
+    // first: model_predictions.risk_class is only ever a denormalized COPY
+    // of the same barangay_risk_scores row (see storeResults in
+    // scoring.js), so this was never actually a different model — just a
+    // less complete, more fragile copy (it has no rows at all for a
+    // historical snapshot year, since those intentionally skip
+    // forecasting). Filter by selected barangay if set, otherwise count all.
+    let highRisk;
     if (aBarangay) {
-      // If a specific barangay is selected, check if it's high risk
-      const inForecasts = forecastsData.find((r) => {
-        const rc = (r.risk_class || '').toLowerCase();
-        return rc === 'high' && r.barangay_name === aBarangay;
-      });
+      // /gis/choropleth rows key the barangay by `name`, not `barangay_name`.
       const inRisk = riskData.find((r) => {
         const rc = (r.risk_class || '').toLowerCase();
-        return rc === 'high' && r.barangay_name === aBarangay;
+        return rc === 'high' && r.name === aBarangay;
       });
-      highRisk = (inForecasts || inRisk) ? 1 : 0;
+      highRisk = inRisk ? 1 : 0;
     } else {
-      // Count all high-risk barangays
-      forecastsData.forEach((r) => {
+      const highRiskSet = new Set();
+      riskData.forEach((r) => {
         const rc = (r.risk_class || '').toLowerCase();
-        if (rc === 'high') highRiskSet.add(r.barangay_name);
+        if (rc === 'high') highRiskSet.add(r.name);
       });
-      if (highRiskSet.size === 0) {
-        riskData.forEach((r) => {
-          const rc = (r.risk_class || '').toLowerCase();
-          if (rc === 'high') highRiskSet.add(r.barangay_name);
-        });
-      }
       highRisk = highRiskSet.size;
     }
     return { total, active, successRate, highRisk };
-  }, [filteredCases, riskData, forecastsData, aBarangay]);
+  }, [filteredCases, riskData, aBarangay, tsrData]);
 
   /* ── Previous year metrics (for trend badges) ── */
   const previousMetrics = useMemo(() => {
     const total = previousYearCases.length;
     const active = previousYearCases.filter((c) => ACTIVE_OUTCOMES.includes((c.outcome_status || '').toUpperCase())).length;
-    const withOutcome = previousYearCases.filter((c) => c.outcome_status && c.outcome_status !== 'NOT EVALUATED');
-    const success = withOutcome.filter((c) => SUCCESS_OUTCOMES.includes(c.outcome_status.toUpperCase())).length;
-    const successRate = withOutcome.length > 0 ? ((success / withOutcome.length) * 100).toFixed(1) : '0.0';
+    // Same cohort-based TSR, for the year before the selected one — see the
+    // prevTsrData fetch above (year: aYear-1, so its own cohort is aYear-2).
+    const successRate = prevTsrData?.successRate != null ? prevTsrData.successRate.toFixed(1) : null;
     return { total, active, successRate };
-  }, [previousYearCases]);
+  }, [previousYearCases, prevTsrData]);
 
   /* ── TB Cases Trend (monthly) ── */
   const trendData = useMemo(() => {
@@ -806,13 +858,14 @@ export default function Analytics() {
                     <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Success</span>
                   </div>
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#ECFDF5', color: '#047857' }}>
-                    {metrics.successRate}%
+                    {metrics.successRate == null ? 'N/A' : `${metrics.successRate}%`}
                   </span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <div className="flex items-end gap-2">
-                  <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.successRate}%</p>
-                  {aYear && <TrendBadge current={Number(metrics.successRate)} previous={Number(previousMetrics.successRate)} inverse={false} />}
+                  <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.successRate == null ? 'N/A' : `${metrics.successRate}%`}</p>
+                  {aYear && metrics.successRate != null && previousMetrics.successRate != null &&
+                    <TrendBadge current={Number(metrics.successRate)} previous={Number(previousMetrics.successRate)} inverse={false} />}
                 </div>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>

@@ -600,6 +600,25 @@ curl -X POST http://localhost:3000/api/tb/barangays/seed
 
 ## ML Pipeline
 
+TB case aggregation feeds two **independent** branches that share only the
+prepared historical data — neither requires the other to run or succeed:
+
+```
+Validated TB Records → Monthly Aggregation
+                              |
+                +-------------+-------------+
+                |                           |
+                v                           v
+        Random Forest                    ARIMA
+        Risk Classification            Forecasting
+                |                           |
+                v                           v
+     barangay_risk_scores           model_predictions
+                |                           |
+                v                           v
+          GIS Hotspot Map            Forecasting Page
+```
+
 ### ARIMA Forecasting
 
 - **Seasonal period**: 12 months (yearly seasonality in monthly data)
@@ -607,29 +626,106 @@ curl -X POST http://localhost:3000/api/tb/barangays/seed
 - **Fallback chain**: ARIMA → Exponential Smoothing → Seasonal Naive
 - **Configuration**: `auto_arima(seasonal=True, stepwise=True, max_order=8)`
 - **Output**: 12-month forecast with 95% confidence intervals
+- Forecasts future aggregated case counts only. ARIMA's success or failure
+  has no effect on whether Random Forest can classify barangay risk.
 
 ### Random Forest Classification
 
-The RF model is an ML-based risk predictor. It outputs a predicted class (Low/Medium/High) and class probabilities. The RF prediction is stored in `model_predictions` but does **not** determine the final operational classification.
+Random Forest is the **authoritative** GIS risk classifier. Its predicted
+class (Low/Medium/High) and class probabilities, persisted in
+`barangay_risk_scores`, are what the GIS Hotspot Map displays — not a
+separate score (see "Legacy Weighted Risk Index" below).
 
-**8 Engineered Features:**
+**8 Engineered Features** (`ML_SERVICE/rf_classifier.py:FEATURES`; order and
+names must match exactly between training and prediction — enforced by
+`BACKEND/tbinsight/pipeline.js:buildFeatureRow`, the single function used to
+build both):
 
 | # | Feature | Description |
 |---|---|---|
-| 1 | `forecasted_incidence` | `(monthlyForecast × 12 / population) × 100,000` — annualized incidence estimate derived from the ARIMA monthly forecast |
+| 1 | `rolling_12m_incidence` | Annualized incidence per 100k from a 12-month rolling window of **actual** case counts (renamed from `forecasted_incidence`; despite the old name, this was never an ARIMA output and is fully independent of it) |
 | 2 | `recent_trend` | Linear regression slope over 12-month window |
-| 3 | `seasonality_flag` | 1 if autocorrelation at lag 12 > 0.3 |
+| 3 | `seasonality_flag` | 1 if a lag-12 sign-pattern match exceeds 60% over ≥24 months |
 | 4 | `lag_1m` | Case count 1 month ago |
 | 5 | `lag_2m` | Case count 2 months ago |
 | 6 | `lag_3m` | Case count 3 months ago |
-| 7 | `neighbor_risk` | Average incidence of **all other** barangays (not just geographic neighbors), normalized [0,1] |
-| 8 | `historical_forecast_error` | Mean Absolute Error: AVG(\|actual - forecasted\|) from past predictions per barangay |
+| 7 | `neighbor_risk` | Mean incidence of **all other** barangays (not just geographic neighbors) at the month **before** the target (lag-1, to prevent leakage), normalized [0,1] |
+| 8 | `historical_bias` | Mean absolute error: AVG(\|actual - forecasted\|) from past ARIMA predictions per barangay (0 if no history yet) |
+
+**Population matching**: every incidence figure — the `rolling_12m_incidence`
+feature, the training label, and the persisted `incidence_per_100k` — uses
+the population of the **same calendar year** as the case data it describes
+(2025 from the barangay GeoJSON, other years from the `barangay_population`
+table). Missing matching-year population → that value is `NULL`, never
+zero and never another year's figure. The one exception is the
+`rolling_12m_incidence` *feature* (not the label, not the displayed value):
+if its own window's year has no population reference, it falls back to the
+nearest year that does, purely so the classifier always has a real number
+to run on — this fallback is a modeling convenience and must never be read
+as a reported incidence for that year.
+
+**Target labels**: incidence tertiles, auto-calibrated **per pipeline run**
+from that run's own incidence distribution (`ML_SERVICE/thresholds.py`,
+tertile method) — not a fixed cutoff, and not an official epidemiological
+threshold. **These are data-derived model classification boundaries and
+must not be presented as official DOH epidemiological thresholds unless
+separately validated.**
 
 **Configuration**: `n_estimators=300, max_depth=8, class_weight="balanced"`
 
-### Weighted Risk Scoring
+**Provenance**: every `barangay_risk_scores` row records `model_type`
+(`random_forest` or `rule_based` — the fallback used only when the ML
+service is unreachable or RF training has too little data),
+`model_version`, `classification_confidence` (RF's own `predict_proba` for
+the predicted class; not persisted for the rule-based fallback, which
+assigns 100% by construction and has no real confidence), the full
+`prob_low`/`prob_medium`/`prob_high` distribution, and the actual `features`
+used — so a fallback result is never presentable as an RF result.
 
-A separate deterministic formula produces the **operational risk classification** used in dashboards and alerts:
+### Historical Risk Snapshots (per-year)
+
+`barangay_risk_scores` is keyed by assessment period, one snapshot per
+calendar year: year Y's snapshot is stored at period `(Y+1)-01-01` — "the
+assessment made using data available through the end of year Y". The
+current/latest year's snapshot is produced automatically by the regular
+pipeline run and lands on this same period by construction, so GIS's Year
+filter needs no special case for it.
+
+Snapshots for **past** years are not computed automatically — an admin
+triggers them once via Forecasting → **Backfill Historical Risk
+Snapshots** (`POST /api/tb/pipeline/historical`,
+`pipeline.js:runHistoricalSnapshots`). For each past year, this re-runs the
+full RF pipeline using **only** data through that year's December
+(`historyCutoffMonth`), including re-querying training rows with that same
+cutoff (`_buildTrainingRows`'s own DB query is filtered too — without this
+a historical snapshot would silently train on the complete, later dataset
+and no longer be "historical" at all). ARIMA forecasting and alert
+generation are skipped for these runs (`skipForecast`/`skipAlerts`) — out
+of scope for a retroactive risk-only snapshot, and running 30 ARIMA fits
+per historical year for no benefit.
+
+A year with insufficient population coverage for that exact year (e.g.
+2023 in the reference dataset, which predates this system's population
+records) will have 0 valid training rows and gracefully degrade to the
+rule-based fallback rather than fail outright — exactly the same
+degrade-gracefully behavior the regular pipeline already has for any run,
+not a special case for history. The year-to-backfill enumeration itself
+comes from the same leading-stray-month trim `buildDenseSeries` already
+applies (not a raw `DISTINCT YEAR` query) — a single stray record dated
+before real reporting begins must not produce a bogus "snapshot" for a
+year that isn't real history.
+
+GIS (`GET /gis/geojson?year=Y`) looks up year Y's snapshot by its *exact*
+period — never falls back to a different year's snapshot. If Y has no
+snapshot yet, risk fields show "No Data" and `meta.requested_year_has_snapshot`
+is `false`, distinguishing "not computed yet" from "computed with no High
+risk found."
+
+### Legacy Weighted Risk Index
+
+A separate, older deterministic formula still exists as an analytical
+index — it is **not** the operational classification and does **not**
+determine GIS polygon color:
 
 ```
 risk_score = 0.45 × normalized_incidence
@@ -638,10 +734,15 @@ risk_score = 0.45 × normalized_incidence
            + 0.10 × normalized_forecast_error
 
 Score × 100 → [0, 100]
-Classification: Low (≤33), Medium (≤66), High (>66)
 ```
 
-The final Low/Medium/High classification in `barangay_risk_scores` comes from weighted score cutoffs (≤33 Low, ≤66 Medium, >66 High), not from the RF classifier. The RF model serves as a supporting ML predictor for comparison and analysis.
+Earlier versions of this system used this score's own `<=33`/`34-66`/`>66`
+cutoffs as the final Low/Medium/High classification, with RF stored only
+for comparison. That is no longer the case: RF's own predicted class is
+authoritative, and this index is retained only for research/audit
+comparison, hidden by default in the barangay profile, and — because it is
+built from genuinely different inputs — will often disagree with RF's
+class for the same barangay. That disagreement is expected, not a bug.
 
 ### Alert Rules
 
@@ -684,7 +785,7 @@ node --test test/multiSheetParser.test.js
 |---|---|---|
 | `test/multiSheetParser.test.js` | 34 | parseDate, normalizeSex, detectSheetType, buildColumnMap, validateRecord, VALID_BARANGAYS |
 
-### ML Service Tests (52 tests)
+### ML Service Tests (60 tests)
 
 ```bash
 cd ML_SERVICE
@@ -696,7 +797,8 @@ pytest
 | `tests/test_thresholds.py` | 6 | Classification boundaries, tertile splits |
 | `tests/test_arima.py` | 14 | Fallback detection, forecasting, trends |
 | `tests/test_rf.py` | 16 | Feature validation, RF prediction, evaluation |
-| `tests/test_endpoints.py` | 16 | All 6 FastAPI endpoints |
+| `tests/test_calibration.py` | 10 | Threshold auto-calibration edge cases |
+| `tests/test_endpoints.py` | 14 | All 5 FastAPI endpoints (`/health`, `/thresholds`, `/forecast`, `/classify`, `/evaluate`) |
 
 ### Frontend Lint
 

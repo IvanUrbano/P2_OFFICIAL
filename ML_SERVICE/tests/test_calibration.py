@@ -100,7 +100,7 @@ def test_walk_forward_runs_on_short_series():
 
 def _rows(n, inc):
     return [
-        {"features": {"forecasted_incidence": inc, "recent_trend": 0, "seasonality_flag": 0,
+        {"features": {"rolling_12m_incidence": inc, "recent_trend": 0, "seasonality_flag": 0,
                       "lag_1m": 1, "lag_2m": 1, "lag_3m": 1, "neighbor_risk": 0.5,
                       "historical_bias": 0}, "incidence": inc}
         for _ in range(n)
@@ -111,7 +111,7 @@ def test_classify_uses_rule_when_training_set_is_small():
     r = client.post("/api/ml/classify", json={
         "thresholds": {"low_max": 150.0, "med_max": 350.0},
         "train": _rows(10, 500),
-        "predict": [{"barangay_name": "Hot", "features": {"forecasted_incidence": 500, "recent_trend": 0,
+        "predict": [{"barangay_name": "Hot", "features": {"rolling_12m_incidence": 500, "recent_trend": 0,
                      "seasonality_flag": 0, "lag_1m": 1, "lag_2m": 1, "lag_3m": 1,
                      "neighbor_risk": 0.5, "historical_bias": 0}}],
     })
@@ -127,7 +127,7 @@ def test_classify_trains_rf_with_enough_rows():
     r = client.post("/api/ml/classify", json={
         "thresholds": {"low_max": 150.0, "med_max": 350.0},
         "train": train,
-        "predict": [{"barangay_name": "Hot", "features": {"forecasted_incidence": 600, "recent_trend": 0,
+        "predict": [{"barangay_name": "Hot", "features": {"rolling_12m_incidence": 600, "recent_trend": 0,
                      "seasonality_flag": 0, "lag_1m": 1, "lag_2m": 1, "lag_3m": 1,
                      "neighbor_risk": 0.5, "historical_bias": 0}}],
     })

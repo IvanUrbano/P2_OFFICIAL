@@ -3,7 +3,7 @@ const pool = require('../db');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { rebuildAggregations } = require('./aggregateMonthly');
 const { seedAll, seedBarangaysGeom, getBarangays, findBarangay } = require('./barangays');
-const { runPipeline } = require('./pipeline');
+const { runPipelineTracked, getPipelineRunStatus, runHistoricalSnapshots } = require('./pipeline');
 const { healthCheck: mlHealthCheck, evaluate: mlEvaluate, forecast: mlForecast } = require('./mlClient');
 const {
   createNotification, getUnreadCount, evaluateAllAlerts,
@@ -12,6 +12,7 @@ const {
 const { buildAnalyticsMetrics, buildForecastingMetrics, buildGisMetrics } = require('./insightDataBuilder');
 const { generateAnalyticsInsight, generateForecastingInsight, generateGisInsight } = require('./nlgEngine');
 const { computeTreatmentCascade } = require('./treatmentCascade');
+const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 const {
   getPopulation, getPopulationMap, calculateAnnualizedIncidence,
   getAvailablePopulationYears, getPopulationReferences, getPopulationByYear,
@@ -540,7 +541,7 @@ router.get('/dashboard/summary', async (req, res) => {
         SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER as cured_count,
         SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER as treatment_completed_count,
         SUM(CASE WHEN UPPER(outcome_status) = 'DIED' THEN 1 ELSE 0 END)::INTEGER as died_count,
-        SUM(CASE WHEN UPPER(outcome_status) = 'LOST TO FOLLOW-UP' THEN 1 ELSE 0 END)::INTEGER as ltfu_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN ('LOST TO FF-UP','LOST TO FOLLOW-UP') THEN 1 ELSE 0 END)::INTEGER as ltfu_count,
         SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER as successful_count,
         COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(outcome_status) != 'NOT EVALUATED')::INTEGER as total_outcomes,
         SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as current_month_cases,
@@ -584,23 +585,10 @@ router.get('/dashboard/metrics', async (req, res) => {
     const onTreatmentCount = row.on_treatment_count || 0;
     const curedCount = row.cured_count || 0;
 
-    // Client TSR formula: cohort = patients who started treatment in previous year
-    const currentYear = new Date().getFullYear();
-    const cohortYear = currentYear - 1;
-    const cohortResult = await pool.query(`
-      SELECT
-        COUNT(*)::INTEGER AS total_patients,
-        SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
-        SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count
-      FROM tb_cases
-      WHERE EXTRACT(YEAR FROM date_started_treatment) = $1
-    `, [cohortYear]);
-
-    const cohort = cohortResult.rows[0] || {};
-    const cohortTotal = cohort.total_patients || 0;
-    const successRate = cohortTotal > 0
-      ? Math.round(((cohort.cured_count + cohort.completed_count) / cohortTotal) * 100)
-      : null;
+    // TSR: single shared calculation (see treatmentSuccessRate.js) — defaults
+    // to the current-year cohort (Y-1) when unfiltered, matching this
+    // route's prior always-current-year behavior.
+    const { successRate } = await computeTreatmentSuccessRate(pool, {});
 
     // Trend: current month vs previous month
     const currentMonth = row.current_month_cases || 0;
@@ -764,7 +752,7 @@ router.get('/barangays/watchlist', async (req, res) => {
         COALESCE(f.confidence_upper, 0)::NUMERIC AS confidence_upper,
         COALESCE(r.risk_score, 0)::NUMERIC AS risk_score,
         COALESCE(r.risk_class, 'No Data') AS risk_class,
-        COALESCE(r.incidence_per_100k, 0)::NUMERIC AS incidence_per_100k,
+        r.incidence_per_100k::NUMERIC AS incidence_per_100k,
         COALESCE(r.trend_direction, 'Stable') AS trend_direction,
         COALESCE(r.norm_incidence, 0)::NUMERIC AS norm_incidence,
         COALESCE(r.norm_trend, 0)::NUMERIC AS norm_trend,
@@ -946,43 +934,71 @@ router.get('/gis/geojson', async (req, res) => {
       ORDER BY name
     `);
 
-    // Fetch risk scores — filtered by year if provided, otherwise latest period
-    const riskQuery = isValidYear
-      ? `SELECT barangay_name, COALESCE(risk_score, 0) as risk_score,
-           COALESCE(risk_class, 'No Data') as risk_class,
-           COALESCE(incidence_per_100k, 0) as incidence_per_100k,
-           COALESCE(trend_direction, 'Stable') as trend_direction,
-           COALESCE(norm_incidence, 0) as norm_incidence,
-           COALESCE(norm_trend, 0) as norm_trend,
-           COALESCE(norm_neighbor_risk, 0) as norm_neighbor_risk,
-           COALESCE(norm_forecast_error, 0) as norm_forecast_error
-         FROM barangay_risk_scores
-         WHERE period = (SELECT MAX(period) FROM barangay_risk_scores WHERE EXTRACT(YEAR FROM period) = $1)`
-      : `SELECT barangay_name, COALESCE(risk_score, 0) as risk_score,
-           COALESCE(risk_class, 'No Data') as risk_class,
-           COALESCE(incidence_per_100k, 0) as incidence_per_100k,
-           COALESCE(trend_direction, 'Stable') as trend_direction,
-           COALESCE(norm_incidence, 0) as norm_incidence,
-           COALESCE(norm_trend, 0) as norm_trend,
-           COALESCE(norm_neighbor_risk, 0) as norm_neighbor_risk,
-           COALESCE(norm_forecast_error, 0) as norm_forecast_error
-         FROM barangay_risk_scores
-         WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)`;
-    const riskResult = await pool.query(riskQuery, isValidYear ? [yearInt] : []);
+    // Risk classification is a SNAPSHOT keyed by assessment period, one per
+    // calendar year (see pipeline.js:runHistoricalSnapshots): year Y's
+    // snapshot is stored at period (Y+1)-01-01 — "the assessment made using
+    // data available through the end of year Y". The current/latest year's
+    // snapshot naturally lands on that same convention, so no special
+    // casing is needed for it.
+    //
+    // A specific year filter must resolve to THAT year's own snapshot, or
+    // to "No Data" if it doesn't exist yet — never silently substitute a
+    // different year's snapshot (that would misrepresent one year's risk
+    // as another's, which is exactly the bug this replaces: previously
+    // every specific-year selection showed "No Data" because the query
+    // required an exact match against a period that only ever existed for
+    // the current year; the fix isn't to always show the latest snapshot
+    // regardless of year — it's to actually compute and store one snapshot
+    // per year, and look each one up by its own period).
+    //
+    // No year filter ("All Years") shows the latest overall snapshot.
+    // incidence_per_100k is intentionally NOT coalesced to 0 — null means
+    // "no matching-year population reference", rendered as N/A.
+    const riskSelect = `barangay_name, COALESCE(risk_score, 0) as risk_score,
+         COALESCE(risk_class, 'No Data') as risk_class,
+         incidence_per_100k,
+         COALESCE(trend_direction, 'Stable') as trend_direction,
+         COALESCE(norm_incidence, 0) as norm_incidence,
+         COALESCE(norm_trend, 0) as norm_trend,
+         COALESCE(norm_neighbor_risk, 0) as norm_neighbor_risk,
+         COALESCE(norm_forecast_error, 0) as norm_forecast_error,
+         model_type, model_version, classification_confidence,
+         prob_low, prob_medium, prob_high, features, period`;
+    const riskResult = isValidYear
+      ? await pool.query(
+          `SELECT ${riskSelect} FROM barangay_risk_scores WHERE period = $1::date`,
+          [`${yearInt + 1}-01-01`]
+        )
+      : await pool.query(
+          `SELECT ${riskSelect} FROM barangay_risk_scores WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)`
+        );
+    const riskAssessmentPeriod = riskResult.rows[0]?.period || null;
+    // Distinguishes "All Years showing the latest snapshot" from "this
+    // specific year has no snapshot at all yet" for the frontend's label.
+    const requestedYearHasSnapshot = isValidYear ? riskResult.rows.length > 0 : null;
 
-    // Fetch forecast data — filtered by year if provided, otherwise latest period
-    const forecastQuery = isValidYear
-      ? `SELECT barangay_name, COALESCE(forecasted_count, 0) as forecasted_count,
-           COALESCE(confidence_lower, 0) as confidence_lower,
-           COALESCE(confidence_upper, 0) as confidence_upper
-         FROM model_predictions
-         WHERE period = (SELECT MAX(period) FROM model_predictions WHERE EXTRACT(YEAR FROM period) = $1)`
-      : `SELECT barangay_name, COALESCE(forecasted_count, 0) as forecasted_count,
-           COALESCE(confidence_lower, 0) as confidence_lower,
-           COALESCE(confidence_upper, 0) as confidence_upper
-         FROM model_predictions
-         WHERE period = (SELECT MAX(period) FROM model_predictions)`;
-    const forecastResult = await pool.query(forecastQuery, isValidYear ? [yearInt] : []);
+    // Forecasts follow the SAME per-year exact lookup as risk (Y+1-01-01):
+    // a historical snapshot deliberately skips ARIMA (see
+    // pipeline.js:runHistoricalSnapshots), so a past year genuinely has no
+    // forecast — showing 0 for it is honest, not a bug. Previously this
+    // always showed the latest (e.g. 2026) forecast regardless of the
+    // selected year, which misattributed today's forecast to a historical
+    // view.
+    const forecastResult = isValidYear
+      ? await pool.query(
+          `SELECT barangay_name, COALESCE(forecasted_count, 0) as forecasted_count,
+             COALESCE(confidence_lower, 0) as confidence_lower,
+             COALESCE(confidence_upper, 0) as confidence_upper
+           FROM model_predictions WHERE period = $1::date`,
+          [`${yearInt + 1}-01-01`]
+        )
+      : await pool.query(
+          `SELECT barangay_name, COALESCE(forecasted_count, 0) as forecasted_count,
+             COALESCE(confidence_lower, 0) as confidence_lower,
+             COALESCE(confidence_upper, 0) as confidence_upper
+           FROM model_predictions
+           WHERE period = (SELECT MAX(period) FROM model_predictions)`
+        );
 
     // Fetch case counts from tb_cases directly
     const caseQuery = isValidYear
@@ -1019,7 +1035,9 @@ router.get('/gis/geojson', async (req, res) => {
           centroid: [row.centroid_lon, row.centroid_lat],
           risk_score: risk.risk_score || 0,
           risk_class: risk.risk_class || 'No Data',
-          incidence_per_100k: risk.incidence_per_100k || 0,
+          // Preserve null (no matching-year population) — never coalesce to
+          // 0, which would claim a real, lowest-possible incidence.
+          incidence_per_100k: risk.incidence_per_100k ?? null,
           trend_direction: risk.trend_direction || 'Stable',
           forecasted_count: forecast.forecasted_count || 0,
           confidence_lower: forecast.confidence_lower || 0,
@@ -1029,6 +1047,20 @@ router.get('/gis/geojson', async (req, res) => {
           norm_trend: risk.norm_trend || 0,
           norm_neighbor_risk: risk.norm_neighbor_risk || 0,
           norm_forecast_error: risk.norm_forecast_error || 0,
+          // Legacy weighted-score analytical fields end here (risk_score,
+          // norm_*) — kept for research/audit use, but risk_class above is
+          // the sole authoritative classification (from model_type below).
+          model_type: risk.model_type || null,
+          model_version: risk.model_version || null,
+          // Real confidence only when model_type is 'random_forest' — the
+          // rule-based fallback never populates these (see pipeline.js).
+          classification_confidence: risk.classification_confidence ?? null,
+          prob_low: risk.prob_low ?? null,
+          prob_medium: risk.prob_medium ?? null,
+          prob_high: risk.prob_high ?? null,
+          // The actual RF input values used for this classification —
+          // "indicators used," never presented as a causal explanation.
+          rf_features: risk.features ?? null,
         },
         geometry: row.geometry,
       };
@@ -1050,6 +1082,15 @@ router.get('/gis/geojson', async (req, res) => {
       type: 'FeatureCollection',
       name: 'pasig_barangays',
       features,
+      // Risk/forecast fields always reflect this period, regardless of the
+      // requested `year` (a case-data filter — see comment above). The
+      // frontend uses this to label risk data "Latest Risk Assessment
+      // (period)" rather than implying it belongs to the selected year.
+      meta: {
+        risk_assessment_period: riskAssessmentPeriod,
+        requested_year: isValidYear ? yearInt : null,
+        requested_year_has_snapshot: requestedYearHasSnapshot,
+      },
       outline: {
         type: 'MultiPolygon',
         coordinates: outlineCoords.map(c => [c])
@@ -1156,7 +1197,7 @@ router.get('/gis/choropleth', async (req, res) => {
         b.population,
         COALESCE(brs.risk_score, 0) as risk_score,
         COALESCE(brs.risk_class, 'No Data') as risk_class,
-        COALESCE(brs.incidence_per_100k, 0) as incidence_per_100k,
+        brs.incidence_per_100k,
         COALESCE(brs.trend_direction, 'Stable') as trend_direction,
         COALESCE(brs.norm_incidence, 0) as norm_incidence,
         COALESCE(brs.norm_trend, 0) as norm_trend,
@@ -1257,7 +1298,7 @@ router.get('/forecasts', async (req, res) => {
         GREATEST(COALESCE(prev_count, actual_count) - 2, 0) AS confidence_lower,
         COALESCE(prev_count, actual_count) + 2 AS confidence_upper,
         'Baseline' AS risk_class,
-        0 AS incidence_per_100k,
+        null AS incidence_per_100k,
         null AS model_version,
         actual_count,
         ABS(actual_count - COALESCE(prev_count, actual_count))::INTEGER AS forecast_error
@@ -1321,19 +1362,27 @@ router.get('/forecast/actual-vs-predicted', async (req, res) => {
 
 /**
  * GET /api/tb/predictions/risk
- * RF risk classifications
+ * RF risk classifications — reads barangay_risk_scores directly (the
+ * authoritative RF table). Previously this INNER JOINed model_predictions,
+ * which (a) had an ambiguous, unqualified `barangay_name` present in both
+ * tables — Postgres rejected every call with "column reference is
+ * ambiguous", so this endpoint has been failing 100% of the time — and
+ * (b) would have silently excluded historical snapshot periods (2023/2024
+ * in the reference dataset) once those were introduced, since a historical
+ * snapshot deliberately has no matching model_predictions row (ARIMA is
+ * skipped for those runs). Neither forecast data nor the join is needed
+ * for "RF risk classifications."
  */
 router.get('/predictions/risk', async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT
-        barangay_name, period, risk_class,
-        incidence_per_100k, risk_score
-      FROM model_predictions mp
-      JOIN barangay_risk_scores brs
-        ON mp.barangay_name = brs.barangay_name AND mp.period = brs.period
-      WHERE mp.risk_class IS NOT NULL
-      ORDER BY mp.period DESC, mp.barangay_name
+        barangay_name, period, risk_class, model_type, model_version,
+        incidence_per_100k, risk_score, classification_confidence,
+        prob_low, prob_medium, prob_high
+      FROM barangay_risk_scores
+      WHERE risk_class IS NOT NULL
+      ORDER BY period DESC, barangay_name
     `);
     res.json({ predictions: result.rows });
   } catch (err) {
@@ -1715,42 +1764,61 @@ router.get('/ml/health', async (req, res) => {
  * Body: { period?: "YYYY-MM-DD", thresholds?: { low_max, med_max }, forecastHorizon?: number, barangays?: string[] }
  */
 router.post('/pipeline', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  const { period, thresholds, forecastHorizon, barangays } = req.body || {};
+
+  // Single-flight: a run already in progress (e.g. sync auto-trigger) wins.
+  // Checked synchronously with the guard inside runPipelineTracked, so a run
+  // cannot slip in between the two checks (same tick, single-threaded).
+  if (getPipelineRunStatus().running) {
+    return res.status(202).json({ message: 'Pipeline already running.', current_run: getPipelineRunStatus() });
+  }
+
+  // Tracked runner — same state machine + post-run hooks (notification, alert
+  // evaluation) as sync-triggered background runs, so both update current_run
+  // and the GIS pipeline-status banner identically. Never rejects.
+  const result = await runPipelineTracked({ period, thresholds, forecastHorizon, barangays }, 'manual');
+  if (!result) {
+    const { lastError } = getPipelineRunStatus();
+    return res.status(500).json({ error: 'Pipeline failed.', details: lastError || 'Unknown error.' });
+  }
+
+  res.json({ message: 'Pipeline completed.', result });
+});
+
+/**
+ * POST /api/tb/pipeline/historical
+ * Admin-only backfill: computes one risk-classification snapshot per PAST
+ * calendar year in monthly_case_summary (the latest year is already
+ * covered by the regular /pipeline run). Each snapshot uses ONLY data
+ * through that year's December, so it reflects what the classifier would
+ * have said "as of" that year — not a copy of the current assessment.
+ *
+ * This is a one-time/rare recovery operation (data for a whole past year
+ * essentially never changes after the fact), not something tied to the
+ * automatic webhook sync trigger, so it has its own single-flight guard
+ * separate from the regular pipeline's.
+ */
+let _historicalBackfillRunning = false;
+router.post('/pipeline/historical', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+  if (_historicalBackfillRunning) {
+    return res.status(202).json({ message: 'Historical backfill already running.' });
+  }
+  _historicalBackfillRunning = true;
   try {
-    const { period, thresholds, forecastHorizon, barangays } = req.body || {};
-    const result = await runPipeline({ period, thresholds, forecastHorizon, barangays });
-
-    // Create notification for successful pipeline run
-    try {
-      const periodLabel = period || new Date().toISOString().slice(0, 7);
-      await createNotification(pool, {
-        title: 'Forecast Generated',
-        message: `A new forecast has been generated for ${periodLabel}.`,
-        sourceModule: 'forecasting',
-        relatedEntityType: 'pipeline',
-        metadata: { period: periodLabel, barangays: barangays || 'all' },
-      });
-    } catch (notifErr) {
-      console.error('Pipeline notification error:', notifErr.message);
-    }
-
-    // Auto-evaluate alerts after pipeline completes
-    try {
-      const evalPeriod = period || new Date().toISOString().slice(0, 7) + '-01';
-      await evaluateAllAlerts(pool, evalPeriod);
-    } catch (alertErr) {
-      console.error('Post-pipeline alert evaluation error:', alertErr.message);
-    }
-
-    res.json({ message: 'Pipeline completed.', result });
+    const summaries = await runHistoricalSnapshots();
+    res.json({ message: 'Historical snapshot backfill completed.', years: summaries });
   } catch (err) {
-    console.error('Pipeline error:', err.message);
-    res.status(500).json({ error: 'Pipeline failed.', details: err.message });
+    console.error('Historical snapshot backfill error:', err.message);
+    res.status(500).json({ error: 'Historical snapshot backfill failed.', details: err.message });
+  } finally {
+    _historicalBackfillRunning = false;
   }
 });
 
 /**
  * GET /api/tb/pipeline/status
- * Get the latest pipeline run metadata
+ * Latest pipeline run metadata + live background-run state (`current_run`)
+ * so the UI can show "processing" instead of silently empty results.
  */
 router.get('/pipeline/status', async (req, res) => {
   try {
@@ -1761,7 +1829,7 @@ router.get('/pipeline/status', async (req, res) => {
        ORDER BY trained_at DESC
        LIMIT 1`
     );
-    res.json({ latest_run: result.rows[0] || null });
+    res.json({ latest_run: result.rows[0] || null, current_run: getPipelineRunStatus() });
   } catch (err) {
     console.error('Pipeline status error:', err.message);
     res.status(500).json({ error: 'Server error fetching pipeline status.' });
@@ -1788,13 +1856,6 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
     if (monthlyResult.rows.length === 0) {
       return res.status(400).json({ error: 'No historical data available for evaluation.' });
     }
-
-    // Build series for ARIMA
-    const series = monthlyResult.rows.map(r => ({
-      barangay_name: r.barangay_name,
-      month: r.month.toISOString().slice(0, 10),
-      case_count: r.case_count,
-    }));
 
     // Get barangay population
     const barangaysResult = await pool.query('SELECT name, population FROM barangays ORDER BY name');
@@ -1827,99 +1888,31 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
       thresholds = { low_max: 150.0, med_max: 350.0 };
     }
 
-    // Build training rows (reuse pipeline logic)
-    const { runPipeline } = require('./pipeline');
-    // We need _buildTrainingRows but it's not exported — build a simple version here
-    // Use a simplified approach: build training rows from monthly data
-    const trainRows = [];
-    const ROLLING_WINDOW = 12;
+    // Build training rows with the SAME feature pipeline the classifier uses
+    // at prediction time (pipeline.buildTrainingRows): 12-month window mean,
+    // window slope, seasonality from pre-target data only, lag-1 neighbor
+    // cross-section normalized identically, per-barangay historical bias.
+    // Replaces an inline builder that diverged from the train/predict code
+    // (un-normalized neighbor scale, target-month seasonality, bias fixed at 0).
+    const { _buildTrainingRows, buildDenseSeries } = require('./pipeline');
+    const { getPopulationMap } = require('./populationService');
+
     const allMonths = [...new Set(monthlyResult.rows.map(r => r.month.toISOString().slice(0, 10)))].sort();
-
-    for (const [name, months] of Object.entries(byBarangay)) {
-      const pop = populationMap[name] || 0;
-      const sorted = months.sort((a, b) => a.month.localeCompare(b.month));
-
-      if (sorted.length < ROLLING_WINDOW + 1) continue;
-
-      for (let i = ROLLING_WINDOW; i < sorted.length; i++) {
-        const targetMonth = sorted[i];
-        const window = sorted.slice(i - ROLLING_WINDOW, i);
-        const windowCounts = window.map(w => w.case_count);
-
-        const totalCount = windowCounts.reduce((a, b) => a + b, 0);
-        const annualized = (totalCount / windowCounts.length) * 12;
-        const forecastedIncidence = (annualized / pop) * 100_000;
-
-        // Trend (slope)
-        const n = windowCounts.length;
-        const xMean = (n - 1) / 2;
-        const yMean = windowCounts.reduce((a, b) => a + b, 0) / n;
-        let num = 0, den = 0;
-        for (let j = 0; j < n; j++) {
-          num += (j - xMean) * (windowCounts[j] - yMean);
-          den += (j - xMean) * (j - xMean);
-        }
-        const slope = den !== 0 ? num / den : 0;
-
-        // Seasonality flag
-        const historyUpToTarget = sorted.slice(0, i + 1);
-        let seasonalityFlag = 0;
-        if (historyUpToTarget.length >= 24) {
-          const counts = historyUpToTarget.map(m => m.case_count);
-          const series = counts.slice(-24);
-          // Simple autocorrelation at lag 12
-          const n2 = series.length;
-          const mean = series.reduce((a, b) => a + b, 0) / n2;
-          let autocorrNum = 0, autocorrDen = 0;
-          for (let j = 0; j < n2 - 12; j++) {
-            autocorrNum += (series[j] - mean) * (series[j + 12] - mean);
-            autocorrDen += (series[j] - mean) * (series[j] - mean);
-          }
-          seasonalityFlag = (autocorrDen > 0 && autocorrNum / autocorrDen > 0.3) ? 1 : 0;
-        }
-
-        // Lag features
-        const lag1m = i >= 1 ? sorted[i - 1].case_count : 0;
-        const lag2m = i >= 2 ? sorted[i - 2].case_count : 0;
-        const lag3m = i >= 3 ? sorted[i - 3].case_count : 0;
-
-        // Neighbor risk
-        let neighborRisk = 0;
-        const otherIncidences = [];
-        for (const [otherName, otherMonths] of Object.entries(byBarangay)) {
-          if (otherName === name) continue;
-          const otherMonthData = otherMonths.find(m => m.month === targetMonth.month);
-          if (otherMonthData) {
-            const otherPop = populationMap[otherName] || 0;
-            otherIncidences.push((otherMonthData.case_count / otherPop) * 100_000);
-          }
-        }
-        if (otherIncidences.length > 0) {
-          neighborRisk = otherIncidences.reduce((a, b) => a + b, 0) / otherIncidences.length;
-        }
-
-        const incidence = (targetMonth.case_count / pop) * 100_000;
-
-        trainRows.push({
-          month: targetMonth.month,
-          barangay_name: name,
-          features: {
-            forecasted_incidence: forecastedIncidence,
-            recent_trend: slope,
-            seasonality_flag: seasonalityFlag,
-            lag_1m: lag1m,
-            lag_2m: lag2m,
-            lag_3m: lag3m,
-            neighbor_risk: neighborRisk,
-            historical_bias: 0,
-          },
-          incidence,
-        });
-      }
+    // Per-year population map, matching pipeline.js: training labels span
+    // every year present in the data, so a single reportingYear (e.g. only
+    // the latest year) would null out every row outside that one year.
+    const dataYears = [...new Set(allMonths.map(m => Number(m.slice(0, 4))))];
+    const popMapByYear = {};
+    for (const y of dataYears) {
+      popMapByYear[y] = await getPopulationMap(y);
     }
+    const trainRows = await _buildTrainingRows(null, popMapByYear, thresholds);
 
-    // Sort train rows by time (so walk-forward works correctly)
-    trainRows.sort((a, b) => a.month.localeCompare(b.month));
+    // ARIMA walk-forward input: dense zero-filled calendar (missing months are
+    // 0, not absent) — the same series shape the pipeline sends to /forecast.
+    const barangayNamesRes = await pool.query('SELECT name FROM barangays ORDER BY name');
+    const { seriesByBarangay } = buildDenseSeries(monthlyResult.rows, barangayNamesRes.rows.map(r => r.name));
+    const series = Object.values(seriesByBarangay).flat();
 
     // Call Python /evaluate
     const result = await mlEvaluate(series, trainRows, thresholds, minTrain);
@@ -1934,8 +1927,19 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
           'arima-v1.0-rf-v1.0',
           trainRows.length,
           JSON.stringify({
-            arima: { mae: result.arima.mae, mape: result.arima.mape, n_steps: result.arima.n_steps },
-            rf: { accuracy: result.rf.accuracy, f1_macro: result.rf.f1_macro, n_steps: result.rf.n_steps },
+            arima: {
+              mae: result.arima.mae,
+              mape: result.arima.mape,
+              n_steps: result.arima.n_steps,
+              method_counts: result.arima.method_counts || {},
+            },
+            rf: {
+              accuracy: result.rf.accuracy,
+              f1_macro: result.rf.f1_macro,
+              precision: result.rf.precision,
+              recall: result.rf.recall,
+              n_steps: result.rf.n_steps,
+            },
           }),
           JSON.stringify({ thresholds, min_train: minTrain, period: allMonths[allMonths.length - 1] }),
         ]
@@ -2241,24 +2245,14 @@ router.get('/reports/summary', async (req, res) => {
     const totalCases = summaryRow.total_cases || 0;
     const activeCases = summaryRow.active_cases || 0;
 
-    // Client TSR formula: cohort = patients who started treatment in year Y-1
-    const cohortYear = yr - 1;
-    const cohortResult = await pool.query(`
-      SELECT
-        COUNT(*)::INTEGER AS total_patients,
-        SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
-        SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count
-      FROM tb_cases
-      WHERE EXTRACT(YEAR FROM date_started_treatment) = $1
-    `, [cohortYear]);
-
-    const cohort = cohortResult.rows[0] || {};
-    const cohortTotal = cohort.total_patients || 0;
-    const cohortCured = cohort.cured_count || 0;
-    const cohortCompleted = cohort.completed_count || 0;
-    const successRate = cohortTotal > 0
-      ? Number((((cohortCured + cohortCompleted) / cohortTotal) * 100).toFixed(1))
-      : null;
+    // TSR: single shared calculation (see treatmentSuccessRate.js) — do not
+    // reimplement the cohort query here.
+    const { successRate, cohortTotal } = await computeTreatmentSuccessRate(pool, { year: yr, barangay });
+    // Same denominator successRate is computed from (the Y-1 treatment-start
+    // cohort) — NOT summaryRow.evaluated_count, which counts a different,
+    // diagnosis-period-based population. Reporting that count alongside this
+    // successRate would silently mix two different cohorts under one label.
+    const evaluatedCount = cohortTotal;
 
     // Compute outcomes with percentages
     const outcomes = outcomesRes.rows.map(r => ({
@@ -2729,6 +2723,28 @@ router.get('/treatment-cascade', async (req, res) => {
   } catch (err) {
     console.error('Treatment cascade error:', err.message);
     res.status(500).json({ error: 'Server error computing treatment cascade.' });
+  }
+});
+
+/**
+ * GET /api/tb/treatment-success-rate
+ * Single shared TSR calculation (see treatmentSuccessRate.js) — the
+ * cohort-based figure required by the intended methodology. Every page
+ * that displays "Treatment Success Rate" / "Success Rate" should call this
+ * rather than computing its own (diagnosis-date-filtered) approximation,
+ * which is a DIFFERENT metric and previously caused four frontend cards to
+ * disagree with this same number as reported by NLG-generated text.
+ *
+ * Query params: year (reporting year Y; cohort is Y-1), barangay (optional).
+ */
+router.get('/treatment-success-rate', async (req, res) => {
+  try {
+    const { year, barangay } = req.query;
+    const result = await computeTreatmentSuccessRate(pool, { year, barangay });
+    res.json(result);
+  } catch (err) {
+    console.error('Treatment success rate error:', err.message);
+    res.status(500).json({ error: 'Server error computing treatment success rate.' });
   }
 });
 

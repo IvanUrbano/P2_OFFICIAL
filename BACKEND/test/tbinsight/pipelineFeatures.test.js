@@ -16,7 +16,10 @@ require.cache[dbPath] = {
   exports: { query: async () => ({ rows: [] }), connect: async () => ({}) },
 };
 
-const { buildDenseSeries, buildTrainingRows } = require('../../tbinsight/pipeline');
+const {
+  buildDenseSeries, buildTrainingRows, buildFeatureRow, _featureWindow, _neighborRisksAt,
+  _uniformPopMapByYear, _popFor, _popForFeature, _resolveClassification, _ruleBasedClassify,
+} = require('../../tbinsight/pipeline');
 const { monthKey, classifyByTertile } = require('../../tbinsight/scoring');
 
 // pg returns DATE columns as JS Dates at local midnight
@@ -83,7 +86,10 @@ describe('buildTrainingRows', () => {
     for (const [name, pop] of Object.entries(pops)) {
       popMap[name] = { population: pop, available: true };
     }
-    return buildTrainingRows(seriesByBarangay, popMap);
+    // Uniform across years: these tests exercise window/lag/neighbor/seasonality
+    // mechanics, not year-matching, so the same population applies regardless
+    // of which calendar year a synthetic series lands on.
+    return buildTrainingRows(seriesByBarangay, _uniformPopMapByYear(popMap));
   };
 
   it('yields rows from 12 months of history (window shrinks to 6)', () => {
@@ -96,11 +102,11 @@ describe('buildTrainingRows', () => {
     assert.strictEqual(build({ A: [1, 2, 3], B: [1, 2, 3] }, { A: 1000, B: 1000 }).length, 0);
   });
 
-  it('annualizes forecasted_incidence once, in the same units as the label', () => {
+  it('annualizes rolling_12m_incidence once, in the same units as the label', () => {
     const rows = build({ A: twelve(10), B: twelve(10) }, { A: 100000, B: 100000 });
     // 10 cases/month in 100k people -> 10 * 12 = 120 per 100k per year
     for (const r of rows) {
-      assert.ok(Math.abs(r.features.forecasted_incidence - 120) < 1e-9);
+      assert.ok(Math.abs(r.features.rolling_12m_incidence - 120) < 1e-9);
       assert.ok(Math.abs(r.incidence - 120) < 1e-9);
     }
   });
@@ -134,6 +140,210 @@ describe('buildTrainingRows', () => {
     const rows = build({ A: twelve(10), B: twelve(20) }, { A: 100000, B: 100000 });
     // Pairs (A, B) per month: incidences alternate 120, 240
     assert.deepStrictEqual(rows.slice(0, 4).map(r => Math.round(r.incidence)), [120, 240, 120, 240]);
+  });
+});
+
+describe('feature parity & leakage (train vs predict)', () => {
+  // Repeating 12-month seasonal pattern so seasonality_flag is meaningful (1)
+  const pattern = [0, 2, 4, 6, 8, 10, 12, 14, 10, 6, 2, 0];
+  const seasonal = (base) => Array.from({ length: 30 }, (_, i) => base + pattern[i % 12]);
+  const popMapFor = (pops) =>
+    _uniformPopMapByYear(Object.fromEntries(Object.entries(pops).map(([n, p]) => [n, { population: p, available: true }])));
+
+  function dense(counts) {
+    return buildDenseSeries(rowsFor(counts), Object.keys(counts));
+  }
+
+  it('train row at month T has identical features to a predict row built from data before T', () => {
+    const counts = { A: seasonal(10), B: seasonal(6), C: seasonal(8) };
+    const popMap = popMapFor({ A: 100000, B: 50000, C: 75000 });
+    const { seriesByBarangay } = dense(counts);
+
+    const T = 24; // 30 months >= 18 → window 12 on both sides
+    const trainRows = buildTrainingRows(seriesByBarangay, popMap);
+    const trainRow = trainRows.find(r => r.barangay_name === 'A' && r.month === seriesByBarangay.A[T].month);
+    assert.ok(trainRow, `expected a training row at month index ${T}`);
+
+    // Prediction "as of" month T-1: only pre-target data is visible.
+    const truncated = {};
+    for (const [n, s] of Object.entries(seriesByBarangay)) truncated[n] = s.slice(0, T);
+    const window = _featureWindow(T);
+    const neighborRisks = _neighborRisksAt(truncated, popMap, T - 1);
+    const predictRow = buildFeatureRow({
+      name: 'A', t: T, seriesByBarangay: truncated, popMapByYear: popMap, window, neighborRisks,
+    });
+
+    assert.deepStrictEqual(predictRow.features, trainRow.features);
+    assert.strictEqual(predictRow.features.seasonality_flag, 1, 'seasonal series should flag seasonality');
+  });
+
+  it('no predictor reads the target month: perturbing it changes only the label', () => {
+    const counts = { A: seasonal(10), B: seasonal(6), C: seasonal(8) };
+    const popMap = popMapFor({ A: 100000, B: 100000, C: 100000 });
+    const T = 24;
+
+    const before = buildTrainingRows(dense(counts).seriesByBarangay, popMap);
+    const rowBefore = before.find(r => r.barangay_name === 'A' && r.month === seriesMonth(T));
+    assert.ok(rowBefore);
+
+    function seriesMonth(idx) {
+      return dense(counts).seriesByBarangay.A[idx].month;
+    }
+
+    // Blast the target month for every barangay
+    counts.A[T] += 500;
+    counts.B[T] += 500;
+    counts.C[T] += 500;
+
+    const after = buildTrainingRows(dense(counts).seriesByBarangay, popMap);
+    const rowAfter = after.find(r => r.barangay_name === 'A' && r.month === seriesMonth(T));
+
+    assert.deepStrictEqual(rowAfter.features, rowBefore.features,
+      'features must be built only from data before the target month');
+    assert.ok(rowAfter.incidence > rowBefore.incidence, 'the label (incidence) must reflect the target month');
+  });
+
+  it('neighbor_risk uses the month before the target (lag-1), never the target month', () => {
+    const popMap = popMapFor({ A: 100000, B: 100000, C: 100000 });
+    const base = { A: Array(12).fill(40), B: Array(12).fill(10), C: Array(12).fill(5) };
+
+    const rows = buildTrainingRows(dense(base).seriesByBarangay, popMap);
+    const targetMonth = dense(base).seriesByBarangay.A[6].month;
+    const bBaseline = rows.find(r => r.barangay_name === 'B' && r.month === targetMonth);
+    assert.ok(bBaseline);
+
+    // 1) Change A only in the TARGET month → B's neighbor_risk must not move
+    const targetHit = { A: [...base.A], B: [...base.B], C: [...base.C] };
+    targetHit.A[6] = 500;
+    const afterTargetHit = buildTrainingRows(dense(targetHit).seriesByBarangay, popMap);
+    const bAfterTargetHit = afterTargetHit.find(r => r.barangay_name === 'B' && r.month === targetMonth);
+    assert.strictEqual(bAfterTargetHit.features.neighbor_risk, bBaseline.features.neighbor_risk,
+      'neighbor_risk must not read the target month');
+
+    // 2) Change A in month T-1 → B's neighbor_risk must move
+    const lagHit = { A: [...base.A], B: [...base.B], C: [...base.C] };
+    lagHit.A[5] = 500;
+    const afterLagHit = buildTrainingRows(dense(lagHit).seriesByBarangay, popMap);
+    const bAfterLagHit = afterLagHit.find(r => r.barangay_name === 'B' && r.month === targetMonth);
+    assert.notStrictEqual(bAfterLagHit.features.neighbor_risk, bBaseline.features.neighbor_risk,
+      'neighbor_risk must reflect the month before the target');
+  });
+
+  it('window rule is identical for train and predict (12 when history ≥ 18)', () => {
+    assert.strictEqual(_featureWindow(30), 12);
+    assert.strictEqual(_featureWindow(18), 12);
+    assert.strictEqual(_featureWindow(12), 6);
+    assert.strictEqual(_featureWindow(3), 3);
+  });
+
+  it('train rows carry month and barangay_name metadata for walk-forward grouping', () => {
+    const rows = buildTrainingRows(dense({ A: seasonal(10), B: seasonal(6) }).seriesByBarangay,
+      popMapFor({ A: 100000, B: 100000 }));
+    assert.ok(rows.length > 0);
+    for (const r of rows) {
+      assert.ok(typeof r.month === 'string' && r.month.endsWith('-01'));
+      assert.ok(r.barangay_name === 'A' || r.barangay_name === 'B');
+      assert.ok(Number.isFinite(r.incidence));
+    }
+  });
+});
+
+describe('per-year population matching (never fabricate incidence)', () => {
+  const popMap2026 = { A: { population: 100000, available: true }, B: { population: 100000, available: true } };
+  const popMapByYear = { 2026: popMap2026 }; // 2025 and 2027 deliberately have no reference
+
+  it('_popFor is strict: no fallback across years', () => {
+    assert.strictEqual(_popFor(popMapByYear, 'A', 2026), 100000);
+    assert.strictEqual(_popFor(popMapByYear, 'A', 2025), null, 'a year with no reference must resolve to null, not another year\'s population');
+  });
+
+  it('_popForFeature falls back to the nearest available year for RF feature construction', () => {
+    assert.strictEqual(_popForFeature(popMapByYear, 'A', 2026), 100000);
+    assert.strictEqual(_popForFeature(popMapByYear, 'A', 2027), 100000, 'feature construction may reuse the nearest known year');
+    assert.strictEqual(_popForFeature(popMapByYear, 'Unknown', 2026), null, 'no reference for this barangay in any year → still null, never fabricated');
+  });
+
+  it('training rows targeting a year with no population reference are skipped, not labeled zero', () => {
+    // 36 months: Jan 2025 - Dec 2027. Window is 12 (>=18 months of history), so
+    // targets run Jan 2026 .. Dec 2027 — spanning a year WITH population (2026)
+    // and one WITHOUT (2027). Population only exists for 2026.
+    const counts = { A: Array(36).fill(10), B: Array(36).fill(10) };
+    const { seriesByBarangay } = buildDenseSeries(rowsFor(counts), Object.keys(counts));
+    const rows = buildTrainingRows(seriesByBarangay, popMapByYear);
+
+    assert.ok(rows.length > 0, 'rows targeting 2026 months should still be produced');
+    for (const r of rows) {
+      assert.ok(r.month.startsWith('2026'), `no training row should target a year without population, got ${r.month}`);
+    }
+    // Exactly the 12 months of 2026, for both barangays — none of 2027.
+    assert.strictEqual(rows.length, 24);
+  });
+
+  it('a 2026-targeted label uses 2026 population, never substituted from another year', () => {
+    const counts = { A: Array(36).fill(10), B: Array(36).fill(10) };
+    const { seriesByBarangay } = buildDenseSeries(rowsFor(counts), Object.keys(counts));
+    const rows = buildTrainingRows(seriesByBarangay, popMapByYear);
+    const row = rows.find(r => r.barangay_name === 'A');
+    assert.ok(row);
+    // 10 cases/month over 100000 population, annualized: 10*12/100000*100000 = 120
+    assert.ok(Math.abs(row.incidence - 120) < 1e-9);
+  });
+
+  it('a prediction row in a year without population still gets a real (non-null) rolling_12m_incidence feature', () => {
+    const counts = { A: Array(36).fill(10), B: Array(36).fill(10) };
+    const { seriesByBarangay } = buildDenseSeries(rowsFor(counts), Object.keys(counts));
+    const t = seriesByBarangay.A.length; // predicting the month right after all 36 (falls in 2028)
+    const window = _featureWindow(t);
+    const neighborRisks = _neighborRisksAt(seriesByBarangay, popMapByYear, t - 1);
+    const predictRow = buildFeatureRow({ name: 'A', t, seriesByBarangay, popMapByYear, window, neighborRisks });
+    assert.ok(predictRow.features.rolling_12m_incidence != null,
+      'RF must still receive a real feature value by falling back to the nearest known population year');
+  });
+});
+
+describe('_resolveClassification (RF is authoritative, independent of the weighted score)', () => {
+  it('TEST A — RF says High: risk_class is High regardless of what a low legacy score would imply', () => {
+    // A legacy risk_score of e.g. 28 would fall in the <=33 "Low" band, but
+    // that band is irrelevant here — _resolveClassification never receives
+    // or consults risk_score/riskClass at all.
+    const classified = { risk_class: 'High', proba: { Low: 0.2, Medium: 0.3, High: 0.5 } };
+    const result = _resolveClassification(classified, 'random_forest');
+    assert.strictEqual(result.risk_class, 'High');
+    assert.strictEqual(result.model_type, 'random_forest');
+    assert.strictEqual(result.classification_confidence, 0.5);
+  });
+
+  it('TEST B — RF says Low: risk_class is Low regardless of what a mid-range legacy score would imply', () => {
+    const classified = { risk_class: 'Low', proba: { Low: 0.6, Medium: 0.3, High: 0.1 } };
+    const result = _resolveClassification(classified, 'random_forest');
+    assert.strictEqual(result.risk_class, 'Low');
+    assert.strictEqual(result.classification_confidence, 0.6);
+  });
+
+  it('TEST C — a rule-based fallback result is labeled as such, never presented as random_forest', () => {
+    const classified = { risk_class: 'Medium', proba: { Low: 0, Medium: 1, High: 0 } };
+    const result = _resolveClassification(classified, 'rule_based');
+    assert.strictEqual(result.risk_class, 'Medium');
+    assert.strictEqual(result.model_type, 'rule_based');
+    // The fallback's 100%/0%/0% proba is manufactured, not a real confidence
+    // — must not be persisted as if it were one.
+    assert.strictEqual(result.classification_confidence, null);
+    assert.strictEqual(result.prob_low, null);
+  });
+
+  it('TEST D — no classification at all: risk_class is null/No Data, never a fabricated class', () => {
+    const result = _resolveClassification(undefined, undefined);
+    assert.strictEqual(result.risk_class, null);
+    assert.strictEqual(result.model_type, null);
+    assert.strictEqual(result.classification_confidence, null);
+  });
+});
+
+describe('_ruleBasedClassify (rename check)', () => {
+  it('reads the renamed rolling_12m_incidence feature, not the old forecasted_incidence key', () => {
+    const rows = [{ barangay_name: 'A', features: { rolling_12m_incidence: 500, lag_1m: 10 } }];
+    const [result] = _ruleBasedClassify(rows, { low_max: 150, med_max: 350 });
+    assert.strictEqual(result.risk_class, 'High');
   });
 });
 

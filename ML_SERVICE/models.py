@@ -86,7 +86,7 @@ class Thresholds(BaseModel):
 class TrainRow(BaseModel):
     """Training row for RF: features + observed incidence for label generation."""
     features: dict = Field(
-        ..., description="Feature vector: forecasted_incidence, recent_trend, "
+        ..., description="Feature vector: rolling_12m_incidence, recent_trend, "
         "seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk, historical_bias"
     )
     incidence: float = Field(
@@ -138,75 +138,6 @@ class ClassifyResponse(BaseModel):
 
 # ==================== /pipeline ====================
 
-class PipelineSeriesPoint(BaseModel):
-    """Data point for pipeline input."""
-    barangay_name: str
-    month: str
-    case_count: int = Field(..., ge=0)
-
-
-class PipelineRequest(BaseModel):
-    """Request body for full pipeline (forecast + classify).
-
-    Express passes all pre-computed data; Python never reads the DB.
-    Optional `train` enables RF classification; without it, rule-based fallback is used.
-    """
-    forecast_horizon: int = Field(
-        default=1, ge=1, le=24,
-        description="Number of months to forecast ahead (1-24)"
-    )
-    series: list[PipelineSeriesPoint] = Field(
-        ..., description="Historical monthly case counts"
-    )
-    population: dict[str, int] = Field(
-        ..., description="Population per barangay"
-    )
-    population_density: dict[str, float] = Field(
-        default_factory=dict,
-        description="Population density per barangay"
-    )
-    neighbor_risk: dict[str, float] = Field(
-        default_factory=dict,
-        description="Pre-computed neighbor risk scores per barangay (0-1)"
-    )
-    historical_bias: dict[str, float] = Field(
-        default_factory=dict,
-        description="Past ARIMA forecast errors per barangay (Approach B)"
-    )
-    thresholds: Optional[Thresholds] = Field(
-        default=None,
-        description="Frozen threshold cut points. If omitted, uses PLACEHOLDER defaults."
-    )
-    train: list[TrainRow] = Field(
-        default_factory=list,
-        description="Optional training rows for RF. If empty, rule-based fallback."
-    )
-
-
-class PipelineForecast(BaseModel):
-    """Forecast result in pipeline response."""
-    barangay_name: str
-    period: str
-    forecasted_count: float = Field(..., ge=0)
-    confidence_lower: float = Field(..., ge=0)
-    confidence_upper: float = Field(..., ge=0)
-    method: str
-
-
-class PipelineClassification(BaseModel):
-    """Classification result in pipeline response."""
-    barangay_name: str
-    risk_class: str
-    incidence_per_100k: float = Field(..., ge=0)
-
-
-class PipelineResponse(BaseModel):
-    """Response from full pipeline endpoint."""
-    forecast: PipelineForecast
-    classification: PipelineClassification
-    model_version: str
-
-
 # ==================== /health ====================
 
 class HealthResponse(BaseModel):
@@ -248,6 +179,9 @@ class ArimaStep(BaseModel):
     actual: float
     predicted: float
     error: float
+    # 'arima' when the real model fit produced this step; the fallback method
+    # name ('seasonal_naive' / 'exponential_smoothing') otherwise.
+    method: str = "arima"
 
 
 class ArimaEvaluation(BaseModel):
@@ -256,6 +190,10 @@ class ArimaEvaluation(BaseModel):
     mape: Optional[float] = None
     n_steps: int = 0
     steps: list[ArimaStep] = []
+    # Steps per method across ALL barangays evaluated, e.g.
+    # {"arima": 520, "seasonal_naive": 50} — lets callers report how much of
+    # the MAE/MAPE comes from real ARIMA fits vs fallback models.
+    method_counts: dict[str, int] = {}
 
 
 class RfStep(BaseModel):

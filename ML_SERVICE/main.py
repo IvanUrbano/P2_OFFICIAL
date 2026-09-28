@@ -9,6 +9,12 @@ import logging
 import os
 import sys
 
+# Load .env (ML_API_KEY) from this directory before config.py is imported —
+# config.py raises RuntimeError if ML_API_KEY is missing from the environment.
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # ARIMA fits run in parallel worker processes (see config.ML_N_JOBS). Each process must use a
 # single math-library thread, otherwise workers oversubscribe the CPU and run slower than serial.
 # Must be set before numpy is imported.
@@ -63,7 +69,7 @@ async def root():
             "thresholds": "POST /api/ml/thresholds",
             "forecast": "POST /api/ml/forecast",
             "classify": "POST /api/ml/classify",
-            "pipeline": "POST /api/ml/pipeline",
+            "evaluate": "POST /api/ml/evaluate",
         },
     }
 

@@ -95,7 +95,11 @@ def _exponential_smoothing_forecast(series: pd.Series, forecast_horizon: int = 1
     try:
         from statsmodels.tsa.holtwinters import SimpleExpSmoothing
 
-        model = SimpleExpSmoothing(series.values.astype(float))
+        # statsmodels >= 0.15: initialization_method=None is rejected when optimizing —
+        # pass 'estimated' explicitly so ES actually runs instead of falling back.
+        model = SimpleExpSmoothing(
+            series.values.astype(float), initialization_method="estimated"
+        )
         fit = model.fit(optimized=True, use_brute=False)
         forecast = fit.forecast(forecast_horizon)
 
@@ -382,10 +386,12 @@ def walk_forward_arima(
 
     Returns:
         {
-            "steps": [{"train_size": int, "test_month": int, "actual": float, "predicted": float, "error": float}],
+            "steps": [{"train_size": int, "test_month": int, "actual": float,
+                       "predicted": float, "error": float, "method": str}],
             "mae": float,
             "mape": float,
             "n_steps": int,
+            "method_counts": {"arima": int, "<fallback_method>": int, ...},
         }
     """
     if len(counts) <= min_train:
@@ -394,6 +400,7 @@ def walk_forward_arima(
             "mae": None,
             "mape": None,
             "n_steps": 0,
+            "method_counts": {},
         }
 
     steps = []
@@ -404,12 +411,17 @@ def walk_forward_arima(
         train = counts[:i]
         actual = float(counts[i])
 
+        # Record which model produced each step so evaluations that fall back
+        # (ARIMA fit failure -> seasonal_naive / exponential_smoothing) are
+        # transparent instead of silently reported as ARIMA metrics.
+        method = "arima"
         try:
             model = _fit_arima(train)
             predicted = max(0.0, float(model.predict(n_periods=1)[0]))
         except Exception:
             fallback = _fallback_forecast(pd.Series(train, dtype=float), 1)
             predicted = float(fallback["forecasted_count"][0])
+            method = str(fallback.get("method") or "seasonal_naive")
 
         error = abs(actual - predicted)
         errors.append(error)
@@ -424,13 +436,18 @@ def walk_forward_arima(
             "actual": actual,
             "predicted": round(predicted, 2),
             "error": round(error, 2),
+            "method": method,
         })
 
     mae = round(float(np.mean(errors)), 4) if errors else None
     mape = round(float(np.mean(pct_errors) * 100), 2) if pct_errors else None
 
+    method_counts: dict[str, int] = {}
+    for s in steps:
+        method_counts[s["method"]] = method_counts.get(s["method"], 0) + 1
+
     logger.info(
-        f"ARIMA walk-forward: {len(steps)} steps, MAE={mae}, MAPE={mape}%"
+        f"ARIMA walk-forward: {len(steps)} steps, MAE={mae}, MAPE={mape}%, methods={method_counts}"
     )
 
     return {
@@ -438,4 +455,5 @@ def walk_forward_arima(
         "mae": mae,
         "mape": mape,
         "n_steps": len(steps),
+        "method_counts": method_counts,
     }

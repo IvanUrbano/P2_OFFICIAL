@@ -168,6 +168,24 @@ const initDb = async () => {
       console.log('⚠️ Manual entry provenance migration not found, skipping.');
     }
 
+    // Duplicate detection: DSTB fingerprint + MN itis_case_id collision
+    // detection columns and one-time backfill (idempotent). Wrapped in its
+    // own try/catch — a failure here (e.g. an unexpected constraint issue
+    // against live data) must not prevent the unrelated migrations below
+    // (boundary restore, geometry sync) from running.
+    try {
+      const dupDetectionMigPath = path.join(__dirname, 'db', 'migrations', '018_duplicate_detection.sql');
+      if (fs.existsSync(dupDetectionMigPath)) {
+        const dupDetectionSql = fs.readFileSync(dupDetectionMigPath, 'utf8');
+        await execSql(dupDetectionSql);
+        console.log('✅ Duplicate detection migration completed successfully.');
+      } else {
+        console.log('⚠️ Duplicate detection migration not found, skipping.');
+      }
+    } catch (dupErr) {
+      console.error('❌ Duplicate detection migration failed (continuing with remaining migrations):', dupErr.message);
+    }
+
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,
     // undoing two earlier over-broad attempts, and keep only the Kapasigan Extension ->
     // Bagong Katipunan rename/population fix (idempotent)

@@ -11,6 +11,7 @@
  */
 
 const { getAvailablePopulationYears } = require('./populationService');
+const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 
 /**
  * Build WHERE clause fragments from filter params.
@@ -277,35 +278,17 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
     percentage: totalAge > 0 ? Math.round((ageRows[0].total / totalAge) * 1000) / 10 : 0,
   } : null;
 
-  // --- Treatment outcomes (Client TSR formula) ---
-  // TSR = (Cured + Completed) / Total patients from treatment-start cohort Y-1 × 100
-  // Cohort: patients with date_started_treatment in year Y-1
+  // --- Treatment outcomes ---
   const outcomeRows = outcomeRes.rows;
   const outcomeBreakdown = {};
   for (const r of outcomeRows) {
     outcomeBreakdown[r.outcome_status] = r.total;
   }
 
-  const reportingYear = filters.year ? Number(filters.year) : new Date().getFullYear();
-  const cohortYear = reportingYear - 1;
-
-  const cohortResult = await pool.query(`
-    SELECT
-      COUNT(*)::INTEGER AS total_patients,
-      SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
-      SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count
-    FROM tb_cases
-    WHERE EXTRACT(YEAR FROM date_started_treatment) = $1
-  `, [cohortYear]);
-
-  const cohort = cohortResult.rows[0] || {};
-  const totalPatients = cohort.total_patients || 0;
-  const curedCount = cohort.cured_count || 0;
-  const completedCount = cohort.completed_count || 0;
-
-  const successRate = totalPatients > 0
-    ? Math.round(((curedCount + completedCount) / totalPatients) * 1000) / 10
-    : null;
+  // TSR: single shared calculation (see treatmentSuccessRate.js) — do not
+  // reimplement the cohort query here; every caller must agree on the same
+  // Y-1 treatment-start cohort for numerator and denominator.
+  const { successRate } = await computeTreatmentSuccessRate(pool, { year: filters.year, barangay: filters.barangay });
 
   // --- Summary ---
   const summary = {

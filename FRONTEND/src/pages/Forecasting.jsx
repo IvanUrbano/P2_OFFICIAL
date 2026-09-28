@@ -123,6 +123,118 @@ function FilterSelect({ label, value, onChange, children, selectStyle }) {
   );
 }
 
+/* ─── Model Evaluation results (walk-forward metrics from the ML service) ─── */
+
+function EvalMetric({ label, value }) {
+  return (
+    <div className="rounded-lg px-3 py-2" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+      <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#94A3B8' }}>{label}</div>
+      <div className="text-sm font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{value}</div>
+    </div>
+  );
+}
+
+function EvaluationResults({ evaluation }) {
+  const arima = evaluation?.arima || {};
+  const rf = evaluation?.rf || {};
+  const methods = arima.method_counts || {};
+  const arimaTotal = Object.values(methods).reduce((a, b) => a + b, 0);
+  const arimaSteps = methods.arima || 0;
+  const fallbackSteps = arimaTotal - arimaSteps;
+  const fmt = (v, digits = 4) => (v == null ? '\u2014' : Number(v).toFixed(digits));
+  const pct = (v, digits = 1) => (v == null ? '\u2014' : `${(Number(v) * 100).toFixed(digits)}%`);
+  const classes = ['Low', 'Medium', 'High'];
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* ARIMA */}
+      <div className="rounded-lg p-4" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <h3 className="text-xs font-extrabold uppercase tracking-wide" style={{ color: '#0F2D52' }}>ARIMA Forecast</h3>
+          <span
+            className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0"
+            style={fallbackSteps === 0
+              ? { background: '#ECFDF5', color: '#047857' }
+              : { background: '#FFFBEB', color: '#B45309' }}
+          >
+            {arimaTotal === 0 ? 'No steps evaluated'
+              : fallbackSteps === 0 ? `All ${arimaTotal} steps: ARIMA`
+              : `${fallbackSteps} of ${arimaTotal} steps used fallback`}
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <EvalMetric label="MAE" value={fmt(arima.mae)} />
+          <EvalMetric label="MAPE" value={arima.mape != null ? `${arima.mape}%` : '\u2014'} />
+          <EvalMetric label="Steps/barangay" value={arima.n_steps ?? '\u2014'} />
+        </div>
+        {fallbackSteps > 0 && (
+          <p className="text-[11px] mt-2.5 leading-relaxed" style={{ color: '#B45309' }}>
+            MAE/MAPE include fallback models:{' '}
+            {Object.entries(methods).filter(([m]) => m !== 'arima').map(([m, c]) => `${m} \u00D7 ${c}`).join(', ')}.
+          </p>
+        )}
+        {arimaTotal > 0 && (
+          <p className="text-[11px] mt-2" style={{ color: '#94A3B8' }}>
+            {arimaSteps} real ARIMA fit{arimaSteps === 1 ? '' : 's'} across barangays · one-step-ahead walk-forward.
+          </p>
+        )}
+      </div>
+
+      {/* Random Forest */}
+      <div className="rounded-lg p-4" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <h3 className="text-xs font-extrabold uppercase tracking-wide" style={{ color: '#0F2D52' }}>Random Forest</h3>
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0" style={{ background: '#EFF6FF', color: '#1E40AF' }}>
+            {rf.n_steps ? `${rf.n_steps} test months` : 'No steps evaluated'}
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <EvalMetric label="Accuracy" value={pct(rf.accuracy)} />
+          <EvalMetric label="F1 (macro)" value={pct(rf.f1_macro)} />
+          <EvalMetric label="Steps" value={rf.n_steps ?? '\u2014'} />
+        </div>
+        <div className="mt-3 space-y-1">
+          {classes.map((cls) => (
+            <div key={cls} className="flex items-center justify-between text-[11px]">
+              <span className="font-semibold" style={{ color: '#64748B' }}>{cls}</span>
+              <span style={{ color: '#334155' }}>
+                Precision {fmt(rf.precision?.[cls])} · Recall {fmt(rf.recall?.[cls])}
+              </span>
+            </div>
+          ))}
+        </div>
+        {rf.confusion_matrix && (
+          <div className="mt-3">
+            <p className="text-[10px] font-bold mb-1" style={{ color: '#64748B' }}>Confusion matrix (rows = actual)</p>
+            <table className="text-[10px]" style={{ borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th />
+                  {classes.map((c) => (
+                    <th key={c} className="font-semibold" style={{ color: '#94A3B8', padding: '2px 8px', textAlign: 'center' }}>{c}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {classes.map((a) => (
+                  <tr key={a}>
+                    <th className="font-semibold" style={{ color: '#64748B', padding: '2px 8px', textAlign: 'left' }}>{a}</th>
+                    {classes.map((p) => (
+                      <td key={p} style={{ color: '#334155', padding: '2px 8px', textAlign: 'center' }}>
+                        {rf.confusion_matrix[a]?.[p] ?? 0}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ─── Main Forecasting Component ─────────────────────────────────────── */
 
 export default function Forecasting() {
@@ -152,6 +264,14 @@ export default function Forecasting() {
   const [error, setError] = useState(null);
   const [filterLoading, setFilterLoading] = useState(false);
   const [forecastRan, setForecastRan] = useState(false);
+
+  /* ── Model evaluation (Evaluate Model — admin only) ── */
+  const [evalLoading, setEvalLoading] = useState(false);
+  const [evalError, setEvalError] = useState(null);
+  const [evalResult, setEvalResult] = useState(null);
+  const isAdmin = (() => {
+    try { return JSON.parse(localStorage.getItem('user') || '{}')?.role === 'admin'; } catch { return false; }
+  })();
 
   /* ── NLG Insight state ── */
   const [insightData, setInsightData] = useState(null);
@@ -235,6 +355,58 @@ export default function Forecasting() {
       setFilterLoading(false);
     }
   }, [startYear, endYear, selectedBarangay, forecastMonths]);
+
+  /* ────────── Evaluate Model (admin) ────────── */
+
+  // Walk-forward evaluation of ARIMA + RF via the existing
+  // POST /api/tb/evaluate endpoint. Metrics arrive from the backend/ML
+  // service as-is — nothing is computed or substituted in the frontend.
+  // On any failure (e.g. ML service down) the error is shown INSTEAD of
+  // results, so fallback models can never be presented as ARIMA/RF metrics.
+  const handleRunEvaluation = useCallback(async () => {
+    setEvalLoading(true);
+    setEvalError(null);
+    setEvalResult(null);
+    try {
+      const res = await API.post('/api/tb/evaluate', {});
+      const evaluation = res.data?.evaluation;
+      if (evaluation) {
+        setEvalResult(evaluation);
+      } else {
+        setEvalError('Evaluation returned no results.');
+      }
+    } catch (err) {
+      const data = err.response?.data;
+      setEvalError(data?.details || data?.error || err.message);
+    } finally {
+      setEvalLoading(false);
+    }
+  }, []);
+
+  /* ────────── Backfill Historical Risk Snapshots (admin) ────────── */
+
+  // Computes one risk-classification snapshot per PAST calendar year (see
+  // POST /api/tb/pipeline/historical), so the GIS Year filter can show a
+  // real, distinct risk assessment for each year instead of only the
+  // current/latest one. One-time/rare admin recovery action, not tied to
+  // the automatic webhook sync trigger.
+  const [historicalLoading, setHistoricalLoading] = useState(false);
+  const [historicalError, setHistoricalError] = useState(null);
+  const [historicalResult, setHistoricalResult] = useState(null);
+  const handleRunHistoricalBackfill = useCallback(async () => {
+    setHistoricalLoading(true);
+    setHistoricalError(null);
+    setHistoricalResult(null);
+    try {
+      const res = await API.post('/api/tb/pipeline/historical', {});
+      setHistoricalResult(res.data?.years || []);
+    } catch (err) {
+      const data = err.response?.data;
+      setHistoricalError(data?.details || data?.error || err.message);
+    } finally {
+      setHistoricalLoading(false);
+    }
+  }, []);
 
   const handleReset = useCallback(() => {
     setStartYear('2024');
@@ -718,10 +890,77 @@ export default function Forecasting() {
               onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
               onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
             >
-              {filterLoading ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Running...</> : 'Run Forecast'}
+              {filterLoading ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Running...</> : 'Run Analysis Pipeline'}
             </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={handleRunEvaluation}
+                disabled={evalLoading || filterLoading}
+                title="Walk-forward evaluation of ARIMA + Random Forest (admin)"
+                className="px-5 py-2 text-xs font-semibold disabled:opacity-60"
+                style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#ffffff'; }}
+              >
+                {evalLoading
+                  ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Evaluating...</>
+                  : <><i className="ri-flask-line mr-1" />Evaluate Model</>}
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={handleRunHistoricalBackfill}
+                disabled={historicalLoading || filterLoading}
+                title="Compute one risk-classification snapshot per past year, so GIS's Year filter shows a real assessment for each year (admin)"
+                className="px-5 py-2 text-xs font-semibold disabled:opacity-60"
+                style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#ffffff'; }}
+              >
+                {historicalLoading
+                  ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Backfilling...</>
+                  : <><i className="ri-history-line mr-1" />Backfill Historical Risk Snapshots</>}
+              </button>
+            )}
           </div>
         </div>
+
+        {/* ─── Historical Snapshot Backfill results (admin) ─── */}
+        {isAdmin && (historicalLoading || historicalError || historicalResult) && (
+          <div className="px-6 py-4" style={{ borderTop: '1px solid #E2E8F0', background: '#F8FAFC' }}>
+            {historicalLoading ? (
+              <div className="flex items-center gap-2 text-xs font-medium" style={{ color: '#64748B' }}>
+                <i className="ri-loader-4-line animate-spin" />
+                Computing a risk snapshot per past year — each one re-runs Random Forest training, this may take a while...
+              </div>
+            ) : historicalError ? (
+              <p className="text-xs font-semibold" style={{ color: '#B91C1C' }}>
+                <i className="ri-error-warning-line mr-1" />Backfill failed: {historicalError}
+              </p>
+            ) : historicalResult && (
+              <div className="space-y-1.5">
+                <p className="text-[11px] font-bold uppercase" style={{ color: '#64748B' }}>Historical Snapshot Backfill</p>
+                {historicalResult.map((y) => (
+                  <div key={y.year} className="flex items-center gap-2 text-xs">
+                    <span className="font-bold w-12" style={{ color: '#0F2D52' }}>{y.year}</span>
+                    {y.status === 'skipped' ? (
+                      <span style={{ color: '#94A3B8' }}>Skipped — {y.reason}</span>
+                    ) : y.status === 'error' ? (
+                      <span style={{ color: '#B91C1C' }}>Failed: {y.error}</span>
+                    ) : (
+                      <span style={{ color: '#334155' }}>
+                        {y.classifierMethod === 'random_forest' ? 'Random Forest' : 'Rule-based fallback'}
+                        {' '}({y.trainingRows} training rows) → period {y.period}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Filter bar */}
         <div className="flex items-center justify-between px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
@@ -761,6 +1000,52 @@ export default function Forecasting() {
           </div>
         </div>
       </div>
+
+      {/* ─── Model Evaluation (admin) ─── */}
+      {isAdmin && (evalLoading || evalError || evalResult) && (
+        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
+          <div className="flex items-center justify-between px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
+            <div>
+              <h2 className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>Model Evaluation</h2>
+              <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>
+                Walk-forward validation of the ARIMA and Random Forest models — metrics computed by the ML service, not in the browser.
+              </p>
+            </div>
+            {evalResult?.model_version && (
+              <span className="text-[11px] font-medium shrink-0" style={{ color: '#94A3B8' }}>{evalResult.model_version}</span>
+            )}
+          </div>
+
+          <div className="px-6 py-4">
+            {evalLoading ? (
+              <div className="flex items-center gap-2 text-xs font-medium" style={{ color: '#64748B' }}>
+                <i className="ri-loader-4-line animate-spin" />
+                Running walk-forward evaluation — one model is trained per step, this may take a few minutes...
+              </div>
+            ) : evalError ? (
+              <div className="rounded-lg px-4 py-3" style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+                <p className="text-xs font-bold" style={{ color: '#B91C1C' }}>
+                  <i className="ri-error-warning-line mr-1" />
+                  Model evaluation could not be completed.
+                </p>
+                <p className="text-[11px] mt-1 font-mono break-words" style={{ color: '#991B1B' }}>{evalError}</p>
+                <p className="text-[11px] mt-1.5 leading-relaxed" style={{ color: '#7F1D1D' }}>
+                  No metrics are shown because the intended models could not be evaluated. Fallback models are never
+                  reported here as ARIMA/RF results — make sure the ML service is running (port 8001), then run again.
+                </p>
+              </div>
+            ) : evalResult ? (
+              <>
+                <EvaluationResults evaluation={evalResult} />
+                <p className="text-[11px] mt-3" style={{ color: '#94A3B8' }}>
+                  Source: POST /api/tb/evaluate (walk-forward: trains on months 1..T, predicts T+1, slides forward).
+                  Results are also stored in model_metadata for provenance.
+                </p>
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       {/* ─── Content States ─── */}
       {!forecastRan ? (
