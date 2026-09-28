@@ -20,7 +20,7 @@ const router = express.Router();
 // ==================== REGISTER (Admin Only) ====================
 router.post('/register', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {
-    const { username, email, role } = req.body;
+    const { username, email, role, facility_id } = req.body;
     const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
     if (!username || !email) {
@@ -41,6 +41,21 @@ router.post('/register', authenticateToken, authorizeRoles('admin'), async (req,
       return res.status(409).json({ error: 'User with this email or username already exists.' });
     }
 
+    // Facility assignment: required for staff, optional (NULL) for admin.
+    let facilityId = null;
+    if (facility_id !== undefined && facility_id !== null && facility_id !== '') {
+      const facResult = await pool.query(
+        'SELECT id FROM health_facilities WHERE id = $1',
+        [Number(facility_id)]
+      );
+      if (facResult.rows.length === 0) {
+        return res.status(400).json({ error: 'Unknown health facility. Select a registered facility.' });
+      }
+      facilityId = Number(facility_id);
+    } else if (userRole === 'staff') {
+      return res.status(400).json({ error: 'A registered health facility is required for staff accounts.' });
+    }
+
     // Generate secure temporary password
     const tempPassword = generateTempPassword();
 
@@ -48,8 +63,10 @@ router.post('/register', authenticateToken, authorizeRoles('admin'), async (req,
     const hashedPassword = await bcrypt.hash(tempPassword, salt);
 
     const result = await pool.query(
-      'INSERT INTO users (username, email, password_hash, role, password_changed_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id, username, email, role, created_at',
-      [username, email, hashedPassword, userRole]
+      `INSERT INTO users (username, email, password_hash, role, facility_id, password_changed_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING id, username, email, role, facility_id, created_at`,
+      [username, email, hashedPassword, userRole, facilityId]
     );
 
     const newUser = result.rows[0];
@@ -63,6 +80,7 @@ router.post('/register', authenticateToken, authorizeRoles('admin'), async (req,
       targetUsername: newUser.username,
       result: 'SUCCESS',
       ipAddress,
+      details: { role: userRole, facilityId },
     });
 
     res.status(201).json({
@@ -149,6 +167,16 @@ const result = await pool.query(
     const recentlyChanged = user.password_changed_at &&
       (Date.now() - new Date(user.password_changed_at).getTime()) < 24 * 60 * 60 * 1000;
 
+    // Facility context for the logged-in user (staff accounts are facility-assigned)
+    let facility = null;
+    if (user.facility_id) {
+      const facResult = await pool.query(
+        'SELECT id, name, barangay_name, facility_type FROM health_facilities WHERE id = $1',
+        [user.facility_id]
+      );
+      facility = facResult.rows[0] || null;
+    }
+
     res.json({
       message: 'Login successful.',
       user: {
@@ -157,6 +185,8 @@ const result = await pool.query(
         email: user.email,
         role: user.role,
         created_at: user.created_at,
+        facility_id: user.facility_id || null,
+        facility,
       },
       passwordRecentlyChanged: recentlyChanged,
     });
@@ -180,7 +210,11 @@ router.post('/logout', (req, res) => {
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, email, role, created_at FROM users WHERE id = $1',
+      `SELECT u.id, u.username, u.email, u.role, u.created_at, u.facility_id,
+              hf.name AS facility_name, hf.barangay_name AS facility_barangay, hf.facility_type
+       FROM users u
+       LEFT JOIN health_facilities hf ON u.facility_id = hf.id
+       WHERE u.id = $1`,
       [req.user.id]
     );
 
@@ -271,7 +305,11 @@ router.put('/password', authenticateToken, async (req, res) => {
 router.get('/users', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, email, role, created_at FROM users ORDER BY created_at DESC'
+      `SELECT u.id, u.username, u.email, u.role, u.created_at, u.facility_id,
+              hf.name AS facility_name, hf.barangay_name AS facility_barangay, hf.facility_type
+       FROM users u
+       LEFT JOIN health_facilities hf ON u.facility_id = hf.id
+       ORDER BY u.created_at DESC`
     );
     res.json({ users: result.rows });
   } catch (err) {

@@ -14,9 +14,14 @@ const path = require('path');
 const pool = require('./db');
 
 const ML_URL = 'http://localhost:8001';
-const EXPRESS_URL = 'http://localhost:5000';
-const ADMIN_EMAIL = 'ivanurbano1000@gmail.com';
-const ADMIN_PASSWORD = process.env.TEST_PASSWORD || '@Mypassword06';
+const EXPRESS_URL = 'http://localhost:5050';
+const SKIP_SPAWN_ML = true; // ML service already running and healthy on :8001
+const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.TEST_PASSWORD;
+if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+  console.error('Set TEST_ADMIN_EMAIL and TEST_PASSWORD env vars before running this script (no hardcoded credentials).');
+  process.exit(1);
+}
 
 function httpGet(url) {
   return new Promise((resolve, reject) => {
@@ -44,7 +49,7 @@ function httpPost(url, body, headers = {}) {
     }, (res) => {
       let data = '';
       res.on('data', (chunk) => (data += chunk));
-      res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      res.on('end', () => resolve({ status: res.statusCode, body: data, headers: res.headers }));
     });
     req.on('error', reject);
     req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
@@ -69,25 +74,29 @@ async function waitForService(url, maxWaitMs = 30_000) {
   let pythonProcess = null;
 
   try {
-    // ── Step 1: Start Python ML service ──
-    console.log('🐍 Starting Python ML service on port 8001...');
-    // Pass env with PORT=8001 to avoid inheriting Express's PORT from .env
-    const mlEnv = { ...process.env, PORT: '8001' };
-    pythonProcess = spawn('python', ['main.py'], {
-      cwd: path.join(__dirname, '..', 'ML_SERVICE'),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
-      env: mlEnv,
-    });
+    // ── Step 1: Start Python ML service (skipped — already running) ──
+    if (!SKIP_SPAWN_ML) {
+      console.log('🐍 Starting Python ML service on port 8001...');
+      // Pass env with PORT=8001 to avoid inheriting Express's PORT from .env
+      const mlEnv = { ...process.env, PORT: '8001' };
+      pythonProcess = spawn('python', ['main.py'], {
+        cwd: path.join(__dirname, '..', 'ML_SERVICE'),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
+        env: mlEnv,
+      });
 
-    pythonProcess.stdout.on('data', (d) => {
-      const msg = d.toString().trim();
-      if (msg) console.log(`  [python] ${msg}`);
-    });
-    pythonProcess.stderr.on('data', (d) => {
-      const msg = d.toString().trim();
-      if (msg) console.log(`  [python] ${msg}`);
-    });
+      pythonProcess.stdout.on('data', (d) => {
+        const msg = d.toString().trim();
+        if (msg) console.log(`  [python] ${msg}`);
+      });
+      pythonProcess.stderr.on('data', (d) => {
+        const msg = d.toString().trim();
+        if (msg) console.log(`  [python] ${msg}`);
+      });
+    } else {
+      console.log('🐍 Skipping ML service spawn — using already-running instance on :8001');
+    }
 
     // ── Step 2: Wait for ML service to be healthy ──
     console.log('⏳ Waiting for ML service to be ready...');
@@ -118,17 +127,19 @@ async function waitForService(url, maxWaitMs = 30_000) {
       throw new Error(`Login failed (${loginRes.status}): ${loginBody.error || loginRes.body}`);
     }
 
-    const loginData = JSON.parse(loginRes.body);
-    const token = loginData.token;
-    if (!token) {
-      throw new Error('No token in login response: ' + loginRes.body);
+    // Token is issued as an httpOnly cookie, not in the JSON body — grab it
+    // from Set-Cookie and forward it as the Cookie header on the next request.
+    const setCookie = loginRes.headers['set-cookie'];
+    const tokenCookie = (setCookie || []).map(c => c.split(';')[0]).find(c => c.startsWith('token='));
+    if (!tokenCookie) {
+      throw new Error('No token cookie in login response headers: ' + JSON.stringify(setCookie));
     }
-    console.log('✅ Login successful, got JWT token');
+    console.log('✅ Login successful, got auth cookie');
 
     // ── Step 5: Run the pipeline ──
     console.log('🚀 Running pipeline (this may take 30-60 seconds for ARIMA)...');
     const pipelineRes = await httpPost(`${EXPRESS_URL}/api/tb/pipeline`, {}, {
-      'Authorization': `Bearer ${token}`,
+      'Cookie': tokenCookie,
     });
 
     if (pipelineRes.status !== 200) {

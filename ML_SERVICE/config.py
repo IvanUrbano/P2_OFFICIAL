@@ -63,9 +63,11 @@ TERTILE_THRESHOLDS = {
 
 # ==================== FEATURE CONFIG ====================
 
-# RF features (8 features — replaced duplicate population_density with lag features)
+# RF features (8 features — replaced duplicate population_density with lag features).
+# NOTE: rf_classifier.py:FEATURES is the list actually used by the classifier
+# (_vec); these two names are kept in sync manually and must not drift.
 FEATURE_NAMES = [
-    "forecasted_incidence",  # Annualized incidence per 100k from 12-month window
+    "rolling_12m_incidence",  # Annualized incidence per 100k from a 12-month window of ACTUAL case counts (not a forecast)
     "recent_trend",          # Linear regression slope of case counts over 12-month window
     "seasonality_flag",      # 1 if seasonal pattern detected, 0 otherwise
     "lag_1m",                # Case count 1 month ago (momentum)
@@ -77,7 +79,7 @@ FEATURE_NAMES = [
 
 # Feature scaling ranges (for normalization if needed)
 FEATURE_RANGES = {
-    "forecasted_incidence": (0, 1000),
+    "rolling_12m_incidence": (0, 1000),
     "recent_trend": (-10, 10),
     "seasonality_flag": (0, 1),
     "lag_1m": (0, 50),

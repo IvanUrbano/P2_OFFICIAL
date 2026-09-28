@@ -180,7 +180,7 @@
    │
    ▼
 4. Compute 8 Random Forest features per barangay:
-   • forecasted_incidence     • lag_1m
+   • rolling_12m_incidence     • lag_1m
    • recent_trend             • lag_2m
    • seasonality_flag         • lag_3m
    • neighbor_risk            • historical_bias

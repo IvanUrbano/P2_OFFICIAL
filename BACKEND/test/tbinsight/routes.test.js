@@ -429,6 +429,110 @@ describe('GET /api/tb/gis/geojson', () => {
     const res = await request(buildApp()).get('/api/tb/gis/geojson');
     assert.strictEqual(res.body.outline.coordinates.length, 2);
   });
+
+  it('never coalesces a missing-population incidence to 0 (TEST E)', async () => {
+    let callCount = 0;
+    mockQueryFn = async () => {
+      callCount++;
+      if (callCount === 1) {
+        return { rows: [{ id: 1, name: 'Dela Paz', population: 50000, geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] }, centroid_lon: 0.5, centroid_lat: 0.5 }] };
+      }
+      if (callCount === 2) {
+        // incidence_per_100k NULL — no matching-year population reference
+        return { rows: [{ barangay_name: 'Dela Paz', risk_score: 40, risk_class: 'Medium', incidence_per_100k: null, trend_direction: 'Stable', period: '2026-01-01' }] };
+      }
+      return { rows: [] };
+    };
+    const res = await request(buildApp()).get('/api/tb/gis/geojson');
+    const f = res.body.features.find(x => x.properties.name === 'Dela Paz');
+    assert.strictEqual(f.properties.incidence_per_100k, null, 'missing population must surface as null, never 0');
+  });
+
+  it('a specific year requests THAT year\'s own snapshot (period Y+1-01-01), not the latest one (TEST F/G)', async () => {
+    let callCount = 0;
+    let riskQueryParams = null;
+    mockQueryFn = async (sql, params) => {
+      callCount++;
+      if (callCount === 1) {
+        return { rows: [{ id: 1, name: 'Dela Paz', population: 50000, geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] }, centroid_lon: 0.5, centroid_lat: 0.5 }] };
+      }
+      if (callCount === 2) {
+        riskQueryParams = params;
+        // 2023's OWN snapshot (period 2024-01-01) — distinct from whatever
+        // the current/latest (e.g. 2026) snapshot says.
+        return { rows: [{ barangay_name: 'Dela Paz', risk_score: 20, risk_class: 'Low', model_type: 'rule_based', incidence_per_100k: null, trend_direction: 'Stable', period: '2024-01-01' }] };
+      }
+      return { rows: [] };
+    };
+    const res = await request(buildApp()).get('/api/tb/gis/geojson?year=2023');
+    assert.deepStrictEqual(riskQueryParams, ['2024-01-01'], 'year=2023 must look up period 2024-01-01 exactly (Y+1 convention), not the latest overall period');
+    const f = res.body.features.find(x => x.properties.name === 'Dela Paz');
+    assert.strictEqual(f.properties.risk_class, 'Low', 'must return 2023\'s own snapshot, not a different year\'s');
+    assert.strictEqual(res.body.meta.risk_assessment_period, '2024-01-01');
+    assert.strictEqual(res.body.meta.requested_year, 2023);
+    assert.strictEqual(res.body.meta.requested_year_has_snapshot, true);
+  });
+
+  it('a year with no computed snapshot yet shows No Data, never substituting a different year\'s snapshot (TEST G)', async () => {
+    let callCount = 0;
+    mockQueryFn = async () => {
+      callCount++;
+      if (callCount === 1) {
+        return { rows: [{ id: 1, name: 'Dela Paz', population: 50000, geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] }, centroid_lon: 0.5, centroid_lat: 0.5 }] };
+      }
+      if (callCount === 2) return { rows: [] }; // no snapshot exists for 2019 yet
+      return { rows: [] };
+    };
+    const res = await request(buildApp()).get('/api/tb/gis/geojson?year=2019');
+    const f = res.body.features.find(x => x.properties.name === 'Dela Paz');
+    assert.strictEqual(f.properties.risk_class, 'No Data');
+    assert.strictEqual(f.properties.model_type, null);
+    assert.strictEqual(res.body.meta.requested_year_has_snapshot, false);
+    assert.strictEqual(res.body.meta.risk_assessment_period, null);
+  });
+
+  it('exposes RF provenance fields: model_type, classification_confidence, probabilities, and features (TEST H)', async () => {
+    let callCount = 0;
+    mockQueryFn = async () => {
+      callCount++;
+      if (callCount === 1) {
+        return { rows: [{ id: 1, name: 'Dela Paz', population: 50000, geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] }, centroid_lon: 0.5, centroid_lat: 0.5 }] };
+      }
+      if (callCount === 2) {
+        return {
+          rows: [{
+            barangay_name: 'Dela Paz', risk_score: 60, risk_class: 'High', incidence_per_100k: 300, trend_direction: 'Increasing',
+            model_type: 'random_forest', model_version: 'arima-v1.0-rf-v1.0', classification_confidence: 0.82,
+            prob_low: 0.05, prob_medium: 0.13, prob_high: 0.82,
+            features: { rolling_12m_incidence: 300, recent_trend: 1.2, seasonality_flag: 0, lag_1m: 5, lag_2m: 4, lag_3m: 3, neighbor_risk: 0.6, historical_bias: 0 },
+            period: '2026-01-01',
+          }],
+        };
+      }
+      return { rows: [] };
+    };
+    const res = await request(buildApp()).get('/api/tb/gis/geojson');
+    const f = res.body.features.find(x => x.properties.name === 'Dela Paz');
+    assert.strictEqual(f.properties.model_type, 'random_forest');
+    assert.strictEqual(f.properties.classification_confidence, 0.82);
+    assert.strictEqual(f.properties.prob_high, 0.82);
+    assert.strictEqual(f.properties.rf_features.rolling_12m_incidence, 300);
+  });
+
+  it('marks a barangay with no risk row as No Data with no fabricated model_type (TEST D)', async () => {
+    let callCount = 0;
+    mockQueryFn = async () => {
+      callCount++;
+      if (callCount === 1) {
+        return { rows: [{ id: 1, name: 'Dela Paz', population: 50000, geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] }, centroid_lon: 0.5, centroid_lat: 0.5 }] };
+      }
+      return { rows: [] }; // no risk rows at all — RF classification unavailable
+    };
+    const res = await request(buildApp()).get('/api/tb/gis/geojson');
+    const f = res.body.features.find(x => x.properties.name === 'Dela Paz');
+    assert.strictEqual(f.properties.risk_class, 'No Data');
+    assert.strictEqual(f.properties.model_type, null, 'must not claim a model produced a classification that does not exist');
+  });
 });
 
 describe('GET /api/tb/gis/barangay-at', () => {
@@ -522,5 +626,13 @@ describe('GET /api/tb/pipeline/status', () => {
     assert.strictEqual(res.status, 200);
     assert.ok(res.body.latest_run);
     assert.strictEqual(res.body.latest_run.model_version, 'v1.0');
+    // Live background-run state machine is exposed alongside the persisted run
+    assert.ok(res.body.current_run);
+    assert.strictEqual(typeof res.body.current_run.running, 'boolean');
+    assert.strictEqual(res.body.current_run.running, false);
+    assert.strictEqual(res.body.current_run.runsFinished, 0);
+    // GIS banner states derive from these
+    assert.strictEqual(res.body.current_run.lastRunStatus, null);
+    assert.strictEqual(res.body.current_run.lastError, null);
   });
 });

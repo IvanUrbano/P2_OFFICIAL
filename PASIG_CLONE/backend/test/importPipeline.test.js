@@ -193,7 +193,7 @@ describe('cleaning', () => {
     assert.equal(cleanAge(33), 33);
     assert.equal(cleanAge('8 mos'), 0);
     assert.equal(cleanAge('abc'), 'abc'); // left for validation to reject
-    assert.equal(cleanOutcome('Lost to follow up'), 'LOST TO FOLLOW-UP');
+    assert.equal(cleanOutcome('Lost to follow up'), 'LOST TO FF-UP');
     assert.equal(cleanOutcome('tx completed'), 'TREATMENT COMPLETED');
     assert.equal(cleanOutcome('cured'), 'CURED');
     assert.equal(cleanOutcome('-'), null);

@@ -5,8 +5,16 @@ Endpoints aligned with Plan 02 spec contracts:
   POST /thresholds — compute tertile/Jenks cut points
   POST /forecast   — ARIMA forecasting with backtest_mae
   POST /classify   — RF train + predict with proba
-  POST /pipeline   — combined forecast + classify
   GET  /health     — service health check
+
+ARIMA forecasting (/forecast) and RF risk classification (/classify) are
+independent endpoints by design — the orchestrator (BACKEND/tbinsight/
+pipeline.js) calls them separately and neither's success or output is
+required by the other. There used to be a combined POST /pipeline endpoint
+that built its own RF feature vector directly from an ARIMA forecast
+(coupling RF to ARIMA); it was never called by the Express backend and has
+been removed rather than fixed, since a working combined endpoint would
+reintroduce the exact ARIMA→RF dependency the architecture must not have.
 """
 
 import logging
@@ -26,10 +34,6 @@ from models import (
     ForecastOut,
     PredictionPoint,
     HealthResponse,
-    PipelineRequest,
-    PipelineResponse,
-    PipelineForecast,
-    PipelineClassification,
     ThresholdRequest,
     ThresholdResponse,
     EvaluateRequest,
@@ -43,7 +47,6 @@ from arima_forecast import parallel_map, forecast_all, compute_trend, detect_sea
 from rf_classifier import (
     train_and_predict,
     classify_risk_simple,
-    compute_incidence,
     walk_forward_rf,
     FEATURES,
 )
@@ -223,124 +226,6 @@ async def run_classify(req: ClassifyRequest):
         raise HTTPException(status_code=500, detail=f"Classification failed: {str(e)}")
 
 
-# ==================== POST /pipeline ====================
-
-@router.post("/pipeline", response_model=PipelineResponse, dependencies=[Depends(verify_api_key)])
-async def run_pipeline(req: PipelineRequest):
-    """
-    Full pipeline: ARIMA forecast → classification.
-    Processes one barangay at a time.
-
-    If `train` data is provided, uses RF classification.
-    Otherwise, falls back to rule-based threshold classification.
-    """
-    try:
-        if not req.series:
-            raise HTTPException(status_code=400, detail="No series data provided")
-
-        series_data = [pt.model_dump() for pt in req.series]
-
-        # Validate all records belong to the same barangay
-        barangay_names = {pt.barangay_name for pt in req.series}
-        if len(barangay_names) > 1:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Pipeline endpoint requires single-barangay input. Got {len(barangay_names)} barangays: {', '.join(sorted(barangay_names))}"
-            )
-        barangay_name = series_data[0]["barangay_name"]
-
-        # Step 1: ARIMA forecasting
-        forecasts = forecast_all(series_data, forecast_horizon=1)
-        if not forecasts:
-            raise HTTPException(status_code=400, detail="No forecasts generated")
-
-        forecast = forecasts[0]
-
-        # Step 2: Build features for classification
-        pop = req.population.get(barangay_name, 1000)
-
-        df = pd.DataFrame(series_data)
-        df["month"] = pd.to_datetime(df["month"])
-        df = df.sort_values("month").set_index("month")
-        ts = df["case_count"].resample("MS").sum().fillna(0)
-
-        recent_trend = compute_trend(ts)
-        seasonality_flag = 1 if detect_seasonality(ts) else 0
-
-        forecasted = forecast["predictions"][0]["yhat"] if forecast["predictions"] else 0
-        pop_density = compute_incidence(forecasted, pop)
-        hist_bias = req.historical_bias.get(barangay_name, 0.0)
-        neighbor_risk = req.neighbor_risk.get(barangay_name, 0.0)
-
-        # Build features matching the 8-feature RF schema
-        # Express pipeline sends lag_1m/2m/3m in predict rows,
-        # but we compute them here as fallback from the time series
-        lag_1m, lag_2m, lag_3m = 0.0, 0.0, 0.0
-        if len(ts) >= 3:
-            lag_1m = float(ts.iloc[-1])
-            lag_2m = float(ts.iloc[-2])
-            lag_3m = float(ts.iloc[-3])
-        elif len(ts) >= 1:
-            lag_1m = float(ts.iloc[-1])
-
-        feature = {
-            "barangay_name": barangay_name,
-            "forecasted_incidence": pop_density,
-            "recent_trend": recent_trend,
-            "seasonality_flag": seasonality_flag,
-            "lag_1m": lag_1m,
-            "lag_2m": lag_2m,
-            "lag_3m": lag_3m,
-            "neighbor_risk": neighbor_risk,
-            "historical_bias": hist_bias,
-        }
-
-        # Step 3: Classification
-        # Use thresholds from request, or PLACEHOLDER defaults
-        if req.thresholds:
-            low_max = req.thresholds.low_max
-            med_max = req.thresholds.med_max
-        else:
-            from config import TERTILE_THRESHOLDS
-            low_max = TERTILE_THRESHOLDS["tertile_low_max"]
-            med_max = TERTILE_THRESHOLDS["tertile_high_min"]
-
-        thresholds_dict = {"low_max": low_max, "med_max": med_max}
-
-        if req.train:
-            # RF classification with training data
-            train = [{"features": r.features, "incidence": r.incidence} for r in req.train]
-            predict = [{"barangay_name": barangay_name, "features": feature}]
-            preds = train_and_predict(train, predict, low_max, med_max)
-            risk_class = preds[0] if preds else classify_risk_simple([feature], thresholds_dict)[0]
-        else:
-            # Rule-based fallback (no training data)
-            risk_class = classify_risk_simple([feature], thresholds_dict)[0]
-
-        first_pred = forecast["predictions"][0] if forecast["predictions"] else {"yhat": 0, "yhat_lower": 0, "yhat_upper": 0}
-        return PipelineResponse(
-            forecast=PipelineForecast(
-                barangay_name=forecast["barangay_name"],
-                period=forecast["period"],
-                forecasted_count=first_pred["yhat"],
-                confidence_lower=first_pred["yhat_lower"],
-                confidence_upper=first_pred["yhat_upper"],
-                method=forecast["method"],
-            ),
-            classification=PipelineClassification(
-                barangay_name=risk_class["barangay_name"],
-                risk_class=risk_class["risk_class"],
-                incidence_per_100k=pop_density,
-            ),
-            model_version=MODEL_VERSION,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Pipeline error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Pipeline failed: {str(e)}")
-
-
 # ==================== POST /evaluate ====================
 
 @router.post("/evaluate", response_model=EvaluateResponse, dependencies=[Depends(verify_api_key)])
@@ -380,11 +265,18 @@ async def evaluate_models(req: EvaluateRequest):
             all_mape = [r["mape"] for r in arima_results if r["mape"] is not None]
             # Use the first (longest) barangay's steps for detailed output
             longest = max(arima_results, key=lambda r: r["n_steps"])
+            # Steps per method across ALL barangays: shows how much of the
+            # reported MAE/MAPE came from real ARIMA fits vs fallback models.
+            method_counts: dict[str, int] = {}
+            for r in arima_results:
+                for m, c in (r.get("method_counts") or {}).items():
+                    method_counts[m] = method_counts.get(m, 0) + c
             arima_eval = ArimaEvaluation(
                 mae=round(float(np.mean(all_mae)), 4) if all_mae else None,
                 mape=round(float(np.mean(all_mape)), 2) if all_mape else None,
                 n_steps=longest["n_steps"],
                 steps=[ArimaStep(**s) for s in longest["steps"]],
+                method_counts=method_counts,
             )
         else:
             arima_eval = ArimaEvaluation()
