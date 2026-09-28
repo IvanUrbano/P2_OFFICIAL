@@ -378,20 +378,38 @@ export default function GisMap() {
       const cls = p.risk_class || 'No Data';
       if (groups[cls]) groups[cls].push(p);
     });
+    // Rows sort by the VISIBLE year-specific incidence (descending), with
+    // total cases as tiebreak — never the legacy risk_score, which is no
+    // longer displayed anywhere in this panel (kept only in the DB).
+    // All Years has no incidence (null), so every row ties at 0 and the
+    // fallback takes over: rows within each risk group order by total
+    // cases across available years (descending), then name. No combined
+    // multi-year risk score is invented to fake an all-years ranking.
     Object.keys(groups).forEach(k => {
-      groups[k].sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0));
+      groups[k].sort((a, b) =>
+        (b.incidence_per_100k || 0) - (a.incidence_per_100k || 0) ||
+        (b.total_cases || 0) - (a.total_cases || 0) ||
+        String(a.name || '').localeCompare(String(b.name || ''))
+      );
     });
     const allBarangays = [...groups.High, ...groups.Medium, ...groups.Low, ...groups['No Data']];
-    const maxScore = Math.max(...allBarangays.map(b => b.risk_score || 0), 1);
     const mid = Math.ceil(allBarangays.length / 2);
     const leftHalf = allBarangays.slice(0, mid);
     const rightHalf = allBarangays.slice(mid);
+    // Neutral, count-based section labels — no prescriptive clinical or
+    // operational directives, which no approved protocol ever defined for
+    // these groups. "No Assessment" (not "No Data"): case data may still
+    // exist for the selected year — only the risk snapshot is missing.
+    // Never rendered empty (count > 0 guard).
     const sections = [
-      { key: 'High', label: 'High Risk', subtitle: 'Immediate Action Required', color: '#EF4444', items: groups.High },
-      { key: 'Medium', label: 'Moderate Risk', subtitle: 'Close Monitoring Recommended', color: '#F97316', items: groups.Medium },
-      { key: 'Low', label: 'Low Risk', subtitle: 'Routine Surveillance', color: '#FBBF24', items: groups.Low },
+      { key: 'High', label: `High Risk — ${groups.High.length} barangay${groups.High.length === 1 ? '' : 's'}`, color: '#EF4444', items: groups.High },
+      { key: 'Medium', label: `Moderate Risk — ${groups.Medium.length} barangay${groups.Medium.length === 1 ? '' : 's'}`, color: '#F97316', items: groups.Medium },
+      { key: 'Low', label: `Low Risk — ${groups.Low.length} barangay${groups.Low.length === 1 ? '' : 's'}`, color: '#FBBF24', items: groups.Low },
+      ...(groups['No Data'].length > 0
+        ? [{ key: 'No Data', label: `No Assessment — ${groups['No Data'].length} barangay${groups['No Data'].length === 1 ? '' : 's'}`, color: '#94A3B8', items: groups['No Data'] }]
+        : []),
     ].filter(s => s.items.length > 0);
-    return { groups, allBarangays, maxScore, sections, leftHalf, rightHalf };
+    return { groups, allBarangays, sections, leftHalf, rightHalf };
   }, [data]);
 
   // Modal content data (extracted from IIFE for performance)
@@ -438,6 +456,21 @@ export default function GisMap() {
 
   const hasActiveFilters = filterBarangay || filterRiskLevel || filterYear;
 
+  // Assessment year of the risk snapshot. Snapshots are keyed at
+  // (assessment year + 1)-01-01 and serialized as an ISO instant
+  // ("2025-12-31T16:00:00.000Z" = local midnight Jan 1, 2026 in Pasig,
+  // UTC+8). Shifting by +8h before reading the UTC year makes this correct
+  // in any browser timezone: 2026 - 1 = 2025, the year the snapshot's
+  // data actually covers. Also avoids the old `period + 'T00:00:00'`
+  // concatenation, which produced an Invalid Date on ISO strings.
+  const riskAssessmentYear = React.useMemo(() => {
+    const p = data?.meta?.risk_assessment_period;
+    if (!p) return null;
+    const d = new Date(p);
+    if (Number.isNaN(d.getTime())) return null;
+    return new Date(d.getTime() + 8 * 3600 * 1000).getUTCFullYear() - 1;
+  }, [data]);
+
   // Click-to-zoom on barangay polygon
   const handlePolygonClick = useCallback((feature, layer) => {
     if (layer.getBounds) {
@@ -476,12 +509,12 @@ export default function GisMap() {
         // predicted class \u2014 only shown when it actually came from RF.
         const confidenceRow = p.model_type === 'random_forest' && p.classification_confidence != null
           ? `<div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
-              <span style="font-size: 10px; color: #94A3B8;">Confidence</span>
+              <span style="font-size: 10px; color: #94A3B8;">Classification Confidence</span>
               <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${Math.round(p.classification_confidence * 100)}%</span>
             </div>`
           : '';
         const tooltipHtml = `
-          <div style="font-family: Inter, sans-serif; min-width: 180px; padding: 2px;">
+          <div style="font-family: Inter, sans-serif; min-width: 220px; padding: 2px;">
             <div style="font-size: 13px; font-weight: 700; color: #0F2D52; margin-bottom: 4px;">${escapeHtml(p.name) || 'Unknown'}</div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
               <span style="font-size: 10px; color: #94A3B8;">Risk</span>
@@ -546,17 +579,22 @@ export default function GisMap() {
       monthCases[name] = entry ? Number(entry.case_count || 0) : 0;
     });
 
-    // Compute incidence per 100k
+    // Compute incidence per 100k — requires the year-matched population.
+    // A missing population must never be faked with a denominator of 1
+    // (that would invent an enormous incidence); such barangays are
+    // excluded from the coloring below and keep their default risk color.
     const withIncidence = data.features.map(f => {
       const name = f.properties?.name;
-      const pop = f.properties?.population || 1;
+      const pop = f.properties?.population;
       const cases = monthCases[name] || 0;
-      const incidence = (cases / pop) * 100000;
+      const incidence = pop && pop > 0 ? (cases / pop) * 100000 : null;
       return { name, incidence, cases };
     });
 
-    // Sort by incidence to compute tertiles
-    const sorted = [...withIncidence].sort((a, b) => a.incidence - b.incidence);
+    // Sort by incidence to compute tertiles (only barangays with a valid
+    // year-matched population participate)
+    const sorted = withIncidence.filter(x => x.incidence != null)
+      .sort((a, b) => a.incidence - b.incidence);
     const n = sorted.length;
     const lowMax = Math.floor(n / 3);
     const medMax = Math.floor((2 * n) / 3);
@@ -833,7 +871,7 @@ export default function GisMap() {
                     style={{ background: '#F8FAFC', color: '#64748B', border: '1px solid #E2E8F0' }}
                     title="Showing the most recent risk assessment. Select a specific Year to see that year's own snapshot."
                   >
-                    Risk Assessment: Latest ({new Date(data.meta.risk_assessment_period + 'T00:00:00').toLocaleDateString('default', { month: 'short', year: 'numeric' })})
+                    Risk Assessment: Latest ({riskAssessmentYear ?? '—'})
                   </span>
                 ) : null;
               }
@@ -1101,7 +1139,21 @@ export default function GisMap() {
 
       {/* ── Risk Distribution ── */}
       {!isFullscreen && riskRankingData && (() => {
-        const { allBarangays, maxScore, sections, leftHalf, rightHalf } = riskRankingData;
+        const { groups, allBarangays, sections, leftHalf, rightHalf } = riskRankingData;
+        const classifiedBarangays = allBarangays.length - (groups['No Data']?.length || 0);
+        const totalBarangays = allBarangays.length;
+        // Dynamic case-data year range (fetched from /api/tb/gis/years —
+        // never hardcoded). Null when no case years exist -> the context
+        // line below is hidden rather than showing a fabricated range.
+        const minYear = availableYears.length ? availableYears[availableYears.length - 1] : null;
+        const maxYear = availableYears.length ? availableYears[0] : null;
+        const caseYearRange = minYear && maxYear ? `${minYear}\u2013${maxYear}` : null;
+        // All Years drops the per-100k column entirely (every row would be
+        // N/A — 30 rows of N/A is clutter without information). A specific
+        // year shows the same-year incidence normally.
+        const rankCols = !filterYear
+          ? '32px 150px 118px 132px 70px'
+          : '32px 150px 104px 112px 96px 70px';
 
         return (
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E8ECF1', boxShadow: '0 4px 24px rgba(15,45,82,0.06)' }}>
@@ -1110,12 +1162,16 @@ export default function GisMap() {
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: '#EF4444' }}>Priority Watchlist</p>
-                  <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>Risk-Ranked Barangays</h3>
-                  <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Grouped by risk classification — {allBarangays.length} Pasig City barangays</p>
+                  <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>Risk-Classified Barangays</h3>
+                  <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
+                    {!filterYear
+                      ? `Grouped by latest Random Forest risk classification and ordered by total cases within each group — ${totalBarangays} Pasig City barangays`
+                      : `Grouped by Random Forest risk classification and ordered by ${filterYear} incidence within each group — ${totalBarangays} Pasig City barangays`}
+                  </p>
                 </div>
                 <div className="text-right shrink-0">
-                  <span className="text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{allBarangays.length}</span>
-                  <span className="text-sm font-semibold" style={{ color: '#94A3B8' }}>/{allBarangays.length}</span>
+                  <span className="text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{classifiedBarangays}</span>
+                  <span className="text-sm font-semibold" style={{ color: '#94A3B8' }}>/{totalBarangays}</span>
                   <p className="text-[10px] font-semibold uppercase tracking-wide mt-0.5" style={{ color: '#94A3B8' }}>of Pasig Barangays</p>
                 </div>
               </div>
@@ -1123,10 +1179,20 @@ export default function GisMap() {
                 {sections.map(s => (
                   <div key={s.key} className="flex items-center gap-1.5">
                     <span className="w-2.5 h-2.5 rounded-full" style={{ background: s.color }} />
-                    <span className="text-[11px] font-semibold" style={{ color: '#64748B' }}>{s.label} ({s.items.length})</span>
+                    <span className="text-[11px] font-semibold" style={{ color: '#64748B' }}>{s.label}</span>
                   </div>
                 ))}
               </div>
+              {/* All Years: risk class/confidence come from ONE snapshot while
+                  case totals span all available years — state this plainly so
+                  the columns are never read as a historical multi-year
+                  classification. Hidden entirely when no case years exist
+                  (a fabricated year range would be worse than none). */}
+              {!filterYear && data?.meta?.risk_assessment_period && caseYearRange && (
+                <p className="text-[9px] font-medium mt-2" style={{ color: '#94A3B8' }}>
+                  All Years combines available TB records from {caseYearRange}. Risk classification and confidence are based on the latest available risk assessment ({riskAssessmentYear}). Incidence per 100,000 is available only when a specific year is selected.
+                </p>
+              )}
             </div>
 
             {/* Table — 2-Column Layout */}
@@ -1142,12 +1208,12 @@ export default function GisMap() {
                   return (
                     <div key={colIdx} style={{ borderRight: colIdx === 0 ? '1px solid #E8ECF1' : 'none' }}>
                       {/* Column Header */}
-                      <div className="grid items-center px-4 py-2.5 text-[10px] font-bold uppercase tracking-wider" style={{ gridTemplateColumns: '32px 140px 1fr 60px 90px 70px', background: '#0F2D52', color: '#ffffff', borderBottom: '1px solid #0F2D52' }}>
+                      <div className="grid items-center px-4 py-2.5 text-[10px] font-bold uppercase tracking-wider" style={{ gridTemplateColumns: rankCols, background: '#0F2D52', color: '#ffffff', borderBottom: '1px solid #0F2D52' }}>
                         <span>Rank</span>
                         <span>Barangay</span>
-                        <span></span>
-                        <span className="text-right">Score</span>
-                        <span className="text-right">per 100k</span>
+                        <span>{!filterYear ? `Latest Risk Assessment (${riskAssessmentYear ?? '—'})` : 'Risk Class'}</span>
+                        <span className="text-right">{!filterYear ? 'Latest Classification Confidence' : 'Classification Confidence'}</span>
+                        {filterYear && <span className="text-right">per 100k</span>}
                         <span className="text-right">Actions</span>
                       </div>
                       {/* Grouped Rows */}
@@ -1159,19 +1225,22 @@ export default function GisMap() {
                           <div className="px-4 py-2 flex items-center gap-2" style={{ background: `${sec.color}08`, borderBottom: '1px solid #F1F5F9' }}>
                             <span className="w-2 h-2 rounded-full" style={{ background: sec.color }} />
                             <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: sec.color }}>{sec.label}</span>
-                            <span className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>— {sec.subtitle}</span>
-                            <span className="ml-auto px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: `${sec.color}15`, color: sec.color }}>{sec.items.length}</span>
                           </div>
                           {sec.items.map((b, localIdx) => {
                             const rank = sectionStartRank + localIdx + 1;
-                            const pct = Math.max(((b.risk_score || 0) / maxScore) * 100, 4);
                             const isHovered = hoveredBarangay === b.name;
+                            // Classification Confidence is RF's own
+                            // predict_proba for the predicted class — shown
+                            // ONLY when the classification actually came from
+                            // the trained model. Never fabricated for the
+                            // rule-based fallback (— means unavailable).
+                            const hasRfConfidence = b.model_type === 'random_forest' && b.classification_confidence != null;
                             return (
                               <div
                                 key={b.name}
                                 className="grid items-center px-4 py-3 transition"
                                 style={{
-                                  gridTemplateColumns: '32px 140px 1fr 60px 90px 70px',
+                                  gridTemplateColumns: rankCols,
                                   borderBottom: '1px solid #F1F5F9',
                                   background: isHovered ? `${sec.color}10` : undefined,
                                 }}
@@ -1183,22 +1252,28 @@ export default function GisMap() {
                                   <div className="w-1 h-7 rounded-full shrink-0" style={{ background: sec.color }} />
                                   <div className="min-w-0">
                                     <p className="text-[13px] font-bold truncate" style={{ color: '#0F2D52' }}>{b.name}</p>
-                                    <p className="text-[10px] truncate" style={{ color: '#94A3B8' }}>{formatNum(b.total_cases)} active</p>
+                                    <p className="text-[10px] truncate" style={{ color: '#94A3B8' }}>{formatNum(b.total_cases)} total cases</p>
                                   </div>
                                 </div>
-                                <div className="px-1.5">
-                                  <div className="h-1.5 rounded-full w-full" style={{ background: '#F1F5F9' }}>
-                                    <div className="h-1.5 rounded-full transition-all" style={{ width: `${pct}%`, background: sec.color }} />
+                                <div className="flex items-center">
+                                  {/* "No Assessment" for the No Data group: case
+                                      data may exist — only the risk snapshot is
+                                      missing for the selected year. */}
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: `${sec.color}15`, color: sec.color, border: `1px solid ${sec.color}40` }}>{sec.key === 'No Data' ? 'No Assessment' : `${riskLabel(b.risk_class)} Risk`}</span>
+                                </div>
+                                <div className="text-right" title="How strongly the Random Forest model supports the assigned risk classification. This is not the probability of developing TB.">
+                                  {hasRfConfidence ? (
+                                    <span className="text-[13px] font-extrabold" style={{ color: sec.color }}>{Math.round(b.classification_confidence * 100)}%</span>
+                                  ) : (
+                                    <span className="text-[13px] font-bold" style={{ color: '#CBD5E1' }}>—</span>
+                                  )}
+                                </div>
+                                {filterYear && (
+                                  <div className="text-right">
+                                    <span className="text-[13px] font-bold" style={{ color: b.incidence_per_100k != null ? '#475569' : '#94A3B8' }}>{b.incidence_per_100k != null ? formatNum(b.incidence_per_100k) : 'N/A'}</span>
+                                    <p className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>per 100k</p>
                                   </div>
-                                </div>
-                                <div className="text-right">
-                                  <span className="text-[13px] font-extrabold" style={{ color: sec.color }}>{formatNum(b.risk_score)}</span>
-                                  <p className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>score</p>
-                                </div>
-                                <div className="text-right">
-                                  <span className="text-[13px] font-bold" style={{ color: '#475569' }}>{formatNum(b.incidence_per_100k)}</span>
-                                  <p className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>per 100k</p>
-                                </div>
+                                )}
                                 <div className="flex items-center justify-end">
                                   <button className="px-1.5 py-1 flex items-center justify-center" aria-label={`View details for ${b.name}`} style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onClick={() => { setSelectedBarangayName(b.name); }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}><i className="ri-eye-line text-xs" /></button>
                                 </div>
@@ -1411,14 +1486,38 @@ export default function GisMap() {
                       analytical view, never the explanation for this. */}
                   {merged.risk_class && (
                     <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Risk Classification</h4>
+                      {/* All Years shows the NEWEST snapshot only — label it as
+                          such (with the assessment year) so one year's RF
+                          output is never read as an all-history classification. */}
+                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
+                        {!filterYear && data?.meta?.risk_assessment_period
+                          ? `Latest Risk Assessment (${riskAssessmentYear ?? '—'})`
+                          : 'Risk Classification'}
+                      </h4>
+                      {/* Selected year has case data but no risk snapshot —
+                          contextual note inside this section (the page-level
+                          yellow banner already covers it globally). */}
+                      {filterYear && data?.meta?.requested_year_has_snapshot === false && (
+                        <p className="text-[11px] mb-3 leading-relaxed" style={{ color: '#B45309' }}>
+                          <i className="ri-error-warning-line mr-1" />
+                          No risk assessment exists for {filterYear}. Case data and population information may still be available below.
+                        </p>
+                      )}
                       <div className="grid grid-cols-2 gap-3 mb-3">
                         <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
                           <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Risk Level</span>
-                          <p className="text-lg font-extrabold mt-1" style={{ color: riskColor }}>{riskLabel(merged.risk_class)}</p>
+                          <p className="text-lg font-extrabold mt-1" style={{ color: riskColor }}>
+                            {/* "No Assessment" not "No Data": case data may
+                                exist for this year — only the snapshot is
+                                missing, and the latest one is never
+                                substituted. */}
+                            {filterYear && merged.risk_class === 'No Data'
+                              ? 'No Assessment'
+                              : riskLabel(merged.risk_class)}
+                          </p>
                         </div>
                         <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                          <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Classification Confidence</span>
+                          <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>{!filterYear ? 'Latest Classification Confidence' : 'Classification Confidence'}</span>
                           <p className="text-lg font-extrabold mt-1" style={{ color: '#0F2D52' }}>
                             {merged.model_type === 'random_forest' && merged.classification_confidence != null
                               ? `${Math.round(merged.classification_confidence * 100)}%`

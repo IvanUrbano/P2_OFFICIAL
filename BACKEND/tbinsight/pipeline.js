@@ -503,6 +503,14 @@ async function runPipeline({
         risk_score: riskScore,
         ...resolved,
         features: predictRow?.features || null,
+        // LEGACY value: annualized latest-calendar-month calculation
+        // ((latest month × 12) / population × 100k) — see step 5a above.
+        // NOT the authoritative year-specific GIS incidence: the GIS
+        // geojson/choropleth endpoints now compute cases/year-population
+        // on the fly (computeYearIncidence). Kept for research/audit only.
+        // BACKLOG: audit → rename (e.g. legacy_annualized_monthly_incidence)
+        // or deprecate, so it can never be accidentally reused as annual
+        // incidence. Do not delete until downstream consumers are audited.
         incidence_per_100k: inc != null ? Math.round(inc * 100) / 100 : null,
         trend_direction: trendByBarangay[name]?.direction || 'Stable',
         norm_incidence: normIncidence,
