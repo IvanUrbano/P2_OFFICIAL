@@ -205,6 +205,33 @@ ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS norm_trend DOUBLE PREC
 ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS norm_neighbor_risk DOUBLE PRECISION;
 ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS norm_forecast_error DOUBLE PRECISION;
 
+-- Explicit model provenance: which classifier actually produced risk_class
+-- for this row — 'random_forest' or 'rule_based' (fallback). Lets GIS and
+-- the frontend distinguish a real RF classification from a rule-based one
+-- instead of presenting both under one unlabeled "risk_class".
+ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS model_type TEXT;
+
+-- Model version string, same as model_predictions.model_version (e.g.
+-- 'arima-v1.0-rf-v1.0') — lets a single row identify which model build
+-- produced it without joining another table.
+ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS model_version TEXT;
+
+-- Classifier confidence: predict_proba of the PREDICTED class only (i.e.
+-- proba[risk_class]), plus the full per-class distribution. NULL when
+-- risk_class came from the rule-based fallback (classify_risk_simple
+-- assigns 100% to one class by construction — not a real confidence, so it
+-- is intentionally not persisted here as if it were one).
+ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS classification_confidence DOUBLE PRECISION;
+ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS prob_low DOUBLE PRECISION;
+ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS prob_medium DOUBLE PRECISION;
+ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS prob_high DOUBLE PRECISION;
+
+-- The actual 8 RF feature values used to produce this row's classification
+-- (see BACKEND/tbinsight/pipeline.js:buildFeatureRow), persisted so GIS can
+-- show "indicators used" without re-running the model. Never presented as a
+-- causal explanation — just the inputs the classifier actually saw.
+ALTER TABLE barangay_risk_scores ADD COLUMN IF NOT EXISTS features JSONB;
+
 -- alerts: unified alerts + notifications
 CREATE TABLE IF NOT EXISTS alerts (
   id BIGSERIAL PRIMARY KEY,

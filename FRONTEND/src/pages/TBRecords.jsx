@@ -64,7 +64,7 @@ const DetailRow = ({ label, value }) => {
   return (
     <div className="flex items-center justify-between gap-4">
       <span className="text-xs" style={{ color: '#94A3B8' }}>{label}</span>
-      <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{displayValue != null ? displayValue : "�"}</span>
+      <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{displayValue != null ? displayValue : "—"}</span>
     </div>
   );
 };
@@ -217,17 +217,24 @@ export default function TBRecords() {
     try {
       const params = buildFilterParams();
       const qs = params.toString();
-      const res = await API.get(`/api/tb/dashboard/summary${qs ? `?${qs}` : ''}`);
-      const s = res.data.summary;
+      const [summaryRes, tsrRes] = await Promise.all([
+        API.get(`/api/tb/dashboard/summary${qs ? `?${qs}` : ''}`),
+        // Treatment Success Rate: from GET /api/tb/treatment-success-rate
+        // (the cohort-based methodology — Cured+Completed / patients whose
+        // treatment started in year Y-1). Previously computed here as
+        // successful/total_outcomes from /dashboard/summary — a DIFFERENT,
+        // diagnosis-date-filtered metric that disagreed with the AI-generated
+        // insight text elsewhere in the app under the same label.
+        API.get(`/api/tb/treatment-success-rate${qs ? `?${qs}` : ''}`).catch(() => ({ data: null })),
+      ]);
+      const s = summaryRes.data.summary;
       if (!s) return;
       const prevMonth = s.prev_month_cases || 0;
       const currentMonth = s.current_month_cases || 0;
       const caseTrendPct = prevMonth > 0
         ? Math.round(((currentMonth - prevMonth) / prevMonth) * 100) : 0;
-      const totalOutcomes = s.total_outcomes || 0;
-      const successful = s.successful_count || 0;
-      const successRate = totalOutcomes > 0
-        ? Math.round((successful / totalOutcomes) * 100) : 0;
+      // null (never 0) when the treatment-start cohort is empty.
+      const successRate = tsrRes.data?.successRate ?? null;
       setMetrics({
         totalCases: s.total_cases || 0,
         onTreatmentCount: s.on_treatment_count || 0,
@@ -460,7 +467,7 @@ export default function TBRecords() {
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Cured</span>
                 </div>
                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#ECFDF5', color: '#047857' }}>
-                  {metrics ? `${metrics.successRate}%` : '---'}
+                  {metrics ? (metrics.successRate == null ? 'N/A' : `${metrics.successRate}%`) : '---'}
                 </span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
@@ -597,7 +604,7 @@ export default function TBRecords() {
                     style={{ color: '#94A3B8', borderRadius: 4 }}
                     aria-label={`Remove ${f.label} filter`}
                   >
-                    �
+                    ×
                   </button>
                 </span>
               ))}
@@ -707,9 +714,9 @@ export default function TBRecords() {
                           <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: record.source_type === 'DSTB' ? '#EFF6FF' : '#F0FDF4', color: record.source_type === 'DSTB' ? '#1E40AF' : '#166534' }}>
                             {record.source_type}
                           </span>
-                        ) : '�'}
+                        ) : '—'}
                       </td>
-                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.bacteriological_status ? record.bacteriological_status.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : '�'}</td>
+                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.bacteriological_status ? record.bacteriological_status.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
                       <td className="px-3 py-2" style={{ borderRight: '1px solid #E2E8F0' }}>
                         <StatusBadge status={record.outcome_status} />
                       </td>
@@ -738,7 +745,7 @@ export default function TBRecords() {
                     <i className="ri-loader-4-line text-xs animate-spin" /> Loading records...
                   </span>
                 ) : (
-                  <>Showing {pagination.total === 0 ? 0 : (currentPage - 1) * pagination.limit + 1}�{Math.min(currentPage * pagination.limit, pagination.total)} of {pagination.total} records</>
+                  <>Showing {pagination.total === 0 ? 0 : (currentPage - 1) * pagination.limit + 1}–{Math.min(currentPage * pagination.limit, pagination.total)} of {pagination.total} records</>
                 )}
               </p>
               <div className="flex items-center gap-1.5">
@@ -763,7 +770,7 @@ export default function TBRecords() {
                 style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-                �
+                ‹
               </button>
               {(() => {
                 const totalPages = pagination.totalPages || 1;
@@ -797,7 +804,7 @@ export default function TBRecords() {
                 style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-                �
+                ›
               </button>
             </div>
           </div>

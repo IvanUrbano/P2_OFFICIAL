@@ -1,13 +1,16 @@
 """
 TBInsight ML Service — Random Forest Classifier
 
-Predicts Low/Medium/High risk classes on ARIMA-forecasted incidences.
+Predicts Low/Medium/High risk classes from historical/current case-data
+features only. Independent of ARIMA: no feature here is derived from a
+forecast, so RF classification does not require ARIMA to run or succeed.
 Uses 8 features including lag features and historical_bias from Approach B feedback loop.
 
 Design spec:
-  - Labels derived from incidence tertiles on 3-year training window
+  - Labels derived from incidence tertiles, auto-calibrated per run from the
+    current incidence distribution (NOT a fixed/official epidemiological
+    threshold — see FEATURES and the caller's threshold calibration)
   - RF learns to predict labels from multivariate features
-  - Applied to ARIMA forecasts (predicts FUTURE risk, not present)
   - Thresholds frozen and passed in each /classify request
 """
 
@@ -38,9 +41,18 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# Fixed feature order (8 features — lag features replace duplicate population_density)
+# Fixed feature order (8 features — lag features replace duplicate population_density).
+# Training and prediction rows MUST supply this exact key set, in any order
+# (values are read by name via _vec below), but changing a name here without
+# updating every caller (BACKEND/tbinsight/pipeline.js:buildFeatureRow) would
+# silently zero-fill the old key and break the model — the two sides are
+# ONLY kept in sync by matching these strings exactly.
 FEATURES = [
-    "forecasted_incidence",
+    "rolling_12m_incidence",  # renamed from forecasted_incidence: this is an
+                               # annualized incidence computed from a rolling
+                               # window of ACTUAL past case counts — never an
+                               # ARIMA forecast. See buildFeatureRow in
+                               # pipeline.js for the exact calculation.
     "recent_trend",
     "seasonality_flag",
     "lag_1m",
@@ -191,7 +203,7 @@ def classify_risk_simple(
     results = []
     for feat in features:
         name = feat.get("barangay_name", "")
-        incidence = feat.get("forecasted_incidence", 0)
+        incidence = feat.get("rolling_12m_incidence", 0)
         risk_class = classify_incidence_tertile(incidence, thresholds)
 
         # Rule-based: 100% probability for the assigned class

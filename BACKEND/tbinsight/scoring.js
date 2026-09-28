@@ -100,7 +100,10 @@ function classifyByTertile(scores) {
 /**
  * Compute neighbor risk for all barangays.
  * neighbor_risk for barangay X = average incidence of all OTHER barangays,
- * normalized to [0, 1] using min-max across all barangays.
+ * normalized to [0, 1] using min-max across all barangays. Barangays with
+ * unavailable (null) incidence are excluded from the average — an unknown
+ * incidence must never pull neighbors' scores toward "low risk" by being
+ * counted as 0.
  *
  * @param {Array} barangays - [{name, incidence_per_100k}]
  * @returns {Object} { barangayName: normalizedNeighborRisk }
@@ -108,19 +111,19 @@ function classifyByTertile(scores) {
 function computeNeighborRisks(barangays) {
   const incidenceMap = {};
   for (const b of barangays) {
-    incidenceMap[b.name] = b.incidence_per_100k || 0;
+    incidenceMap[b.name] = b.incidence_per_100k;
   }
 
   const names = barangays.map(b => b.name);
   const result = {};
 
   for (const name of names) {
-    const others = names.filter(n => n !== name);
+    const others = names.filter(n => n !== name && incidenceMap[n] != null);
     if (others.length === 0) {
       result[name] = 0;
       continue;
     }
-    const avg = others.reduce((sum, n) => sum + (incidenceMap[n] || 0), 0) / others.length;
+    const avg = others.reduce((sum, n) => sum + incidenceMap[n], 0) / others.length;
     result[name] = avg;
   }
 
@@ -255,7 +258,8 @@ function generateAlerts({ forecasts, classifications, barangayList, prevRiskClas
  * @param {string} period - Forecast period (YYYY-MM-DD) — start of forecast window
  * @param {Array} forecasts - ML forecast results
  * @param {Array} classifications - ML classify results
- * @param {Array} riskScores - [{barangay_name, risk_score, risk_class, incidence_per_100k, trend_direction}]
+ * @param {Array} riskScores - [{barangay_name, risk_score, risk_class, model_type, model_version,
+ *   classification_confidence, prob_low, prob_medium, prob_high, features, incidence_per_100k, trend_direction}]
  * @param {Array} alerts - Generated alerts
  * @param {string} modelVersion - Version string
  */
@@ -309,7 +313,7 @@ async function storeResults(client, period, forecasts, classifications, riskScor
         pt.yhat_lower,
         pt.yhat_upper,
         risk?.risk_class || null,
-        risk?.incidence_per_100k || 0,
+        risk?.incidence_per_100k ?? null,
         actualCount,
         modelVersion,
       ]);
@@ -341,8 +345,9 @@ async function storeResults(client, period, forecasts, classifications, riskScor
     await client.query(
       `INSERT INTO barangay_risk_scores
         (barangay_name, period, risk_score, risk_class, incidence_per_100k, trend_direction,
-         norm_incidence, norm_trend, norm_neighbor_risk, norm_forecast_error)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+         norm_incidence, norm_trend, norm_neighbor_risk, norm_forecast_error, model_type,
+         model_version, classification_confidence, prob_low, prob_medium, prob_high, features)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
       [
         rs.barangay_name,
         period,
@@ -354,6 +359,13 @@ async function storeResults(client, period, forecasts, classifications, riskScor
         rs.norm_trend ?? null,
         rs.norm_neighbor_risk ?? null,
         rs.norm_forecast_error ?? null,
+        rs.model_type ?? null,
+        rs.model_version ?? null,
+        rs.classification_confidence ?? null,
+        rs.prob_low ?? null,
+        rs.prob_medium ?? null,
+        rs.prob_high ?? null,
+        rs.features ? JSON.stringify(rs.features) : null,
       ]
     );
   }

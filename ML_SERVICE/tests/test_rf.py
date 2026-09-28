@@ -20,7 +20,7 @@ from rf_classifier import (
 def test_features_are_the_fixed_eight():
     """FEATURES should contain the 8 fixed features (lag features replace population_density)."""
     assert FEATURES == [
-        "forecasted_incidence",
+        "rolling_12m_incidence",
         "recent_trend",
         "seasonality_flag",
         "lag_1m",
@@ -96,28 +96,28 @@ def test_rf_predicts_high_for_clearly_high_forecast():
     # Separable training set spanning the three bands
     train = []
     for inc in [5, 10, 15, 20, 25]:        # Low
-        train.append({"features": {"forecasted_incidence": inc, "recent_trend": -0.1,
+        train.append({"features": {"rolling_12m_incidence": inc, "recent_trend": -0.1,
                       "seasonality_flag": 0, "lag_1m": inc - 2, "lag_2m": inc - 3,
                       "lag_3m": inc - 1, "neighbor_risk": 0.2, "historical_bias": 0.0},
                       "incidence": inc})
     for inc in [60, 70, 80, 90, 100]:      # Medium
-        train.append({"features": {"forecasted_incidence": inc, "recent_trend": 0.0,
+        train.append({"features": {"rolling_12m_incidence": inc, "recent_trend": 0.0,
                       "seasonality_flag": 1, "lag_1m": inc - 5, "lag_2m": inc - 8,
                       "lag_3m": inc - 3, "neighbor_risk": 1.0, "historical_bias": 0.0},
                       "incidence": inc})
     for inc in [160, 180, 200, 220, 240]:  # High
-        train.append({"features": {"forecasted_incidence": inc, "recent_trend": 0.4,
+        train.append({"features": {"rolling_12m_incidence": inc, "recent_trend": 0.4,
                       "seasonality_flag": 1, "lag_1m": inc - 10, "lag_2m": inc - 15,
                       "lag_3m": inc - 8, "neighbor_risk": 2.5, "historical_bias": 0.0},
                       "incidence": inc})
 
     predict = [
         {"barangay_name": "Hot",
-         "features": {"forecasted_incidence": 230, "recent_trend": 0.5,
+         "features": {"rolling_12m_incidence": 230, "recent_trend": 0.5,
                       "seasonality_flag": 1, "lag_1m": 220, "lag_2m": 210,
                       "lag_3m": 200, "neighbor_risk": 2.6, "historical_bias": 0.0}},
         {"barangay_name": "Cool",
-         "features": {"forecasted_incidence": 8, "recent_trend": -0.2,
+         "features": {"rolling_12m_incidence": 8, "recent_trend": -0.2,
                       "seasonality_flag": 0, "lag_1m": 10, "lag_2m": 12,
                       "lag_3m": 11, "neighbor_risk": 0.1, "historical_bias": 0.0}},
     ]
@@ -142,8 +142,8 @@ def test_train_and_predict_empty():
 def test_classify_risk_simple():
     """Rule-based classification should work without training data."""
     features = [
-        {"barangay_name": "Low", "forecasted_incidence": 50.0},
-        {"barangay_name": "High", "forecasted_incidence": 400.0},
+        {"barangay_name": "Low", "rolling_12m_incidence": 50.0},
+        {"barangay_name": "High", "rolling_12m_incidence": 400.0},
     ]
     results = classify_risk_simple(features, {"low_max": 150.0, "med_max": 350.0})
     assert len(results) == 2
@@ -176,7 +176,7 @@ def test_walk_forward_rf_enough_data():
             base = 50 + (month_idx * 2) + (b * 3)
             train_rows.append({
                 "features": {
-                    "forecasted_incidence": base,
+                    "rolling_12m_incidence": base,
                     "recent_trend": 0.1,
                     "seasonality_flag": 0,
                     "lag_1m": base - 5,

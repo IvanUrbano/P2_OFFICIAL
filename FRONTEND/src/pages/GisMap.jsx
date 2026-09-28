@@ -17,6 +17,41 @@ const RISK_COLORS = {
   'No Data': '#64748B',
 };
 
+// Canonical risk_class values (backend/DB/RF) are Low/Medium/High. The
+// user-facing label for 'Medium' is "Moderate" everywhere in this page —
+// never rename the underlying value, only its display text.
+const RISK_LABELS = { High: 'High', Medium: 'Moderate', Low: 'Low', 'No Data': 'No Data' };
+const riskLabel = (cls) => RISK_LABELS[cls] || cls || 'No Data';
+
+// Human-readable labels for the actual 8 RF input features (see
+// BACKEND/tbinsight/pipeline.js:buildFeatureRow / ML_SERVICE/rf_classifier.py:FEATURES).
+// These are the model's real inputs, shown as "indicators used" — never as
+// a causal "this factor caused High Risk" claim.
+const RF_FEATURE_LABELS = {
+  rolling_12m_incidence: 'Rolling 12-Month Incidence',
+  recent_trend: 'Recent Case Trend',
+  seasonality_flag: 'Seasonal Pattern',
+  lag_1m: '1-Month Lag Cases',
+  lag_2m: '2-Month Lag Cases',
+  lag_3m: '3-Month Lag Cases',
+  neighbor_risk: 'Neighbor Risk Indicator',
+  historical_bias: 'Historical Forecast Error',
+};
+const RF_FEATURE_ORDER = [
+  'rolling_12m_incidence', 'recent_trend', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk', 'seasonality_flag', 'historical_bias',
+];
+function formatRfFeatureValue(key, value) {
+  if (value == null) return 'N/A';
+  switch (key) {
+    case 'rolling_12m_incidence': return `${Number(value).toFixed(1)} / 100k`;
+    case 'recent_trend': return `${value > 0 ? '+' : ''}${Number(value).toFixed(2)} cases/mo`;
+    case 'seasonality_flag': return value ? 'Detected' : 'Not detected';
+    case 'neighbor_risk': return `${Math.round(Number(value) * 100)}%`;
+    case 'historical_bias': return Number(value).toFixed(1);
+    default: return String(Math.round(Number(value)));
+  }
+}
+
 const OUTCOME_COLORS = {
   'CURED': '#047857',
   'TREATMENT COMPLETED': '#2E6FAF',
@@ -157,8 +192,14 @@ export default function GisMap() {
   const [selectedBarangayName, setSelectedBarangayName] = useState(null);
   const [barangayDetail, setBarangayDetail] = useState(null);
   const [barangayDetailLoading, setBarangayDetailLoading] = useState(false);
+  const [barangayTsr, setBarangayTsr] = useState(null);
   const [barangayInterventionCount, setBarangayInterventionCount] = useState(0);
   const [hoveredBarangay, setHoveredBarangay] = useState(null);
+  // Legacy weighted risk_score breakdown — hidden by default (see item 12 of
+  // the GIS/RF audit follow-up): it must not be presented alongside the RF
+  // classification as if it explained it, so it stays out of sight until
+  // explicitly opened.
+  const [showLegacyIndex, setShowLegacyIndex] = useState(false);
   const [timelineMonth, setTimelineMonth] = useState(null);
   const [isAnimating, setIsAnimating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -167,6 +208,9 @@ export default function GisMap() {
   const [gisInsight, setGisInsight] = useState(null);
   const [gisInsightLoading, setGisInsightLoading] = useState(false);
   const [gisInsightError, setGisInsightError] = useState(null);
+  const [pipelineRun, setPipelineRun] = useState(null);
+  const [pipelineRefreshTick, setPipelineRefreshTick] = useState(0);
+  const wasRunningRef = useRef(false);
   const closeButtonRef = useRef(null);
 
   const handleGenerateGisInsight = useCallback(async () => {
@@ -246,7 +290,7 @@ export default function GisMap() {
       }
     })();
     return () => controller.abort();
-  }, [fetchGeoData]);
+  }, [fetchGeoData, pipelineRefreshTick]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -260,6 +304,30 @@ export default function GisMap() {
     })();
     return () => controller.abort();
   }, [fetchMonthlyData]);
+
+  // Pipeline run status: drives the "processing" banner and refreshes the map
+  // automatically the moment a background run (auto-triggered by a record
+  // sync) finishes. Fast poll while running, slow poll when idle.
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer;
+    const poll = async () => {
+      let running = false;
+      try {
+        const res = await API.get('/api/tb/pipeline/status', { signal: controller.signal });
+        const cur = res.data?.current_run || null;
+        setPipelineRun(cur);
+        running = !!(cur && cur.running);
+        if (wasRunningRef.current && !running) setPipelineRefreshTick(t => t + 1);
+        wasRunningRef.current = running;
+      } catch {
+        // silently ignore — next poll retries
+      }
+      if (!controller.signal.aborted) timer = setTimeout(poll, running ? 4000 : 15000);
+    };
+    poll();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, []);
 
   useEffect(() => {
     if (!mapRef.current || mapInstance.current) return;
@@ -343,9 +411,11 @@ export default function GisMap() {
     const riskColor = RISK_COLORS[merged.risk_class] || '#64748B';
     const totalOutcomeCases = outcomes.reduce((s, o) => s + (o.total || 0), 0);
     const activeCases = outcomes.find(o => o.outcome_status === 'ON TREATMENT')?.total || 0;
-    const successCases = outcomes.filter(o => ['CURED', 'TREATMENT COMPLETED'].includes(o.outcome_status)).reduce((s, o) => s + o.total, 0);
-    const evaluatedCases = outcomes.filter(o => o.outcome_status !== 'NOT EVALUATED').reduce((s, o) => s + o.total, 0);
-    const successRate = evaluatedCases > 0 ? ((successCases / evaluatedCases) * 100).toFixed(1) : '—';
+    // Treatment Success Rate: the cohort-based figure fetched from
+    // GET /api/tb/treatment-success-rate (see barangayTsr) — NOT computed
+    // from this barangay's outcomes breakdown, which is diagnosis-date
+    // filtered and a different metric under the same label.
+    const successRate = barangayTsr?.successRate != null ? barangayTsr.successRate.toFixed(1) : '—';
     const trendChartData = monthly.slice(-12).map(m => ({
       label: m.month ? new Date(m.month.includes('T') ? m.month : m.month + 'T00:00:00').toLocaleString('default', { month: 'short', year: '2-digit' }) : '',
       cases: Number(m.case_count ?? 0),
@@ -364,7 +434,7 @@ export default function GisMap() {
       color: OUTCOME_COLORS[o.outcome_status] || '#64748B',
     }));
     return { merged, riskColor, totalOutcomeCases, activeCases, successRate, trendChartData, demoChartData, outcomeChartData };
-  }, [selectedBarangayName, barangayDetail, barangayDetailLoading, monthlyByBarangay, data]);
+  }, [selectedBarangayName, barangayDetail, barangayDetailLoading, monthlyByBarangay, data, barangayTsr]);
 
   const hasActiveFilters = filterBarangay || filterRiskLevel || filterYear;
 
@@ -398,6 +468,18 @@ export default function GisMap() {
         const p = feature.properties || {};
         const riskColor = RISK_COLORS[p.risk_class] || '#6B7280';
         const trendArrow = p.trend_direction === 'Increasing' ? '\u2191' : p.trend_direction === 'Decreasing' ? '\u2193' : '\u2192';
+        // Confidence \u2014 not "Score": the legacy weighted risk_score (0-100)
+        // no longer determines risk_class (RF does) and its own <=33/34-66/
+        // >66 bands frequently disagree with the RF class shown above it,
+        // which would misleadingly imply the score explains the class.
+        // classification_confidence is RF's own predict_proba for the
+        // predicted class \u2014 only shown when it actually came from RF.
+        const confidenceRow = p.model_type === 'random_forest' && p.classification_confidence != null
+          ? `<div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+              <span style="font-size: 10px; color: #94A3B8;">Confidence</span>
+              <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${Math.round(p.classification_confidence * 100)}%</span>
+            </div>`
+          : '';
         const tooltipHtml = `
           <div style="font-family: Inter, sans-serif; min-width: 180px; padding: 2px;">
             <div style="font-size: 13px; font-weight: 700; color: #0F2D52; margin-bottom: 4px;">${escapeHtml(p.name) || 'Unknown'}</div>
@@ -405,10 +487,7 @@ export default function GisMap() {
               <span style="font-size: 10px; color: #94A3B8;">Risk</span>
               <span style="font-size: 10px; font-weight: 700; color: ${riskColor};">${escapeHtml(p.risk_class) || 'No Data'}</span>
             </div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
-              <span style="font-size: 10px; color: #94A3B8;">Score</span>
-              <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${formatNum(p.risk_score)}</span>
-            </div>
+            ${confidenceRow}
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
               <span style="font-size: 10px; color: #94A3B8;">Trend</span>
               <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${trendArrow} ${escapeHtml(p.trend_direction) || 'Stable'}</span>
@@ -555,20 +634,27 @@ export default function GisMap() {
 
   // Fetch barangay detail data when a barangay is selected
   useEffect(() => {
-    if (!selectedBarangayName) { setBarangayDetail(null); setBarangayInterventionCount(0); return; }
+    if (!selectedBarangayName) { setBarangayDetail(null); setBarangayInterventionCount(0); setBarangayTsr(null); return; }
     const controller = new AbortController();
     (async () => {
       setBarangayDetailLoading(true);
       try {
-        const [detailRes, interventionsRes] = await Promise.all([
+        const [detailRes, interventionsRes, tsrRes] = await Promise.all([
           API.get(`/api/tb/dashboard/barangay/${encodeURIComponent(selectedBarangayName)}`, { signal: controller.signal }),
           API.get('/api/tb/interventions', { params: { barangay: selectedBarangayName, limit: 1 }, signal: controller.signal }),
+          // Treatment Success Rate: from GET /api/tb/treatment-success-rate
+          // (the cohort-based methodology). Previously computed here from
+          // this barangay's outcomes breakdown (diagnosis-date filtered, no
+          // cohort) — a DIFFERENT metric under the same label.
+          API.get('/api/tb/treatment-success-rate', { params: { barangay: selectedBarangayName }, signal: controller.signal })
+            .catch(() => ({ data: null })),
         ]);
         setBarangayDetail(detailRes.data);
         setBarangayInterventionCount(interventionsRes.data.pagination?.total || 0);
+        setBarangayTsr(tsrRes.data);
       } catch (err) {
         if (err.name !== 'CanceledError' && err.name !== 'AbortError') {
-          setBarangayDetail(null); setBarangayInterventionCount(0);
+          setBarangayDetail(null); setBarangayInterventionCount(0); setBarangayTsr(null);
         }
       } finally {
         if (!controller.signal.aborted) setBarangayDetailLoading(false);
@@ -732,6 +818,46 @@ export default function GisMap() {
               {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
             </FilterSelect>
 
+            {/* Risk classification is a per-year snapshot: selecting a Year
+                shows THAT year's own assessment (using only data through
+                that year — see the admin "Backfill Historical Risk
+                Snapshots" action), never a different year's data
+                relabeled. "All Years" shows the latest snapshot. If a
+                specific year has no snapshot computed yet, say so plainly
+                instead of implying one is missing due to an error. */}
+            {(() => {
+              if (!filterYear) {
+                return data?.meta?.risk_assessment_period ? (
+                  <span
+                    className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
+                    style={{ background: '#F8FAFC', color: '#64748B', border: '1px solid #E2E8F0' }}
+                    title="Showing the most recent risk assessment. Select a specific Year to see that year's own snapshot."
+                  >
+                    Risk Assessment: Latest ({new Date(data.meta.risk_assessment_period + 'T00:00:00').toLocaleDateString('default', { month: 'short', year: 'numeric' })})
+                  </span>
+                ) : null;
+              }
+              if (data?.meta?.requested_year_has_snapshot === false) {
+                return (
+                  <span
+                    className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
+                    style={{ background: '#FFFBEB', color: '#B45309', border: '1px solid #FDE68A' }}
+                    title="An administrator can compute this from Forecasting > Backfill Historical Risk Snapshots."
+                  >
+                    No risk snapshot for {filterYear} yet
+                  </span>
+                );
+              }
+              return data?.meta?.risk_assessment_period ? (
+                <span
+                  className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
+                  style={{ background: '#F8FAFC', color: '#64748B', border: '1px solid #E2E8F0' }}
+                >
+                  Risk Assessment for {filterYear}
+                </span>
+              ) : null;
+            })()}
+
             {hasActiveFilters && (
               <button
                 onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); setFilterYear(''); setSelectedBarangayName(null); }}
@@ -783,6 +909,48 @@ export default function GisMap() {
           </div>
         </div>
         )}
+
+        {/* ── Pipeline status banner ──
+            State comes from GET /api/tb/pipeline/status `current_run`.
+            Shown while a run is active, or when the map has no risk scores. */}
+        {(() => {
+          if (isFullscreen) return null;
+          const feats = data?.features || [];
+          const noScores = feats.length > 0 && feats.every(f => !f.properties?.risk_class || f.properties.risk_class === 'No Data');
+          const running = !!pipelineRun?.running;
+          if (!running && !noScores) return null;
+
+          let bg, fg, border, icon, text;
+          if (running) {
+            bg = '#EFF6FF'; fg = '#1E40AF'; border = '#DBEAFE';
+            icon = 'ri-loader-4-line animate-spin';
+            text = <>Risk classification is currently being generated
+              {pipelineRun.startedAt ? ` (started ${new Date(pipelineRun.startedAt).toLocaleTimeString()})` : ''}. Please refresh shortly.</>;
+          } else if (pipelineRun?.lastError || pipelineRun?.lastRunStatus === 'error') {
+            bg = '#FEF2F2'; fg = '#B91C1C'; border = '#FECACA';
+            icon = 'ri-error-warning-line';
+            text = <>Risk classification could not be generated. An administrator may rerun the analysis pipeline.</>;
+          } else if (pipelineRun?.lastRunStatus === 'no_data') {
+            bg = '#F8FAFC'; fg = '#475569'; border = '#E2E8F0';
+            icon = 'ri-database-2-line';
+            text = <>Insufficient data are available to generate a risk classification for the selected period.</>;
+          } else {
+            bg = '#FFFBEB'; fg = '#B45309'; border = '#FDE68A';
+            icon = 'ri-time-line';
+            text = <>Risk classifications are not yet available for the current data. Risk analysis is processed
+              automatically after validated records are synchronized. If processing fails, an administrator can
+              rerun the analysis pipeline.</>;
+          }
+          return (
+            <div
+              className="gis-toolbar px-5 py-2.5 flex items-center gap-2 text-xs font-semibold"
+              style={{ background: bg, color: fg, borderBottom: `1px solid ${border}` }}
+            >
+              <i className={icon} />
+              <span>{text}</span>
+            </div>
+          );
+        })()}
 
         {/* Map */}
         <div
@@ -859,10 +1027,13 @@ export default function GisMap() {
             Risk Level
           </p>
           <div className="flex flex-col gap-2">
+            {/* Random Forest risk_class only — the legacy weighted score's
+                own <=33/34-66/>66 bands do not determine this color and
+                must not be shown here as if they did. */}
             {[
-              { label: 'High Risk (score >66)', color: RISK_COLORS.High },
-              { label: 'Moderate (score 34-66)', color: RISK_COLORS.Medium },
-              { label: 'Low Risk (score ≤33)', color: RISK_COLORS.Low },
+              { label: 'High Risk', color: RISK_COLORS.High },
+              { label: 'Moderate Risk', color: RISK_COLORS.Medium },
+              { label: 'Low Risk', color: RISK_COLORS.Low },
               { label: 'No Data', color: RISK_COLORS['No Data'] },
             ].map(({ label, color }) => (
               <div key={label} className="flex items-center gap-2">
@@ -909,7 +1080,9 @@ export default function GisMap() {
                 <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk Barangays</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{stats.classes?.High || 0}</p>
+              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
+                {stats.total > 0 && stats.classes?.['No Data'] === stats.total ? 'N/A' : (stats.classes?.High ?? 0)}
+              </p>
               <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
             </div>
 
@@ -1142,7 +1315,7 @@ export default function GisMap() {
                         <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>{merged.name || selectedBarangayName}</h3>
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: `${riskColor}15`, color: riskColor }}>
                           <span className="w-1.5 h-1.5 rounded-full" style={{ background: riskColor }} />
-                          {merged.risk_class || 'No Data'} Risk
+                          {riskLabel(merged.risk_class)}{merged.risk_class ? ' Risk' : ''}
                         </span>
                       </div>
                     </div>
@@ -1232,36 +1405,103 @@ export default function GisMap() {
 
                   <div style={{ borderTop: '1px solid #E2E8F0' }} />
 
-                  {/* Risk Factors Breakdown */}
+                  {/* Risk Classification — the RF classifier's own output and
+                      inputs. This is the authoritative classification; the
+                      legacy weighted index below is a separate, optional
+                      analytical view, never the explanation for this. */}
+                  {merged.risk_class && (
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Risk Classification</h4>
+                      <div className="grid grid-cols-2 gap-3 mb-3">
+                        <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                          <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Risk Level</span>
+                          <p className="text-lg font-extrabold mt-1" style={{ color: riskColor }}>{riskLabel(merged.risk_class)}</p>
+                        </div>
+                        <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                          <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Classification Confidence</span>
+                          <p className="text-lg font-extrabold mt-1" style={{ color: '#0F2D52' }}>
+                            {merged.model_type === 'random_forest' && merged.classification_confidence != null
+                              ? `${Math.round(merged.classification_confidence * 100)}%`
+                              : 'N/A'}
+                          </p>
+                        </div>
+                      </div>
+                      {merged.model_type && merged.model_type !== 'random_forest' && (
+                        <p className="text-[11px] mb-3 leading-relaxed" style={{ color: '#B45309' }}>
+                          <i className="ri-error-warning-line mr-1" />
+                          Produced by a rule-based fallback, not the trained Random Forest model — confidence is not meaningful for a rule-based result.
+                        </p>
+                      )}
+                      {merged.rf_features && (
+                        <>
+                          <p className="text-[10px] font-bold uppercase mb-2" style={{ color: '#64748B' }}>Indicators Used</p>
+                          <p className="text-[10px] mb-2 leading-relaxed" style={{ color: '#94A3B8' }}>
+                            The values the model was given for this classification — not individually-ranked reasons.
+                          </p>
+                          <div className="space-y-1.5">
+                            {RF_FEATURE_ORDER.filter(k => k in merged.rf_features).map(key => (
+                              <div key={key} className="flex items-center justify-between text-[11px]">
+                                <span className="font-semibold" style={{ color: '#475569' }}>{RF_FEATURE_LABELS[key] || key}</span>
+                                <span style={{ color: '#0F2D52' }}>{formatRfFeatureValue(key, merged.rf_features[key])}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Legacy weighted risk_score — a separate analytical
+                      index, hidden by default. It does NOT determine
+                      risk_class above and must not be read as the reason
+                      for it; its own <=33/34-66/>66 bands are internal to
+                      this index only. */}
                   {merged.risk_score != null && (
                     <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Risk Factors</h4>
-                      <div className="space-y-2.5">
-                        {(() => {
-                          const factors = [
-                            { label: 'Incidence', weight: 0.45, value: merged.norm_incidence || 0 },
-                            { label: 'Trend', weight: 0.25, value: merged.norm_trend || 0 },
-                            { label: 'Neighbor Risk', weight: 0.20, value: merged.norm_neighbor_risk || 0 },
-                            { label: 'Forecast Error', weight: 0.10, value: merged.norm_forecast_error || 0 },
-                          ];
-                          return factors.map(f => {
-                            const pct = Math.min(f.value * 100, 100);
-                            const level = pct > 66 ? 'High' : pct > 33 ? 'Medium' : 'Low';
-                            const levelColor = RISK_COLORS[level] || '#64748B';
-                            return (
-                              <div key={f.label}>
-                                <div className="flex items-center justify-between mb-1">
-                                  <span className="text-[11px] font-semibold" style={{ color: '#475569' }}>{f.label} <span style={{ color: '#94A3B8' }}>({Math.round(f.weight * 100)}%)</span></span>
-                                  <span className="text-[10px] font-bold" style={{ color: levelColor }}>{level}</span>
-                                </div>
-                                <div className="h-2 rounded-full overflow-hidden" style={{ background: '#E2E8F0' }}>
-                                  <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: levelColor }} />
-                                </div>
-                              </div>
-                            );
-                          });
-                        })()}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowLegacyIndex(v => !v)}
+                        className="flex items-center gap-1.5 text-[11px] font-semibold"
+                        style={{ color: '#94A3B8' }}
+                      >
+                        <i className={`ri-arrow-${showLegacyIndex ? 'down' : 'right'}-s-line`} />
+                        Analytical Risk Index (legacy, separate from RF classification)
+                      </button>
+                      {showLegacyIndex && (
+                        <div className="mt-3">
+                          <p className="text-[10px] mb-3 leading-relaxed" style={{ color: '#94A3B8' }}>
+                            A separate weighted formula kept for research/audit comparison. It does not determine the Risk Level above.
+                          </p>
+                          <div className="space-y-2.5">
+                            {(() => {
+                              const factors = [
+                                { label: 'Incidence', weight: 0.45, value: merged.norm_incidence || 0 },
+                                { label: 'Trend', weight: 0.25, value: merged.norm_trend || 0 },
+                                { label: 'Neighbor Risk', weight: 0.20, value: merged.norm_neighbor_risk || 0 },
+                                { label: 'Forecast Error', weight: 0.10, value: merged.norm_forecast_error || 0 },
+                              ];
+                              return factors.map(f => {
+                                const pct = Math.min(f.value * 100, 100);
+                                return (
+                                  <div key={f.label}>
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-[11px] font-semibold" style={{ color: '#475569' }}>{f.label} <span style={{ color: '#94A3B8' }}>({Math.round(f.weight * 100)}%)</span></span>
+                                      <span className="text-[10px] font-bold" style={{ color: '#64748B' }}>{pct.toFixed(0)}%</span>
+                                    </div>
+                                    <div className="h-2 rounded-full overflow-hidden" style={{ background: '#E2E8F0' }}>
+                                      <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: '#94A3B8' }} />
+                                    </div>
+                                  </div>
+                                );
+                              });
+                            })()}
+                            <div className="flex items-center justify-between text-[11px] pt-1">
+                              <span className="font-semibold" style={{ color: '#475569' }}>Index score (0-100)</span>
+                              <span className="font-bold" style={{ color: '#64748B' }}>{formatNum(merged.risk_score)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 

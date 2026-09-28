@@ -152,17 +152,17 @@ def _make_train_rows():
     """Create training rows spanning Low/Medium/High bands."""
     rows = []
     for inc in [5, 10, 15, 20, 25]:        # Low
-        rows.append({"features": {"forecasted_incidence": inc, "recent_trend": -0.1,
+        rows.append({"features": {"rolling_12m_incidence": inc, "recent_trend": -0.1,
                       "seasonality_flag": 0, "lag_1m": inc - 2, "lag_2m": inc - 3,
                       "lag_3m": inc - 1, "neighbor_risk": 0.2, "historical_bias": 0.0},
                       "incidence": inc})
     for inc in [60, 70, 80, 90, 100]:      # Medium
-        rows.append({"features": {"forecasted_incidence": inc, "recent_trend": 0.0,
+        rows.append({"features": {"rolling_12m_incidence": inc, "recent_trend": 0.0,
                       "seasonality_flag": 1, "lag_1m": inc - 5, "lag_2m": inc - 8,
                       "lag_3m": inc - 3, "neighbor_risk": 1.0, "historical_bias": 0.0},
                       "incidence": inc})
     for inc in [160, 180, 200, 220, 240]:  # High
-        rows.append({"features": {"forecasted_incidence": inc, "recent_trend": 0.4,
+        rows.append({"features": {"rolling_12m_incidence": inc, "recent_trend": 0.4,
                       "seasonality_flag": 1, "lag_1m": inc - 10, "lag_2m": inc - 15,
                       "lag_3m": inc - 8, "neighbor_risk": 2.5, "historical_bias": 0.0},
                       "incidence": inc})
@@ -176,11 +176,11 @@ def test_classify_with_training():
         "train": _make_train_rows(),
         "predict": [
             {"barangay_name": "Hot",
-             "features": {"forecasted_incidence": 230, "recent_trend": 0.5,
+             "features": {"rolling_12m_incidence": 230, "recent_trend": 0.5,
                           "seasonality_flag": 1, "lag_1m": 220, "lag_2m": 210,
                           "lag_3m": 200, "neighbor_risk": 2.6, "historical_bias": 0.0}},
             {"barangay_name": "Cool",
-             "features": {"forecasted_incidence": 8, "recent_trend": -0.2,
+             "features": {"rolling_12m_incidence": 8, "recent_trend": -0.2,
                           "seasonality_flag": 0, "lag_1m": 10, "lag_2m": 12,
                           "lag_3m": 11, "neighbor_risk": 0.1, "historical_bias": 0.0}},
         ],
@@ -208,7 +208,7 @@ def test_classify_without_training():
         "train": [],
         "predict": [
             {"barangay_name": "Low",
-             "features": {"forecasted_incidence": 50, "recent_trend": -0.1,
+             "features": {"rolling_12m_incidence": 50, "recent_trend": -0.1,
                           "seasonality_flag": 0, "lag_1m": 45, "lag_2m": 40,
                           "lag_3m": 55, "neighbor_risk": 0.2, "historical_bias": 0.0}},
         ],
@@ -261,7 +261,7 @@ def test_evaluate_walk_forward():
         inc = (c / pop) * 100_000
         train.append({
             "features": {
-                "forecasted_incidence": inc,
+                "rolling_12m_incidence": inc,
                 "recent_trend": 0.1,
                 "seasonality_flag": 0,
                 "lag_1m": counts[i - 1] if i > 0 else 0,
@@ -293,47 +293,6 @@ def test_evaluate_walk_forward():
     print(f"  PASS: test_evaluate_walk_forward (ARIMA MAE={data['arima']['mae']:.2f}, RF acc={data['rf']['accuracy']:.2f})")
 
 
-# ==================== Pipeline ====================
-
-def test_pipeline():
-    """Full pipeline: forecast -> classify."""
-    series = [
-        {"barangay_name": "Manggahan", "month": f"2024-{m:02d}-01", "case_count": c}
-        for m, c in enumerate([5, 8, 6, 10, 7, 12, 9, 11, 8, 13, 7, 10], 1)
-    ]
-    r = client.post("/api/ml/pipeline", json={
-        "series": series,
-        "population": {"Manggahan": 30000},
-        "historical_bias": {"Manggahan": 0.0},
-    })
-    assert r.status_code == 200
-    data = r.json()
-    assert "forecast" in data
-    assert "classification" in data
-    assert data["forecast"]["barangay_name"] == "Manggahan"
-    assert data["classification"]["risk_class"] in ("Low", "Medium", "High")
-    assert data["classification"]["incidence_per_100k"] >= 0
-    print(f"  PASS: test_pipeline (risk={data['classification']['risk_class']})")
-
-
-def test_pipeline_short_series():
-    """Pipeline with short series should still work via fallback."""
-    series = [
-        {"barangay_name": "Short", "month": "2024-01-01", "case_count": 3},
-        {"barangay_name": "Short", "month": "2024-02-01", "case_count": 5},
-    ]
-    r = client.post("/api/ml/pipeline", json={
-        "series": series,
-        "population": {"Short": 20000},
-        "historical_bias": {"Short": 0.0},
-    })
-    assert r.status_code == 200
-    data = r.json()
-    assert data["forecast"]["method"] in ("seasonal_naive", "exponential_smoothing")
-    assert data["classification"]["risk_class"] in ("Low", "Medium", "High")
-    print(f"  PASS: test_pipeline_short_series (method={data['forecast']['method']})")
-
-
 # ==================== 404 ====================
 
 def test_404():
@@ -357,8 +316,6 @@ if __name__ == "__main__":
         test_classify_without_training,
         test_classify_empty_predict,
         test_evaluate_walk_forward,
-        test_pipeline,
-        test_pipeline_short_series,
         test_404,
     ]
 

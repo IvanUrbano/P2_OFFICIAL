@@ -477,4 +477,18 @@ router.get('/audit-logs', authenticate, authorizeRoles('admin'), async (req, res
   }
 });
 
+// ==================== NOTIFICATIONS (not yet populated) ====================
+// Layout.jsx polls these every 30s to drive the bell icon. No backend flow
+// creates notifications yet, so these return an explicitly empty set — the
+// bell stays visible but shows nothing instead of 404-spamming the console.
+// Shapes: unread-count -> {count}, list -> {notifications}.
+
+router.get('/notifications/unread-count', authenticate, (req, res) => {
+  res.json({ count: 0 });
+});
+
+router.get('/notifications', authenticate, (req, res) => {
+  res.json({ notifications: [] });
+});
+
 module.exports = router;

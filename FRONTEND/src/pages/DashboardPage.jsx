@@ -304,6 +304,7 @@ export default function DashboardPage() {
   const [lastUpdatedDate, setLastUpdatedDate] = useState(null);
   const [monthlyData, setMonthlyData] = useState([]);
   const [outcomesData, setOutcomesData] = useState([]);
+  const [tsrData, setTsrData] = useState(null);
   const [forecastsData, setForecastsData] = useState([]);
   const [alertsData, setAlertsData] = useState([]);
   const [riskData, setRiskData] = useState([]);
@@ -339,7 +340,7 @@ export default function DashboardPage() {
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [summaryRes, monthlyRes, outcomesRes, forecastsRes, alertsRes, riskRes, brgyRes, pipelineRes, demoRes, cascadeRes] =
+      const [summaryRes, monthlyRes, outcomesRes, forecastsRes, alertsRes, riskRes, brgyRes, pipelineRes, demoRes, cascadeRes, tsrRes] =
         await Promise.all([
           API.get('/api/tb/dashboard/summary'),
           API.get('/api/tb/dashboard/monthly'),
@@ -351,6 +352,10 @@ export default function DashboardPage() {
           API.get('/api/tb/pipeline/status').catch(() => ({ data: { latest_run: null } })),
           API.get('/api/tb/dashboard/demographics').catch(() => ({ data: { demographics: [] } })),
           API.get('/api/tb/treatment-cascade').catch(() => ({ data: null })),
+          // Unfiltered (no year/barangay) — Dashboard is an overview page —
+          // which defaults to the current-year Y-1 cohort, the same default
+          // /dashboard/metrics used before this endpoint existed.
+          API.get('/api/tb/treatment-success-rate').catch(() => ({ data: null })),
         ]);
       setLastUpdatedDate(summaryRes.data.summary?.latest_date || null);
       setMonthlyData(monthlyRes.data.monthly || []);
@@ -362,6 +367,7 @@ export default function DashboardPage() {
       setPipelineStatus(pipelineRes.data.latest_run || null);
       setDemographicsData(demoRes.data.demographics || []);
       setCascadeData(cascadeRes.data || null);
+      setTsrData(tsrRes.data || null);
     } catch (err) {
       if (import.meta.env.DEV) console.error('Dashboard fetch error:', err);
       setError('Dashboard data could not be retrieved. Please try again.');
@@ -401,70 +407,36 @@ export default function DashboardPage() {
       .reduce((s, r) => s + Number(r.total || 0), 0);
   }, [outcomesData]);
 
-  /* ── 3. Treatment Success Rate ── */
-  const successRate = useMemo(() => {
-    const byStatus = {};
-    outcomesData.forEach((r) => {
-      const st = (r.outcome_status || 'Unknown').toUpperCase();
-      byStatus[st] = (byStatus[st] || 0) + Number(r.total || 0);
-    });
-    const total = Object.values(byStatus).reduce((s, v) => s + v, 0);
-    if (total === 0) return { rate: '0.0', evaluated: 0 };
-    const success = (byStatus['CURED'] || 0) + (byStatus['TREATMENT COMPLETED'] || 0);
-    const evaluated = total - (byStatus['NOT EVALUATED'] || 0);
-    return { rate: ((success / (evaluated || 1)) * 100).toFixed(1), evaluated };
-  }, [outcomesData]);
+  /* ── 3. Treatment Success Rate (TSR) ──
+   * From GET /api/tb/treatment-success-rate — the cohort-based methodology
+   * (Cured+Completed / patients whose treatment started in year Y-1). This
+   * used to be computed here client-side from the current outcomes
+   * breakdown (diagnosis-date filtered, no cohort), which is a DIFFERENT
+   * metric that disagreed with the AI-generated insight text on this same
+   * page, which already used the correct cohort formula. Never 0 when the
+   * cohort is empty — the API returns null, rendered as N/A below. */
+  const successRate = useMemo(() => ({
+    rate: tsrData?.successRate != null ? tsrData.successRate.toFixed(1) : null,
+    evaluated: tsrData?.cohortTotal ?? 0,
+  }), [tsrData]);
 
-  /* ── 4. High-Risk Barangays ── */
+  /* ── 4. High-Risk Barangays ──
+   * Sourced ONLY from the persisted, RF-authoritative risk_class
+   * (choropleth = barangay_risk_scores). A previous version of this
+   * fell through to a forecast-derived count and then to a client-side
+   * tertile computed from raw case counts (using `population || 1` when
+   * population was unknown) whenever the real count was 0 — treating a
+   * legitimate "zero High-risk barangays" result as if it were missing
+   * data and inventing a different number instead. That is exactly the
+   * kind of fabricated classification this dashboard must not produce:
+   * 0 is a valid answer, and "no classification exists yet" must show
+   * N/A, never silently substitute an unrelated calculation.
+   */
+  const hasRiskData = riskData.some((r) => (r.risk_class || '').toLowerCase() !== 'no data' && r.risk_class);
   const highRiskCount = useMemo(() => {
-    // Source 1: choropleth data (pipeline-computed risk scores)
-    const fromChoropleth = riskData.filter((r) => {
-      const rc = (r.risk_class || '').toLowerCase();
-      return rc === 'high';
-    }).length;
-    if (fromChoropleth > 0) return fromChoropleth;
-
-    // Source 2: forecasts data with risk_class
-    if (forecastsData.length > 0) {
-      const latestPeriod = forecastsData.reduce((max, r) => {
-        const p = r.period || '';
-        return p > max ? p : max;
-      }, '');
-      const highSet = new Set();
-      forecastsData.forEach((r) => {
-        if (r.period !== latestPeriod) return;
-        const rc = (r.risk_class || '').toLowerCase();
-        if (rc === 'high') highSet.add(r.barangay_name);
-      });
-      if (highSet.size > 0) return highSet.size;
-    }
-
-    // Source 3: compute from monthly case counts + barangay population (tertiles)
-    if (monthlyData.length > 0 && barangays.length > 0) {
-      const popMap = {};
-      barangays.forEach((b) => { popMap[b.barangay_name || b.name] = b.population || 0; });
-      const casesByBrgy = {};
-      monthlyData.forEach((r) => {
-        if (!r.barangay_name) return;
-        casesByBrgy[r.barangay_name] = (casesByBrgy[r.barangay_name] || 0) + Number(r.case_count || 0);
-      });
-      const entries = Object.entries(casesByBrgy).map(([name, totalCases]) => {
-        const pop = popMap[name] || 1;
-        return { name, incidence: ((totalCases * 12) / pop) * 100000 };
-      }).filter((e) => e.incidence > 0);
-      if (entries.length === 0) return 0;
-      entries.sort((a, b) => a.incidence - b.incidence);
-      const n = entries.length;
-      const medMax = Math.floor((2 * n) / 3);
-      let count = 0;
-      entries.forEach((e, i) => {
-        if (i >= medMax) count++;
-      });
-      return count;
-    }
-
-    return 0;
-  }, [forecastsData, riskData, monthlyData, barangays]);
+    if (!hasRiskData) return null;
+    return riskData.filter((r) => (r.risk_class || '').toLowerCase() === 'high').length;
+  }, [riskData, hasRiskData]);
 
   /* ── 5. Forecasted Cases ── */
   const forecastSummary = useMemo(() => {
@@ -750,7 +722,7 @@ export default function DashboardPage() {
   const animatedActiveCases = useAnimatedNumber(activeCases);
   const animatedSuccessRate = useAnimatedNumber(Number(successRate.rate), 600, 1);
   const animatedFatalityRate = useAnimatedNumber(Number(caseFatalityRate.rate), 600, 1);
-  const animatedHighRisk = useAnimatedNumber(highRiskCount);
+  const animatedHighRisk = useAnimatedNumber(highRiskCount ?? 0);
   const animatedForecasted = useAnimatedNumber(forecastSummary.total);
 
   /* ────────── Render ────────── */
@@ -871,11 +843,11 @@ export default function DashboardPage() {
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-checkbox-circle-line text-sm" style={{ color: '#6B9E8A' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Success Rate</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Success Rate</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedSuccessRate}%</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{successRate.evaluated.toLocaleString()} evaluated</span>
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{successRate.rate == null ? 'N/A' : `${animatedSuccessRate}%`}</p>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{successRate.evaluated.toLocaleString()} treatment-cohort patients</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
@@ -898,7 +870,7 @@ export default function DashboardPage() {
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedHighRisk}/30</p>
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{highRiskCount == null ? 'N/A' : `${animatedHighRisk}/30`}</p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Barangays requiring attention</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>

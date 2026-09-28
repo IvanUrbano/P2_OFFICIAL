@@ -9,6 +9,15 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 
+// Load BACKEND/.env by absolute path before requiring anything that touches the
+// DB: db.js calls dotenv.config() with no path, which resolves .env from the
+// process working directory — without this, running the suite from the repo
+// root (instead of BACKEND/) connects with zero env vars and dies with a
+// pg FATAL.
+require('dotenv').config({
+  path: require('path').join(__dirname, '..', '..', '.env'),
+});
+
 const {
   buildAnalyticsMetrics,
   buildForecastingMetrics,

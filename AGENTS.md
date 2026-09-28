@@ -154,10 +154,11 @@ BACKEND/
 - **Date column**: `date_of_diagnosis` is the ARIMA time key
 - **Incidence formula**: (cases ÷ population) × 100,000
 - **Risk thresholds**: Tertiles on 3-year window (not absolute WHO thresholds)
-- **RF features (8)**: forecasted_incidence, recent_trend, seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk, historical_bias (Approach B feedback loop)
+- **RF features (8)**: rolling_12m_incidence, recent_trend, seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk, historical_bias (Approach B feedback loop)
 - **Historical bias**: AVG(forecast_error) per barangay from past runs; 0 on first run
 - **Neighbor risk**: Computed as average incidence of all other barangays, normalized to 0-1
-- **Risk scoring**: Weighted index — 45% incidence + 25% trend + 20% neighbor risk + 10% forecast error
+- **Risk classification (authoritative)**: Random Forest's own predicted class, persisted with model_type/model_version/classification_confidence in `barangay_risk_scores` — this is what GIS displays
+- **Legacy weighted risk_score**: 45% incidence + 25% trend + 20% neighbor risk + 10% forecast error — a separate analytical index only, does NOT determine risk_class or GIS color
 - **Alert rules**: Rule-based — escalation (Medium→High), danger (High), surge (>30% increase)
 - **Pipeline idempotency**: DELETE + INSERT per period — safe to re-run
 - **Module format**: CommonJS (`require`/`module.exports`) — matches existing codebase
