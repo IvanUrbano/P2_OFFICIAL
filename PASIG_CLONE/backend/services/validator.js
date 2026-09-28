@@ -1,5 +1,5 @@
 const db = require('../db/pasigSchema');
-const { getSourceRecordId } = require('./recordDuplicateDetector');
+const { classifyRecord } = require('./recordDuplicateDetector');
 const { cleanRecord, isBlankRecord, PASIG_BARANGAYS } = require('./dataCleaner');
 
 const VALID_SEX = ['male', 'female'];
@@ -95,9 +95,12 @@ async function validateBatch(batchId) {
   }
 
   const validRecords = results.validatedRecords.filter(r => r.is_valid);
+  const classificationCounts = { new: 0, updated: 0, duplicate: 0 };
   for (const r of validRecords) {
-    r.source_record_id = getSourceRecordId(r, r.source_type);
-    r.record_status = 'new';
+    const classification = await classifyRecord(r, r.source_type, batchId);
+    r.source_record_id = classification.sourceRecordId;
+    r.record_status = classification.status;
+    classificationCounts[classification.status] = (classificationCounts[classification.status] || 0) + 1;
   }
 
   const client = await db.pool.connect();
@@ -139,9 +142,9 @@ async function validateBatch(batchId) {
 
   results.summary = {
     total: validRecords.length,
-    new: validRecords.length,
-    updated: 0,
-    duplicate: 0,
+    new: classificationCounts.new,
+    updated: classificationCounts.updated,
+    duplicate: classificationCounts.duplicate,
     error: results.invalid,
     cleaned: results.cleaned,
     nonPasig: results.nonPasig,

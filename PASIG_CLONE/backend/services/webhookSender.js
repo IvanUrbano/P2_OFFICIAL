@@ -97,9 +97,12 @@ async function sendWebhook(batchId, userId) {
 
     const recordsResult = await db.getValidatedCases(batchId);
 
-    // Filter: only send Pasig City records to TBInsight
-    const pasigRecords = recordsResult.rows.filter(isPasigRecord);
-    const nonPasigCount = recordsResult.rows.length - pasigRecords.length;
+    // Filter: only send Pasig City records to TBInsight, and skip exact
+    // duplicates of records already sent in a prior batch (record_status
+    // is set by recordDuplicateDetector during validation).
+    const pasigOnly = recordsResult.rows.filter(isPasigRecord);
+    const nonPasigCount = recordsResult.rows.length - pasigOnly.length;
+    const pasigRecords = pasigOnly.filter(r => r.record_status !== 'duplicate');
 
     const dstbRecords = pasigRecords.filter(r => r.source_type === 'DSTB');
     const mnRecords = pasigRecords.filter(r => r.source_type === 'MN');

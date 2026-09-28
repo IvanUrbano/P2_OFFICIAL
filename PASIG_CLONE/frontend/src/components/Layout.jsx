@@ -3,6 +3,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import API from '../api/axios';
 
 const NAV_ITEMS = [
+  { icon: 'ri-dashboard-line', label: 'Dashboard', path: '/dashboard' },
   { icon: 'ri-hospital-line', label: 'Health Facilities', path: '/facilities' },
   { icon: 'ri-stethoscope-line', label: 'TB Records', path: '/records' },
   { icon: 'ri-upload-cloud-2-line', label: 'Data Import', path: '/import' },
@@ -14,6 +15,7 @@ const NAV_ITEMS = [
 ];
 
 const NAV_ACCENT = {
+  '/dashboard': '#0EA5E9',
   '/facilities': '#3B82F6',
   '/records': '#10B981',
   '/import': '#8B5CF6',
@@ -47,7 +49,7 @@ export default function Layout() {
   const logout = useCallback(async () => {
     try { await API.post('/api/auth/logout'); } catch {}
     localStorage.removeItem('user');
-    window.location.href = 'https://p2-official.vercel.app';
+    window.location.href = import.meta.env.VITE_MAIN_APP_URL || 'https://p2-official.vercel.app';
   }, [navigate]);
 
   const resetTimer = useCallback(() => {

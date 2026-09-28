@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const config = require('../config');
 const db = require('../db/pasigSchema');
@@ -25,8 +26,17 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Guards account-mutating actions (register, password changes/resets) from abuse.
+const accountActionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Too many requests. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // ==================== REGISTER (Admin Only) ====================
-router.post('/register', authenticate, authorizeRoles('admin'), async (req, res) => {
+router.post('/register', accountActionLimiter, authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const { username, email, role, facility_id } = req.body;
     const ipAddress = req.ip || req.connection?.remoteAddress || null;
@@ -172,6 +182,16 @@ router.post('/login', loginLimiter, async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
+    // Readable double-submit CSRF cookie — paired with the x-csrf-token header
+    // on state-changing requests so a cross-site page can't ride the session cookie.
+    const csrfToken = crypto.randomBytes(32).toString('hex');
+    res.cookie('csrf_token', csrfToken, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
     // Check if password was changed within the last 24 hours
     const recentlyChanged = user.password_changed_at &&
       (Date.now() - new Date(user.password_changed_at).getTime()) < 24 * 60 * 60 * 1000;
@@ -196,6 +216,11 @@ router.post('/login', loginLimiter, async (req, res) => {
 router.post('/logout', (req, res) => {
   res.clearCookie('token', {
     httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+  });
+  res.clearCookie('csrf_token', {
+    httpOnly: false,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
   });
@@ -255,7 +280,7 @@ router.put('/profile', authenticate, async (req, res) => {
 });
 
 // ==================== CHANGE PASSWORD (Protected) ====================
-router.put('/password', authenticate, async (req, res) => {
+router.put('/password', accountActionLimiter, authenticate, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
 
@@ -405,7 +430,7 @@ router.delete('/users/:id', authenticate, authorizeRoles('admin'), async (req, r
 });
 
 // ==================== ADMIN RESET PASSWORD (Admin Only) ====================
-router.put('/users/:id/password', authenticate, authorizeRoles('admin'), async (req, res) => {
+router.put('/users/:id/password', accountActionLimiter, authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const ipAddress = req.ip || req.connection?.remoteAddress || null;

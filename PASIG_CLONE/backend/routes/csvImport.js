@@ -1,12 +1,22 @@
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
 const { parseRegistryFile } = require('../services/multiSheetParser');
 const { calculateFileHash } = require('../utils/fileHash');
 const { logAuditEvent } = require('../utils/auditLogger');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 
-router.post('/import', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+// Large-file parsing is expensive — cap how often it can be triggered per IP.
+const importLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Too many import requests. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   const client = await db.pool.connect();
   try {
     if (!req.files || !req.files.file) {
