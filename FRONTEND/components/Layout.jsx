@@ -25,6 +25,7 @@ export default function Layout() {
       await API.post('/api/auth/logout');
     } catch { /* ignore */ }
     localStorage.removeItem('user');
+    sessionStorage.removeItem('csrf_token');
     navigate('/login');
   }, [navigate]);
 

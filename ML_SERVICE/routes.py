@@ -17,6 +17,7 @@ been removed rather than fixed, since a working combined endpoint would
 reintroduce the exact ARIMA→RF dependency the architecture must not have.
 """
 
+import hmac
 import logging
 
 import numpy as np
@@ -57,8 +58,8 @@ router = APIRouter()
 
 
 def verify_api_key(x_api_key: str = Header(...)):
-    """Verify ML API key from request header."""
-    if x_api_key != ML_API_KEY:
+    """Verify ML API key from request header (constant-time comparison)."""
+    if not hmac.compare_digest(x_api_key, ML_API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing ML API key")
 
 
