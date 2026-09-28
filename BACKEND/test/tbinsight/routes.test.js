@@ -430,7 +430,7 @@ describe('GET /api/tb/gis/geojson', () => {
     assert.strictEqual(res.body.outline.coordinates.length, 2);
   });
 
-  it('never coalesces a missing-population incidence to 0 (TEST E)', async () => {
+  it('never coalesces a missing exact-year population incidence to 0 (TEST E)', async () => {
     let callCount = 0;
     mockQueryFn = async () => {
       callCount++;
@@ -438,13 +438,16 @@ describe('GET /api/tb/gis/geojson', () => {
         return { rows: [{ id: 1, name: 'Dela Paz', population: 50000, geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] }, centroid_lon: 0.5, centroid_lat: 0.5 }] };
       }
       if (callCount === 2) {
-        // incidence_per_100k NULL — no matching-year population reference
-        return { rows: [{ barangay_name: 'Dela Paz', risk_score: 40, risk_class: 'Medium', incidence_per_100k: null, trend_direction: 'Stable', period: '2026-01-01' }] };
+        // risk row exists, but...
+        return { rows: [{ barangay_name: 'Dela Paz', risk_score: 40, risk_class: 'Medium', incidence_per_100k: null, trend_direction: 'Stable', period: '2024-01-01' }] };
       }
+      // ...2023 has NO exact-year population record (forecast/cases/pop all
+      // empty) — year-specific incidence must surface null, never 0.
       return { rows: [] };
     };
-    const res = await request(buildApp()).get('/api/tb/gis/geojson');
+    const res = await request(buildApp()).get('/api/tb/gis/geojson?year=2023');
     const f = res.body.features.find(x => x.properties.name === 'Dela Paz');
+    assert.strictEqual(f.properties.population, null, 'no exact-year population -> null, never another year\'s figure');
     assert.strictEqual(f.properties.incidence_per_100k, null, 'missing population must surface as null, never 0');
   });
 

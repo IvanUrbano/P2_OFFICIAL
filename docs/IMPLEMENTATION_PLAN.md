@@ -310,3 +310,9 @@ PORT=5001
 7. **ML Service location**: In production, the ML Service runs on the same Render instance as the TBInsight backend (port 8001). In development, start it separately with `uvicorn`.
 
 8. **CommonJS throughout**: Both backends use `require()`/`module.exports` (CommonJS). Do not introduce ES module syntax (`import`/`export`) without converting the entire backend.
+
+---
+
+## Known Backlog
+
+- **[GIS-B1] Audit / rename / deprecate `barangay_risk_scores.incidence_per_100k`** — this stored field currently holds the LEGACY pipeline annualized-month calculation (`(latest calendar month × 12) / population × 100k`, `pipeline.js` step 5a) and is **not** the authoritative year-specific GIS incidence. The GIS geojson/choropleth endpoints now compute year-specific incidence on the fly (`computeYearIncidence` in `populationService.js`) and expose the stored value only under `legacy_pipeline_incidence`. Rename the column (e.g. `legacy_annualized_monthly_incidence`) or deprecate it after auditing all remaining consumers, so it can never be accidentally reused as annual incidence. Known remaining consumers: `GET /api/tb/barangays/watchlist` (`routes.js`), `buildAnalyticsMetrics` / `buildForecastingMetrics` (`insightDataBuilder.js`), `alertEngine.js` thresholds.
