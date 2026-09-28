@@ -15,17 +15,10 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem('pasig_remember_me');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed.email || parsed.password) {
-          setFormData({ email: parsed.email || '', password: parsed.password || '' });
-          setRememberMe(true);
-        }
-      } catch (e) {
-        // ignore invalid JSON
-      }
+    const savedEmail = localStorage.getItem('pasig_remember_me');
+    if (savedEmail) {
+      setFormData((prev) => ({ ...prev, email: savedEmail }));
+      setRememberMe(true);
     }
   }, []);
 
@@ -52,7 +45,7 @@ export default function LoginPage() {
     try {
       const res = await API.post('/api/auth/login', formData);
       if (rememberMe) {
-        localStorage.setItem('pasig_remember_me', JSON.stringify({ email: formData.email, password: formData.password }));
+        localStorage.setItem('pasig_remember_me', formData.email);
       } else {
         localStorage.removeItem('pasig_remember_me');
       }
@@ -131,7 +124,7 @@ export default function LoginPage() {
                   onChange={(e) => setRememberMe(e.target.checked)}
                   className="w-4 h-4 rounded border-gray-300 accent-[#0F2D52] cursor-pointer"
                 />
-                <span>Remember password</span>
+                <span>Remember username</span>
               </label>
               <button
                 type="button"

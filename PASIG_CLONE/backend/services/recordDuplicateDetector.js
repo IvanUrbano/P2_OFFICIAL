@@ -41,9 +41,11 @@ function getSourceRecordId(record, sourceType) {
  * Classify a record compared to existing records
  * @param {Object} record - Record data
  * @param {string} sourceType - 'DSTB' or 'MN'
+ * @param {number|null} excludeBatchId - Batch to exclude from the lookup (the
+ *   batch currently being (re-)validated, so replaying it doesn't self-match)
  * @returns {Promise<Object>} { status: 'new'|'existing'|'updated'|'duplicate', existingId: null|id }
  */
-async function classifyRecord(record, sourceType) {
+async function classifyRecord(record, sourceType, excludeBatchId = null) {
   try {
     const sourceRecordId = getSourceRecordId(record, sourceType);
 
@@ -57,14 +59,20 @@ async function classifyRecord(record, sourceType) {
     }
 
     // Query for existing record with same source ID
+    const params = [sourceType, sourceRecordId];
+    let batchFilter = '';
+    if (excludeBatchId !== null) {
+      params.push(excludeBatchId);
+      batchFilter = ` AND batch_id <> $${params.length}`;
+    }
     const result = await db.pool.query(
-      `SELECT id, is_valid, 
+      `SELECT id, is_valid,
               barangay_name, date_of_diagnosis, age, sex,
               source_record_id
        FROM validated_tb_cases
-       WHERE source_type = $1 AND source_record_id = $2
+       WHERE source_type = $1 AND source_record_id = $2${batchFilter}
        LIMIT 1`,
-      [sourceType, sourceRecordId]
+      params
     );
 
     if (result.rows.length === 0) {
@@ -105,9 +113,10 @@ async function classifyRecord(record, sourceType) {
  * Classify all records in a batch
  * @param {Array} records - Array of record objects
  * @param {string} sourceType - 'DSTB' or 'MN'
+ * @param {number|null} excludeBatchId - Batch to exclude from the lookup
  * @returns {Promise<Object>} Classification summary
  */
-async function classifyBatch(records, sourceType) {
+async function classifyBatch(records, sourceType, excludeBatchId = null) {
   const summary = {
     total: records.length,
     new: 0,
@@ -119,7 +128,7 @@ async function classifyBatch(records, sourceType) {
 
   for (const record of records) {
     try {
-      const classification = await classifyRecord(record, sourceType);
+      const classification = await classifyRecord(record, sourceType, excludeBatchId);
       classification.record = record;
       summary.classifications.push(classification);
 

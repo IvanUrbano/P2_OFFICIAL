@@ -9,13 +9,14 @@ const SETTINGS_TABS = [
   { key: 'security', label: 'Security', desc: 'Password and security settings' },
 ];
 
+// Must match the canonical 30 PSGC barangays in BACKEND/services/dataCleaner.js.
 const PASIG_BARANGAYS = [
-  'Bagong Ilog', 'Bagumbayan', 'Bambang', 'Buting', 'Caniogan',
-  'Dela Paz', 'Kalawaan', 'Kapitolyo', 'Malinao', 'Manggahan',
-  'Maybunga', 'Oranbo', 'Palatiw', 'Pinagbuhatan', 'Pineda',
-  'Rosario', 'Sagad', 'San Antonio', 'San Joaquin', 'San Miguel',
-  'San Nicolas', 'Santa Cruz', 'Santa Rosa', 'Santo Tomas', 'Santolan',
-  'Sumilang', 'Tagapo', 'Ugong', 'Wawa',
+  'Bagong Ilog', 'Bagong Katipunan', 'Bambang', 'Buting', 'Caniogan', 'Dela Paz',
+  'Kalawaan', 'Kapasigan', 'Kapitolyo', 'Malinao', 'Manggahan', 'Maybunga',
+  'Oranbo', 'Palatiw', 'Pinagbuhatan', 'Pineda', 'Rosario', 'Sagad',
+  'San Antonio', 'San Joaquin', 'San Jose', 'San Miguel', 'San Nicolas',
+  'Santa Cruz', 'Santa Lucia', 'Santa Rosa', 'Santo Tomas', 'Santolan',
+  'Sumilang', 'Ugong',
 ];
 
 export default function SettingsPage() {

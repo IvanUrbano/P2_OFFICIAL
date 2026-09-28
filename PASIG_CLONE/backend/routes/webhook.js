@@ -1,10 +1,19 @@
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
 const { sendWebhook } = require('../services/webhookSender');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 
-router.post('/send', authenticate, authorizeRoles('admin'), async (req, res) => {
+const sendLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Too many sync requests. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.post('/send', sendLimiter, authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const { batchId } = req.body;
 

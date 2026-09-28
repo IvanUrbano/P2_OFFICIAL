@@ -5,6 +5,25 @@ const instance = axios.create({
   withCredentials: true,
 });
 
+function readCookie(name) {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+const SAFE_METHODS = new Set(['get', 'head', 'options']);
+
+instance.interceptors.request.use((requestConfig) => {
+  const method = (requestConfig.method || 'get').toLowerCase();
+  if (!SAFE_METHODS.has(method)) {
+    const csrfToken = readCookie('csrf_token');
+    if (csrfToken) {
+      requestConfig.headers = requestConfig.headers || {};
+      requestConfig.headers['x-csrf-token'] = csrfToken;
+    }
+  }
+  return requestConfig;
+});
+
 instance.interceptors.response.use(
   (response) => response,
   (error) => {

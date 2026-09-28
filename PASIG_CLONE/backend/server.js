@@ -16,6 +16,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const config = require('./config');
 const { initSchema } = require('./db/pasigSchema');
+const { csrfProtection } = require('./middleware/csrf');
  
 const authRoutes = require('./routes/auth');
 const csvImportRoutes = require('./routes/csvImport');
@@ -46,7 +47,8 @@ app.use('/api/auth', express.json({ limit: '50mb' }));
 app.use('/api/webhook', express.json({ limit: '100mb' })); // Large payloads from TBInsight
 app.use(express.json({ limit: '50mb' })); // Default for other routes
 app.use(cookieParser());
- 
+app.use('/api', csrfProtection);
+
 app.use('/api/auth', authRoutes);
 app.use('/api/data', csvImportRoutes);
 app.use('/api/data', validationRoutes);
