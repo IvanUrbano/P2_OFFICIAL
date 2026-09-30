@@ -963,9 +963,9 @@ export default function Analytics() {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
               {/* Total TB Cases */}
               <div className="flex flex-col px-4 py-4 relative">
-                <div className="flex items-center gap-2">
-                  <i className="ri-file-list-3-line text-sm" style={{ color: '#6B7FA3' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Total TB Cases</span>
+                <div className="flex items-center gap-2 h-5 min-w-0">
+                  <i className="ri-file-list-3-line text-sm shrink-0" style={{ color: '#6B7FA3' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Total TB Cases</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <div className="flex items-end gap-1.5 flex-wrap">
@@ -980,9 +980,9 @@ export default function Analytics() {
 
               {/* Incidence per 100k */}
               <div className="flex flex-col px-4 py-4 relative">
-                <div className="flex items-center gap-2">
-                  <i className="ri-pulse-line text-sm" style={{ color: '#6B9E9E' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Incidence / 100k</span>
+                <div className="flex items-center gap-2 h-5 min-w-0">
+                  <i className="ri-pulse-line text-sm shrink-0" style={{ color: '#6B9E9E' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Incidence / 100k</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.incidence == null ? 'N/A' : metrics.incidence}</p>
@@ -994,10 +994,10 @@ export default function Analytics() {
 
               {/* Currently On Treatment */}
               <div className="flex flex-col px-4 py-4 relative">
-                <div className="flex items-center justify-between flex-wrap gap-x-2 gap-y-1">
-                  <div className="flex items-center gap-2">
-                    <i className="ri-first-aid-kit-line text-sm" style={{ color: '#B8956A' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Currently On Treatment</span>
+                <div className="flex items-center justify-between gap-2 h-5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <i className="ri-first-aid-kit-line text-sm shrink-0" style={{ color: '#B8956A' }} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Currently On Treatment</span>
                   </div>
                   {metrics.total > 0 && (
                     <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ background: '#FFFBEB', color: '#92400E' }}>
@@ -1015,10 +1015,10 @@ export default function Analytics() {
 
               {/* Treatment Success Rate (TSR) */}
               <div className="flex flex-col px-4 py-4 relative" title="TSR is a cohort-based indicator: (Cured + Treatment Completed) among patients whose treatment started in the previous year, divided by the total previous-year treatment cohort. This differs from the Treatment Cascade's Successful Outcome % of Evaluated.">
-                <div className="flex items-center justify-between flex-wrap gap-x-2 gap-y-1">
-                  <div className="flex items-center gap-2">
-                    <i className="ri-check-double-line text-sm" style={{ color: '#6B9E8A' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Treatment Success Rate (TSR)</span>
+                <div className="flex items-center justify-between gap-2 h-5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <i className="ri-check-double-line text-sm shrink-0" style={{ color: '#6B9E8A' }} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Treatment Success Rate (TSR)</span>
                   </div>
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ background: '#ECFDF5', color: '#047857' }}>
                     {metrics.successRate == null ? 'N/A' : `${metrics.successRate}%`}
@@ -1046,9 +1046,9 @@ export default function Analytics() {
 
               {/* Case Fatality Rate */}
               <div className="flex flex-col px-4 py-4 relative">
-                <div className="flex items-center gap-2">
-                  <i className="ri-heart-pulse-line text-sm" style={{ color: '#B07070' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Case Fatality Rate</span>
+                <div className="flex items-center gap-2 h-5 min-w-0">
+                  <i className="ri-heart-pulse-line text-sm shrink-0" style={{ color: '#B07070' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Case Fatality Rate</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.fatalityRate == null ? 'N/A' : `${metrics.fatalityRate}%`}</p>
@@ -1069,10 +1069,10 @@ export default function Analytics() {
 
               {/* High-Risk Barangays */}
               <div className="flex flex-col px-4 py-4">
-                <div className="flex items-center justify-between flex-wrap gap-x-2 gap-y-1">
-                  <div className="flex items-center gap-2">
-                    <i className="ri-alarm-warning-line text-sm" style={{ color: '#C4886A' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>High-Risk Barangays</span>
+                <div className="flex items-center justify-between gap-2 h-5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <i className="ri-alarm-warning-line text-sm shrink-0" style={{ color: '#C4886A' }} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>High-Risk Barangays</span>
                   </div>
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ background: '#FEF2F2', color: '#991B1B' }}>
                     {metrics.highRisk}/{barangayNames.length || 30}
