@@ -393,10 +393,9 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       console.error('Failed to log webhook error:', logErr.message);
     }
     
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Webhook processing failed',
-      details: error.message,
-      code: error.code
+      batch_id: req.body?.batch_id || null,
     });
   } finally {
     client.release();

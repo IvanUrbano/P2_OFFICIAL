@@ -14,16 +14,57 @@ const ALL_YEARS = ['2023', '2024', '2025', '2026'];
 const HORIZON_OPTIONS = [
   { value: 1, label: '1 Month' },
   { value: 3, label: '3 Months' },
-  { value: 6, label: '6 Months' },
-  { value: 12, label: '12 Months' },
 ];
 
-const RISK_COLORS = {
-  Low: '#10B981',
-  Moderate: '#F59E0B',
-  High: '#EF4444',
-  'Very High': '#991B1B',
+const MODEL_STATUS_COLORS = {
+  success: '#047857',
+  degraded: '#B45309',
+  insufficient_data: '#B91C1C',
+  failed: '#991B1B',
+  not_run: '#94A3B8',
 };
+
+const MODEL_STATUS_LABELS = {
+  success: 'Success',
+  degraded: 'Degraded',
+  insufficient_data: 'Insufficient Data',
+  failed: 'Failed',
+  not_run: 'Not Run',
+};
+
+function formatModelStatus(status) {
+  return MODEL_STATUS_LABELS[status] || 'Not Run';
+}
+
+// Just the method name for a forecast tier — 'ARIMA' | 'Baseline Forecast'
+// | 'Insufficient Historical Data' | null.
+function forecastTierMethodLabel(tier) {
+  if (tier === 'arima') return 'ARIMA';
+  if (tier === 'insufficient_data') return 'Insufficient Historical Data';
+  if (tier != null) return 'Baseline Forecast';
+  return null;
+}
+
+// Shared by the Model Status KPI card and the Run Analysis Pipeline result
+// banner. Never renders "ARIMA: Baseline Forecast" — a 10-23 month result is
+// a real success, just not the ARIMA tier, so it reads "Success — Method:
+// Baseline Forecast" instead of implying the model failed to be ARIMA.
+function formatForecastingStatus(status) {
+  switch (status) {
+    case 'success':
+    case 'arima':
+      return { label: 'Success — Method: ARIMA', color: MODEL_STATUS_COLORS.success };
+    case 'degraded':
+    case 'baseline':
+      return { label: 'Success — Method: Baseline Forecast', color: MODEL_STATUS_COLORS.degraded };
+    case 'insufficient_data':
+      return { label: 'Insufficient Historical Data', color: MODEL_STATUS_COLORS.insufficient_data };
+    case 'failed':
+      return { label: 'Failed', color: MODEL_STATUS_COLORS.failed };
+    default:
+      return { label: 'Not Run', color: MODEL_STATUS_COLORS.not_run };
+  }
+}
 
 /* ─── Helper Components ──────────────────────────────────────────────── */
 
@@ -63,18 +104,6 @@ function ForecastTooltip({ active, payload, label }) {
           </div>
         ))}
     </div>
-  );
-}
-
-function RiskBadge({ risk }) {
-  const bg = RISK_COLORS[risk] || '#94A3B8';
-  return (
-    <span
-      className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold text-white"
-      style={{ backgroundColor: bg }}
-    >
-      {risk}
-    </span>
   );
 }
 
@@ -178,6 +207,16 @@ function EvaluationResults({ evaluation }) {
             {arimaSteps} real ARIMA fit{arimaSteps === 1 ? '' : 's'} across barangays · one-step-ahead walk-forward.
           </p>
         )}
+        {Array.isArray(arima.failed_barangays) && arima.failed_barangays.length > 0 && (
+          <div className="mt-2.5 pt-2.5" style={{ borderTop: '1px solid #FECACA' }}>
+            <p className="text-[11px] font-bold" style={{ color: '#B91C1C' }}>
+              {arima.failed_barangays.length} barangay{arima.failed_barangays.length === 1 ? '' : 's'} could not be evaluated:
+            </p>
+            {arima.failed_barangays.map((f, i) => (
+              <p key={i} className="text-[11px]" style={{ color: '#991B1B' }}>{f.barangay_name}: {f.error}</p>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Random Forest */}
@@ -262,8 +301,26 @@ export default function Forecasting() {
 
   /* ── UI state ── */
   const [error, setError] = useState(null);
-  const [filterLoading, setFilterLoading] = useState(false);
-  const [forecastRan, setForecastRan] = useState(false);
+
+  // View Forecast content-area state — 'idle' (nothing requested yet),
+  // 'loading' (request in flight), 'checking' (request succeeded, waiting
+  // one render for the filtered/aggregated memos below to recompute against
+  // the fresh data so we can tell "no data for this scope" apart from
+  // "data exists"), 'success', 'no_data', or 'error'. A failed request must
+  // never fall through to 'success'/'no_data' and render stale data as if
+  // the click had worked.
+  const [viewStatus, setViewStatus] = useState('idle');
+  const [viewErrorMessage, setViewErrorMessage] = useState(null);
+  const [viewSuccessInfo, setViewSuccessInfo] = useState(null); // { scope, method }
+
+  // Run Analysis Pipeline result — separate from viewStatus because this is
+  // reporting on the ACTION (did reprocessing succeed?), not on the content
+  // area, even though a successful run also refreshes that content.
+  const [pipelineRunStatus, setPipelineRunStatus] = useState('idle');
+  const [pipelineRunResult, setPipelineRunResult] = useState(null);
+  const [pipelineRunErrorMessage, setPipelineRunErrorMessage] = useState(null);
+
+  const isBusy = viewStatus === 'loading' || viewStatus === 'checking' || pipelineRunStatus === 'loading';
 
   /* ── Model evaluation (Evaluate Model — admin only) ── */
   const [evalLoading, setEvalLoading] = useState(false);
@@ -318,43 +375,120 @@ export default function Forecasting() {
 
   /* ────────── Run Forecast ────────── */
 
-  const handleRunForecast = useCallback(async () => {
-    setFilterLoading(true);
-    setForecastRan(true);
+  const refreshForecastView = useCallback(async () => {
+    const [freshForecasts, freshAvp, freshPipeline] = await Promise.all([
+      API.get('/api/tb/forecasts'),
+      API.get('/api/tb/forecast/backtest'),
+      API.get('/api/tb/pipeline/status').catch(() => ({ data: { latest_run: null } })),
+    ]);
+    setForecastsData(freshForecasts.data.forecasts || []);
+    setBacktestData(freshAvp.data.data || []);
+    setPipelineStatus(freshPipeline.data.latest_run || null);
+  }, []);
 
-    // Validate start <= end
+  const applySelectedFilters = useCallback(() => {
+    setAppliedStartYear(startYear);
+    setAppliedEndYear(endYear);
+    setAppliedBarangay(selectedBarangay);
+    setAppliedMonths(forecastMonths);
+  }, [startYear, endYear, selectedBarangay, forecastMonths]);
+
+  const scopeLabel = useCallback(() => {
+    const barangayPart = selectedBarangay || 'All Pasig Barangays';
+    return `${barangayPart} • ${startYear}–${endYear}`;
+  }, [selectedBarangay, startYear, endYear]);
+
+  // Loads currently persisted forecasts under the selected filters — read-only,
+  // available to every user, never reprocesses ARIMA/RF. A failed request
+  // moves to 'error' and stops — it never leaves stale forecastsData/
+  // backtestData on screen looking like a successful result.
+  const handleViewForecast = useCallback(async () => {
+    setViewStatus('loading');
+    setViewErrorMessage(null);
+    setViewSuccessInfo(null);
+
     if (Number(startYear) > Number(endYear)) {
-      setFilterLoading(false);
+      setViewStatus('error');
+      setViewErrorMessage('Start year must be on or before end year.');
       return;
     }
 
     try {
-      // Run the ARIMA pipeline
-      await API.post('/api/tb/pipeline', {
+      await refreshForecastView();
+      applySelectedFilters();
+      setViewSuccessInfo({ scope: scopeLabel() });
+      setViewStatus('checking');
+    } catch (err) {
+      if (import.meta.env.DEV) console.error('Forecast fetch error:', err.response?.data?.error || err.message);
+      setViewStatus('error');
+      setViewErrorMessage(err.response?.data?.error || err.message || 'Could not load the forecast.');
+    }
+  }, [startYear, endYear, refreshForecastView, applySelectedFilters, scopeLabel]);
+
+  // Admin-only reprocessing action — runs ARIMA + RF, then shows the
+  // refreshed view. Captures the full pipeline result (never discards it)
+  // and reports Random Forest / Forecasting status separately, distinct
+  // from "already running" and outright failure.
+  const handleRunPipeline = useCallback(async () => {
+    setPipelineRunStatus('loading');
+    setPipelineRunResult(null);
+    setPipelineRunErrorMessage(null);
+
+    if (Number(startYear) > Number(endYear)) {
+      setPipelineRunStatus('error');
+      setPipelineRunErrorMessage('Start year must be on or before end year.');
+      return;
+    }
+
+    try {
+      const res = await API.post('/api/tb/pipeline', {
         forecastHorizon: forecastMonths,
         barangays: selectedBarangay ? [selectedBarangay] : undefined,
       });
 
-      // Re-fetch fresh data
-      const [freshForecasts, freshAvp, freshPipeline] = await Promise.all([
-        API.get('/api/tb/forecasts'),
-        API.get('/api/tb/forecast/backtest'),
-        API.get('/api/tb/pipeline/status').catch(() => ({ data: { latest_run: null } })),
-      ]);
-      setForecastsData(freshForecasts.data.forecasts || []);
-      setBacktestData(freshAvp.data.data || []);
-      setPipelineStatus(freshPipeline.data.latest_run || null);
+      if (res.status === 202) {
+        setPipelineRunStatus('already_running');
+        return;
+      }
+
+      // The pipeline itself succeeded once we're here — everything below
+      // this point is reporting on that success and then trying to refresh
+      // the view. A failure in the refresh step must never be reported as
+      // "Pipeline failed", since the pipeline run did not fail.
+      const result = res.data?.result || {};
+      const hasWarnings = Array.isArray(result.errors) && result.errors.length > 0;
+      setPipelineRunResult({
+        barangaysProcessed: result.barangaysProcessed ?? null,
+        forecastsCount: result.forecastsCount ?? null,
+        classificationsCount: result.classificationsCount ?? null,
+        alertsCount: result.alertsCount ?? null,
+        errors: result.errors || [],
+      });
+      setPipelineRunStatus(hasWarnings ? 'warning' : 'success');
     } catch (err) {
       if (import.meta.env.DEV) console.error('Pipeline error:', err.response?.data?.error || err.message);
-    } finally {
-      // Apply filters
-      setAppliedStartYear(startYear);
-      setAppliedEndYear(endYear);
-      setAppliedBarangay(selectedBarangay);
-      setAppliedMonths(forecastMonths);
-      setFilterLoading(false);
+      setPipelineRunStatus('error');
+      setPipelineRunErrorMessage(err.response?.data?.error || err.message || 'Pipeline failed.');
+      return;
     }
-  }, [startYear, endYear, selectedBarangay, forecastMonths]);
+
+    // Refresh the persisted forecast/model-status view after successful
+    // processing, the same way View Forecast does. A failure here only
+    // affects the content-area view state, not the pipeline result banner
+    // above (which already correctly reported success/warning).
+    setViewStatus('loading');
+    setViewErrorMessage(null);
+    try {
+      await refreshForecastView();
+      applySelectedFilters();
+      setViewSuccessInfo({ scope: scopeLabel() });
+      setViewStatus('checking');
+    } catch (err) {
+      if (import.meta.env.DEV) console.error('Post-pipeline refresh error:', err.response?.data?.error || err.message);
+      setViewStatus('error');
+      setViewErrorMessage(err.response?.data?.error || err.message || 'Pipeline completed, but the view could not be refreshed. Click View Forecast to try again.');
+    }
+  }, [startYear, endYear, forecastMonths, selectedBarangay, refreshForecastView, applySelectedFilters, scopeLabel]);
 
   /* ────────── Evaluate Model (admin) ────────── */
 
@@ -383,31 +517,6 @@ export default function Forecasting() {
     }
   }, []);
 
-  /* ────────── Backfill Historical Risk Snapshots (admin) ────────── */
-
-  // Computes one risk-classification snapshot per PAST calendar year (see
-  // POST /api/tb/pipeline/historical), so the GIS Year filter can show a
-  // real, distinct risk assessment for each year instead of only the
-  // current/latest one. One-time/rare admin recovery action, not tied to
-  // the automatic webhook sync trigger.
-  const [historicalLoading, setHistoricalLoading] = useState(false);
-  const [historicalError, setHistoricalError] = useState(null);
-  const [historicalResult, setHistoricalResult] = useState(null);
-  const handleRunHistoricalBackfill = useCallback(async () => {
-    setHistoricalLoading(true);
-    setHistoricalError(null);
-    setHistoricalResult(null);
-    try {
-      const res = await API.post('/api/tb/pipeline/historical', {});
-      setHistoricalResult(res.data?.years || []);
-    } catch (err) {
-      const data = err.response?.data;
-      setHistoricalError(data?.details || data?.error || err.message);
-    } finally {
-      setHistoricalLoading(false);
-    }
-  }, []);
-
   const handleReset = useCallback(() => {
     setStartYear('2024');
     setEndYear('2025');
@@ -417,7 +526,9 @@ export default function Forecasting() {
     setAppliedEndYear(null);
     setAppliedBarangay(null);
     setAppliedMonths(null);
-    setForecastRan(false);
+    setViewStatus('idle');
+    setViewErrorMessage(null);
+    setViewSuccessInfo(null);
   }, []);
 
   const handleGenerateInsight = useCallback(async () => {
@@ -439,7 +550,7 @@ export default function Forecasting() {
     }
   }, [appliedStartYear, appliedEndYear, appliedBarangay, appliedMonths]);
 
-  /* ────────── Derived data (all behind forecastRan + applied filters) ────────── */
+  /* ────────── Derived data (all behind viewStatus + applied filters) ────────── */
 
   const barangayNames = useMemo(
     () => barangays.map((b) => b.barangay_name || b.name).filter(Boolean).sort(),
@@ -493,7 +604,10 @@ export default function Forecasting() {
       data = data.filter((r) => (r.barangay_name || '') === appliedBarangay);
     }
 
-    // Aggregate by period
+    // Aggregate by period. forecasted_count/CI are only summed from rows
+    // that actually have a value — a barangay with insufficient history has
+    // forecasted_count = null (see arima_forecast.py), and treating that as
+    // 0 would misrepresent "not modeled" as "predicted zero cases".
     const byPeriod = {};
     data.forEach((r) => {
       const period = r.period || r.forecast_period || '';
@@ -502,32 +616,42 @@ export default function Forecasting() {
         byPeriod[period] = {
           period,
           forecasted: 0,
+          hasForecast: false,
           actual: 0,
           ci_lower: 0,
           ci_upper: 0,
+          hasCI: false,
           count: 0,
-          riskCounts: {},
+          methodCounts: {},
         };
       }
-      byPeriod[period].forecasted += Number(r.forecasted_count || 0);
-      byPeriod[period].actual += Number(r.actual_count || 0);
-      byPeriod[period].ci_lower += Number(r.confidence_lower || 0);
-      byPeriod[period].ci_upper += Number(r.confidence_upper || 0);
-      byPeriod[period].count += 1;
-      // Tally risk classes for majority vote
-      const rc = r.risk_class || 'Low';
-      byPeriod[period].riskCounts[rc] = (byPeriod[period].riskCounts[rc] || 0) + 1;
+      const p = byPeriod[period];
+      if (r.forecasted_count != null) {
+        p.forecasted += Number(r.forecasted_count);
+        p.hasForecast = true;
+      }
+      if (r.confidence_lower != null && r.confidence_upper != null) {
+        p.ci_lower += Number(r.confidence_lower);
+        p.ci_upper += Number(r.confidence_upper);
+        p.hasCI = true;
+      }
+      p.actual += Number(r.actual_count || 0);
+      p.count += 1;
+      // Tally forecast methods for a majority-vote tier label when
+      // aggregating across barangays (city-wide view).
+      const m = r.method || 'arima';
+      p.methodCounts[m] = (p.methodCounts[m] || 0) + 1;
     });
 
-    // Resolve majority risk class per period
+    // Resolve majority method (forecast tier) per period.
     Object.values(byPeriod).forEach((p) => {
       let maxCount = 0;
-      let majority = 'Low';
-      for (const [cls, cnt] of Object.entries(p.riskCounts)) {
-        if (cnt > maxCount) { maxCount = cnt; majority = cls; }
+      let majority = 'arima';
+      for (const [m, cnt] of Object.entries(p.methodCounts)) {
+        if (cnt > maxCount) { maxCount = cnt; majority = m; }
       }
-      p.risk_class = majority;
-      delete p.riskCounts;
+      p.method = majority;
+      delete p.methodCounts;
     });
 
     let result = Object.values(byPeriod).sort((a, b) => a.period.localeCompare(b.period));
@@ -535,6 +659,17 @@ export default function Forecasting() {
     if (appliedMonths) result = result.slice(0, appliedMonths);
     return result;
   }, [forecastsData, appliedBarangay, appliedMonths]);
+
+  // Resolves the transient 'checking' state (set right after a successful
+  // fetch) into 'success' or 'no_data' once historicalCases/filteredForecasts
+  // have recomputed against the freshly-fetched data and just-applied
+  // filters — these are memoized from state set in the same action, so they
+  // aren't readable synchronously inside the handler that set that state.
+  useEffect(() => {
+    if (viewStatus !== 'checking') return;
+    const hasData = historicalCases > 0 || filteredForecasts.length > 0;
+    setViewStatus(hasData ? 'success' : 'no_data');
+  }, [viewStatus, historicalCases, filteredForecasts]);
 
   /** Comparison forecasts for barangay comparison */
   const comparisonForecasts = useMemo(() => {
@@ -618,11 +753,14 @@ export default function Forecasting() {
     return ((firstForecast - baseline) / baseline) * 100;
   }, [historicalCases, totalForecasted, filteredForecasts, filteredMonthly]);
 
-  const riskLevel = useMemo(() => {
-    if (!filteredForecasts.length) return 'Low';
-    const majorityRisk = filteredForecasts[filteredForecasts.length - 1]?.risk_class || 'Low';
-    return majorityRisk;
+  /** Forecast tier for the selected scope: 'arima' | a baseline method name
+   * | 'insufficient_data' | null (nothing loaded yet). Drives the Model
+   * Status KPI and the chart/table's tier labeling. */
+  const forecastTier = useMemo(() => {
+    if (!filteredForecasts.length) return null;
+    return filteredForecasts[filteredForecasts.length - 1]?.method || null;
   }, [filteredForecasts]);
+  const isBaselineTier = forecastTier != null && forecastTier !== 'arima' && forecastTier !== 'insufficient_data';
 
   /** Chart data: historical + forecast combined */
   const forecastChartData = useMemo(() => {
@@ -659,6 +797,7 @@ export default function Forecasting() {
       const d = new Date(r.period);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       const isFuture = !latestActual || key > latestActual;
+      const hasValue = isFuture && r.hasForecast;
       const comparePoint = comparisonForecasts.find((c) => {
         const cd = new Date(c.period);
         return `${cd.getFullYear()}-${String(cd.getMonth() + 1).padStart(2, '0')}` === key;
@@ -667,11 +806,13 @@ export default function Forecasting() {
         label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
         month: r.period,
         Actual: null,
-        Forecast: isFuture ? Math.round(r.forecasted) : null,
-        CompareForecast: isFuture && comparePoint ? Math.round(comparePoint.forecasted) : null,
-        ci_upper: isFuture ? r.ci_upper : null,
-        ci_lower: isFuture ? r.ci_lower : null,
-        isForecast: isFuture,
+        // No point is drawn at all for an insufficient-history period — a
+        // fabricated zero would misrepresent "not modeled" as a prediction.
+        Forecast: hasValue ? Math.round(r.forecasted) : null,
+        CompareForecast: hasValue && comparePoint ? Math.round(comparePoint.forecasted) : null,
+        ci_upper: hasValue && r.hasCI ? r.ci_upper : null,
+        ci_lower: hasValue && r.hasCI ? r.ci_lower : null,
+        isForecast: hasValue,
       });
     });
     return points;
@@ -717,9 +858,10 @@ export default function Forecasting() {
       const isHistorical = hasActual && periodKey <= latestActualPeriod;
 
       const actual = isHistorical ? actualByPeriod[periodKey] : null;
-      const forecasted = isHistorical ? null : Math.round(Number(r.forecasted) || 0);
-      const ci_lower = isHistorical ? null : Math.round(Number(r.ci_lower) || 0);
-      const ci_upper = isHistorical ? null : Math.round(Number(r.ci_upper) || 0);
+      const isInsufficient = !isHistorical && r.method === 'insufficient_data';
+      const forecasted = !isHistorical && r.hasForecast ? Math.round(Number(r.forecasted)) : null;
+      const ci_lower = !isHistorical && r.hasCI ? Math.round(Number(r.ci_lower)) : null;
+      const ci_upper = !isHistorical && r.hasCI ? Math.round(Number(r.ci_upper)) : null;
 
       // Growth: first forecast compares to last actual, subsequent compare to previous forecast
       let gr = null;
@@ -742,7 +884,9 @@ export default function Forecasting() {
         ci_lower,
         ci_upper,
         growthRate: gr,
-        risk_class: r.risk_class,
+        method: r.method,
+        isBaseline: !isHistorical && !isInsufficient && r.method !== 'arima',
+        isInsufficient,
         isHistorical,
       };
     });
@@ -824,7 +968,7 @@ export default function Forecasting() {
       { key: 'forecasted', label: 'FORECAST' },
       { key: 'confidence', label: 'CONFIDENCE RANGE (95% CI)' },
       { key: 'growthRate', label: 'GROWTH' },
-      { key: 'risk_class', label: 'RISK' },
+      { key: 'method', label: 'MODEL' },
     ],
     []
   );
@@ -883,20 +1027,37 @@ export default function Forecasting() {
             </button>
             <button
               type="button"
-              onClick={handleRunForecast}
-              disabled={filterLoading}
+              onClick={handleViewForecast}
+              disabled={isBusy}
+              title="Load the currently persisted forecast for the selected filters — does not reprocess any model"
               className="px-5 py-2 text-xs font-semibold disabled:opacity-60"
               style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
               onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
               onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
             >
-              {filterLoading ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Running...</> : 'Run Analysis Pipeline'}
+              {viewStatus === 'loading' || viewStatus === 'checking' ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Loading...</> : 'View Forecast'}
             </button>
             {isAdmin && (
               <button
                 type="button"
+                onClick={handleRunPipeline}
+                disabled={isBusy}
+                title="Processes the latest TB records to update forecasts and barangay risk classifications (admin)"
+                className="px-5 py-2 text-xs font-semibold disabled:opacity-60"
+                style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#ffffff'; }}
+              >
+                {pipelineRunStatus === 'loading'
+                  ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Running...</>
+                  : <><i className="ri-refresh-line mr-1" />Run Analysis Pipeline</>}
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                type="button"
                 onClick={handleRunEvaluation}
-                disabled={evalLoading || filterLoading}
+                disabled={evalLoading || isBusy}
                 title="Walk-forward evaluation of ARIMA + Random Forest (admin)"
                 className="px-5 py-2 text-xs font-semibold disabled:opacity-60"
                 style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
@@ -908,57 +1069,18 @@ export default function Forecasting() {
                   : <><i className="ri-flask-line mr-1" />Evaluate Model</>}
               </button>
             )}
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={handleRunHistoricalBackfill}
-                disabled={historicalLoading || filterLoading}
-                title="Compute one risk-classification snapshot per past year, so GIS's Year filter shows a real assessment for each year (admin)"
-                className="px-5 py-2 text-xs font-semibold disabled:opacity-60"
-                style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = '#ffffff'; }}
-              >
-                {historicalLoading
-                  ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Backfilling...</>
-                  : <><i className="ri-history-line mr-1" />Backfill Historical Risk Snapshots</>}
-              </button>
-            )}
           </div>
         </div>
 
-        {/* ─── Historical Snapshot Backfill results (admin) ─── */}
-        {isAdmin && (historicalLoading || historicalError || historicalResult) && (
-          <div className="px-6 py-4" style={{ borderTop: '1px solid #E2E8F0', background: '#F8FAFC' }}>
-            {historicalLoading ? (
-              <div className="flex items-center gap-2 text-xs font-medium" style={{ color: '#64748B' }}>
-                <i className="ri-loader-4-line animate-spin" />
-                Computing a risk snapshot per past year — each one re-runs Random Forest training, this may take a while...
-              </div>
-            ) : historicalError ? (
-              <p className="text-xs font-semibold" style={{ color: '#B91C1C' }}>
-                <i className="ri-error-warning-line mr-1" />Backfill failed: {historicalError}
-              </p>
-            ) : historicalResult && (
-              <div className="space-y-1.5">
-                <p className="text-[11px] font-bold uppercase" style={{ color: '#64748B' }}>Historical Snapshot Backfill</p>
-                {historicalResult.map((y) => (
-                  <div key={y.year} className="flex items-center gap-2 text-xs">
-                    <span className="font-bold w-12" style={{ color: '#0F2D52' }}>{y.year}</span>
-                    {y.status === 'skipped' ? (
-                      <span style={{ color: '#94A3B8' }}>Skipped — {y.reason}</span>
-                    ) : y.status === 'error' ? (
-                      <span style={{ color: '#B91C1C' }}>Failed: {y.error}</span>
-                    ) : (
-                      <span style={{ color: '#334155' }}>
-                        {y.classifierMethod === 'random_forest' ? 'Random Forest' : 'Rule-based fallback'}
-                        {' '}({y.trainingRows} training rows) → period {y.period}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+        {/* View Forecast success confirmation — small and non-permanent,
+            since the chart/table below is the primary result. Cleared at
+            the start of the next action. */}
+        {viewStatus === 'success' && viewSuccessInfo && (
+          <div className="px-6 py-2" style={{ borderTop: '1px solid #E2E8F0', background: '#F0FDF4' }}>
+            <p className="text-[11px] font-semibold" style={{ color: '#047857' }}>
+              <i className="ri-checkbox-circle-line mr-1" />
+              Forecast loaded — {viewSuccessInfo.scope}{forecastTierMethodLabel(forecastTier) ? ` • Method: ${forecastTierMethodLabel(forecastTier)}` : ''}
+            </p>
           </div>
         )}
 
@@ -1000,6 +1122,91 @@ export default function Forecasting() {
           </div>
         </div>
       </div>
+
+      {/* ─── Run Analysis Pipeline result (admin) ─── */}
+      {isAdmin && pipelineRunStatus !== 'idle' && (
+        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
+          <div className="px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
+            <h2 className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>Run Analysis Pipeline</h2>
+          </div>
+          <div className="px-6 py-4">
+            {pipelineRunStatus === 'loading' ? (
+              <div className="flex items-center gap-2 text-xs font-medium" style={{ color: '#64748B' }}>
+                <i className="ri-loader-4-line animate-spin" />
+                Processing the latest TB records — this may take a few minutes...
+              </div>
+            ) : pipelineRunStatus === 'already_running' ? (
+              <div className="rounded-lg px-4 py-3" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+                <p className="text-xs font-bold" style={{ color: '#92400E' }}>
+                  <i className="ri-time-line mr-1" />
+                  A pipeline run is already in progress.
+                </p>
+                <p className="text-[11px] mt-1" style={{ color: '#92400E' }}>
+                  Another run (e.g. triggered automatically after a data sync) is currently processing. Try again shortly.
+                </p>
+              </div>
+            ) : pipelineRunStatus === 'error' ? (
+              <div className="rounded-lg px-4 py-3" style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+                <p className="text-xs font-bold" style={{ color: '#B91C1C' }}>
+                  <i className="ri-error-warning-line mr-1" />
+                  Pipeline failed.
+                </p>
+                <p className="text-[11px] mt-1 font-mono break-words" style={{ color: '#991B1B' }}>{pipelineRunErrorMessage}</p>
+                <p className="text-[11px] mt-1.5" style={{ color: '#7F1D1D' }}>
+                  No forecasts or risk classifications were changed by this run.
+                </p>
+              </div>
+            ) : (pipelineRunStatus === 'success' || pipelineRunStatus === 'warning') && pipelineRunResult ? (
+              <div className="rounded-lg p-4" style={{ background: pipelineRunStatus === 'warning' ? '#FFFBEB' : '#F0FDF4', border: `1px solid ${pipelineRunStatus === 'warning' ? '#FDE68A' : '#BBF7D0'}` }}>
+                <p className="text-xs font-bold mb-3" style={{ color: pipelineRunStatus === 'warning' ? '#92400E' : '#047857' }}>
+                  <i className={pipelineRunStatus === 'warning' ? 'ri-alert-line mr-1' : 'ri-checkbox-circle-line mr-1'} />
+                  {pipelineRunStatus === 'warning' ? 'Completed with warnings.' : 'Completed.'}
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase" style={{ color: '#64748B' }}>Barangays</p>
+                    <p className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>{pipelineRunResult.barangaysProcessed ?? '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase" style={{ color: '#64748B' }}>Forecasts</p>
+                    <p className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>{pipelineRunResult.forecastsCount ?? '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase" style={{ color: '#64748B' }}>Classifications</p>
+                    <p className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>{pipelineRunResult.classificationsCount ?? '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase" style={{ color: '#64748B' }}>Alerts</p>
+                    <p className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>{pipelineRunResult.alertsCount ?? '—'}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-4 pt-3" style={{ borderTop: '1px solid #E2E8F0' }}>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold" style={{ color: '#64748B' }}>Random Forest:</span>
+                    <span className="text-[11px] font-extrabold" style={{ color: MODEL_STATUS_COLORS[pipelineStatus?.rf_status] || '#94A3B8' }}>
+                      {formatModelStatus(pipelineStatus?.rf_status)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold" style={{ color: '#64748B' }}>Forecasting:</span>
+                    <span className="text-[11px] font-extrabold" style={{ color: formatForecastingStatus(pipelineStatus?.arima_status).color }}>
+                      {formatForecastingStatus(pipelineStatus?.arima_status).label}
+                    </span>
+                  </div>
+                </div>
+                {pipelineRunResult.errors.length > 0 && (
+                  <div className="mt-3 pt-3" style={{ borderTop: '1px solid #E2E8F0' }}>
+                    <p className="text-[10px] font-bold uppercase mb-1" style={{ color: '#92400E' }}>Warnings</p>
+                    {pipelineRunResult.errors.map((e, i) => (
+                      <p key={i} className="text-[11px]" style={{ color: '#92400E' }}>{e}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       {/* ─── Model Evaluation (admin) ─── */}
       {isAdmin && (evalLoading || evalError || evalResult) && (
@@ -1047,9 +1254,16 @@ export default function Forecasting() {
         </div>
       )}
 
-      {/* ─── Content States ─── */}
-      {!forecastRan ? (
-        /* ─── 9. EMPTY STATE ─── */
+      {/* ─── Content States ───
+          Five distinct states, never conflated: idle (nothing requested),
+          loading/checking, error (the GET itself failed — never silently
+          shows stale data as if it had succeeded), no_data (request
+          succeeded but there is no persisted forecast/history for this
+          scope — NOT the same message as a request failure or as the
+          model's own "Insufficient Historical Data" tier, which is a
+          per-period banner shown inside the success view below), success. */}
+      {viewStatus === 'idle' ? (
+        /* ─── 9. IDLE STATE ─── */
         <div className="flex flex-col items-center justify-center py-24 gap-4" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
           <div
             className="w-16 h-16 rounded-2xl flex items-center justify-center"
@@ -1059,19 +1273,20 @@ export default function Forecasting() {
           </div>
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>
-              No Forecast Generated
+              No Forecast Loaded
             </p>
             <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
-              Select a historical period, barangay, and forecast horizon, then click Run
-              Forecast to generate projections.
+              Select a historical period, barangay, and forecast horizon, then click View
+              Forecast to load the current projections.
             </p>
           </div>
         </div>
-      ) : filterLoading ? (
+      ) : viewStatus === 'loading' || viewStatus === 'checking' ? (
         /* ─── 10. LOADING STATE ─── */
         <SectionSkeleton rows={4} />
-      ) : historicalCases === 0 && filteredForecasts.length === 0 ? (
-        /* ─── 11. ERROR / INSUFFICIENT DATA STATE ─── */
+      ) : viewStatus === 'error' ? (
+        /* ─── 11. REQUEST-FAILED STATE — distinct from "no data" and from
+            the model's own "Insufficient Historical Data" tier. ─── */
         <div className="flex flex-col items-center justify-center py-24 gap-4" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
           <div
             className="w-16 h-16 rounded-2xl flex items-center justify-center"
@@ -1081,11 +1296,40 @@ export default function Forecasting() {
           </div>
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>
-              Unable to Generate Forecast
+              Couldn't Load Forecast
             </p>
             <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
-              Insufficient historical data for the selected parameters. Please adjust the
-              settings and try again.
+              {viewErrorMessage || 'The request failed. Check your connection and try again.'}
+            </p>
+            <button
+              type="button"
+              onClick={handleViewForecast}
+              className="mt-4 px-4 py-2 text-xs font-semibold"
+              style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 }}
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      ) : viewStatus === 'no_data' ? (
+        /* ─── 12. NO PERSISTED FORECAST FOR THIS SCOPE — the request
+            succeeded; there is simply nothing computed yet. Never worded as
+            "Insufficient Historical Data", which is a specific per-period
+            model-tier concept shown elsewhere once data exists. ─── */
+        <div className="flex flex-col items-center justify-center py-24 gap-4" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
+          <div
+            className="w-16 h-16 rounded-2xl flex items-center justify-center"
+            style={{ background: '#F1F5F9' }}
+          >
+            <i className="ri-inbox-line text-3xl" style={{ color: '#CBD5E1' }} />
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-bold" style={{ color: '#475569' }}>
+              No Forecast Available
+            </p>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
+              There is no persisted forecast or historical data for the selected barangay and period.
+              Try different filters, or ask an admin to run the analysis pipeline.
             </p>
           </div>
         </div>
@@ -1139,18 +1383,31 @@ export default function Forecasting() {
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
-              {/* Risk Classification */}
-              <div className="flex flex-col px-5 py-5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <i className="ri-shield-line text-sm" style={{ color: '#8B7BA3' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Risk Classification</span>
-                  </div>
-                  <RiskBadge risk={riskLevel} />
+              {/* Model Status — RF and ARIMA reported independently, since a
+                  run where one succeeds and the other degrades/fails is not
+                  the same as a fully healthy run (see model_metadata's
+                  rf_status/arima_status). Random Forest / GIS risk output is
+                  a separate branch and is not shown on this page. */}
+              <div className="flex flex-col px-5 py-5" title="Random Forest risk classification is shown on the GIS page, not here — this page tracks ARIMA forecasting only.">
+                <div className="flex items-center gap-2">
+                  <i className="ri-cpu-line text-sm" style={{ color: '#8B7BA3' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Model Status</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{riskLevel}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Based on forecast analysis</span>
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold" style={{ color: '#64748B' }}>Random Forest</span>
+                    <span className="text-[11px] font-extrabold" style={{ color: MODEL_STATUS_COLORS[pipelineStatus?.rf_status] || '#94A3B8' }}>
+                      {formatModelStatus(pipelineStatus?.rf_status)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[11px] font-semibold shrink-0" style={{ color: '#64748B' }}>Forecasting</span>
+                    <span className="text-[11px] font-extrabold text-right" style={{ color: formatForecastingStatus(forecastTier).color }}>
+                      {formatForecastingStatus(forecastTier).label}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1163,9 +1420,14 @@ export default function Forecasting() {
                 <div>
                   <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Historical vs Forecasted TB Cases</h3>
                   <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Comparison of historical tuberculosis cases and projected cases for the selected forecast period.</p>
-                  {!pipelineStatus && (
+                  {forecastTier === 'insufficient_data' && (
+                    <p className="text-[10px] mt-0.5 font-medium" style={{ color: '#B91C1C' }}>
+                      Insufficient Historical Data — no forecast is shown for the selected scope.
+                    </p>
+                  )}
+                  {isBaselineTier && (
                     <p className="text-[10px] mt-0.5 font-medium" style={{ color: '#D97706' }}>
-                      Baseline forecast (previous month) — run pipeline for ARIMA predictions.
+                      Baseline Forecast (not ARIMA) — fewer than 24 months of history for the selected scope.
                     </p>
                   )}
                 </div>
@@ -1411,7 +1673,12 @@ export default function Forecasting() {
                     <tbody>
                       {sortedForecastTable.map((row, i) => {
                         const gr = row.growthRate != null ? Number(row.growthRate) : null;
-                        const riskColor = RISK_COLORS[row.risk_class] || '#94A3B8';
+                        const modelLabel = row.isInsufficient ? 'Insufficient Data' : row.isBaseline ? 'Baseline Forecast' : row.method === 'arima' ? 'ARIMA' : null;
+                        const modelColor = row.isInsufficient
+                          ? MODEL_STATUS_COLORS.insufficient_data
+                          : row.isBaseline
+                            ? MODEL_STATUS_COLORS.degraded
+                            : MODEL_STATUS_COLORS.success;
 
                         // Historical periods: show actual only. Forecast periods: show forecast + CI only.
                         const hasCI = row.ci_lower > 0 && row.ci_upper > 0;
@@ -1440,8 +1707,10 @@ export default function Forecasting() {
                             <td className="px-5 py-4 text-xs font-medium" style={{ color: '#1E293B' }}>
                               {row.actual != null ? row.actual.toLocaleString() : '\u2014'}
                             </td>
-                            <td className="px-5 py-4 text-xs font-medium" style={{ color: '#1E293B' }}>
-                              {!row.isHistorical && row.forecasted != null ? row.forecasted.toLocaleString() : '\u2014'}
+                            <td className="px-5 py-4 text-xs font-medium" style={{ color: row.isInsufficient ? '#B91C1C' : '#1E293B' }}>
+                              {row.isInsufficient
+                                ? 'Insufficient Historical Data'
+                                : !row.isHistorical && row.forecasted != null ? row.forecasted.toLocaleString() : '\u2014'}
                             </td>
                             <td className="px-5 py-4">
                               {showCI ? (
@@ -1479,10 +1748,10 @@ export default function Forecasting() {
                               {!row.isHistorical && gr != null ? `${gr >= 0 ? '+' : ''}${gr.toFixed(1)}%` : '\u2014'}
                             </td>
                             <td className="px-5 py-4">
-                              {!row.isHistorical && row.risk_class ? (
+                              {!row.isHistorical && modelLabel ? (
                                 <div className="flex items-center gap-2">
-                                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: riskColor }} />
-                                  <span className="text-xs font-semibold" style={{ color: '#1E293B' }}>{row.risk_class}</span>
+                                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: modelColor }} />
+                                  <span className="text-xs font-semibold" style={{ color: '#1E293B' }}>{modelLabel}</span>
                                 </div>
                               ) : (
                                 <span className="text-[11px]" style={{ color: '#94A3B8' }}>{"\u2014"}</span>

@@ -43,6 +43,13 @@ const DEFAULT_THRESHOLDS = {
 // alongside every forecast/risk row this run produces.
 const MODEL_VERSION = 'arima-v1.0-rf-v1.0';
 
+// Mirrors ML_SERVICE/config.py's ARIMA_MIN_HISTORY_NONSEASONAL. Below this
+// many monthly observations, no forecast method (ARIMA or fallback) has
+// enough history to be meaningful — used by this file's own ML-service-down
+// fallback path, which runs entirely in Node and never calls that Python
+// constant directly.
+const ARIMA_MIN_HISTORY_NONSEASONAL = 10;
+
 // Leading months whose city-wide total is below this share of the median month
 // are treated as stray records (e.g. one old case) and dropped from the calendar.
 const LEADING_TRIM_SHARE = 0.2;
@@ -270,6 +277,34 @@ async function runPipeline({
 
       for (const [bName, pts] of Object.entries(barangayMap)) {
         const sorted = pts.sort((a, c) => a.month.localeCompare(c.month));
+
+        // Below ARIMA_MIN_HISTORY_NONSEASONAL months, there isn't enough
+        // history for even this naive fallback to be meaningful — report it
+        // honestly rather than presenting a "forecast" with no real basis.
+        // One prediction point per horizon month is still emitted (yhat:
+        // null) so callers can tell "assessed, insufficient data" apart
+        // from "not assessed at all".
+        if (sorted.length < ARIMA_MIN_HISTORY_NONSEASONAL) {
+          const insufficientPredictions = [];
+          for (let i = 1; i <= forecastHorizon; i++) {
+            const nextDate = new Date(results.period);
+            nextDate.setUTCMonth(nextDate.getUTCMonth() + (i - 1));
+            insufficientPredictions.push({
+              month: nextDate.toISOString().slice(0, 8) + '01',
+              yhat: null,
+              yhat_lower: null,
+              yhat_upper: null,
+            });
+          }
+          forecastResults.push({
+            barangay_name: bName,
+            method: 'insufficient_data',
+            backtest_mae: null,
+            predictions: insufficientPredictions,
+          });
+          continue;
+        }
+
         const predictions = [];
 
         // Build a lookup: month index (0-11) -> case_count for the most recent year
@@ -297,19 +332,22 @@ async function runPipeline({
           const seasonalValue = monthLookup[monthIdx] != null ? monthLookup[monthIdx] : avgRecent;
           const yhat = Math.max(0, Math.round(seasonalValue * trendFactor));
 
-          // CI widens with forecast horizon
-          const ciSpread = 0.15 + (i * 0.03);
+          // This is a naive heuristic, not a statistically fitted model — it
+          // has no real basis for a confidence interval, so none is reported
+          // (never fabricate bounds; see arima_forecast.py's own fallback,
+          // which is a real model with a defensible interval and is the only
+          // tier below true ARIMA that DOES get one).
           predictions.push({
             month: nextPeriod,
             yhat,
-            yhat_lower: Math.max(0, Math.round(yhat * (1 - ciSpread))),
-            yhat_upper: Math.round(yhat * (1 + ciSpread)),
+            yhat_lower: null,
+            yhat_upper: null,
           });
         }
         forecastResults.push({
           barangay_name: bName,
           method: 'seasonal-naive-fallback',
-          backtest_mae: 0,
+          backtest_mae: null,
           predictions,
         });
       }
@@ -574,12 +612,37 @@ async function runPipeline({
       MODEL_VERSION
     );
 
+    // Independent RF/ARIMA status for this run, so a caller can tell "both
+    // models genuinely succeeded" apart from "one silently degraded to a
+    // fallback" or "one's ML call failed outright" — previously only a
+    // single combined metrics blob existed and hid partial failure.
+    const arimaMethodsUsed = new Set(forecastResults.map(f => f.method));
+    let arimaStatus;
+    if (forecastResults.length === 0) {
+      arimaStatus = results.errors.some(e => e.startsWith('Forecast failed')) ? 'failed' : 'not_run';
+    } else if (arimaMethodsUsed.size === 1 && arimaMethodsUsed.has('insufficient_data')) {
+      arimaStatus = 'insufficient_data';
+    } else if (arimaMethodsUsed.size === 1 && arimaMethodsUsed.has('arima')) {
+      arimaStatus = 'success';
+    } else {
+      // Mixed across barangays (some real ARIMA, some fallback/insufficient),
+      // or the ML service was unreachable so every barangay used the
+      // Node-side fallback — degraded, not a clean success.
+      arimaStatus = 'degraded';
+    }
+    let rfStatus;
+    if (results.classifierMethod === 'random_forest') rfStatus = 'success';
+    else if (results.classifierMethod === 'rule_based') rfStatus = 'degraded';
+    else rfStatus = 'not_run';
+    const modelStatusTimestamp = new Date().toISOString();
+
     // Record pipeline run in model_metadata.
     // training_months = distinct months on the shared calendar (NOT the barangay-month row count).
     results.barangaysProcessed = barangays.length;
     await txClient.query(
-      `INSERT INTO model_metadata (run_type, model_version, training_months, metrics, config)
-       VALUES ($1, $2, $3, $4, $5)`,
+      `INSERT INTO model_metadata (run_type, model_version, training_months, metrics, config,
+                                    rf_status, rf_updated_at, arima_status, arima_updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         historyCutoffMonth ? 'pipeline_historical' : 'pipeline',
         MODEL_VERSION,
@@ -590,7 +653,7 @@ async function runPipeline({
           dataEnd: latestMonth,
           trainingRows: results.trainingRows ?? 0,
           classifierMethod: results.classifierMethod ?? 'rule_based',
-          forecastMethods: [...new Set(forecastResults.map(f => f.method))],
+          forecastMethods: [...arimaMethodsUsed],
           forecastsCount: results.forecastsCount,
           classificationsCount: results.classificationsCount,
           alertsCount: results.alertsCount,
@@ -600,10 +663,17 @@ async function runPipeline({
           period: results.period,
           historyCutoffMonth: historyCutoffMonth || null,
         }),
+        rfStatus,
+        modelStatusTimestamp,
+        arimaStatus,
+        modelStatusTimestamp,
       ]
     );
 
     await txClient.query('COMMIT');
+    } catch (txErr) {
+      await txClient.query('ROLLBACK');
+      throw txErr;
     } finally {
       txClient.release();
     }

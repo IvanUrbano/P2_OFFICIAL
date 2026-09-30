@@ -85,6 +85,9 @@ function buildReport(data, config) {
   if (summary.successRate != null) {
     executiveSummary.push(`Treatment success rate is ${summary.successRate}%, ${summary.successRate >= 85 ? 'above' : 'below'} the 85% target.`);
   }
+  if (summary.fatalityRate != null) {
+    executiveSummary.push(`Case fatality rate is ${summary.fatalityRate}%.`);
+  }
 
   // Bacteriological status breakdown
   const bactMap = {};
@@ -170,6 +173,7 @@ function ReportRenderer({ report, reportData }) {
               <span><strong>Total Cases:</strong> {reportData.summary.totalCases ?? 0}</span>
               <span><strong>Active Cases:</strong> {reportData.summary.activeCases ?? 0}</span>
               <span><strong>Success Rate:</strong> {reportData.summary.successRate != null ? `${reportData.summary.successRate}%` : 'N/A'}</span>
+              <span><strong>Case Fatality Rate:</strong> {reportData.summary.fatalityRate != null ? `${reportData.summary.fatalityRate}%` : 'N/A'}</span>
             </div>
           </div>
         )}

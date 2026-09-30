@@ -43,7 +43,7 @@ from models import (
     RfEvaluation,
     RfStep,
 )
-from arima_forecast import parallel_map, forecast_all, compute_trend, detect_seasonality, backtest_mae, walk_forward_arima
+from arima_forecast import parallel_map, forecast_all, compute_trend, detect_seasonality, backtest_mae, walk_forward_arima, _walk_forward_arima_job
 from rf_classifier import (
     train_and_predict,
     classify_risk_simple,
@@ -247,19 +247,33 @@ async def evaluate_models(req: EvaluateRequest):
         df = pd.DataFrame([pt.model_dump() for pt in req.series])
         df["month"] = pd.to_datetime(df["month"])
 
-        # Use the longest barangay series for ARIMA walk-forward
-        # (or we could average across barangays — using longest for now)
-        arima_results = []
+        # Each barangay's walk-forward is fully independent (own counts, own
+        # fits) — run them across worker processes the same way /forecast
+        # already parallelizes forecast_barangay, instead of one at a time.
+        # _walk_forward_arima_job catches its own exceptions so one
+        # barangay's failure can't abort every other (already-good) result.
+        jobs = []
         for name in df["barangay_name"].unique():
             barangay_df = df[df["barangay_name"] == name].sort_values("month")
             counts = barangay_df["case_count"].tolist()
             # Shorter series get a proportionally smaller warm-up so they can still be evaluated
             min_train = min(req.min_train, max(ARIMA_MIN_HISTORY_NONSEASONAL, len(counts) // 2))
             if len(counts) > min_train:
-                result = walk_forward_arima(counts, min_train=min_train)
-                arima_results.append(result)
+                jobs.append((name, counts, min_train))
 
-        # Aggregate ARIMA results: use the mean across barangays
+        raw_results = parallel_map(_walk_forward_arima_job, jobs)
+        arima_results = [r for r in raw_results if r.get("error") is None]
+        failed_barangays = [
+            {"barangay_name": r["barangay_name"], "error": r["error"]}
+            for r in raw_results if r.get("error") is not None
+        ]
+        if failed_barangays:
+            logger.warning(f"ARIMA walk-forward failed for {len(failed_barangays)} barangay(s): {failed_barangays}")
+
+        # Aggregate ARIMA results: use the mean across barangays. Both the
+        # mean and the method_counts sum below are order-independent, so
+        # running the jobs in parallel (arbitrary completion order) cannot
+        # change these numbers versus the previous serial loop.
         if arima_results:
             all_mae = [r["mae"] for r in arima_results if r["mae"] is not None]
             all_mape = [r["mape"] for r in arima_results if r["mape"] is not None]
@@ -277,9 +291,10 @@ async def evaluate_models(req: EvaluateRequest):
                 n_steps=longest["n_steps"],
                 steps=[ArimaStep(**s) for s in longest["steps"]],
                 method_counts=method_counts,
+                failed_barangays=failed_barangays,
             )
         else:
-            arima_eval = ArimaEvaluation()
+            arima_eval = ArimaEvaluation(failed_barangays=failed_barangays)
 
         # ── RF walk-forward ──
         n_barangays = len(df["barangay_name"].unique())

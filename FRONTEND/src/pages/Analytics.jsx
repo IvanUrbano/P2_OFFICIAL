@@ -153,12 +153,14 @@ export default function Analytics() {
   const [allCases, setAllCases] = useState([]);
   const [barangays, setBarangays] = useState([]);
   const [riskData, setRiskData] = useState([]);
+  const [facilities, setFacilities] = useState([]);
   const [filterOptions, setFilterOptions] = useState({ sex: [], bacteriological_status: [], outcome_status: [] });
 
   /* Filter state */
   const [filterYear, setFilterYear] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
   const [filterBarangay, setFilterBarangay] = useState('');
+  const [filterFacility, setFilterFacility] = useState('');
   const [filterOutcome, setFilterOutcome] = useState('');
   const [filterSex, setFilterSex] = useState('');
   const [filterAgeGroup, setFilterAgeGroup] = useState('');
@@ -169,6 +171,7 @@ export default function Analytics() {
   const [aYear, setAYear] = useState('');
   const [aMonth, setAMonth] = useState('');
   const [aBarangay, setABarangay] = useState('');
+  const [aFacility, setAFacility] = useState('');
   const [aOutcome, setAOutcome] = useState('');
   const [aSex, setASex] = useState('');
   const [aAgeGroup, setAAgeGroup] = useState('');
@@ -178,6 +181,12 @@ export default function Analytics() {
   const [compareYear, setCompareYear] = useState(false);
   const [showIncidence, setShowIncidence] = useState(false);
 
+  // Incidence has no meaning across combined "All Years" data (see
+  // barangayIncidenceData) — derive the effective toggle state instead of
+  // resetting `showIncidence` in an effect, so clearing the year filter
+  // falls back to the Cases view without an extra render pass.
+  const incidenceViewActive = showIncidence && !!aYear;
+
   /* NLG Insight state */
   const [insightData, setInsightData] = useState(null);
   const [insightLoading, setInsightLoading] = useState(false);
@@ -185,17 +194,19 @@ export default function Analytics() {
   const [cascadeData, setCascadeData] = useState(null);
   const [tsrData, setTsrData] = useState(null);
   const [prevTsrData, setPrevTsrData] = useState(null);
+  const [cfrData, setCfrData] = useState(null);
   const [cascadeLoading, setCascadeLoading] = useState(false);
 
   /* ── Data fetching ── */
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [firstPageRes, brgyRes, riskRes, filterRes] = await Promise.all([
+      const [firstPageRes, brgyRes, riskRes, filterRes, facilityRes] = await Promise.all([
         API.get('/api/tb/cases?limit=1'),
         API.get('/api/tb/barangays'),
         API.get('/api/tb/gis/choropleth'),
         API.get('/api/tb/filter-options').catch(() => ({ data: {} })),
+        API.get('/api/tb/facilities').catch(() => ({ data: { facilities: [] } })),
       ]);
       const totalCases = firstPageRes.data.pagination?.total || 0;
       const allCasesRes = totalCases > 0
@@ -205,6 +216,7 @@ export default function Analytics() {
       setBarangays(brgyRes.data.barangays || brgyRes.data || []);
       setRiskData(riskRes.data.choropleth || []);
       setFilterOptions(filterRes.data || {});
+      setFacilities(facilityRes.data.facilities || []);
     } catch (err) {
       if (import.meta.env.DEV) console.error('Analytics fetch error:', err);
       setError('Failed to load analytics data. Make sure the backend is running.');
@@ -220,17 +232,19 @@ export default function Analytics() {
     setAYear(filterYear);
     setAMonth(filterMonth);
     setABarangay(filterBarangay);
+    setAFacility(filterFacility);
     setAOutcome(filterOutcome);
     setASex(filterSex);
     setAAgeGroup(filterAgeGroup);
     setABact(filterBact);
     setApplied(true);
-  }, [filterYear, filterMonth, filterBarangay, filterOutcome, filterSex, filterAgeGroup, filterBact]);
+  }, [filterYear, filterMonth, filterBarangay, filterFacility, filterOutcome, filterSex, filterAgeGroup, filterBact]);
 
   const handleClear = useCallback(() => {
     setFilterYear('');
     setFilterMonth('');
     setFilterBarangay('');
+    setFilterFacility('');
     setFilterOutcome('');
     setFilterSex('');
     setFilterAgeGroup('');
@@ -238,6 +252,7 @@ export default function Analytics() {
     setAYear('');
     setAMonth('');
     setABarangay('');
+    setAFacility('');
     setAOutcome('');
     setASex('');
     setAAgeGroup('');
@@ -253,6 +268,10 @@ export default function Analytics() {
         year: aYear,
         month: aMonth,
         barangay: aBarangay,
+        outcome: aOutcome,
+        sex: aSex,
+        ageGroup: aAgeGroup,
+        bacteriological: aBact,
       });
       setInsightData(insight);
     } catch (err) {
@@ -261,7 +280,7 @@ export default function Analytics() {
     } finally {
       setInsightLoading(false);
     }
-  }, [aYear, aMonth, aBarangay]);
+  }, [aYear, aMonth, aBarangay, aOutcome, aSex, aAgeGroup, aBact]);
 
   /* ── Treatment Cascade — shared backend calculation with active filters ── */
   const activeCascadeFilters = useMemo(() => {
@@ -320,6 +339,29 @@ export default function Analytics() {
     return () => { cancelled = true; };
   }, [aYear, aBarangay]);
 
+  /* ── Case Fatality Rate — shared backend calculation ──
+   * GET /api/tb/case-fatality-rate: DIED / evaluated terminal outcomes,
+   * scoped by diagnosis year (same year semantics as Total/Active Cases),
+   * optionally scoped to aBarangay. */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const params = {};
+        if (aYear) params.year = aYear;
+        if (aBarangay) params.barangay = aBarangay;
+        const res = await API.get('/api/tb/case-fatality-rate', { params });
+        if (!cancelled) setCfrData(res.data);
+      } catch (err) {
+        if (!cancelled) {
+          if (import.meta.env.DEV) console.error('CFR fetch failed:', err);
+          setCfrData(null);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [aYear, aBarangay]);
+
   // Previous year's TSR, for the YoY trend badge — only meaningful when a
   // specific year is selected (mirrors previousMetrics' own aYear gate).
   useEffect(() => {
@@ -341,12 +383,41 @@ export default function Analytics() {
     return () => { cancelled = true; };
   }, [aYear, aBarangay]);
 
+  /* ── Year-matched population (for Incidence per 100k) ──
+   * Incidence must divide a year's cases by THAT SAME year's population
+   * (populationService.computeYearIncidence's rule, already used correctly
+   * by GIS) — never a flat, undated population figure. "All Years" has no
+   * single matching year, so incidence is N/A there by design. */
+  const [yearPopulationMap, setYearPopulationMap] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    if (!aYear) { setYearPopulationMap({}); return undefined; }
+    (async () => {
+      try {
+        const res = await API.get(`/api/tb/population/${aYear}`);
+        const map = {};
+        (res.data.data || []).forEach((r) => {
+          const pop = Number(r.population);
+          if (pop > 0) map[r.barangay_name] = pop;
+        });
+        if (!cancelled) setYearPopulationMap(map);
+      } catch (err) {
+        if (!cancelled) {
+          if (import.meta.env.DEV) console.error('Year population fetch failed:', err);
+          setYearPopulationMap({});
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [aYear]);
+
   /* ── Remove a single filter chip ── */
   const removeFilter = useCallback((key) => {
     const setters = {
       year: () => { setFilterYear(''); setAYear(''); },
       month: () => { setFilterMonth(''); setAMonth(''); },
       barangay: () => { setFilterBarangay(''); setABarangay(''); },
+      facility: () => { setFilterFacility(''); setAFacility(''); },
       outcome: () => { setFilterOutcome(''); setAOutcome(''); },
       sex: () => { setFilterSex(''); setASex(''); },
       age: () => { setFilterAgeGroup(''); setAAgeGroup(''); },
@@ -377,6 +448,7 @@ export default function Analytics() {
     if (!applied) return allCases;
     return allCases.filter((c) => {
       if (aBarangay && c.barangay_name !== aBarangay) return false;
+      if (aFacility && c.screening_facility !== aFacility && c.treatment_facility !== aFacility) return false;
       if (aSex && !(c.sex || '').toLowerCase().includes(aSex.toLowerCase())) return false;
       if (aOutcome && c.outcome_status !== aOutcome) return false;
       if (aBact && !(c.bacteriological_status || '').toLowerCase().includes(aBact.toLowerCase())) return false;
@@ -392,7 +464,7 @@ export default function Analytics() {
       }
       return true;
     });
-  }, [allCases, applied, aYear, aMonth, aBarangay, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [allCases, applied, aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
 
   /* ── Previous year cases (for trend indicators) ── */
   const previousYearCases = useMemo(() => {
@@ -403,6 +475,7 @@ export default function Analytics() {
       if (isNaN(d.getTime())) return false;
       if (d.getFullYear() !== Number(prevYear)) return false;
       if (aBarangay && c.barangay_name !== aBarangay) return false;
+      if (aFacility && c.screening_facility !== aFacility && c.treatment_facility !== aFacility) return false;
       if (aSex && !(c.sex || '').toLowerCase().includes(aSex.toLowerCase())) return false;
       if (aOutcome && c.outcome_status !== aOutcome) return false;
       if (aBact && !(c.bacteriological_status || '').toLowerCase().includes(aBact.toLowerCase())) return false;
@@ -410,7 +483,7 @@ export default function Analytics() {
       if (aAgeGroup && categorizeAge(c.age) !== aAgeGroup) return false;
       return true;
     });
-  }, [allCases, aYear, aMonth, aBarangay, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [allCases, aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
 
   /* ── Summary Metrics ── */
   const metrics = useMemo(() => {
@@ -449,8 +522,21 @@ export default function Analytics() {
       });
       highRisk = highRiskSet.size;
     }
-    return { total, active, successRate, highRisk };
-  }, [filteredCases, riskData, aBarangay, tsrData]);
+    // Incidence per 100k: cases(scope, aYear) / population(scope, aYear) ×
+    // 100,000 — same rule as populationService.computeYearIncidence. N/A
+    // (not 0) for All Years (no single matching year) or missing population.
+    let incidence = null;
+    if (aYear) {
+      const population = aBarangay
+        ? (yearPopulationMap[aBarangay] ?? null)
+        : Object.values(yearPopulationMap).reduce((s, v) => s + v, 0) || null;
+      if (population != null && population > 0) {
+        incidence = Math.round((total / population) * 100000 * 10) / 10;
+      }
+    }
+    const fatalityRate = cfrData?.rate != null ? cfrData.rate.toFixed(1) : null;
+    return { total, active, successRate, highRisk, incidence, fatalityRate };
+  }, [filteredCases, riskData, aBarangay, aYear, tsrData, cfrData, yearPopulationMap]);
 
   /* ── Previous year metrics (for trend badges) ── */
   const previousMetrics = useMemo(() => {
@@ -494,6 +580,7 @@ export default function Analytics() {
       if (isNaN(d.getTime())) return false;
       if (d.getFullYear() !== Number(prevYear)) return false;
       if (aBarangay && c.barangay_name !== aBarangay) return false;
+      if (aFacility && c.screening_facility !== aFacility && c.treatment_facility !== aFacility) return false;
       if (aSex && !(c.sex || '').toLowerCase().includes(aSex.toLowerCase())) return false;
       if (aOutcome && c.outcome_status !== aOutcome) return false;
       if (aBact && !(c.bacteriological_status || '').toLowerCase().includes(aBact.toLowerCase())) return false;
@@ -519,7 +606,7 @@ export default function Analytics() {
           [`Prev (${prevYear})`]: count,
         };
       });
-  }, [compareYear, aYear, allCases, aBarangay, aOutcome, aSex, aBact, aAgeGroup]);
+  }, [compareYear, aYear, allCases, aBarangay, aFacility, aOutcome, aSex, aBact, aAgeGroup]);
 
   /* ── Merged YoY trend data ── */
   const mergedTrendData = useMemo(() => {
@@ -572,22 +659,24 @@ export default function Analytics() {
       .sort((a, b) => b.Cases - a.Cases);
   }, [filteredCases]);
 
-  /* ── Barangay Incidence Data (per 100k) ── */
+  /* ── Barangay Incidence Data (per 100k) ──
+   * Case year MUST match population year (populationService's rule). Uses
+   * yearPopulationMap (fetched per aYear from /api/tb/population/:year),
+   * never the flat, undated `barangays` population field. "All Years" has
+   * no single matching year, so incidence is null (N/A), never 0 — a
+   * previous version divided by a flat population regardless of which
+   * year(s) were selected, silently summing multi-year cases over one
+   * year's population. */
   const barangayIncidenceData = useMemo(() => {
-    const popMap = {};
-    barangays.forEach((b) => {
-      const name = b.barangay_name || b.name;
-      if (name) popMap[name] = Number(b.population) || 0;
-    });
     return barangayData.map((d) => {
-      const pop = popMap[d.name] || 0;
+      const pop = aYear ? (yearPopulationMap[d.name] ?? null) : null;
       return {
         ...d,
         Population: pop,
-        Incidence: pop > 0 ? Number(((d.Cases / pop) * 100000).toFixed(1)) : 0,
+        Incidence: pop != null && pop > 0 ? Number(((d.Cases / pop) * 100000).toFixed(1)) : null,
       };
     });
-  }, [barangayData, barangays]);
+  }, [barangayData, aYear, yearPopulationMap]);
 
   /* ── Cases by Health Facility ── */
   const facilityData = useMemo(() => {
@@ -653,12 +742,13 @@ export default function Analytics() {
     if (aYear) chips.push({ key: 'year', label: 'Year', value: aYear });
     if (aMonth) chips.push({ key: 'month', label: 'Month', value: MONTHS[Number(aMonth)] || aMonth });
     if (aBarangay) chips.push({ key: 'barangay', label: 'Barangay', value: aBarangay });
+    if (aFacility) chips.push({ key: 'facility', label: 'Facility', value: aFacility });
     if (aOutcome) chips.push({ key: 'outcome', label: 'Outcome', value: aOutcome });
     if (aSex) chips.push({ key: 'sex', label: 'Sex', value: aSex });
     if (aAgeGroup) chips.push({ key: 'age', label: 'Age Group', value: aAgeGroup });
     if (aBact) chips.push({ key: 'bacterio', label: 'Bacterio', value: aBact });
     return chips;
-  }, [aYear, aMonth, aBarangay, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
 
   /* ── Last updated ── */
   const lastUpdated = useMemo(() => {
@@ -747,6 +837,10 @@ export default function Analytics() {
               <option value="">All Barangays</option>
               {barangayNames.map((n) => <option key={n} value={n}>{n}</option>)}
             </FilterSelect>
+            <FilterSelect label="Facility" value={filterFacility} onChange={setFilterFacility} selectStyle={{ maxWidth: 180 }}>
+              <option value="">All Facilities</option>
+              {facilities.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
+            </FilterSelect>
             <FilterSelect label="Outcome" value={filterOutcome} onChange={setFilterOutcome} selectStyle={{ maxWidth: 160 }}>
               <option value="">All Outcomes</option>
               {(filterOptions.outcome_status || OUTCOMES.filter(o => o !== 'All Outcomes')).map((o) => (
@@ -797,8 +891,8 @@ export default function Analytics() {
 
       {/* ─── Loading ─── */}
       {loading ? (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => (
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="rounded-xl p-5 animate-pulse" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
               <div className="h-3 w-24 rounded mb-3" style={{ background: '#E2E8F0' }} />
               <div className="h-7 w-16 rounded" style={{ background: '#E2E8F0' }} />
@@ -814,7 +908,7 @@ export default function Analytics() {
 
           {/* ─── Metric Cards (with Trend Indicators) ─── */}
           <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15,45,82,0.12), 0 2px 8px rgba(15,45,82,0.08)' }}>
-            <div className="grid grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-2 lg:grid-cols-3">
               {/* Total TB Cases */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
@@ -826,15 +920,31 @@ export default function Analytics() {
                   <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.total.toLocaleString()}</p>
                   {aYear && <TrendBadge current={metrics.total} previous={previousMetrics.total} inverse={true} />}
                 </div>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                  {aYear ? `Diagnosed in ${aYear}` : availableYears.length > 0 ? `Total across ${availableYears[availableYears.length - 1]}–${availableYears[0]}` : 'Total across available years'}
+                </span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
-              {/* Active TB Cases */}
+              {/* Incidence per 100k */}
+              <div className="flex flex-col px-5 py-5 relative">
+                <div className="flex items-center gap-2">
+                  <i className="ri-pulse-line text-sm" style={{ color: '#6B9E9E' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Incidence / 100k</span>
+                </div>
+                <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.incidence == null ? 'N/A' : metrics.incidence}</p>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                  {!aYear ? 'Select a year — not applicable across combined years' : metrics.incidence == null ? 'No matching population data' : `${aYear} cases per 100,000 population`}
+                </span>
+              </div>
+
+              {/* Currently On Treatment */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <i className="ri-first-aid-kit-line text-sm" style={{ color: '#B8956A' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Active Cases</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Currently On Treatment</span>
                   </div>
                   {metrics.total > 0 && (
                     <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FFFBEB', color: '#92400E' }}>
@@ -867,6 +977,18 @@ export default function Analytics() {
                   {aYear && metrics.successRate != null && previousMetrics.successRate != null &&
                     <TrendBadge current={Number(metrics.successRate)} previous={Number(previousMetrics.successRate)} inverse={false} />}
                 </div>
+                <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
+              </div>
+
+              {/* Case Fatality Rate */}
+              <div className="flex flex-col px-5 py-5 relative">
+                <div className="flex items-center gap-2">
+                  <i className="ri-heart-pulse-line text-sm" style={{ color: '#B07070' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Fatality Rate</span>
+                </div>
+                <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.fatalityRate == null ? 'N/A' : `${metrics.fatalityRate}%`}</p>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Deaths / evaluated terminal outcomes</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
@@ -1019,18 +1141,20 @@ export default function Analytics() {
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
               <div className="flex items-center justify-between px-5 py-4">
                 <div className="flex items-center gap-3">
-                   <div className="w-1 h-8 rounded-full" style={{ background: showIncidence ? '#92400E' : '#0D9488' }} />
+                   <div className="w-1 h-8 rounded-full" style={{ background: incidenceViewActive ? '#92400E' : '#0D9488' }} />
                   <div>
                     <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>TB Cases by Barangay</h3>
-                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>{showIncidence ? 'Incidence rate per 100,000 population across Pasig City barangays.' : 'Distribution of reported TB cases across the 30 barangays of Pasig City.'}</p>
+                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>{incidenceViewActive ? 'Incidence rate per 100,000 population across Pasig City barangays.' : 'Distribution of reported TB cases across the 30 barangays of Pasig City.'}</p>
                   </div>
                 </div>
                 <button onClick={() => setShowIncidence(!showIncidence)}
-                  className="text-xs font-semibold px-3 py-1.5"
+                  disabled={!aYear}
+                  title={!aYear ? 'Select a specific year to view incidence — not applicable across combined years' : undefined}
+                  className="text-xs font-semibold px-3 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                  onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
+                  onMouseEnter={e => { if (aYear) { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; } }}
                   onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
-                  {showIncidence ? 'Show Cases' : 'Show Incidence'}
+                  {incidenceViewActive ? 'Show Cases' : 'Show Incidence'}
                 </button>
               </div>
               <div className="px-5 pb-5">
@@ -1042,10 +1166,10 @@ export default function Analytics() {
                         <XAxis type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
                         <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={105} tickMargin={4} />
                         <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
-                        <Bar dataKey={showIncidence ? 'Incidence' : 'Cases'} radius={[0, 6, 6, 0]} barSize={16} name={showIncidence ? 'Per 100k' : 'Cases'}>
+                        <Bar dataKey={incidenceViewActive ? 'Incidence' : 'Cases'} radius={[0, 6, 6, 0]} barSize={16} name={incidenceViewActive ? 'Per 100k' : 'Cases'}>
                           {barangayIncidenceData.map((entry, i) => (
-                            <Cell key={i} fill={showIncidence
-                               ? (entry.Incidence > 100 ? '#991B1B' : entry.Incidence > 50 ? '#92400E' : '#047857')
+                            <Cell key={i} fill={incidenceViewActive
+                               ? (entry.Incidence == null ? '#94A3B8' : entry.Incidence > 100 ? '#991B1B' : entry.Incidence > 50 ? '#92400E' : '#047857')
                               : (i === 0 ? '#0D9488' : i < 5 ? '#14B8A6' : '#99F6E4')
                             } />
                           ))}

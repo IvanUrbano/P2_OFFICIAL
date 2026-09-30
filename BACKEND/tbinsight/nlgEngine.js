@@ -118,11 +118,17 @@ function buildDemographics(m) {
 
 function buildTreatment(m) {
   const rate = m.treatment.successRate;
+  const fatalityRate = m.treatment.fatalityRate;
   let text;
   if (rate === null || rate === undefined) {
     text = 'Treatment success rate cannot be calculated because previous-year treatment cohort data are unavailable.';
   } else {
     text = `Treatment success rate is **${rate}%**.`;
+  }
+  if (fatalityRate === null || fatalityRate === undefined) {
+    text += ' Case fatality rate is unavailable because no evaluated outcomes are recorded for this scope.';
+  } else {
+    text += ` Case fatality rate is **${fatalityRate}%**.`;
   }
   return { id: 'treatment', title: 'Treatment', icon: '💊', text };
 }
@@ -186,8 +192,13 @@ function generateAnalyticsInsight(metrics, filters = {}) {
 function buildForecastDirection(m) {
   const { trend, growthRate } = m.direction;
   const horizon = m.predictedCases.horizon || m.modelInfo.horizon || 3;
+  const tier = m.modelInfo?.tier;
   let text;
-  if (trend === 'increasing') {
+  if (tier === 'insufficient_data' || tier === 'none') {
+    text = 'Forecast interpretation is unavailable because there is insufficient historical data for the selected series.';
+  } else if (tier === 'baseline') {
+    text = `Historical data is not yet long enough for full ARIMA modeling, so this is a **preliminary baseline estimate**, not a modeled forecast direction.`;
+  } else if (trend === 'increasing') {
     text = `TB cases are projected to **increase** over the next ${horizon} months.`;
   } else if (trend === 'decreasing') {
     text = `TB cases are projected to **decrease** over the next ${horizon} months.`;
@@ -261,8 +272,19 @@ function buildConfidence(m) {
 }
 
 function buildForecastOverallSummary(m) {
+  const tier = m.modelInfo?.tier;
+  if (tier === 'insufficient_data' || tier === 'none') {
+    return {
+      id: 'overallSummary',
+      title: 'Overall Summary',
+      icon: '📝',
+      text: 'Forecast interpretation is unavailable because there is insufficient historical data for the selected series.',
+    };
+  }
   const parts = [];
-  if (m.direction.growthRate > 5) {
+  if (tier === 'baseline') {
+    parts.push('This is a preliminary baseline estimate, not a full ARIMA forecast, since the selected series does not yet have enough monthly history.');
+  } else if (m.direction.growthRate > 5) {
     parts.push('The forecast indicates that TB activity may remain elevated in the coming months.');
   } else if (m.direction.growthRate < -5) {
     parts.push('The forecast suggests a potential decline in TB activity.');

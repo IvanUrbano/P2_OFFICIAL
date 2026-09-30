@@ -186,6 +186,20 @@ const initDb = async () => {
       console.error('❌ Duplicate detection migration failed (continuing with remaining migrations):', dupErr.message);
     }
 
+    // Forecast method/tier column + per-model (RF vs ARIMA) run status columns (idempotent)
+    try {
+      const forecastMethodMigPath = path.join(__dirname, 'db', 'migrations', '019_forecast_method_and_model_status.sql');
+      if (fs.existsSync(forecastMethodMigPath)) {
+        const forecastMethodSql = fs.readFileSync(forecastMethodMigPath, 'utf8');
+        await execSql(forecastMethodSql);
+        console.log('✅ Forecast method / model status migration completed successfully.');
+      } else {
+        console.log('⚠️ Forecast method / model status migration not found, skipping.');
+      }
+    } catch (methodErr) {
+      console.error('❌ Forecast method / model status migration failed (continuing with remaining migrations):', methodErr.message);
+    }
+
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,
     // undoing two earlier over-broad attempts, and keep only the Kapasigan Extension ->
     // Bagong Katipunan rename/population fix (idempotent)

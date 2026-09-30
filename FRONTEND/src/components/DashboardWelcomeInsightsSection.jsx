@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import renderFormattedText from '../utils/renderFormattedText.jsx';
 
 function ChartLineIcon({ className = "w-4 h-4" }) {
   return (
@@ -303,7 +304,7 @@ export default function DashboardWelcomeInsightsSection({
                 </h4>
               </div>
               <p className="text-xs leading-relaxed" style={{ color: '#334155' }}>
-                {currentSlide.text}
+                {renderFormattedText(currentSlide.text)}
               </p>
             </div>
           </div>

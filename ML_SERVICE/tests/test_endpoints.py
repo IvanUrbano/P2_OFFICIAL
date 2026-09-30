@@ -75,7 +75,7 @@ def test_forecast_normal():
     assert len(data["forecasts"]) == 1
     f = data["forecasts"][0]
     assert f["barangay_name"] == "Manggahan"
-    assert f["method"] in ("arima", "exponential_smoothing", "seasonal_naive")
+    assert f["method"] in ("arima", "arima_nonseasonal", "exponential_smoothing", "seasonal_naive")
     assert len(f["predictions"]) == 1
     assert f["predictions"][0]["yhat"] >= 0
     assert f["predictions"][0]["yhat_lower"] <= f["predictions"][0]["yhat"]
@@ -107,8 +107,9 @@ def test_forecast_with_backtest():
     print(f"  PASS: test_forecast_with_backtest (mae={f['backtest_mae']:.2f})")
 
 
-def test_forecast_short_series():
-    """Short series should fallback."""
+def test_forecast_insufficient_history():
+    """Below ARIMA_MIN_HISTORY_NONSEASONAL (10) months: no forecast at all,
+    reported honestly as insufficient_data rather than a fabricated baseline."""
     series = [
         {"barangay_name": "Test", "month": "2024-01-01", "case_count": 5},
         {"barangay_name": "Test", "month": "2024-02-01", "case_count": 8},
@@ -116,8 +117,26 @@ def test_forecast_short_series():
     r = client.post("/api/ml/forecast", json={"series": series})
     assert r.status_code == 200
     f = r.json()["forecasts"][0]
-    assert f["method"] in ("seasonal_naive", "exponential_smoothing")
-    print(f"  PASS: test_forecast_short_series (method={f['method']})")
+    assert f["method"] == "insufficient_data"
+    assert all(p["yhat"] is None for p in f["predictions"])
+    print(f"  PASS: test_forecast_insufficient_history (method={f['method']})")
+
+
+def test_forecast_baseline_tier():
+    """10-23 months: a non-seasonal ARIMA fit can still succeed here, but is
+    tagged 'arima_nonseasonal' (never plain 'arima') so downstream callers
+    always show this tier as "Baseline Forecast", not "ARIMA"."""
+    series = [
+        {"barangay_name": "Test", "month": f"2024-{m:02d}-01", "case_count": 5 + m}
+        for m in range(1, 13)
+    ]
+    r = client.post("/api/ml/forecast", json={"series": series})
+    assert r.status_code == 200
+    f = r.json()["forecasts"][0]
+    assert f["method"] in ("seasonal_naive", "exponential_smoothing", "arima_nonseasonal")
+    assert f["method"] != "arima"
+    assert f["predictions"][0]["yhat"] is not None
+    print(f"  PASS: test_forecast_baseline_tier (method={f['method']})")
 
 
 def test_forecast_empty_series():

@@ -12,6 +12,7 @@
 
 const { getAvailablePopulationYears, computeYearIncidence, GEOJSON_REFERENCE_YEAR } = require('./populationService');
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
+const { computeCaseFatalityRate } = require('./caseFatalityRate');
 
 /**
  * Build WHERE clause fragments from filter params.
@@ -290,6 +291,10 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
   // Y-1 treatment-start cohort for numerator and denominator.
   const { successRate } = await computeTreatmentSuccessRate(pool, { year: filters.year, barangay: filters.barangay });
 
+  // CFR: single shared calculation (see caseFatalityRate.js) — do not
+  // reimplement the evaluated-outcomes denominator here.
+  const { rate: fatalityRate } = await computeCaseFatalityRate(pool, { year: filters.year, barangay: filters.barangay });
+
   // --- Summary ---
   const summary = {
     totalCases: totalRes.rows[0]?.total_cases || 0,
@@ -309,7 +314,7 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
       sexSplit: { male: malePct, female: femalePct },
       dominantAgeGroup,
     },
-    treatment: { successRate, outcomeBreakdown },
+    treatment: { successRate, fatalityRate, outcomeBreakdown },
     summary,
   };
 }
@@ -354,7 +359,8 @@ async function buildForecastingMetrics(pool, filters = {}) {
         mp.confidence_upper,
         mp.risk_class,
         mp.incidence_per_100k,
-        mp.actual_count
+        mp.actual_count,
+        mp.method
       FROM model_predictions mp
       ${where}
       ORDER BY mp.period ASC, mp.barangay_name
@@ -384,8 +390,13 @@ async function buildForecastingMetrics(pool, filters = {}) {
   const forecastRows = forecastRes.rows;
 
   // --- Direction ---
-  // Compare forecast average vs historical actual average
-  const forecastedValues = forecastRows.map((r) => Number(r.forecasted_count) || 0);
+  // Compare forecast average vs historical actual average. forecasted_count
+  // is null for insufficient-history rows (see arima_forecast.py) — those
+  // are excluded rather than coerced to 0, which would understate the
+  // average as if "0 cases" had actually been predicted.
+  const forecastedValues = forecastRows
+    .filter((r) => r.forecasted_count != null)
+    .map((r) => Number(r.forecasted_count));
   const actualValues = forecastRows
     .filter((r) => r.actual_count != null)
     .map((r) => Number(r.actual_count));
@@ -408,17 +419,40 @@ async function buildForecastingMetrics(pool, filters = {}) {
   const totalPredicted = Math.round(forecastedValues.reduce((s, v) => s + v, 0));
   // Only count future periods (where actual_count is null)
   const futureForecasts = forecastRows.filter((r) => r.actual_count == null);
-  const futureTotal = Math.round(futureForecasts.reduce((s, r) => s + (Number(r.forecasted_count) || 0), 0));
+  const futureTotal = Math.round(
+    futureForecasts.reduce((s, r) => s + (r.forecasted_count != null ? Number(r.forecasted_count) : 0), 0)
+  );
   const horizon = futureForecasts.length;
   const monthlyAvg = horizon > 0 ? Math.round(futureTotal / horizon) : 0;
+
+  // --- Forecast tier for this scope: majority `method` among future rows.
+  // Drives whether the NLG can state a direction at all (see nlgEngine.js's
+  // buildForecastDirection/buildForecastOverallSummary).
+  let forecastTier = 'none';
+  if (futureForecasts.length > 0) {
+    const methodCounts = {};
+    for (const r of futureForecasts) {
+      const m = r.method || 'arima';
+      methodCounts[m] = (methodCounts[m] || 0) + 1;
+    }
+    let maxCount = 0;
+    let majority = 'arima';
+    for (const [m, cnt] of Object.entries(methodCounts)) {
+      if (cnt > maxCount) { maxCount = cnt; majority = m; }
+    }
+    forecastTier = majority === 'insufficient_data'
+      ? 'insufficient_data'
+      : majority === 'arima' ? 'arima' : 'baseline';
+  }
 
   // --- Peak period ---
   // Find the month with highest forecasted count
   const periodAgg = {};
   for (const r of forecastRows) {
+    if (r.forecasted_count == null) continue;
     const p = r.period;
     if (!periodAgg[p]) periodAgg[p] = 0;
-    periodAgg[p] += Number(r.forecasted_count) || 0;
+    periodAgg[p] += Number(r.forecasted_count);
   }
   let peakPeriod = null;
   let peakCount = 0;
@@ -471,6 +505,7 @@ async function buildForecastingMetrics(pool, filters = {}) {
       method: meta?.config?.method || meta?.model_version || 'ARIMA + RF',
       horizon: filters.horizon || horizon,
       barangaysProcessed,
+      tier: forecastTier,
     },
   };
 }

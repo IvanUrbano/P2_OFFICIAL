@@ -305,6 +305,7 @@ export default function DashboardPage() {
   const [monthlyData, setMonthlyData] = useState([]);
   const [outcomesData, setOutcomesData] = useState([]);
   const [tsrData, setTsrData] = useState(null);
+  const [cfrData, setCfrData] = useState(null);
   const [forecastsData, setForecastsData] = useState([]);
   const [alertsData, setAlertsData] = useState([]);
   const [riskData, setRiskData] = useState([]);
@@ -340,7 +341,7 @@ export default function DashboardPage() {
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [summaryRes, monthlyRes, outcomesRes, forecastsRes, alertsRes, riskRes, brgyRes, pipelineRes, demoRes, cascadeRes, tsrRes] =
+      const [summaryRes, monthlyRes, outcomesRes, forecastsRes, alertsRes, riskRes, brgyRes, pipelineRes, demoRes, cascadeRes, tsrRes, cfrRes] =
         await Promise.all([
           API.get('/api/tb/dashboard/summary'),
           API.get('/api/tb/dashboard/monthly'),
@@ -356,6 +357,7 @@ export default function DashboardPage() {
           // which defaults to the current-year Y-1 cohort, the same default
           // /dashboard/metrics used before this endpoint existed.
           API.get('/api/tb/treatment-success-rate').catch(() => ({ data: null })),
+          API.get('/api/tb/case-fatality-rate').catch(() => ({ data: null })),
         ]);
       setLastUpdatedDate(summaryRes.data.summary?.latest_date || null);
       setMonthlyData(monthlyRes.data.monthly || []);
@@ -368,6 +370,7 @@ export default function DashboardPage() {
       setDemographicsData(demoRes.data.demographics || []);
       setCascadeData(cascadeRes.data || null);
       setTsrData(tsrRes.data || null);
+      setCfrData(cfrRes.data || null);
     } catch (err) {
       if (import.meta.env.DEV) console.error('Dashboard fetch error:', err);
       setError('Dashboard data could not be retrieved. Please try again.');
@@ -516,22 +519,20 @@ export default function DashboardPage() {
     return merged;
   }, [monthlyData, forecastsData]);
 
-  /* ── 6. Case Fatality Rate (CFR) ── */
-  const caseFatalityRate = useMemo(() => {
-    const byStatus = {};
-    outcomesData.forEach((r) => {
-      const st = (r.outcome_status || 'Unknown').toUpperCase();
-      byStatus[st] = (byStatus[st] || 0) + Number(r.total || 0);
-    });
-    const total = Object.values(byStatus).reduce((s, v) => s + v, 0);
-    const died = byStatus['DIED'] || 0;
-    const evaluated = total - (byStatus['NOT EVALUATED'] || 0);
-    return {
-      rate: evaluated > 0 ? ((died / evaluated) * 100).toFixed(1) : '0.0',
-      died,
-      evaluated,
-    };
-  }, [outcomesData]);
+  /* ── 6. Case Fatality Rate (CFR) ──
+   * From GET /api/tb/case-fatality-rate — the single shared calculation
+   * (see caseFatalityRate.js): DIED / evaluated terminal outcomes (CURED +
+   * TREATMENT COMPLETED + DIED + TREATMENT FAILED + LOST TO FOLLOW-UP) × 100,
+   * excluding ON TREATMENT and NOT EVALUATED. Previously computed here
+   * client-side with a different "evaluated" definition (total minus only
+   * NOT EVALUATED, which left ON TREATMENT in the denominator) and coerced
+   * an empty denominator to '0.0' instead of N/A. Never 0% when the
+   * denominator is empty — the API returns null, rendered as N/A below. */
+  const caseFatalityRate = useMemo(() => ({
+    rate: cfrData?.rate != null ? cfrData.rate.toFixed(1) : null,
+    died: cfrData?.died ?? 0,
+    evaluated: cfrData?.evaluated ?? 0,
+  }), [cfrData]);
 
   /* ── 7. Month-over-Month Comparison ── */
   const monthOverMonth = useMemo(() => {
@@ -858,7 +859,7 @@ export default function DashboardPage() {
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Fatality Rate</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedFatalityRate}%</p>
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{caseFatalityRate.rate == null ? 'N/A' : `${animatedFatalityRate}%`}</p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{caseFatalityRate.died} deaths / {caseFatalityRate.evaluated} evaluated</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>

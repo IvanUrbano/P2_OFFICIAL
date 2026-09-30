@@ -13,6 +13,7 @@ const { buildAnalyticsMetrics, buildForecastingMetrics, buildGisMetrics } = requ
 const { generateAnalyticsInsight, generateForecastingInsight, generateGisInsight } = require('./nlgEngine');
 const { computeTreatmentCascade } = require('./treatmentCascade');
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
+const { computeCaseFatalityRate } = require('./caseFatalityRate');
 const {
   getPopulation, getPopulationMap, calculateAnnualizedIncidence,
   getAvailablePopulationYears, getPopulationReferences, getPopulationByYear,
@@ -1355,7 +1356,7 @@ router.get('/forecasts', async (req, res) => {
           barangay_name, period, forecasted_count,
           confidence_lower, confidence_upper,
           risk_class, incidence_per_100k, model_version,
-          actual_count, forecast_error
+          actual_count, forecast_error, method
         FROM model_predictions
         ORDER BY period DESC, barangay_name
       `;
@@ -1366,7 +1367,7 @@ router.get('/forecasts', async (req, res) => {
             barangay_name, period, forecasted_count,
             confidence_lower, confidence_upper,
             risk_class, incidence_per_100k, model_version,
-            actual_count, forecast_error
+            actual_count, forecast_error, method
           FROM model_predictions
           WHERE barangay_name = $1
           ORDER BY period DESC, barangay_name
@@ -1405,13 +1406,14 @@ router.get('/forecasts', async (req, res) => {
       SELECT
         barangay_name, period,
         COALESCE(prev_count, actual_count) AS forecasted_count,
-        GREATEST(COALESCE(prev_count, actual_count) - 2, 0) AS confidence_lower,
-        COALESCE(prev_count, actual_count) + 2 AS confidence_upper,
-        'Baseline' AS risk_class,
+        null AS confidence_lower,
+        null AS confidence_upper,
+        null AS risk_class,
         null AS incidence_per_100k,
         null AS model_version,
         actual_count,
-        ABS(actual_count - COALESCE(prev_count, actual_count))::INTEGER AS forecast_error
+        ABS(actual_count - COALESCE(prev_count, actual_count))::INTEGER AS forecast_error,
+        'naive_lag_fallback' AS method
       FROM with_lag
       ORDER BY period DESC, barangay_name
     `;
@@ -1889,7 +1891,8 @@ router.post('/pipeline', authenticateToken, authorizeRoles('admin'), async (req,
   const result = await runPipelineTracked({ period, thresholds, forecastHorizon, barangays }, 'manual');
   if (!result) {
     const { lastError } = getPipelineRunStatus();
-    return res.status(500).json({ error: 'Pipeline failed.', details: lastError || 'Unknown error.' });
+    console.error('Pipeline failed:', lastError || 'Unknown error.');
+    return res.status(500).json({ error: 'Pipeline failed. See server logs for details.' });
   }
 
   res.json({ message: 'Pipeline completed.', result });
@@ -1919,7 +1922,7 @@ router.post('/pipeline/historical', authenticateToken, authorizeRoles('admin'), 
     res.json({ message: 'Historical snapshot backfill completed.', years: summaries });
   } catch (err) {
     console.error('Historical snapshot backfill error:', err.message);
-    res.status(500).json({ error: 'Historical snapshot backfill failed.', details: err.message });
+    res.status(500).json({ error: 'Historical snapshot backfill failed. See server logs for details.' });
   } finally {
     _historicalBackfillRunning = false;
   }
@@ -1932,12 +1935,19 @@ router.post('/pipeline/historical', authenticateToken, authorizeRoles('admin'), 
  */
 router.get('/pipeline/status', async (req, res) => {
   try {
+    // run_type defaults to the regular pipeline run; Settings' Model &
+    // Data Maintenance section passes 'pipeline_historical' to show the
+    // last backfill timestamp instead.
+    const allowedRunTypes = ['pipeline', 'pipeline_historical'];
+    const runType = allowedRunTypes.includes(req.query.run_type) ? req.query.run_type : 'pipeline';
     const result = await pool.query(
-      `SELECT id, run_type, model_version, trained_at, training_months, metrics, config
+      `SELECT id, run_type, model_version, trained_at, training_months, metrics, config,
+              rf_status, rf_updated_at, arima_status, arima_updated_at
        FROM model_metadata
-       WHERE run_type = 'pipeline'
+       WHERE run_type = $1
        ORDER BY trained_at DESC
-       LIMIT 1`
+       LIMIT 1`,
+      [runType]
     );
     res.json({ latest_run: result.rows[0] || null, current_run: getPipelineRunStatus() });
   } catch (err) {
@@ -2042,6 +2052,7 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
               mape: result.arima.mape,
               n_steps: result.arima.n_steps,
               method_counts: result.arima.method_counts || {},
+              failed_barangays: result.arima.failed_barangays || [],
             },
             rf: {
               accuracy: result.rf.accuracy,
@@ -2061,7 +2072,7 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
     res.json({ message: 'Evaluation completed.', evaluation: result });
   } catch (err) {
     console.error('Evaluate error:', err.message);
-    res.status(500).json({ error: 'Evaluation failed.', details: err.message });
+    res.status(500).json({ error: 'Evaluation failed. See server logs for details.' });
   }
 });
 
@@ -2364,6 +2375,10 @@ router.get('/reports/summary', async (req, res) => {
     // successRate would silently mix two different cohorts under one label.
     const evaluatedCount = cohortTotal;
 
+    // CFR: single shared calculation (see caseFatalityRate.js) — do not
+    // reimplement the evaluated-outcomes denominator here.
+    const { rate: fatalityRate, evaluated: fatalityEvaluated } = await computeCaseFatalityRate(pool, { year: yr, barangay });
+
     // Compute outcomes with percentages
     const outcomes = outcomesRes.rows.map(r => ({
       outcome_status: r.outcome_status,
@@ -2471,7 +2486,7 @@ router.get('/reports/summary', async (req, res) => {
         generatedAt: new Date().toISOString(),
         lastSync,
       },
-      summary: { totalCases, activeCases, successRate, evaluatedCount },
+      summary: { totalCases, activeCases, successRate, evaluatedCount, fatalityRate, fatalityEvaluated },
       outcomes,
       demographics: { sex, ageGroups },
       caseProfile,
@@ -2855,6 +2870,25 @@ router.get('/treatment-success-rate', async (req, res) => {
   } catch (err) {
     console.error('Treatment success rate error:', err.message);
     res.status(500).json({ error: 'Server error computing treatment success rate.' });
+  }
+});
+
+/**
+ * GET /api/tb/case-fatality-rate
+ * Single shared CFR calculation (see caseFatalityRate.js) — every page that
+ * displays "Case Fatality Rate" should call this rather than computing its
+ * own denominator independently.
+ *
+ * Query params: year (EXTRACT(YEAR FROM date_of_diagnosis)), barangay (optional).
+ */
+router.get('/case-fatality-rate', async (req, res) => {
+  try {
+    const { year, barangay } = req.query;
+    const result = await computeCaseFatalityRate(pool, { year, barangay });
+    res.json(result);
+  } catch (err) {
+    console.error('Case fatality rate error:', err.message);
+    res.status(500).json({ error: 'Server error computing case fatality rate.' });
   }
 });
 

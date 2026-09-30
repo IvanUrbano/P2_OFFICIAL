@@ -301,6 +301,15 @@ async function storeResults(client, period, forecasts, classifications, riskScor
     const predPoints = fc.predictions || [];
     const risk = riskScores.find(r => r.barangay_name === fc.barangay_name);
 
+    // Confidence intervals are only ever stored for a genuine 24+-month
+    // seasonal ARIMA fit. A 10-23 month series can still successfully fit a
+    // NON-seasonal ARIMA (method: 'arima_nonseasonal') with a real
+    // statistical CI — but per the approved reporting rule this whole tier
+    // surfaces as "Baseline Forecast", so its CI is dropped here rather
+    // than downstream, making the database itself the single source of
+    // truth for "CI only exists on real ARIMA rows".
+    const hasRealCI = fc.method === 'arima';
+
     for (const pt of predPoints) {
       if (!pt.month) continue;
       // Look up actual count for this specific barangay + period
@@ -310,12 +319,13 @@ async function storeResults(client, period, forecasts, classifications, riskScor
         fc.barangay_name,
         pt.month,
         pt.yhat,
-        pt.yhat_lower,
-        pt.yhat_upper,
+        hasRealCI ? pt.yhat_lower : null,
+        hasRealCI ? pt.yhat_upper : null,
         risk?.risk_class || null,
         risk?.incidence_per_100k ?? null,
         actualCount,
         modelVersion,
+        fc.method || null,
       ]);
     }
   }
@@ -326,14 +336,14 @@ async function storeResults(client, period, forecasts, classifications, riskScor
     for (let i = 0; i < insertRows.length; i += chunkSize) {
       const chunk = insertRows.slice(i, i + chunkSize);
       const placeholders = chunk.map((_, idx) => {
-        const base = idx * 9;
-        return `($${base+1}, $${base+2}, $${base+3}, $${base+4}, $${base+5}, $${base+6}, $${base+7}, $${base+8}, $${base+9})`;
+        const base = idx * 10;
+        return `($${base+1}, $${base+2}, $${base+3}, $${base+4}, $${base+5}, $${base+6}, $${base+7}, $${base+8}, $${base+9}, $${base+10})`;
       }).join(', ');
       const flatParams = chunk.flat();
       await client.query(
         `INSERT INTO model_predictions
           (barangay_name, period, forecasted_count, confidence_lower, confidence_upper,
-           risk_class, incidence_per_100k, actual_count, model_version)
+           risk_class, incidence_per_100k, actual_count, model_version, method)
          VALUES ${placeholders}`,
         flatParams
       );

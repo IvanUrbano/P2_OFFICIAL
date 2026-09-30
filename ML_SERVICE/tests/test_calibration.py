@@ -43,9 +43,13 @@ def test_ten_to_23_months_use_nonseasonal_arima():
     assert _needs_fallback(pd.Series(_noisy(9), dtype=float))
 
 
-def test_twelve_month_series_is_forecast_with_arima():
+def test_twelve_month_series_is_forecast_with_nonseasonal_arima():
+    # 12 months (10-23 range) fits a real non-seasonal ARIMA model, but is
+    # tagged "arima_nonseasonal" (never plain "arima") — this tier always
+    # surfaces as "Baseline Forecast" downstream, since seasonality can't be
+    # learned from under two annual cycles.
     out = forecast_all(_series({"A": _noisy(12)}), forecast_horizon=1)
-    assert out[0]["method"] == "arima"
+    assert out[0]["method"] == "arima_nonseasonal"
     p = out[0]["predictions"][0]
     assert p["month"] == "2026-01-01"
     assert 0 <= p["yhat_lower"] <= p["yhat"] <= p["yhat_upper"]
@@ -84,7 +88,7 @@ def test_stray_old_record_does_not_make_series_sparse():
     data = _series({"A": _noisy(12), "B": _noisy(12, 8, 1)}, start="2025-01-01")
     data.append({"barangay_name": "A", "month": "2022-11-01", "case_count": 1})
     out = {f["barangay_name"]: f for f in forecast_all(data, forecast_horizon=1)}
-    assert out["A"]["method"] == "arima"
+    assert out["A"]["method"] == "arima_nonseasonal"
 
 
 def test_backtest_mae_shrinks_holdout_for_short_series():

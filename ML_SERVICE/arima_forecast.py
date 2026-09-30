@@ -156,7 +156,17 @@ def _fallback_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
 
 
 def _arima_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
-    """Run ARIMA forecast using pmdarima auto_arima."""
+    """Run ARIMA forecast using pmdarima auto_arima.
+
+    A 10-23 month series still successfully fits a NON-seasonal ARIMA model
+    here (see _fit_arima) — that is a real, methodologically-unchanged fit,
+    but per the approved reporting rule it must still surface as "Baseline
+    Forecast" everywhere downstream, never "ARIMA", since seasonality can't
+    be learned from under two annual cycles. `method` is tagged
+    "arima_nonseasonal" in that case so callers can tell the two apart
+    without re-deriving the observation count; "arima" is reserved for the
+    24+-month seasonal fit.
+    """
     try:
         model = _fit_arima(series.values)
 
@@ -166,11 +176,12 @@ def _arima_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
             alpha=0.05,  # 95% confidence interval
         )
 
+        method = "arima" if len(series) >= ARIMA_MIN_HISTORY else "arima_nonseasonal"
         return {
             "forecasted_count": [max(0, float(v)) for v in forecast],
             "confidence_lower": [max(0, float(c[0])) for c in conf_int],
             "confidence_upper": [float(c[1]) for c in conf_int],
-            "method": "arima",
+            "method": method,
         }
     except Exception as e:
         logger.warning(f"ARIMA failed, using fallback: {e}")
@@ -199,6 +210,31 @@ def forecast_barangay(
             "period": "",
             "predictions": [],
             "method": "zero_fallback",
+        }
+
+    # Below ARIMA_MIN_HISTORY_NONSEASONAL months, there isn't enough history
+    # for any forecast method to be meaningful — report this honestly instead
+    # of running a fallback and presenting it as a real prediction. One
+    # prediction point per horizon month is still emitted (yhat=null) so
+    # callers can tell "assessed, insufficient data" apart from "not
+    # assessed at all".
+    if len(series) < ARIMA_MIN_HISTORY_NONSEASONAL:
+        last_month_start = pd.Timestamp(series.index[-1]).to_period('M').to_timestamp()
+        predictions = []
+        for i in range(forecast_horizon):
+            month_date = last_month_start + pd.DateOffset(months=i + 1)
+            predictions.append({
+                "month": month_date.strftime("%Y-%m-%d"),
+                "yhat": None,
+                "yhat_lower": None,
+                "yhat_upper": None,
+            })
+        last_period = last_month_start + pd.DateOffset(months=forecast_horizon)
+        return {
+            "barangay_name": barangay_name,
+            "period": last_period.strftime("%Y-%m-%d"),
+            "predictions": predictions,
+            "method": "insufficient_data",
         }
 
     # Choose method based on series characteristics
@@ -457,3 +493,37 @@ def walk_forward_arima(
         "n_steps": len(steps),
         "method_counts": method_counts,
     }
+
+
+def _walk_forward_arima_job(barangay_name: str, counts: list[int], min_train: int) -> dict:
+    """
+    Wraps walk_forward_arima for use with parallel_map — same unmodified
+    evaluation logic, just run per-barangay across worker processes.
+
+    Every barangay's walk-forward is fully independent (own counts, own
+    fits), so this is the same shape of "independent per-item work" that
+    forecast_barangay/parallel_map already parallelizes for /forecast.
+
+    Catching the exception HERE (inside the job) rather than letting it
+    propagate is what isolates one barangay's failure from the rest: joblib's
+    Parallel aborts the whole batch on the first uncaught exception from any
+    worker, so a truly failed job must return a normal (error-tagged) result
+    instead of raising, or every other barangay's already-good result would
+    be lost too.
+    """
+    try:
+        result = walk_forward_arima(counts, min_train=min_train)
+        result["barangay_name"] = barangay_name
+        result["error"] = None
+        return result
+    except Exception as e:
+        logger.warning(f"Walk-forward ARIMA failed for {barangay_name}: {e}")
+        return {
+            "barangay_name": barangay_name,
+            "error": str(e),
+            "steps": [],
+            "mae": None,
+            "mape": None,
+            "n_steps": 0,
+            "method_counts": {},
+        }

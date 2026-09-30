@@ -8,6 +8,10 @@ const TABS = [
   { key: 'population', label: 'Population Reference Data', icon: 'ri-group-line' },
 ];
 
+const ADMIN_TABS = [
+  { key: 'maintenance', label: 'Model & Data Maintenance', icon: 'ri-tools-line' },
+];
+
 const FALLBACK_BARANGAYS = [
   'Bagong Ilog', 'Bagong Katipunan', 'Bambang', 'Buting', 'Caniogan',
   'Dela Paz', 'Kalawaan', 'Kapasigan', 'Kapitolyo', 'Malinao',
@@ -53,6 +57,13 @@ export default function Settings() {
   const csvInputRef = useRef(null);
   const xlsxInputRef = useRef(null);
 
+  // Model & Data Maintenance — Historical Risk Snapshot Backfill (admin only)
+  const [historicalLoading, setHistoricalLoading] = useState(false);
+  const [historicalError, setHistoricalError] = useState(null);
+  const [historicalResult, setHistoricalResult] = useState(null);
+  const [showBackfillConfirm, setShowBackfillConfirm] = useState(false);
+  const [lastBackfillRun, setLastBackfillRun] = useState(null);
+
   useEffect(() => {
     API.get('/api/auth/profile')
       .then(res => {
@@ -85,6 +96,38 @@ export default function Settings() {
   const handleTabChange = (key) => {
     setActiveTab(key);
     if (key === 'population') fetchPopReferences();
+    if (key === 'maintenance') fetchLastBackfillRun();
+  };
+
+  const fetchLastBackfillRun = async () => {
+    try {
+      const res = await API.get('/api/tb/pipeline/status', { params: { run_type: 'pipeline_historical' } });
+      setLastBackfillRun(res.data?.latest_run || null);
+    } catch {
+      setLastBackfillRun(null);
+    }
+  };
+
+  // Historical Risk Snapshot Backfill — computes one risk-classification
+  // snapshot per PAST calendar year (POST /api/tb/pipeline/historical), so
+  // GIS's Year filter can show a real, distinct assessment for each year
+  // instead of only the current/latest one. Rare admin recovery action, not
+  // required during normal data synchronization.
+  const handleRunHistoricalBackfill = async () => {
+    setShowBackfillConfirm(false);
+    setHistoricalLoading(true);
+    setHistoricalError(null);
+    setHistoricalResult(null);
+    try {
+      const res = await API.post('/api/tb/pipeline/historical', {});
+      setHistoricalResult(res.data?.years || []);
+      fetchLastBackfillRun();
+    } catch (err) {
+      const data = err.response?.data;
+      setHistoricalError(data?.details || data?.error || err.message);
+    } finally {
+      setHistoricalLoading(false);
+    }
   };
 
 
@@ -448,12 +491,14 @@ export default function Settings() {
   const inputStyle = { background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text };
   const labelCls = "block text-[11px] font-semibold mb-1";
   const labelStyle = { color: t.textSecondary };
+  const isAdmin = profile?.role === 'admin';
+  const visibleTabs = isAdmin ? [...TABS, ...ADMIN_TABS] : TABS;
 
   return (
     <div className="flex flex-col gap-6">
       {/* Tab Navigation */}
       <div className="flex items-center gap-1 overflow-x-auto" style={{ borderBottom: `1px solid ${t.border}` }}>
-        {TABS.map(tab => (
+        {visibleTabs.map(tab => (
           <button
             key={tab.key}
             onClick={() => handleTabChange(tab.key)}
@@ -911,6 +956,95 @@ export default function Settings() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Model & Data Maintenance Tab (admin only) */}
+      {activeTab === 'maintenance' && isAdmin && (
+        <div className="rounded-xl p-5" style={{ background: t.cardSolid, border: `1px solid ${t.border}` }}>
+          <h2 className="text-sm font-bold mb-1" style={{ color: t.text }}>Model & Data Maintenance</h2>
+          <p className="text-xs mb-4" style={{ color: t.textSecondary }}>
+            Administrative operations for the forecasting and risk-classification models. These are rare
+            maintenance actions, not part of normal day-to-day data synchronization.
+          </p>
+
+          <div className="rounded-lg p-4" style={{ border: `1px solid ${t.border}` }}>
+            <h3 className="text-xs font-bold mb-1" style={{ color: t.text }}>Historical Risk Assessments</h3>
+            <p className="text-xs mb-3" style={{ color: t.textSecondary }}>
+              Generate missing year-specific barangay risk assessments from available historical TB records.
+              This administrative maintenance operation is not required during normal data synchronization —
+              GIS already updates automatically after each sync through the Random Forest branch.
+            </p>
+
+            {!showBackfillConfirm ? (
+              <button
+                onClick={() => setShowBackfillConfirm(true)}
+                disabled={historicalLoading}
+                className="px-4 py-2 text-xs font-semibold rounded-lg disabled:opacity-50 cursor-pointer"
+                style={{ background: '#0F2D52', color: '#fff' }}
+              >
+                {historicalLoading
+                  ? <><i className="ri-loader-4-line animate-spin mr-1" />Backfilling...</>
+                  : <><i className="ri-history-line mr-1" />Backfill Historical Risk Snapshots</>}
+              </button>
+            ) : (
+              <div className="rounded-lg p-3" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+                <p className="text-xs font-medium mb-3" style={{ color: '#92400E' }}>
+                  Generate missing historical risk assessments from available historical TB data? This
+                  administrative operation may take some time.
+                </p>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setShowBackfillConfirm(false)} className="px-3 py-1.5 text-xs font-semibold rounded-lg cursor-pointer" style={{ color: '#64748B' }}>
+                    Cancel
+                  </button>
+                  <button onClick={handleRunHistoricalBackfill} className="px-3 py-1.5 text-xs font-semibold rounded-lg cursor-pointer" style={{ background: '#0F2D52', color: '#fff' }}>
+                    Continue Backfill
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <p className="text-[11px] mt-3" style={{ color: t.textMuted }}>
+              Last Backfill: {lastBackfillRun?.trained_at ? new Date(lastBackfillRun.trained_at).toLocaleString() : 'Never run'}
+            </p>
+
+            {historicalLoading && (
+              <div className="flex items-center gap-2 text-xs font-medium mt-3" style={{ color: t.textSecondary }}>
+                <i className="ri-loader-4-line animate-spin" />
+                Computing a risk snapshot per past year — each one re-runs Random Forest training, this may take a while...
+              </div>
+            )}
+            {historicalError && (
+              <div className="rounded-lg px-3 py-2.5 mt-3" style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+                <p className="text-xs font-semibold" style={{ color: '#B91C1C' }}>
+                  <i className="ri-error-warning-line mr-1" />Backfill failed: {historicalError}
+                </p>
+                <p className="text-[11px] mt-1" style={{ color: '#991B1B' }}>
+                  No existing risk assessments were deleted or changed — this only affects the new snapshots this run was trying to create.
+                </p>
+              </div>
+            )}
+            {historicalResult && (
+              <div className="space-y-1.5 mt-3 pt-3" style={{ borderTop: `1px solid ${t.border}` }}>
+                <p className="text-[11px] font-bold uppercase" style={{ color: t.textSecondary }}>Historical Snapshot Backfill Completed</p>
+                {historicalResult.map((y) => (
+                  <div key={y.year} className="flex items-center gap-2 text-xs">
+                    <span className="font-bold w-12" style={{ color: '#0F2D52' }}>{y.year}</span>
+                    {y.status === 'skipped' ? (
+                      <span style={{ color: '#94A3B8' }}>Skipped — {y.reason}</span>
+                    ) : y.status === 'error' ? (
+                      <span style={{ color: '#B91C1C' }}>Failed: {y.error}</span>
+                    ) : (
+                      <span style={{ color: t.textSecondary }}>
+                        {y.classifierMethod === 'random_forest' ? 'Random Forest' : 'Rule-based fallback'}
+                        {' '}({y.trainingRows} training rows) → period {y.period}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

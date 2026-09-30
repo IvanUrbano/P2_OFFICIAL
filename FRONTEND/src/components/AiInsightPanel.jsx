@@ -1,3 +1,5 @@
+import renderFormattedText from '../utils/renderFormattedText.jsx';
+
 const SECTION_ICONS = {
   keyTrend: '\ud83d\udcc8',
   highestLowest: '\ud83d\udcca',
@@ -185,7 +187,7 @@ function AiInsightPanel({
                   </h4>
                 </div>
                 <p className="text-xs leading-relaxed pl-6" style={{ color: '#64748B' }}>
-                  {section.text}
+                  {renderFormattedText(section.text)}
                 </p>
               </div>
             ))}
@@ -208,7 +210,7 @@ function AiInsightPanel({
                 </h4>
               </div>
               <p className="text-xs leading-relaxed" style={{ color: '#334155' }}>
-                {sections.find((s) => s.id === 'overallSummary')?.text}
+                {renderFormattedText(sections.find((s) => s.id === 'overallSummary')?.text)}
               </p>
             </div>
           </div>

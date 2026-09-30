@@ -50,11 +50,13 @@ class ForecastRequest(BaseModel):
 
 
 class PredictionPoint(BaseModel):
-    """Single forecast point."""
+    """Single forecast point. yhat/yhat_lower/yhat_upper are null when the
+    series has insufficient history (< ARIMA_MIN_HISTORY_NONSEASONAL months)
+    — the month is still reported so callers know a period was assessed."""
     month: str
-    yhat: float
-    yhat_lower: float
-    yhat_upper: float
+    yhat: Optional[float] = None
+    yhat_lower: Optional[float] = None
+    yhat_upper: Optional[float] = None
 
 
 class ForecastOut(BaseModel):
@@ -194,6 +196,9 @@ class ArimaEvaluation(BaseModel):
     # {"arima": 520, "seasonal_naive": 50} — lets callers report how much of
     # the MAE/MAPE comes from real ARIMA fits vs fallback models.
     method_counts: dict[str, int] = {}
+    # Barangays whose walk-forward raised an exception (excluded from
+    # mae/mape/method_counts above, not silently dropped).
+    failed_barangays: list[dict] = []
 
 
 class RfStep(BaseModel):
