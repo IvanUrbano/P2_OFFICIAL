@@ -5,6 +5,7 @@ export async function getAnalyticsInsight(filters = {}) {
   if (filters.year) params.year = filters.year;
   if (filters.month) params.month = filters.month;
   if (filters.barangay) params.barangay = filters.barangay;
+  if (filters.facility) params.facility = filters.facility;
   if (filters.outcome) params.outcome = filters.outcome;
   if (filters.sex) params.sex = filters.sex;
   if (filters.ageGroup) params.ageGroup = filters.ageGroup;

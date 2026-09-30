@@ -29,25 +29,57 @@
  * @param {number|string} [opts.year] - Reporting year Y; cohort is Y-1.
  *   Defaults to the current calendar year if omitted.
  * @param {string} [opts.barangay] - Optional barangay_name filter.
+ * @param {string} [opts.sex] - Optional sex filter.
+ * @param {string} [opts.ageGroup] - Optional age group filter.
+ * @param {string} [opts.facility] - Optional treatment_facility filter.
+ * @param {string} [opts.bacteriological] - Optional bacteriological_status filter.
  * @returns {Promise<{successRate: number|null, cohortYear: number,
  *   cohortTotal: number, cohortCured: number, cohortCompleted: number}>}
  */
-async function computeTreatmentSuccessRate(pool, { year, barangay } = {}) {
+async function computeTreatmentSuccessRate(pool, { year, barangay, sex, ageGroup, facility, bacteriological } = {}) {
   const reportingYear = year ? Number(year) : new Date().getFullYear();
   const cohortYear = reportingYear - 1;
 
   const conditions = ['EXTRACT(YEAR FROM date_started_treatment) = $1'];
   const params = [cohortYear];
+  let idx = 2;
+
   if (barangay) {
-    conditions.push(`TRIM(barangay_name) = $${params.length + 1}`);
+    conditions.push(`TRIM(barangay_name) = $${idx}`);
     params.push(barangay);
+    idx++;
+  }
+  if (sex) {
+    conditions.push(`TRIM(sex) ILIKE $${idx}`);
+    params.push(sex);
+    idx++;
+  }
+  if (ageGroup) {
+    const ag = ageGroup;
+    if (ag === '0-14') conditions.push('age <= 14');
+    else if (ag === '15-24') conditions.push('age BETWEEN 15 AND 24');
+    else if (ag === '25-34') conditions.push('age BETWEEN 25 AND 34');
+    else if (ag === '35-44') conditions.push('age BETWEEN 35 AND 44');
+    else if (ag === '45-54') conditions.push('age BETWEEN 45 AND 54');
+    else if (ag === '55-64') conditions.push('age BETWEEN 55 AND 64');
+    else if (ag === '65+') conditions.push('age >= 65');
+  }
+  if (facility) {
+    conditions.push(`TRIM(treatment_facility) = $${idx}`);
+    params.push(facility);
+    idx++;
+  }
+  if (bacteriological) {
+    conditions.push(`TRIM(bacteriological_status) ILIKE $${idx}`);
+    params.push(bacteriological);
+    idx++;
   }
 
   const result = await pool.query(
     `SELECT
        COUNT(*)::INTEGER AS total_patients,
-       SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
-       SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count
+       SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
+       SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count
      FROM tb_cases
      WHERE ${conditions.join(' AND ')}`,
     params

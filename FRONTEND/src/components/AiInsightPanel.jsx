@@ -1,26 +1,5 @@
 import renderFormattedText from '../utils/renderFormattedText.jsx';
 
-const SECTION_ICONS = {
-  keyTrend: '\ud83d\udcc8',
-  highestLowest: '\ud83d\udcca',
-  significantChanges: '\u26a0\ufe0f',
-  riskFindings: '\ud83c\udfaf',
-  demographics: '\ud83d\udc65',
-  treatment: '\ud83d\udc8a',
-  forecastDirection: '\ud83d\udcc8',
-  predictedCases: '\ud83d\udd2e',
-  peakPeriod: '\ud83d\udcc5',
-  growthRate: '\ud83d\udcca',
-  highRiskAreas: '\ud83c\udfaf',
-  confidence: '\ud83d\udcd0',
-  overallSummary: '\ud83d\udcdd',
-  riskOverview: '\ud83c\udf0d',
-  topHotspots: '\ud83d\udccd',
-  caseConcentration: '\ud83e\udde6',
-  casesVsRiskPatterns: '\ud83e\udde9',
-  trendDistribution: '\ud83d\udcc8',
-};
-
 function AiInsightPanel({
   type = 'analytics',
   data = null,
@@ -42,7 +21,7 @@ function AiInsightPanel({
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
         <div className="px-5 py-4" style={{ background: '#0F2D52' }}>
           <h3 className="text-sm font-semibold" style={{ color: '#ffffff' }}>
-            {'\u2726'} {title}
+            {title}
           </h3>
         </div>
         <div className="flex flex-col items-center justify-center py-12">
@@ -67,11 +46,10 @@ function AiInsightPanel({
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
         <div className="px-5 py-4" style={{ background: '#0F2D52' }}>
           <h3 className="text-sm font-semibold" style={{ color: '#ffffff' }}>
-            {'\u2726'} {title}
+            {title}
           </h3>
         </div>
         <div className="px-5 py-8 text-center">
-          <div className="text-2xl mb-3">{'\u26a0\ufe0f'}</div>
           <p className="text-sm font-medium" style={{ color: '#0F2D52' }}>
             Unable to generate the interpretation.
           </p>
@@ -112,7 +90,7 @@ function AiInsightPanel({
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
         <div className="px-5 py-4" style={{ background: '#0F2D52' }}>
           <h3 className="text-sm font-semibold" style={{ color: '#ffffff' }}>
-            {'\u2726'} {title}
+            {title}
           </h3>
         </div>
         <div className="px-5 py-6 flex flex-col items-center text-center gap-4">
@@ -139,7 +117,7 @@ function AiInsightPanel({
                 e.currentTarget.style.borderColor = '#0F2D52';
               }}
             >
-              {'\u2726'} Generate Insight
+              Generate Insight
             </button>
           )}
           <p className="text-xs" style={{ color: '#64748B' }}>
@@ -158,7 +136,7 @@ function AiInsightPanel({
       <div className="px-5 py-4 flex items-center justify-between" style={{ background: '#0F2D52' }}>
         <div>
           <h3 className="text-sm font-semibold" style={{ color: '#ffffff' }}>
-            {'\u2726'} {title}
+            {title}
           </h3>
           {data?.meta?.basedOn && (
             <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
@@ -175,18 +153,13 @@ function AiInsightPanel({
             .filter((section) => section.id !== 'overallSummary')
             .map((section) => (
               <div key={section.id}>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-sm">
-                    {section.icon || SECTION_ICONS[section.id] || '\u2022'}
-                  </span>
-                  <h4
-                    className="text-[10px] font-bold uppercase tracking-wider"
-                    style={{ color: '#0F2D52' }}
-                  >
-                    {section.title}
-                  </h4>
-                </div>
-                <p className="text-xs leading-relaxed pl-6" style={{ color: '#64748B' }}>
+                <h4
+                  className="text-[10px] font-bold uppercase tracking-wider mb-1"
+                  style={{ color: '#0F2D52' }}
+                >
+                  {section.title}
+                </h4>
+                <p className="text-xs leading-relaxed" style={{ color: '#64748B' }}>
                   {renderFormattedText(section.text)}
                 </p>
               </div>
@@ -200,8 +173,7 @@ function AiInsightPanel({
               className="rounded-lg p-4"
               style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}
             >
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-sm">{'\ud83d\udcdd'}</span>
+              <div className="mb-2">
                 <h4
                   className="text-[10px] font-bold uppercase tracking-wider"
                   style={{ color: '#0F2D52' }}
@@ -222,7 +194,7 @@ function AiInsightPanel({
           style={{ borderTop: '1px solid #E2E8F0' }}
         >
           <p className="text-[10px]" style={{ color: '#94A3B8' }}>
-            Generated from calculated TBInsight model results
+            Generated from TBInsight analytical indicators and model outputs
           </p>
           {data?.meta?.generatedAt && (
             <p className="text-[10px]" style={{ color: '#94A3B8' }}>

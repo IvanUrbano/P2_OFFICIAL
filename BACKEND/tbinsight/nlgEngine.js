@@ -29,20 +29,26 @@ function abs(n) {
 //  ANALYTICS INSIGHT — 7 sections
 // ============================================================
 
-function buildKeyTrend(m) {
+function buildKeyTrend(m, noData) {
+  if (noData) {
+    return { id: 'keyTrend', title: 'Key Trend', text: 'No TB records matched the selected filters, so a trend comparison cannot be calculated.' };
+  }
+  if (!m.trend) return null;
   const { direction, changePercent, recentCount, priorCount } = m.trend;
   let text;
   if (direction === 'increasing') {
-    text = `TB cases show an **increasing trend** of **${abs(changePercent)}%** over the last 3 months (${recentCount} cases) compared with the prior 3 months (${priorCount} cases).`;
+    text = `Reported TB cases **increased** by **${abs(changePercent)}%** over the most recent 3-month period (${recentCount} cases) compared with the preceding 3 months (${priorCount} cases).`;
   } else if (direction === 'decreasing') {
-    text = `TB cases show a **decreasing trend** of **${abs(changePercent)}%** over the last 3 months (${recentCount} cases) compared with the prior 3 months (${priorCount} cases).`;
+    text = `Reported TB cases **decreased** by **${abs(changePercent)}%** over the most recent 3-month period (${recentCount} cases) compared with the preceding 3 months (${priorCount} cases).`;
   } else {
-    text = `TB cases remained **relatively stable** over the last 3 months, with ${recentCount} cases compared with ${priorCount} cases during the prior 3 months.`;
+    text = `Reported TB cases remained **relatively stable** over the most recent 3-month period, with ${recentCount} cases compared with ${priorCount} cases during the preceding 3 months.`;
   }
-  return { id: 'keyTrend', title: 'Key Trend', icon: '📈', text };
+  return { id: 'keyTrend', title: 'Key Trend', text };
 }
 
-function buildHighestLowest(m) {
+function buildHighestLowest(m, filters = {}) {
+  if (filters.barangay) return null;
+  if ((m.unavailable || []).includes('highestLowest')) return null;
   const h = m.highestBarangay;
   const l = m.lowestBarangay;
   const hasData = h && l;
@@ -55,11 +61,12 @@ function buildHighestLowest(m) {
   } else {
     text = `Barangay **${h.name}** recorded the highest case count (${h.total} cases), while Barangay **${l.name}** recorded the lowest (${l.total} cases).`;
   }
-  return { id: 'highestLowest', title: 'Highest / Lowest', icon: '📊', text };
+  return { id: 'highestLowest', title: 'Highest / Lowest', text };
 }
 
 function buildSignificantChanges(m) {
   const sig = m.significantChanges;
+  if (!Array.isArray(sig)) return null;
   const hasIncrease = sig.some((s) => s.caseCount > s.historicalMean);
   const hasDecrease = sig.some((s) => s.caseCount < s.historicalMean);
   let text;
@@ -71,18 +78,29 @@ function buildSignificantChanges(m) {
     const pctChange = first.historicalMean > 0
       ? Math.round(((first.caseCount - first.historicalMean) / first.historicalMean) * 100)
       : 0;
-    text = `Barangay **${first.barangay}** showed a notable **${pctChange}% increase** in ${formatMonth(first.month)}, with cases exceeding its historical average (${first.zScore} standard deviations above the mean).`;
+    text = `Barangay **${first.barangay}** showed a notable **${pctChange}% increase** in ${formatMonth(first.month)} compared with its historical monthly average, with cases ${first.zScore} standard deviations above the mean.`;
   } else {
     const first = sig[0];
-    text = `Barangay **${first.barangay}** showed a notable deviation in ${formatMonth(first.month)}, with cases ${first.zScore} standard deviations above the historical average.`;
+    text = `Barangay **${first.barangay}** showed a notable deviation in ${formatMonth(first.month)}, with cases ${first.zScore} standard deviations above its historical monthly average.`;
   }
-  return { id: 'significantChanges', title: 'Significant Changes', icon: '⚠️', text };
+  return { id: 'significantChanges', title: 'Significant Changes', text };
 }
 
-function buildRiskFindings(m) {
+function buildRiskFindings(m, filters = {}) {
+  const caveat = ' Classification reflects the latest barangay-level assessment rather than the current filter selection.';
+  // Single-barangay selection: state that barangay's own RF classification
+  // instead of an aggregate city-wide distribution that ignores the filter.
+  if (filters.barangay && m.riskByBarangay) {
+    const riskClass = m.riskByBarangay[filters.barangay];
+    if (!riskClass) return null;
+    const label = /^(High|Medium|Low)$/i.test(riskClass) ? `${riskClass} Risk` : riskClass;
+    const text = `The Random Forest risk model classifies **${filters.barangay}** as **${label}**.` + caveat;
+    return { id: 'riskFindings', title: 'Risk Findings', text };
+  }
+  if (!m.riskCounts) return null;
   const highCount = m.riskCounts.high;
   const medCount = m.riskCounts.medium;
-  const names = m.highRiskBarangays;
+  const names = m.highRiskBarangays || [];
   let text;
   if (highCount === 0) {
     text = 'No barangays are currently classified as high-risk based on the selected results.';
@@ -90,96 +108,194 @@ function buildRiskFindings(m) {
       text += ` However, ${medCount} barangay(s) are classified as medium-risk and should continue to be monitored.`;
     }
   } else if (highCount <= 5) {
-    text = `**${highCount}** barangay(s) are classified as **high-risk**: ${names.join(', ')}.`;
+    text = `The Random Forest risk model classified **${highCount}** of 30 barangays as **High Risk**: ${names.join(', ')}.`;
   } else {
     const top4 = names.slice(0, 4).join(', ');
-    text = `**${highCount}** barangays are classified as **high-risk**, including ${top4}.`;
+    const others = highCount - 4;
+    text = `The Random Forest risk model classified **${highCount}** of 30 barangays as **High Risk**. These include ${top4}, and ${others} others.`;
   }
-  return { id: 'riskFindings', title: 'Risk Findings', icon: '🎯', text };
+  text += caveat;
+  return { id: 'riskFindings', title: 'Risk Findings', text };
 }
 
-function buildDemographics(m) {
+function buildDemographics(m, filters = {}) {
+  if (!m.demographics || !m.demographics.sexSplit) return null;
   const { male, female } = m.demographics.sexSplit;
   const age = m.demographics.dominantAgeGroup;
   const ageText = age ? `The **${age.group}** age group represents the largest demographic at **${age.percentage}%**.` : '';
 
-  let text;
   if (male === 0 && female === 0) {
-    text = 'No demographic data available for the selected period.';
-  } else if (male > female + 5) {
-    text = `Males account for **${male}%** of reported cases. ${ageText}`;
-  } else if (female > male + 5) {
-    text = `Females account for **${female}%** of reported cases. ${ageText}`;
-  } else {
-    text = `Cases were relatively balanced by sex, with males at **${male}%** and females at **${female}%**. ${ageText}`;
+    return { id: 'demographics', title: 'Demographics', text: 'No demographic data available for the selected period.' };
   }
-  return { id: 'demographics', title: 'Demographics', icon: '👥', text };
+  if (filters.sex) {
+    // Both demographic dimensions filtered → nothing left to describe.
+    if (filters.ageGroup) return null;
+    if (!age) return null;
+    return { id: 'demographics', title: 'Demographics', text: ageText };
+  }
+  if (filters.ageGroup) {
+    // Dominant-age statement would merely restate the active age filter.
+    return { id: 'demographics', title: 'Demographics', text: sexSentence(male, female) };
+  }
+  const text = `${sexSentence(male, female)} ${ageText}`.trim();
+  return { id: 'demographics', title: 'Demographics', text };
+}
+
+// Shared sex-split sentence used by Demographics (and filter variants).
+function sexSentence(male, female) {
+  if (male > female + 5) {
+    return `Males account for **${male}%** of reported cases.`;
+  }
+  if (female > male + 5) {
+    return `Females account for **${female}%** of reported cases.`;
+  }
+  return `Cases were relatively balanced by sex, with males at **${male}%** and females at **${female}%**.`;
 }
 
 function buildTreatment(m) {
+  if (!m.treatment) return null;
   const rate = m.treatment.successRate;
   const fatalityRate = m.treatment.fatalityRate;
   let text;
   if (rate === null || rate === undefined) {
-    text = 'Treatment success rate cannot be calculated because previous-year treatment cohort data are unavailable.';
+    text = 'The cohort-based Treatment Success Rate cannot be calculated because previous-year treatment cohort data are unavailable.';
   } else {
-    text = `Treatment success rate is **${rate}%**.`;
+    text = `The Treatment Success Rate is **${rate}%**`;
+    const context = [];
+    if (m.treatment.cohortYear) context.push(`for the ${m.treatment.cohortYear} treatment cohort`);
+    if (m.treatment.cohortTotal) context.push(`${m.treatment.cohortTotal.toLocaleString()} patients`);
+    if (context.length > 0) text += ` ${context.join(' — ')}`;
+    text += '.';
   }
   if (fatalityRate === null || fatalityRate === undefined) {
-    text += ' Case fatality rate is unavailable because no evaluated outcomes are recorded for this scope.';
+    text += ' Case Fatality Rate is unavailable because no evaluated terminal outcomes are recorded for this scope.';
   } else {
-    text += ` Case fatality rate is **${fatalityRate}%**.`;
+    text += ` The Case Fatality Rate among evaluated terminal outcomes is **${fatalityRate}%**.`;
   }
-  return { id: 'treatment', title: 'Treatment', icon: '💊', text };
+  return { id: 'treatment', title: 'Treatment', text };
 }
 
-function buildAnalyticsOverallSummary(m) {
+function buildAnalyticsOverallSummary(m, filters = {}) {
+  if (m.noData) {
+    return { id: 'overallSummary', title: 'Overall Summary', text: 'No analytical insight is available for the selected filters because no matching TB records were found.' };
+  }
   const parts = [];
-  if (m.trend.direction === 'increasing') {
-    parts.push('TB activity is increasing during the selected period.');
-  } else if (m.trend.direction === 'decreasing') {
-    parts.push('TB activity shows a declining trend during the selected period.');
-  } else {
-    parts.push('TB activity remained stable during the selected period.');
+  // Trend — omitted when the trend metric is unavailable
+  if (m.trend) {
+    if (m.trend.direction === 'increasing') {
+      parts.push(`Reported TB cases increased by ${abs(m.trend.changePercent)}% over the most recent 3-month period compared with the preceding 3 months`);
+    } else if (m.trend.direction === 'decreasing') {
+      parts.push(`Reported TB cases decreased by ${abs(m.trend.changePercent)}% over the most recent 3-month period compared with the preceding 3 months`);
+    } else {
+      parts.push('Reported TB cases remained stable over the most recent 3-month period');
+    }
   }
-  if (m.riskCounts.high > 0) {
-    parts.push(`${m.riskCounts.high} barangay(s) are classified as high-risk.`);
-  } else {
-    parts.push('No barangays are currently classified as high-risk.');
+  // Risk — omitted when the risk metric is unavailable
+  if (m.riskCounts) {
+    if (m.riskCounts.high > 0) {
+      parts.push(parts.length > 0
+        ? `while ${m.riskCounts.high} of 30 barangays are classified as High Risk`
+        : `${m.riskCounts.high} of 30 barangays are classified as High Risk`);
+    } else {
+      parts.push(parts.length > 0
+        ? 'and no barangays are currently classified as High Risk'
+        : 'no barangays are currently classified as High Risk');
+    }
   }
-  if (m.treatment.successRate === null || m.treatment.successRate === undefined) {
-    parts.push('Treatment success rate is not available due to missing previous-year cohort data.');
-  } else {
-    parts.push(`Treatment success rate is ${m.treatment.successRate}%.`);
+  // Demographics — skip when a sex/age filter makes the split a tautology
+  // or when the demographics metric is unavailable
+  if (m.demographics && m.demographics.sexSplit) {
+    const { male, female } = m.demographics.sexSplit;
+    if ((male > 0 || female > 0) && !filters.sex && !filters.ageGroup) {
+      const dominant = male > female ? 'Male' : female > male ? 'Female' : null;
+      if (dominant) {
+        parts.push(`${dominant} cases represent the majority of reported cases`);
+      }
+    }
   }
-  return { id: 'overallSummary', title: 'Overall Summary', icon: '📝', text: parts.join(' ') };
+  // Treatment — omitted when TSR/CFR could not be computed
+  if (m.treatment) {
+    if (m.treatment.successRate !== null && m.treatment.successRate !== undefined) {
+      parts.push(`the Treatment Success Rate was ${m.treatment.successRate}%`);
+    }
+    if (m.treatment.fatalityRate !== null && m.treatment.fatalityRate !== undefined) {
+      parts.push(`and the Case Fatality Rate among evaluated terminal outcomes was ${m.treatment.fatalityRate}%`);
+    }
+  }
+  if (parts.length === 0) {
+    return {
+      id: 'overallSummary',
+      title: 'Overall Summary',
+      text: 'Matching TB records were found, but no supporting metrics could be computed for this selection.',
+    };
+  }
+  let text = parts.join(', ') + '.';
+  text = text.charAt(0).toUpperCase() + text.slice(1);
+  return { id: 'overallSummary', title: 'Overall Summary', text };
 }
 
 /**
  * Generate analytics insight sections from computed metrics.
+ * Sections are filter-aware: irrelevant sections are omitted (return null)
+ * and filtered out. Zero matching records produces a single no-data section.
  */
 function generateAnalyticsInsight(metrics, filters = {}) {
-  const sections = [
-    buildKeyTrend(metrics),
-    buildHighestLowest(metrics),
-    buildSignificantChanges(metrics),
-    buildRiskFindings(metrics),
-    buildDemographics(metrics),
-    buildTreatment(metrics),
-    buildAnalyticsOverallSummary(metrics),
-  ];
+  const noData = !metrics.summary || !metrics.summary.totalCases;
+  const basedOnParts = () => {
+    const parts = [];
+    if (filters.year) parts.push(filters.year);
+    else parts.push('All Years');
+    if (filters.month) parts.push(MONTH_NAMES[Number(filters.month)] || filters.month);
+    if (filters.barangay) parts.push(filters.barangay);
+    else parts.push('All Barangays');
+    if (filters.facility) parts.push(filters.facility);
+    if (filters.sex) parts.push(filters.sex);
+    if (filters.ageGroup) parts.push(`Age ${filters.ageGroup}`);
+    if (filters.bacteriological) parts.push(filters.bacteriological);
+    if (filters.outcome) parts.push(filters.outcome);
+    return parts;
+  };
 
-  const parts = [];
-  if (filters.year) parts.push(filters.year);
-  if (filters.month) parts.push(MONTH_NAMES[Number(filters.month)] || filters.month);
-  if (filters.barangay) parts.push(filters.barangay);
-  else parts.push('All Barangays');
+  if (noData) {
+    metrics.noData = true;
+    return {
+      type: 'analytics',
+      sections: [
+        { id: 'overallSummary', title: 'Overall Summary', text: 'No analytical insight is available for the selected filters because no matching TB records were found.' },
+      ],
+      meta: {
+        basedOn: basedOnParts().join(' • '),
+        generatedAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  // Per-section isolation: a failing builder omits only its own section and
+  // is logged — it never fails the whole response.
+  const builders = [
+    () => buildKeyTrend(metrics, noData),
+    () => buildHighestLowest(metrics, filters),
+    () => buildSignificantChanges(metrics),
+    () => buildRiskFindings(metrics, filters),
+    () => buildDemographics(metrics, filters),
+    () => buildTreatment(metrics),
+    () => buildAnalyticsOverallSummary(metrics, filters),
+  ];
+  const sections = [];
+  for (const build of builders) {
+    try {
+      const section = build();
+      if (section) sections.push(section);
+    } catch (err) {
+      console.error('NLG section builder failed:', err.message);
+    }
+  }
 
   return {
     type: 'analytics',
     sections,
     meta: {
-      basedOn: parts.join(' • '),
+      basedOn: basedOnParts().join(' • '),
       generatedAt: new Date().toISOString(),
     },
   };
@@ -205,7 +321,7 @@ function buildForecastDirection(m) {
   } else {
     text = `TB cases are projected to remain **relatively stable** over the next ${horizon} months.`;
   }
-  return { id: 'forecastDirection', title: 'Forecast Direction', icon: '📈', text };
+  return { id: 'forecastDirection', title: 'Forecast Direction', text };
 }
 
 function buildPredictedCases(m) {
@@ -216,7 +332,7 @@ function buildPredictedCases(m) {
   } else {
     text = 'No forecast data available for the selected parameters.';
   }
-  return { id: 'predictedCases', title: 'Predicted Cases', icon: '🔮', text };
+  return { id: 'predictedCases', title: 'Predicted Cases', text };
 }
 
 function buildPeakPeriod(m) {
@@ -227,7 +343,7 @@ function buildPeakPeriod(m) {
   } else {
     text = 'Unable to determine peak period from the available forecast data.';
   }
-  return { id: 'peakPeriod', title: 'Peak Period', icon: '📅', text };
+  return { id: 'peakPeriod', title: 'Peak Period', text };
 }
 
 function buildGrowthRate(m) {
@@ -240,7 +356,7 @@ function buildGrowthRate(m) {
   } else {
     text = 'The forecast indicates **no significant change** compared with the historical average.';
   }
-  return { id: 'growthRate', title: 'Growth Rate', icon: '📊', text };
+  return { id: 'growthRate', title: 'Growth Rate', text };
 }
 
 function buildHighRiskAreas(m) {
@@ -255,7 +371,7 @@ function buildHighRiskAreas(m) {
     const top4 = names.slice(0, 4).join(', ');
     text = `**${count}** barangays remain in the high-risk category, including ${top4}.`;
   }
-  return { id: 'highRiskAreas', title: 'High-Risk Areas', icon: '🎯', text };
+  return { id: 'highRiskAreas', title: 'High-Risk Areas', text };
 }
 
 function buildConfidence(m) {
@@ -268,7 +384,7 @@ function buildConfidence(m) {
   } else {
     text = 'The 95% confidence intervals are **wide**, indicating **significant forecast uncertainty**.';
   }
-  return { id: 'confidence', title: 'Forecast Confidence', icon: '📘', text };
+  return { id: 'confidence', title: 'Forecast Confidence', text };
 }
 
 function buildForecastOverallSummary(m) {
@@ -277,7 +393,6 @@ function buildForecastOverallSummary(m) {
     return {
       id: 'overallSummary',
       title: 'Overall Summary',
-      icon: '📝',
       text: 'Forecast interpretation is unavailable because there is insufficient historical data for the selected series.',
     };
   }
@@ -299,7 +414,7 @@ function buildForecastOverallSummary(m) {
   if (m.confidence.avgRelativeCIWidth > 0.6) {
     parts.push('However, the wide confidence intervals suggest that these projections should be interpreted with caution.');
   }
-  return { id: 'overallSummary', title: 'Overall Summary', icon: '📝', text: parts.join(' ') };
+  return { id: 'overallSummary', title: 'Overall Summary', text: parts.join(' ') };
 }
 
 /**
@@ -367,7 +482,7 @@ function buildGisRiskOverview(m) {
       text += ` ${incidenceUnavailableNote(m)}`;
     }
   }
-  return { id: 'riskOverview', title: 'Risk Overview', icon: '🗺️', text };
+  return { id: 'riskOverview', title: 'Risk Overview', text };
 }
 
 function buildGisTopHotspots(m) {
@@ -376,7 +491,6 @@ function buildGisTopHotspots(m) {
     return {
       id: 'topHotspots',
       title: 'Top Hotspots',
-      icon: '📍',
       text: 'No barangays currently have risk scores for this period.',
     };
   }
@@ -386,7 +500,7 @@ function buildGisTopHotspots(m) {
   if (incidenceAvailable && spots[0].incidence_per_100k != null) {
     text += ` The leading hotspot, **${spots[0].name}**, records an incidence of **${spots[0].incidence_per_100k} per 100,000 population**.`;
   }
-  return { id: 'topHotspots', title: 'Top Hotspots', icon: '📍', text };
+  return { id: 'topHotspots', title: 'Top Hotspots', text };
 }
 
 function buildGisCaseConcentration(m) {
@@ -395,14 +509,13 @@ function buildGisCaseConcentration(m) {
     return {
       id: 'caseConcentration',
       title: 'Case Concentration',
-      icon: '🥧',
       text: 'No reported case data is available to assess case concentration.',
     };
   }
   const top5Count = (c.top5 || []).reduce((s, r) => s + (r.total_cases || 0), 0);
   const names = (c.top5 || []).map((r) => r.name).join(', ');
   const text = `**${c.top5CaseSharePct}%** of all reported TB cases (**${top5Count}** of **${c.totalCases}**) are concentrated in 5 barangays: ${names}.`;
-  return { id: 'caseConcentration', title: 'Case Concentration', icon: '🥧', text };
+  return { id: 'caseConcentration', title: 'Case Concentration', text };
 }
 
 function buildGisCasesVsRiskPatterns(m) {
@@ -413,7 +526,6 @@ function buildGisCasesVsRiskPatterns(m) {
     return {
       id: 'casesVsRiskPatterns',
       title: 'Cases vs Risk Patterns',
-      icon: '🧩',
       text: 'Risk classifications and raw case volumes are closely aligned across barangays for this period.',
     };
   }
@@ -428,7 +540,7 @@ function buildGisCasesVsRiskPatterns(m) {
   if (hlNames.length > 0) {
     text += ` High-risk/lower-case barangays include ${hlNames.join(', ')}.`;
   }
-  return { id: 'casesVsRiskPatterns', title: 'Cases vs Risk Patterns', icon: '🧩', text };
+  return { id: 'casesVsRiskPatterns', title: 'Cases vs Risk Patterns', text };
 }
 
 function buildGisTrendDistribution(m) {
@@ -438,12 +550,11 @@ function buildGisTrendDistribution(m) {
     return {
       id: 'trendDistribution',
       title: 'Trend Distribution',
-      icon: '📈',
       text: 'No classified barangays are available to summarize case trends.',
     };
   }
   const text = `Among **${scored}** classified barangays, **${t.Increasing || 0}** show an **Increasing** trend, **${t.Decreasing || 0}** a **Decreasing** trend, and **${t.Stable || 0}** a **Stable** trend.`;
-  return { id: 'trendDistribution', title: 'Trend Distribution', icon: '📈', text };
+  return { id: 'trendDistribution', title: 'Trend Distribution', text };
 }
 
 function buildGisOverallSummary(m) {
@@ -469,7 +580,7 @@ function buildGisOverallSummary(m) {
   if (m.incidence && m.incidence.available === false && (cov.scoredBarangays || 0) > 0) {
     parts.push(incidenceUnavailableNote(m));
   }
-  return { id: 'overallSummary', title: 'Overall Summary', icon: '📝', text: parts.join(' ') };
+  return { id: 'overallSummary', title: 'Overall Summary', text: parts.join(' ') };
 }
 
 /**

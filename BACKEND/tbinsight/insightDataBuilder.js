@@ -60,6 +60,11 @@ function applyFilters(conditions, params, paramIdx, filters) {
     params.push(filters.outcome);
     idx++;
   }
+  if (filters.facility) {
+    conditions.push(`(TRIM(c.screening_facility) = $${idx} OR TRIM(c.treatment_facility) = $${idx})`);
+    params.push(filters.facility);
+    idx++;
+  }
   return idx;
 }
 
@@ -118,6 +123,15 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
   idx = applyFilters(conditions, params, idx, filters);
   const where = `WHERE ${conditions.join(' AND ')}`;
 
+  // Optional metric queries degrade to `null` instead of rejecting: one
+  // optional metric failing must NOT 500 the entire NLG response — the
+  // affected section is omitted instead. Only the summary/total query (last)
+  // is required; its failure is a genuine database error.
+  const safe = (promise, label) => promise.catch((err) => {
+    console.error(`NLG optional metric failed (${label}):`, err.message);
+    return null;
+  });
+
   // Run all queries in parallel
   const [
     monthlyTrendRes,
@@ -130,7 +144,7 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
     totalRes,
   ] = await Promise.all([
     // 1. Monthly trend: last 12 months of aggregated case counts
-    pool.query(`
+    safe(pool.query(`
       SELECT
         DATE_TRUNC('month', c.date_of_diagnosis)::DATE AS month,
         COUNT(*)::INTEGER AS case_count
@@ -139,19 +153,19 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
       GROUP BY DATE_TRUNC('month', c.date_of_diagnosis)
       ORDER BY month DESC
       LIMIT 12
-    `, params),
+    `, params), 'monthlyTrend'),
 
     // 2. Per-barangay case counts
-    pool.query(`
+    safe(pool.query(`
       SELECT c.barangay_name, COUNT(*)::INTEGER AS total
       FROM tb_cases c
       ${where}
       GROUP BY c.barangay_name
       ORDER BY total DESC
-    `, params),
+    `, params), 'barangayCounts'),
 
     // 3. Per-barangay monthly counts for significance (last 12 months)
-    pool.query(`
+    safe(pool.query(`
       SELECT
         c.barangay_name,
         DATE_TRUNC('month', c.date_of_diagnosis)::DATE AS month,
@@ -160,25 +174,25 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
       ${where}
       GROUP BY c.barangay_name, DATE_TRUNC('month', c.date_of_diagnosis)
       ORDER BY c.barangay_name, month
-    `, params),
+    `, params), 'significance'),
 
     // 4. Risk data from barangay_risk_scores (latest period)
-    pool.query(`
+    safe(pool.query(`
       SELECT barangay_name, risk_class, risk_score, incidence_per_100k
       FROM barangay_risk_scores
       WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)
-    `),
+    `), 'risk'),
 
     // 5. Sex distribution
-    pool.query(`
+    safe(pool.query(`
       SELECT TRIM(c.sex) AS sex, COUNT(*)::INTEGER AS total
       FROM tb_cases c
       ${where}
       GROUP BY TRIM(c.sex)
-    `, params),
+    `, params), 'sexDistribution'),
 
     // 6. Age group distribution
-    pool.query(`
+    safe(pool.query(`
       SELECT
         CASE
           WHEN c.age IS NULL THEN 'Unknown'
@@ -195,17 +209,17 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
       ${where}
       GROUP BY age_group
       ORDER BY total DESC
-    `, params),
+    `, params), 'ageDistribution'),
 
     // 7. Outcome distribution
-    pool.query(`
+    safe(pool.query(`
       SELECT
-        COALESCE(TRIM(c.outcome_status), 'Unknown') AS outcome_status,
+        COALESCE(NULLIF(UPPER(TRIM(c.outcome_status)), ''), 'UNKNOWN') AS outcome_status,
         COUNT(*)::INTEGER AS total
       FROM tb_cases c
       ${where}
-      GROUP BY COALESCE(TRIM(c.outcome_status), 'Unknown')
-    `, params),
+      GROUP BY COALESCE(NULLIF(UPPER(TRIM(c.outcome_status)), ''), 'UNKNOWN')
+    `, params), 'outcomes'),
 
     // 8. Total count and date range
     pool.query(`
@@ -220,80 +234,152 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
   ]);
 
   // --- Trend calculation ---
-  const monthlyRows = monthlyTrendRes.rows;
-  // Rows are DESC ordered; first 3 = recent, next 3 = prior
-  const recent3 = monthlyRows.slice(0, 3);
-  const prior3 = monthlyRows.slice(3, 6);
+  const unavailable = [];
+  let trend = null;
+  if (monthlyTrendRes) {
+    const monthlyRows = monthlyTrendRes.rows;
+    // Rows are DESC ordered; first 3 = recent, next 3 = prior
+    const recent3 = monthlyRows.slice(0, 3);
+    const prior3 = monthlyRows.slice(3, 6);
 
-  const recentCount = recent3.reduce((s, r) => s + r.case_count, 0);
-  const priorCount = prior3.reduce((s, r) => s + r.case_count, 0);
-  const changePercent = priorCount > 0
-    ? Math.round(((recentCount - priorCount) / priorCount) * 1000) / 10
-    : 0;
-  const direction = changePercent > 5 ? 'increasing'
-    : changePercent < -5 ? 'decreasing'
-    : 'stable';
+    const recentCount = recent3.reduce((s, r) => s + r.case_count, 0);
+    const priorCount = prior3.reduce((s, r) => s + r.case_count, 0);
+    const changePercent = priorCount > 0
+      ? Math.round(((recentCount - priorCount) / priorCount) * 1000) / 10
+      : 0;
+    const direction = changePercent > 5 ? 'increasing'
+      : changePercent < -5 ? 'decreasing'
+      : 'stable';
+    trend = { direction, changePercent, recentCount, priorCount };
+  } else {
+    unavailable.push('trend');
+  }
 
   // --- Barangay highest / lowest ---
-  const grouped = groupByBarangay(barangayCountsRes.rows);
-  const highestBarangay = grouped.length > 0 ? grouped[0] : null;
-  const lowestBarangay = grouped.length > 0 ? grouped[grouped.length - 1] : null;
+  let highestBarangay = null;
+  let lowestBarangay = null;
+  if (barangayCountsRes) {
+    const grouped = groupByBarangay(barangayCountsRes.rows);
+    highestBarangay = grouped.length > 0 ? grouped[0] : null;
+    lowestBarangay = grouped.length > 0 ? grouped[grouped.length - 1] : null;
+  } else {
+    unavailable.push('highestLowest');
+  }
 
   // --- Significant changes ---
-  const significantChanges = computeSignificance(significantRes.rows);
+  let significantChanges = null;
+  if (significantRes) {
+    significantChanges = computeSignificance(significantRes.rows);
+  } else {
+    unavailable.push('significance');
+  }
 
   // --- Risk counts ---
-  const riskRows = riskRes.rows;
-  const riskCounts = { high: 0, medium: 0, low: 0 };
-  const highRiskBarangays = [];
-  for (const r of riskRows) {
-    const cls = (r.risk_class || '').toLowerCase();
-    if (cls === 'high') {
-      riskCounts.high++;
-      highRiskBarangays.push(r.barangay_name);
-    } else if (cls === 'medium') {
-      riskCounts.medium++;
-    } else if (cls === 'low') {
-      riskCounts.low++;
+  let riskCounts = null;
+  let highRiskBarangays = null;
+  let riskByBarangay = null;
+  if (riskRes) {
+    riskCounts = { high: 0, medium: 0, low: 0 };
+    highRiskBarangays = [];
+    riskByBarangay = {};
+    for (const r of riskRes.rows) {
+      riskByBarangay[r.barangay_name] = r.risk_class;
+      const cls = (r.risk_class || '').toLowerCase();
+      if (cls === 'high') {
+        riskCounts.high++;
+        highRiskBarangays.push(r.barangay_name);
+      } else if (cls === 'medium') {
+        riskCounts.medium++;
+      } else if (cls === 'low') {
+        riskCounts.low++;
+      }
     }
+  } else {
+    unavailable.push('risk');
   }
 
   // --- Demographics ---
-  const sexRows = sexRes.rows;
-  const totalSex = sexRows.reduce((s, r) => s + r.total, 0);
-  let maleCount = 0;
-  let femaleCount = 0;
-  for (const r of sexRows) {
-    const s = (r.sex || '').toUpperCase();
-    if (s === 'M' || s === 'MALE') maleCount += r.total;
-    else if (s === 'F' || s === 'FEMALE') femaleCount += r.total;
-  }
-  const malePct = totalSex > 0 ? Math.round((maleCount / totalSex) * 1000) / 10 : 0;
-  const femalePct = totalSex > 0 ? Math.round((femaleCount / totalSex) * 1000) / 10 : 0;
+  let demographics = null;
+  if (sexRes) {
+    const sexRows = sexRes.rows;
+    const totalSex = sexRows.reduce((s, r) => s + r.total, 0);
+    let maleCount = 0;
+    let femaleCount = 0;
+    for (const r of sexRows) {
+      const s = (r.sex || '').toUpperCase();
+      if (s === 'M' || s === 'MALE') maleCount += r.total;
+      else if (s === 'F' || s === 'FEMALE') femaleCount += r.total;
+    }
+    const malePct = totalSex > 0 ? Math.round((maleCount / totalSex) * 1000) / 10 : 0;
+    const femalePct = totalSex > 0 ? Math.round((femaleCount / totalSex) * 1000) / 10 : 0;
 
-  const ageRows = ageRes.rows;
-  const totalAge = ageRows.reduce((s, r) => s + r.total, 0);
-  const dominantAgeGroup = ageRows.length > 0 ? {
-    group: ageRows[0].age_group,
-    count: ageRows[0].total,
-    percentage: totalAge > 0 ? Math.round((ageRows[0].total / totalAge) * 1000) / 10 : 0,
-  } : null;
+    const ageRows = ageRes ? ageRes.rows : [];
+    const totalAge = ageRows.reduce((s, r) => s + r.total, 0);
+    const dominantAgeGroup = ageRows.length > 0 ? {
+      group: ageRows[0].age_group,
+      count: ageRows[0].total,
+      percentage: totalAge > 0 ? Math.round((ageRows[0].total / totalAge) * 1000) / 10 : 0,
+    } : null;
+
+    demographics = {
+      sexSplit: { male: malePct, female: femalePct },
+      dominantAgeGroup,
+    };
+  } else {
+    unavailable.push('demographics');
+  }
 
   // --- Treatment outcomes ---
-  const outcomeRows = outcomeRes.rows;
   const outcomeBreakdown = {};
-  for (const r of outcomeRows) {
-    outcomeBreakdown[r.outcome_status] = r.total;
+  if (outcomeRes) {
+    for (const r of outcomeRes.rows) {
+      outcomeBreakdown[r.outcome_status] = r.total;
+    }
   }
 
   // TSR: single shared calculation (see treatmentSuccessRate.js) — do not
   // reimplement the cohort query here; every caller must agree on the same
   // Y-1 treatment-start cohort for numerator and denominator.
-  const { successRate } = await computeTreatmentSuccessRate(pool, { year: filters.year, barangay: filters.barangay });
+  // Forward supported sub-filters so NLG TSR matches the KPI when
+  // demographic filters are active. Month and Outcome are excluded from TSR.
+  // Optional metric: degrade to null instead of failing the whole response.
+  let successRate = null;
+  let cohortYear = null;
+  let cohortTotal = null;
+  try {
+    ({ successRate, cohortYear, cohortTotal } = await computeTreatmentSuccessRate(pool, {
+      year: filters.year,
+      barangay: filters.barangay,
+      sex: filters.sex,
+      ageGroup: filters.ageGroup,
+      facility: filters.facility,
+      bacteriological: filters.bacteriological,
+    }));
+  } catch (err) {
+    console.error('NLG optional metric failed (tsr):', err.message);
+    unavailable.push('treatment');
+  }
 
   // CFR: single shared calculation (see caseFatalityRate.js) — do not
   // reimplement the evaluated-outcomes denominator here.
-  const { rate: fatalityRate } = await computeCaseFatalityRate(pool, { year: filters.year, barangay: filters.barangay });
+  // Forward supported sub-filters. Month is supported for CFR.
+  // Outcome is intentionally excluded.
+  // Optional metric: degrade to null instead of failing the whole response.
+  let fatalityRate = null;
+  try {
+    ({ rate: fatalityRate } = await computeCaseFatalityRate(pool, {
+      year: filters.year,
+      month: filters.month,
+      barangay: filters.barangay,
+      sex: filters.sex,
+      ageGroup: filters.ageGroup,
+      facility: filters.facility,
+      bacteriological: filters.bacteriological,
+    }));
+  } catch (err) {
+    console.error('NLG optional metric failed (cfr):', err.message);
+    unavailable.push('fatality');
+  }
 
   // --- Summary ---
   const summary = {
@@ -304,18 +390,17 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
   };
 
   return {
-    trend: { direction, changePercent, recentCount, priorCount },
+    trend,
     highestBarangay,
     lowestBarangay,
     significantChanges,
     riskCounts,
     highRiskBarangays,
-    demographics: {
-      sexSplit: { male: malePct, female: femalePct },
-      dominantAgeGroup,
-    },
-    treatment: { successRate, fatalityRate, outcomeBreakdown },
+    riskByBarangay,
+    demographics,
+    treatment: { successRate, fatalityRate, cohortYear, cohortTotal, outcomeBreakdown },
     summary,
+    unavailable,
   };
 }
 

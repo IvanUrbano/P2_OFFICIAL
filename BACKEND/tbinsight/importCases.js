@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const pool = require('../db');
+const { normalizeOutcome } = require('./outcomeNormalization');
 
 /**
  * Import parsed case data into the database
@@ -72,7 +73,7 @@ async function importCases(rows, sourceFile) {
           row.registration_group ? row.registration_group.trim() : null,
           row.bacteriological_status ? row.bacteriological_status.trim() : null,
           row.date_started_treatment,
-          row.outcome_status ? row.outcome_status.trim() : null,
+          normalizeOutcome(row.outcome_status),
           row.date_of_outcome,
           row.record_created_at,
           sourceFile,
@@ -118,7 +119,7 @@ async function importCases(rows, sourceFile) {
           row.registration_group ? row.registration_group.trim() : null,
           row.bacteriological_status ? row.bacteriological_status.trim() : null,
           row.date_started_treatment,
-          row.outcome_status ? row.outcome_status.trim() : null,
+          normalizeOutcome(row.outcome_status),
           row.date_of_outcome,
           row.validation_status || null,
           row.itis_case_id ? row.itis_case_id.trim() : null,

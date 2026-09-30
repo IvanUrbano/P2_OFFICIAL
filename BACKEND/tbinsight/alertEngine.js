@@ -6,6 +6,7 @@
  */
 
 const pool = require('../db');
+const { NORMALIZE_OUTCOME_SQL, SUCCESS_OUTCOMES, EVALUATED_TERMINAL_OUTCOMES } = require('./outcomeNormalization');
 
 // ── Thresholds ──────────────────────────────────────────────────────────────
 const THRESHOLDS = {
@@ -247,11 +248,11 @@ async function evaluateTreatmentAlerts(poolOrClient, period) {
 
   const result = await poolOrClient.query(
     `SELECT
-       SUM(CASE WHEN outcome_status IN ('TREATMENT COMPLETED', 'CURED') THEN case_count ELSE 0 END) AS success_count,
-       SUM(case_count) AS total_count
+       SUM(CASE WHEN ${NORMALIZE_OUTCOME_SQL} = ANY($2) THEN case_count ELSE 0 END) AS success_count,
+       SUM(CASE WHEN ${NORMALIZE_OUTCOME_SQL} = ANY($3) THEN case_count ELSE 0 END) AS total_count
      FROM outcome_summary
      WHERE month = $1`,
-    [period]
+    [period, SUCCESS_OUTCOMES, EVALUATED_TERMINAL_OUTCOMES]
   );
 
   if (!result.rows.length) return created;

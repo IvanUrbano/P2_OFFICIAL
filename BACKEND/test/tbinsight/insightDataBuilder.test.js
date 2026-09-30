@@ -311,6 +311,228 @@ describe('buildAnalyticsMetrics', () => {
   });
 });
 
+// ==================== FILTER ISOLATION & RESILIENCE ====================
+
+describe('buildAnalyticsMetrics — filter isolation & resilience', () => {
+  /**
+   * SQL-routed mock pool: canned rows by distinctive SQL markers, with
+   * optional per-marker injected failures. Captures every call so tests can
+   * assert placeholder/param consistency across the whole pipeline.
+   */
+  function createSqlPool({ fail = [] } = {}) {
+    const calls = [];
+    return {
+      calls,
+      query: async (sql, params) => {
+        calls.push({ sql, params });
+        const s = String(sql);
+        for (const marker of fail) {
+          if (s.includes(marker)) throw new Error(`injected failure: ${marker}`);
+        }
+        if (s.includes('date_started_treatment')) {
+          return { rows: [{ total_patients: 100, cured_count: 70, completed_count: 20 }] };
+        }
+        if (s.includes('AS evaluated')) return { rows: [{ evaluated: 20, died: 1 }] };
+        if (s.includes('AS total FROM tb_cases')) return { rows: [{ total: 500 }] };
+        if (s.includes('AS total_cases')) {
+          return { rows: [{ total_cases: 100, barangays_with_data: 5, earliest_date: '2024-01-01', latest_date: '2026-08-31' }] };
+        }
+        if (s.includes('LIMIT 12')) {
+          return { rows: [
+            { month: '2026-08-01', case_count: 12 },
+            { month: '2026-07-01', case_count: 10 },
+            { month: '2026-06-01', case_count: 9 },
+            { month: '2026-05-01', case_count: 8 },
+            { month: '2026-04-01', case_count: 7 },
+            { month: '2026-03-01', case_count: 6 },
+          ] };
+        }
+        if (s.includes('GROUP BY c.barangay_name, DATE_TRUNC')) {
+          return { rows: [{ barangay_name: 'San Jose', month: '2026-08-01', case_count: 5 }] };
+        }
+        if (s.includes('SELECT c.barangay_name, COUNT(*)::INTEGER AS total')) {
+          return { rows: [
+            { barangay_name: 'San Jose', total: 50 },
+            { barangay_name: 'Oranbo', total: 5 },
+          ] };
+        }
+        if (s.includes('barangay_risk_scores')) {
+          return { rows: [
+            { barangay_name: 'A', risk_class: 'High', risk_score: 80, incidence_per_100k: 12 },
+            { barangay_name: 'B', risk_class: 'Low', risk_score: 20, incidence_per_100k: 3 },
+          ] };
+        }
+        if (s.includes('TRIM(c.sex) AS sex')) {
+          return { rows: [{ sex: 'Male', total: 60 }, { sex: 'Female', total: 40 }] };
+        }
+        if (s.includes('AS age_group')) {
+          return { rows: [{ age_group: '25-34', total: 40 }, { age_group: '0-14', total: 20 }] };
+        }
+        if (s.includes('AS outcome_status')) {
+          return { rows: [{ outcome_status: 'CURED', total: 40 }] };
+        }
+        return { rows: [] };
+      },
+    };
+  }
+
+  function placeholdersOf(sql) {
+    return (String(sql).match(/\$\d+/g) || []).map((p) => Number(p.slice(1)));
+  }
+
+  function assertPipelineParamConsistency(pool, label) {
+    pool.calls.forEach((call, i) => {
+      const ph = placeholdersOf(call.sql);
+      const list = call.params || [];
+      if (ph.length === 0) {
+        assert.strictEqual(list.length, 0,
+          `${label} [q${i}]: no placeholders but ${list.length} param(s)`);
+        return;
+      }
+      const max = Math.max(...ph);
+      assert.strictEqual(max, list.length,
+        `${label} [q${i}]: max $${max} !== params.length ${list.length}\nSQL: ${call.sql}`);
+      const unique = [...new Set(ph)].sort((a, b) => a - b);
+      assert.deepStrictEqual(unique, Array.from({ length: max }, (_, k) => k + 1),
+        `${label} [q${i}]: placeholders not contiguous from $1`);
+    });
+  }
+
+  const combos = [
+    ['no filters', {}],
+    ['year', { year: 2025 }],
+    ['barangay (original repro)', { barangay: 'Bagong Ilog' }],
+    ['year + month + barangay + sex', { year: 2025, month: 8, barangay: 'Bagong Ilog', sex: 'Female' }],
+    ['ageGroup', { ageGroup: '25-34' }],
+    ['sex + ageGroup', { sex: 'Male', ageGroup: '0-14' }],
+    ['facility', { facility: 'Rizal Health Center' }],
+    ['bacteriological', { bacteriological: 'smear' }],
+    ['outcome', { outcome: 'CURED' }],
+    ['year + barangay', { year: 2025, barangay: 'Bagong Ilog' }],
+  ];
+
+  for (const [name, filters] of combos) {
+    it(`runs the full pipeline for ${name} and stays param-consistent`, async () => {
+      const pool = createSqlPool();
+      const m = await buildAnalyticsMetrics(pool, filters);
+      assert.strictEqual(m.summary.totalCases, 100);
+      assert.deepStrictEqual(m.unavailable, [], 'all metrics available');
+      assert.ok(m.trend && m.trend.direction, 'trend present');
+      assert.ok(m.riskCounts, 'risk present');
+      assert.ok(m.riskByBarangay && m.riskByBarangay.A === 'High', 'riskByBarangay map present');
+      assert.ok(m.demographics && m.demographics.sexSplit, 'demographics present');
+      assert.strictEqual(m.treatment.successRate, 90); // (70+20)/100
+      assert.strictEqual(m.treatment.fatalityRate, 5);  // 1/20
+      const flat = JSON.stringify(m);
+      assert.ok(!/NaN|Infinity/.test(flat), `metrics contain NaN/Infinity: ${flat.slice(0, 200)}`);
+      assertPipelineParamConsistency(pool, name);
+    });
+  }
+
+  it('does not forward month to TSR but does forward it to CFR', async () => {
+    const pool = createSqlPool();
+    await buildAnalyticsMetrics(pool, { month: 8 });
+    const tsrCall = pool.calls.find((c) => String(c.sql).includes('date_started_treatment'));
+    assert.strictEqual(tsrCall.params.length, 1, 'TSR must only bind the cohort year');
+    const cfrEval = pool.calls.find((c) => String(c.sql).includes('AS evaluated'));
+    assert.strictEqual(cfrEval.params.length, 2, 'CFR binds outcomes array + month');
+    assert.strictEqual(cfrEval.params[1], 8);
+  });
+
+  it('does not forward outcome to TSR or CFR', async () => {
+    const pool = createSqlPool();
+    await buildAnalyticsMetrics(pool, { outcome: 'CURED' });
+    const tsrCall = pool.calls.find((c) => String(c.sql).includes('date_started_treatment'));
+    assert.strictEqual(tsrCall.params.length, 1, 'TSR must only bind the cohort year');
+    const cfrEval = pool.calls.find((c) => String(c.sql).includes('AS evaluated'));
+    assert.strictEqual(cfrEval.params.length, 1, 'CFR must only bind the outcomes array');
+  });
+
+  it('cohort year is reporting-year minus 1 (year filter)', async () => {
+    const pool = createSqlPool();
+    const m = await buildAnalyticsMetrics(pool, { year: 2025 });
+    assert.strictEqual(m.treatment.cohortYear, 2024);
+  });
+
+  it('degrades to null when the risk query fails (never throws)', async () => {
+    const pool = createSqlPool({ fail: ['barangay_risk_scores'] });
+    const m = await buildAnalyticsMetrics(pool, { barangay: 'Bagong Ilog' });
+    assert.strictEqual(m.summary.totalCases, 100, 'core summary still resolves');
+    assert.strictEqual(m.riskCounts, null);
+    assert.strictEqual(m.riskByBarangay, null);
+    assert.strictEqual(m.highRiskBarangays, null);
+    assert.ok(m.unavailable.includes('risk'));
+    assert.ok(m.trend, 'other metrics unaffected');
+    assert.strictEqual(m.treatment.successRate, 90);
+  });
+
+  it('degrades to null when the trend query fails (never throws)', async () => {
+    const pool = createSqlPool({ fail: ['LIMIT 12'] });
+    const m = await buildAnalyticsMetrics(pool, { year: 2025 });
+    assert.strictEqual(m.trend, null);
+    assert.ok(m.unavailable.includes('trend'));
+    assert.strictEqual(m.summary.totalCases, 100);
+  });
+
+  it('degrades to null when the significance query fails (never throws)', async () => {
+    const pool = createSqlPool({ fail: ['GROUP BY c.barangay_name, DATE_TRUNC'] });
+    const m = await buildAnalyticsMetrics(pool, {});
+    assert.strictEqual(m.significantChanges, null);
+    assert.ok(m.unavailable.includes('significance'));
+    assert.strictEqual(m.summary.totalCases, 100);
+  });
+
+  it('degrades to null when the sex-distribution query fails (never throws)', async () => {
+    const pool = createSqlPool({ fail: ['TRIM(c.sex) AS sex'] });
+    const m = await buildAnalyticsMetrics(pool, {});
+    assert.strictEqual(m.demographics, null);
+    assert.ok(m.unavailable.includes('demographics'));
+    assert.strictEqual(m.summary.totalCases, 100);
+  });
+
+  it('degrades TSR to null when the cohort query rejects (never throws)', async () => {
+    const pool = createSqlPool({ fail: ['date_started_treatment'] });
+    const m = await buildAnalyticsMetrics(pool, { barangay: 'Bagong Ilog' });
+    assert.strictEqual(m.treatment.successRate, null);
+    assert.strictEqual(m.treatment.cohortYear, null);
+    assert.ok(m.unavailable.includes('treatment'));
+    assert.strictEqual(m.treatment.fatalityRate, 5, 'CFR unaffected');
+    assert.strictEqual(m.summary.totalCases, 100);
+  });
+
+  it('degrades CFR to null when the evaluated-outcomes query rejects (never throws)', async () => {
+    const pool = createSqlPool({ fail: ['AS evaluated'] });
+    const m = await buildAnalyticsMetrics(pool, { year: 2025 });
+    assert.strictEqual(m.treatment.fatalityRate, null);
+    assert.ok(m.unavailable.includes('fatality'));
+    assert.strictEqual(m.treatment.successRate, 90, 'TSR unaffected');
+    assert.strictEqual(m.summary.totalCases, 100);
+  });
+
+  it('degrades multiple optional metrics at once (never throws)', async () => {
+    const pool = createSqlPool({
+      fail: ['LIMIT 12', 'barangay_risk_scores', 'date_started_treatment', 'AS evaluated'],
+    });
+    const m = await buildAnalyticsMetrics(pool, { year: 2025 });
+    assert.strictEqual(m.trend, null);
+    assert.strictEqual(m.riskCounts, null);
+    assert.strictEqual(m.treatment.successRate, null);
+    assert.strictEqual(m.treatment.fatalityRate, null);
+    for (const flag of ['trend', 'risk', 'treatment', 'fatality']) {
+      assert.ok(m.unavailable.includes(flag), `unavailable should include ${flag}`);
+    }
+    assert.strictEqual(m.summary.totalCases, 100, 'core summary still resolves → HTTP 200');
+  });
+
+  it('still rejects (500-worthy) when the required summary query fails', async () => {
+    const pool = createSqlPool({ fail: ['AS total_cases'] });
+    await assert.rejects(
+      () => buildAnalyticsMetrics(pool, { barangay: 'Bagong Ilog' }),
+      /injected failure: AS total_cases/
+    );
+  });
+});
+
 // ==================== FORECASTING METRICS ====================
 
 describe('buildForecastingMetrics', () => {

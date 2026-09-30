@@ -1294,8 +1294,8 @@ export default function GisMap() {
 
       {/* ── NLG GIS Insight Panel ── */}
       {!isFullscreen && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          <div className="lg:col-span-2 rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E8ECF1', boxShadow: '0 4px 24px rgba(15,45,82,0.06)' }}>
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+          <div className="lg:col-span-3 rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E8ECF1', boxShadow: '0 4px 24px rgba(15,45,82,0.06)' }}>
             <div className="px-6 py-5">
               <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: '#2563EB' }}>Map Interpretation</p>
               <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>About This Map</h3>
@@ -1316,7 +1316,7 @@ export default function GisMap() {
               </div>
             </div>
           </div>
-          <div>
+          <div className="lg:col-span-2">
             <AiInsightPanel
               type="gis"
               data={gisInsight}

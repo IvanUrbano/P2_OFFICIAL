@@ -1774,7 +1774,7 @@ export default function Forecasting() {
           </div>
 
           {/* ─── RIGHT COLUMN: Sticky NLG Insight Panel ─── */}
-          <div className="w-[320px] shrink-0 hidden lg:block">
+          <div className="w-[420px] shrink-0 hidden lg:block">
             <div className="sticky top-4">
               <AiInsightPanel
                 type="forecasting"

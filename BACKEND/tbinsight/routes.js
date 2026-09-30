@@ -572,10 +572,10 @@ router.get('/dashboard/metrics', async (req, res) => {
     const result = await pool.query(`
       SELECT
         COUNT(*)::INTEGER AS total_cases,
-        SUM(CASE WHEN outcome_status = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS on_treatment_count,
-        SUM(CASE WHEN outcome_status = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
-        SUM(CASE WHEN outcome_status IN ('CURED', 'TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful_count,
-        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(outcome_status) != 'NOT EVALUATED')::INTEGER AS total_outcomes,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS on_treatment_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN ('CURED', 'TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful_count,
+        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(TRIM(outcome_status)) != 'NOT EVALUATED')::INTEGER AS total_outcomes,
         SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER AS current_month_cases,
         SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
                   AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER AS prev_month_cases
@@ -709,11 +709,11 @@ router.get('/dashboard/barangay/:name', async (req, res) => {
     let outcomesRows = [];
     try {
       const outcomes = await pool.query(
-        `SELECT COALESCE(outcome_status, 'Unknown') AS outcome_status,
+        `SELECT COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status,
                 COUNT(*)::INTEGER AS total
          FROM tb_cases
          WHERE LOWER(barangay_name) = LOWER($1)
-         GROUP BY outcome_status
+         GROUP BY COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
          ORDER BY total DESC`,
         [name]
       );
@@ -2248,10 +2248,10 @@ router.get('/reports/summary', async (req, res) => {
 
       // Outcomes breakdown
       pool.query(`
-        SELECT COALESCE(outcome_status, 'Unknown') AS outcome_status, COUNT(*)::INTEGER AS count
+        SELECT COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status, COUNT(*)::INTEGER AS count
         FROM tb_cases c
         ${whereClause}
-        GROUP BY outcome_status
+        GROUP BY COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
         ORDER BY count DESC
       `, params),
 
@@ -2336,8 +2336,8 @@ router.get('/reports/summary', async (req, res) => {
         LIMIT 30
       `, [startDate]),
 
-      // Population for incidence calculation
-      pool.query(`SELECT name, population FROM barangays`),
+      // Population for incidence calculation — year-specific
+      getPopulationMap(yr),
 
       // All matching case records for the detailed table
       pool.query(`
@@ -2432,17 +2432,28 @@ router.get('/reports/summary', async (req, res) => {
     });
 
     // Barangay distribution with incidence and risk
+    // populationRes is now from getPopulationMap(yr) — a Map of { barangayName: { population, ... } }
     const popMap = {};
-    populationRes.rows.forEach(r => { popMap[r.name] = r.population || 0; });
+    for (const [name, popObj] of Object.entries(populationRes)) {
+      popMap[name] = popObj?.population || 0;
+    }
+
+    // Annualization factor: annual/barangay-without-month = 1 (no annualization),
+    // monthly = 12, quarterly = 4, barangay-with-month = 12
+    const isFullPeriod = (type === 'annual') || (type === 'barangay' && !month);
+    const annualFactor = isFullPeriod ? 1 : (type === 'quarterly' ? 4 : 12);
+    const incidenceLabel = isFullPeriod ? 'Annual Incidence / 100k' : 'Annualized Incidence / 100k';
 
     const barangayDistribution = barangayDistRes.rows.map(r => {
       const pop = popMap[r.barangay_name] || 0;
-      const incidence = pop > 0 ? Number((((r.cases * 12) / pop) * 100000).toFixed(1)) : null;
+      const rawIncidence = pop > 0 ? (r.cases * annualFactor / pop) * 100000 : null;
+      const incidence = rawIncidence != null ? Number(rawIncidence.toFixed(1)) : null;
       return {
         barangay: r.barangay_name,
         cases: r.cases,
         population: pop,
         incidence,
+        incidenceLabel,
       };
     });
 
@@ -2762,15 +2773,16 @@ router.delete('/interventions/:id', authenticateToken, authorizeRoles('admin'), 
 /**
  * GET /api/tb/insights/analytics
  * Generate NLG-based analytics insight from computed metrics.
- * Query params: year, month, barangay, outcome, sex, ageGroup, bacteriological
+ * Query params: year, month, barangay, facility, outcome, sex, ageGroup, bacteriological
  */
 router.get('/insights/analytics', async (req, res) => {
   try {
-    const { year, month, barangay, outcome, sex, ageGroup, bacteriological } = req.query;
+    const { year, month, barangay, facility, outcome, sex, ageGroup, bacteriological } = req.query;
     const filters = {};
     if (year) filters.year = year;
     if (month) filters.month = month;
     if (barangay) filters.barangay = barangay;
+    if (facility) filters.facility = facility;
     if (outcome) filters.outcome = outcome;
     if (sex) filters.sex = sex;
     if (ageGroup) filters.ageGroup = ageGroup;
@@ -2839,7 +2851,7 @@ router.get('/insights/gis', async (req, res) => {
  */
 router.get('/treatment-cascade', async (req, res) => {
   try {
-    const { year, month, barangay, sex, ageGroup, bacteriological, outcome } = req.query;
+    const { year, month, barangay, sex, ageGroup, bacteriological } = req.query;
     const filters = {};
     if (year) filters.year = year;
     if (month) filters.month = month;
@@ -2847,7 +2859,6 @@ router.get('/treatment-cascade', async (req, res) => {
     if (sex) filters.sex = sex;
     if (ageGroup) filters.ageGroup = ageGroup;
     if (bacteriological) filters.bacteriological = bacteriological;
-    if (outcome) filters.outcome = outcome;
 
     const cascade = await computeTreatmentCascade(pool, filters);
     res.json(cascade);
@@ -2870,8 +2881,8 @@ router.get('/treatment-cascade', async (req, res) => {
  */
 router.get('/treatment-success-rate', async (req, res) => {
   try {
-    const { year, barangay } = req.query;
-    const result = await computeTreatmentSuccessRate(pool, { year, barangay });
+    const { year, barangay, sex, ageGroup, facility, bacteriological } = req.query;
+    const result = await computeTreatmentSuccessRate(pool, { year, barangay, sex, ageGroup, facility, bacteriological });
     res.json(result);
   } catch (err) {
     console.error('Treatment success rate error:', err.message);
@@ -2885,12 +2896,12 @@ router.get('/treatment-success-rate', async (req, res) => {
  * displays "Case Fatality Rate" should call this rather than computing its
  * own denominator independently.
  *
- * Query params: year (EXTRACT(YEAR FROM date_of_diagnosis)), barangay (optional).
+ * Query params: year, month, barangay, sex, ageGroup, facility, bacteriological.
  */
 router.get('/case-fatality-rate', async (req, res) => {
   try {
-    const { year, barangay } = req.query;
-    const result = await computeCaseFatalityRate(pool, { year, barangay });
+    const { year, month, barangay, sex, ageGroup, facility, bacteriological } = req.query;
+    const result = await computeCaseFatalityRate(pool, { year, month, barangay, sex, ageGroup, facility, bacteriological });
     res.json(result);
   } catch (err) {
     console.error('Case fatality rate error:', err.message);
