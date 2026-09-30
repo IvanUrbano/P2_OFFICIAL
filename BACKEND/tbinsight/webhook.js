@@ -3,6 +3,7 @@ const router = express.Router();
 const crypto = require('crypto');
 const pool = require('../db');
 const { validateRow } = require('./parseCaseFile');
+const { normalizeOutcome } = require('./outcomeNormalization');
 const { rebuildAggregations } = require('./aggregateMonthly');
 const { schedulePipelineRun } = require('./pipeline');
 const { verifyWebhookSignature } = require('../middleware/webhookAuth');
@@ -207,7 +208,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
             record.age, record.sex, record.barangay_name, record.screening_facility,
             record.treatment_facility, record.source_of_patient, record.anatomical_site,
             record.registration_group, record.bacteriological_status, record.date_started_treatment,
-            record.outcome_status, record.date_of_outcome, record.validation_status,
+            normalizeOutcome(record.outcome_status), record.date_of_outcome, record.validation_status,
             record.itis_case_id, source_type, locationClassification,
             record.type, record.province, record.region,
             record.referred_to_dots, record.referral_status,

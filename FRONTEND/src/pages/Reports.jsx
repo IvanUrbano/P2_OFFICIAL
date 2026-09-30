@@ -5,7 +5,7 @@ import {
   saveToRecentReports, getRecentReports, deleteRecentReport,
 } from '../utils/exportReports';
 import SkeletonBlock from '../../components/SkeletonBlock';
-import FilterSelect from '../../components/FilterSelect';
+import FilterSelect from '../components/FilterSelect';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
@@ -685,7 +685,7 @@ export default function Reports() {
                 <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
                   {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
                 </FilterSelect>
-                <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay}>
+                <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 160 }}>
                   <option value="">Select Barangay</option>
                   {barangays.map(b => <option key={b} value={b}>{b}</option>)}
                 </FilterSelect>

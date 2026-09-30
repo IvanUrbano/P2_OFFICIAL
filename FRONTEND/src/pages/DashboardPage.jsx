@@ -22,39 +22,21 @@ const RISK_COLORS = {
   'No Data': '#94A3B8',
 };
 
-// Fixed categorical slot order (dataviz skill's validated default palette),
-// assigned in OUTCOME_ORDER's sequence — never reassigned/cycled per filter,
-// so a given outcome always renders the same color everywhere. Validated via
-// scripts/validate_palette.js: all CVD/lightness/chroma checks pass; aqua,
-// yellow, and magenta fall under the 3:1 surface-contrast floor, which is why
-// this chart always pairs each slice with a direct text label in the legend
-// (never color-alone identification). Previously TREATMENT FAILED/DIED and
-// LOST TO FF-UP/EXCLUDED were near-indistinguishable dark-red and gray pairs.
 const OUTCOME_COLORS = {
-  'CURED': '#2a78d6',               // slot 1 — blue
-  'TREATMENT COMPLETED': '#eb6834', // slot 2 — orange
-  'ON TREATMENT': '#1baf7a',        // slot 3 — aqua
-  'TREATMENT FAILED': '#eda100',    // slot 4 — yellow
-  'FAILED': '#eda100',              // same slot as TREATMENT FAILED (synonym)
-  'DIED': '#e87ba4',                // slot 5 — magenta
-  'LOST TO FF-UP': '#008300',       // slot 6 — green
-  'LOST TO FOLLOW-UP': '#008300',   // same slot as LOST TO FF-UP (synonym)
-  'EXCLUDED': '#4a3aa7',            // slot 7 — violet
+  'CURED': '#2a78d6',
+  'TREATMENT COMPLETED': '#eb6834',
+  'ON TREATMENT': '#1baf7a',
+  'FAILED': '#eda100',
+  'DIED': '#e87ba4',
+  'LOST TO FF-UP': '#008300',
+  'EXCLUDED': '#4a3aa7',
+  'DIAGNOSED': '#0369A1',
+  'NOT EVALUATED': '#94A3B8',
 };
 
-// Genuine treatment outcomes only. NOT EVALUATED, DIAGNOSED, and SCREENED are
-// deliberately excluded — those are pre-treatment / pending case-lifecycle
-// stages, not outcomes (BACKEND/tbinsight/treatmentCascade.js's own
-// EVALUATED_OUTCOMES list excludes them for the same reason). FAILED and
-// LOST TO FOLLOW-UP are kept as tolerant fallbacks for raw, unnormalized
-// spellings that can enter tb_cases via BACKEND's own direct CSV import
-// (tbinsight/importCases.js), which — unlike PASIG_CLONE's dataCleaner.js —
-// does not canonicalize outcome_status before storing it.
 const OUTCOME_ORDER = [
-  'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT',
-  'TREATMENT FAILED', 'FAILED', 'DIED',
-  'LOST TO FF-UP', 'LOST TO FOLLOW-UP',
-  'EXCLUDED',
+  'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT', 'FAILED',
+  'DIAGNOSED', 'NOT EVALUATED', 'DIED', 'LOST TO FF-UP', 'EXCLUDED',
 ];
 
 const GIS_RISK_COLORS = {
@@ -684,7 +666,12 @@ export default function DashboardPage() {
   const outcomeChartData = useMemo(() => {
     const byStatus = {};
     outcomesData.forEach((r) => {
-      const st = r.outcome_status || 'Unknown';
+      const raw = (r.outcome_status || 'Unknown').toUpperCase();
+      // Map DB variants to source-aligned display form
+      const st = raw === 'TREATMENT FAILED' ? 'FAILED'
+        : raw === 'LOST TO FOLLOW-UP' ? 'LOST TO FF-UP'
+        : raw;
+      if (!OUTCOME_ORDER.includes(st)) return; // exclude SCREENED etc.
       byStatus[st] = (byStatus[st] || 0) + Number(r.total || 0);
     });
     return OUTCOME_ORDER
@@ -1146,9 +1133,9 @@ export default function DashboardPage() {
 
             {/* Treatment Outcomes */}
             <SectionCard
-              title="Treatment Outcomes"
+              title="Case Status / Outcome Distribution"
               iconColor="#10B981"
-              description="Distribution of recorded TB treatment outcomes."
+              description="Distribution of reported TB records by the Outcome/Status values recorded in the source data."
               action="View Analytics"
               actionTo="/analytics"
             >

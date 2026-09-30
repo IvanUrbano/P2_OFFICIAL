@@ -124,7 +124,7 @@ describe('applyCascadeFilters', () => {
       outcome: 'CURED',
     });
     assert.strictEqual(idx, 7);
-    assert.deepStrictEqual(params, ['2026', '8', 'San Jose', 'Male', 'Bacteriologically-confirmed TB', 'CURED'].map((p, i) => (i < 2 ? Number(p) : p)));
+    assert.deepStrictEqual(params, [2026, 8, 'San Jose', 'Male', 'Bacteriologically-confirmed TB', ['CURED']]);
     assert.strictEqual(conditions.length, 7);
     assert.ok(conditions[0].includes('EXTRACT(YEAR FROM c.date_of_diagnosis) = $1'));
     assert.ok(conditions[1].includes('EXTRACT(MONTH FROM c.date_of_diagnosis) = $2'));
@@ -132,7 +132,7 @@ describe('applyCascadeFilters', () => {
     assert.ok(conditions[3].includes('TRIM(c.sex) ILIKE $4'));
     assert.ok(conditions[4].includes('c.age BETWEEN 25 AND 34'));
     assert.ok(conditions[5].includes('TRIM(c.bacteriological_status) ILIKE $5'));
-    assert.ok(conditions[6].includes('UPPER(TRIM(c.outcome_status)) = UPPER($6)'));
+    assert.ok(conditions[6].includes('UPPER(TRIM(c.outcome_status)) = ANY($6)'));
   });
 
   it('supports age group bands', () => {
@@ -234,7 +234,7 @@ describe('computeTreatmentCascade', () => {
   it('applies filters as query params', async () => {
     const pool = createMockPool(FULL_ROW);
     await computeTreatmentCascade(pool, { year: '2026', barangay: 'San Jose', outcome: 'CURED' });
-    assert.deepStrictEqual(pool.captured.params, [2026, 'San Jose', 'CURED']);
+    assert.deepStrictEqual(pool.captured.params, [2026, 'San Jose', ['CURED']]);
     assert.ok(pool.captured.sql.includes('WHERE'));
   });
 

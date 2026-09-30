@@ -8,6 +8,7 @@ import {
 } from 'recharts';
 import API from '../api/axios';
 import AiInsightPanel from '../components/AiInsightPanel';
+import FilterSelect from '../components/FilterSelect';
 import { getGisInsight } from '../services/insightService';
 
 const RISK_COLORS = {
@@ -56,40 +57,18 @@ const OUTCOME_COLORS = {
   'CURED': '#047857',
   'TREATMENT COMPLETED': '#2E6FAF',
   'ON TREATMENT': '#92400E',
-  'LOST TO FF-UP': '#6B7280',
-  'LOST TO FOLLOW-UP': '#6B7280',
-  'DIED': '#991B1B',
-  'EXCLUDED': '#64748B',
-  'TREATMENT FAILED': '#991B1B',
   'FAILED': '#991B1B',
-  'DEFAULTED': '#B45309',
+  'DIED': '#991B1B',
+  'LOST TO FF-UP': '#6B7280',
+  'EXCLUDED': '#64748B',
   'NOT EVALUATED': '#94A3B8',
   'DIAGNOSED': '#0369A1',
-  'SCREENED': '#0E7490',
 };
 
 const PASIG_AREA_KM2 = 31.3;
 
 const PASIG_BOUNDS = L.latLngBounds([14.48, 121.02], [14.64, 121.13]);
 const MAX_BOUNDS = L.latLngBounds([14.3, 120.85], [14.85, 121.25]);
-
-function FilterSelect({ label, value, onChange, children, selectStyle }) {
-  return (
-    <div className="relative inline-flex items-center">
-      <span className="absolute left-3 text-[11px] pointer-events-none whitespace-nowrap" style={{ color: '#94A3B8' }}>{label}:</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label={label}
-        className="rounded-lg py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-        style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52', paddingLeft: `${label.length * 6.5 + 26}px`, paddingRight: '28px', maxWidth: 160, ...selectStyle }}
-      >
-        {children}
-      </select>
-      <i className="ri-arrow-down-s-line absolute right-2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-    </div>
-  );
-}
 
 function riskStyle(feature) {
   const risk = feature.properties?.risk_class || 'No Data';
@@ -446,11 +425,20 @@ export default function GisMap() {
     const demoChartData = Object.entries(ageGroups)
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([age, counts]) => ({ name: age, Male: counts.Male, Female: counts.Female }));
-    const outcomeChartData = outcomes.map(o => ({
-      name: o.outcome_status?.length > 16 ? o.outcome_status.slice(0, 14) + '...' : o.outcome_status,
-      value: o.total,
-      color: OUTCOME_COLORS[o.outcome_status] || '#64748B',
-    }));
+    const outcomeChartData = outcomes
+      .map(o => {
+        const raw = (o.outcome_status || '').toUpperCase();
+        const display = raw === 'TREATMENT FAILED' ? 'FAILED'
+          : raw === 'LOST TO FOLLOW-UP' ? 'LOST TO FF-UP'
+          : raw;
+        return { display, value: o.total };
+      })
+      .filter(o => o.display && OUTCOME_COLORS[o.display])
+      .map(o => ({
+        name: o.display.length > 16 ? o.display.slice(0, 14) + '...' : o.display,
+        value: o.value,
+        color: OUTCOME_COLORS[o.display] || '#64748B',
+      }));
     return { merged, riskColor, totalOutcomeCases, activeCases, successRate, trendChartData, demoChartData, outcomeChartData };
   }, [selectedBarangayName, barangayDetail, barangayDetailLoading, monthlyByBarangay, data, barangayTsr]);
 

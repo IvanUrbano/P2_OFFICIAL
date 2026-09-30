@@ -13,6 +13,7 @@
 const { getAvailablePopulationYears, computeYearIncidence, GEOJSON_REFERENCE_YEAR } = require('./populationService');
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
+const { getOutcomeFilterValues, normalizeDisplayOutcome } = require('./outcomeNormalization');
 
 /**
  * Build WHERE clause fragments from filter params.
@@ -56,8 +57,8 @@ function applyFilters(conditions, params, paramIdx, filters) {
     idx++;
   }
   if (filters.outcome) {
-    conditions.push(`UPPER(TRIM(c.outcome_status)) = UPPER($${idx})`);
-    params.push(filters.outcome);
+    conditions.push(`UPPER(TRIM(c.outcome_status)) = ANY($${idx})`);
+    params.push(getOutcomeFilterValues(filters.outcome));
     idx++;
   }
   if (filters.facility) {
@@ -333,7 +334,10 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
   const outcomeBreakdown = {};
   if (outcomeRes) {
     for (const r of outcomeRes.rows) {
-      outcomeBreakdown[r.outcome_status] = r.total;
+      const displayKey = normalizeDisplayOutcome(r.outcome_status);
+      if (displayKey) {
+        outcomeBreakdown[displayKey] = (outcomeBreakdown[displayKey] || 0) + r.total;
+      }
     }
   }
 

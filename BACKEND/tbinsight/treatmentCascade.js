@@ -21,6 +21,8 @@
  * so future imports with alternate spellings still classify correctly.
  */
 
+const { getOutcomeFilterValues } = require('./outcomeNormalization');
+
 const EVALUATED_OUTCOMES = [
   'CURED',
   'TREATMENT COMPLETED',
@@ -90,8 +92,8 @@ function applyCascadeFilters(conditions, params, paramIdx, filters) {
     idx++;
   }
   if (filters.outcome) {
-    conditions.push(`UPPER(TRIM(c.outcome_status)) = UPPER($${idx})`);
-    params.push(filters.outcome);
+    conditions.push(`UPPER(TRIM(c.outcome_status)) = ANY($${idx})`);
+    params.push(getOutcomeFilterValues(filters.outcome));
     idx++;
   }
   return idx;

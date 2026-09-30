@@ -7,6 +7,7 @@ import {
 import API from '../api/axios';
 import AiInsightPanel from '../components/AiInsightPanel';
 import TreatmentCascadeCard from '../components/TreatmentCascadeCard';
+import FilterSelect from '../components/FilterSelect';
 import { getAnalyticsInsight } from '../services/insightService';
 import {
   categorizeAge,
@@ -33,19 +34,17 @@ const OUTCOME_COLORS = {
   'CURED': '#2a78d6',
   'TREATMENT COMPLETED': '#eb6834',
   'ON TREATMENT': '#1baf7a',
-  'TREATMENT FAILED': '#eda100',
   'FAILED': '#eda100',
   'DIED': '#e87ba4',
   'LOST TO FF-UP': '#008300',
-  'LOST TO FOLLOW-UP': '#008300',
   'EXCLUDED': '#4a3aa7',
+  'DIAGNOSED': '#0369A1',
+  'NOT EVALUATED': '#94A3B8',
 };
 
 const OUTCOME_ORDER = [
-  'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT',
-  'TREATMENT FAILED', 'FAILED', 'DIED',
-  'LOST TO FF-UP', 'LOST TO FOLLOW-UP',
-  'EXCLUDED',
+  'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT', 'FAILED',
+  'DIAGNOSED', 'NOT EVALUATED', 'DIED', 'LOST TO FF-UP', 'EXCLUDED',
 ];
 
 const AGE_GROUP_ORDER = ['0-14', '15-24', '25-34', '35-44', '45-54', '55-64', '65+'];
@@ -56,10 +55,8 @@ const MONTHS = [
 ];
 
 const OUTCOMES = [
-  'All Outcomes', 'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT',
-  'TREATMENT FAILED', 'FAILED', 'DIED',
-  'LOST TO FF-UP', 'LOST TO FOLLOW-UP',
-  'EXCLUDED', 'NOT EVALUATED', 'DIAGNOSED', 'SCREENED',
+  'All', 'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT', 'FAILED',
+  'DIAGNOSED', 'NOT EVALUATED', 'DIED', 'LOST TO FF-UP', 'EXCLUDED',
 ];
 
 const ACTIVE_OUTCOMES = ['ON TREATMENT'];
@@ -118,30 +115,6 @@ function EmptyState() {
   );
 }
 
-/* ─── Filter Select (same as DashboardPage) ─── */
-function FilterSelect({ label, value, onChange, children, selectStyle, width = 140 }) {
-  return (
-    <div className="relative min-w-0" style={{ width }}>
-      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none whitespace-nowrap" style={{ color: '#94A3B8' }}>{label}:</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-        style={{
-          background: '#ffffff',
-          color: '#0F2D52',
-          border: '1px solid #E2E8F0',
-          width: '100%',
-          paddingLeft: `${(label.length * 6.5) + 24}px`,
-          ...selectStyle,
-        }}
-      >
-        {children}
-      </select>
-      <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-    </div>
-  );
-}
 
 /* ─── Main Analytics Component ───────────────────────────────────────── */
 
@@ -754,7 +727,12 @@ export default function Analytics() {
   const outcomeData = useMemo(() => {
     const byOutcome = {};
     filteredCases.forEach((c) => {
-      const status = (c.outcome_status || 'Unknown').toUpperCase();
+      const raw = (c.outcome_status || 'Unknown').toUpperCase();
+      // Map DB variants to source-aligned display form
+      const status = raw === 'TREATMENT FAILED' ? 'FAILED'
+        : raw === 'LOST TO FOLLOW-UP' ? 'LOST TO FF-UP'
+        : raw;
+      if (!OUTCOME_ORDER.includes(status)) return; // exclude SCREENED etc.
       if (!byOutcome[status]) byOutcome[status] = 0;
       byOutcome[status]++;
     });
@@ -770,7 +748,7 @@ export default function Analytics() {
     if (aMonth) chips.push({ key: 'month', label: 'Month', value: MONTHS[Number(aMonth)] || aMonth });
     if (aBarangay) chips.push({ key: 'barangay', label: 'Barangay', value: aBarangay });
     if (aFacility) chips.push({ key: 'facility', label: 'Facility', value: aFacility });
-    if (aOutcome) chips.push({ key: 'outcome', label: 'Outcome', value: aOutcome });
+    if (aOutcome) chips.push({ key: 'outcome', label: 'Case Status / Outcome', value: aOutcome });
     if (aSex) chips.push({ key: 'sex', label: 'Sex', value: aSex });
     if (aAgeGroup) chips.push({ key: 'age', label: 'Age Group', value: aAgeGroup });
     if (aBact) chips.push({ key: 'bacterio', label: 'Bacterio', value: aBact });
@@ -879,8 +857,8 @@ export default function Analytics() {
         </div>
 
         {/* Filter bar */}
-        <div className="flex items-center justify-between px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
-          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-3 px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
+          <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
             <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
               <option value="">All Years</option>
               {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
@@ -888,17 +866,17 @@ export default function Analytics() {
             <FilterSelect label="Month" value={filterMonth} onChange={setFilterMonth}>
               {MONTHS.map((m, i) => <option key={m} value={i === 0 ? '' : String(i)}>{m}</option>)}
             </FilterSelect>
-            <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay}>
+            <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 140 }}>
               <option value="">All Barangays</option>
               {barangayNames.map((n) => <option key={n} value={n}>{n}</option>)}
             </FilterSelect>
-            <FilterSelect label="Facility" value={filterFacility} onChange={setFilterFacility}>
+            <FilterSelect label="Facility" value={filterFacility} onChange={setFilterFacility} selectStyle={{ maxWidth: 140 }}>
               <option value="">All Facilities</option>
               {facilities.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
             </FilterSelect>
-            <FilterSelect label="Outcome" value={filterOutcome} onChange={setFilterOutcome} width={190}>
-              <option value="">All Outcomes</option>
-              {(filterOptions.outcome_status || OUTCOMES.filter(o => o !== 'All Outcomes')).map((o) => (
+            <FilterSelect label="Case Status / Outcome" value={filterOutcome} onChange={setFilterOutcome} selectStyle={{ maxWidth: 150 }}>
+              <option value="">All</option>
+              {(filterOptions.outcome_status || OUTCOMES.filter(o => o !== 'All')).map((o) => (
                 <option key={o} value={o}>{o}</option>
               ))}
             </FilterSelect>
@@ -912,7 +890,7 @@ export default function Analytics() {
               <option value="">All Ages</option>
               {AGE_GROUP_ORDER.map((g) => <option key={g} value={g}>{g}</option>)}
             </FilterSelect>
-            <FilterSelect label="Bacterio" value={filterBact} onChange={setFilterBact}>
+            <FilterSelect label="Bacterio" value={filterBact} onChange={setFilterBact} selectStyle={{ maxWidth: 130 }}>
               <option value="">All</option>
               {(filterOptions.bacteriological_status || []).map((s) => (
                 <option key={s} value={s}>{s}</option>
@@ -1354,8 +1332,8 @@ export default function Analytics() {
                   <div className="flex items-center gap-3">
                     <div className="w-1 h-8 rounded-full" style={{ background: '#047857' }} />
                     <div>
-                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Treatment Outcomes</h3>
-                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Distribution of recorded TB treatment outcomes.</p>
+                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Case Status / Outcome Distribution</h3>
+                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Distribution of reported TB records by the Outcome/Status values recorded in the source data.</p>
                     </div>
                   </div>
                 </div>

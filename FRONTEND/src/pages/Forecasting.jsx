@@ -5,6 +5,7 @@ import {
 } from 'recharts';
 import API from '../api/axios';
 import AiInsightPanel from '../components/AiInsightPanel';
+import FilterSelect from '../components/FilterSelect';
 import { getForecastingInsight } from '../services/insightService';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
@@ -124,30 +125,6 @@ function SectionSkeleton({ rows = 3 }) {
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-/* ─── Filter Select (same as DashboardPage) ─── */
-function FilterSelect({ label, value, onChange, children, selectStyle }) {
-  return (
-    <div className="relative">
-      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none whitespace-nowrap" style={{ color: '#94A3B8' }}>{label}:</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-        style={{
-          background: '#ffffff',
-          color: '#0F2D52',
-          border: '1px solid #E2E8F0',
-          paddingLeft: `${(label.length * 6.5) + 24}px`,
-          ...selectStyle,
-        }}
-      >
-        {children}
-      </select>
-      <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
     </div>
   );
 }
@@ -1114,7 +1091,7 @@ export default function Forecasting() {
               Compare
             </button>
             {showCompare && (
-              <FilterSelect label="Compare" value={compareBarangay} onChange={setCompareBarangay} selectStyle={{ maxWidth: 180, borderColor: '#F59E0B' }}>
+              <FilterSelect label="Compare" value={compareBarangay} onChange={setCompareBarangay} style={{ borderColor: '#F59E0B' }} selectStyle={{ maxWidth: 180 }}>
                 <option value="">Select Barangay</option>
                 {barangayNames.filter((n) => n !== selectedBarangay).map((name) => <option key={name} value={name}>{name}</option>)}
               </FilterSelect>

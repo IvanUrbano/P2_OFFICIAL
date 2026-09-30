@@ -13,6 +13,7 @@ const { buildAnalyticsMetrics, buildForecastingMetrics, buildGisMetrics } = requ
 const { generateAnalyticsInsight, generateForecastingInsight, generateGisInsight } = require('./nlgEngine');
 const { computeTreatmentCascade } = require('./treatmentCascade');
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
+const { APPROVED_OUTCOMES, normalizeDisplayOutcome, getOutcomeFilterValues } = require('./outcomeNormalization');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
 const {
   getPopulation, getPopulationMap, calculateAnnualizedIncidence,
@@ -74,7 +75,11 @@ router.get('/filter-options', async (req, res) => {
     res.json({
       sex: sexRes.rows.map(r => r.sex),
       bacteriological_status: bactRes.rows.map(r => r.bacteriological_status),
-      outcome_status: outcomeRes.rows.map(r => r.outcome_status),
+      outcome_status: outcomeRes.rows
+        .map(r => normalizeDisplayOutcome(r.outcome_status))
+        .filter(v => v != null)
+        .filter((v, i, arr) => arr.indexOf(v) === i)  // dedupe
+        .sort((a, b) => APPROVED_OUTCOMES.indexOf(a) - APPROVED_OUTCOMES.indexOf(b)),
       validation_status: validationRes.rows.map(r => r.validation_status),
       source_type: sourceTypeRes.rows.map(r => r.source_type),
       location_classification: locationRes.rows.map(r => r.location_classification),
@@ -210,8 +215,8 @@ router.get('/cases', async (req, res) => {
     }
 
     if (outcome) {
-      conditions.push(`UPPER(TRIM(c.outcome_status)) = UPPER($${paramIdx})`);
-      params.push(outcome.trim());
+      conditions.push(`UPPER(TRIM(c.outcome_status)) = ANY($${paramIdx})`);
+      params.push(getOutcomeFilterValues(outcome));
       paramIdx++;
     }
 
@@ -376,7 +381,7 @@ router.get('/cases/export', async (req, res) => {
     if (barangay) { conditions.push(`TRIM(c.barangay_name) = $${paramIdx}`); params.push(barangay.trim()); paramIdx++; }
     if (year) { conditions.push(`EXTRACT(YEAR FROM c.date_of_diagnosis) = $${paramIdx}`); params.push(Number(year)); paramIdx++; }
     if (month) { conditions.push(`EXTRACT(MONTH FROM c.date_of_diagnosis) = $${paramIdx}`); params.push(Number(month)); paramIdx++; }
-    if (outcome) { conditions.push(`UPPER(TRIM(c.outcome_status)) = UPPER($${paramIdx})`); params.push(outcome.trim()); paramIdx++; }
+    if (outcome) { conditions.push(`UPPER(TRIM(c.outcome_status)) = ANY($${paramIdx})`); params.push(getOutcomeFilterValues(outcome)); paramIdx++; }
     if (facility) { conditions.push(`(TRIM(c.screening_facility) = $${paramIdx} OR TRIM(c.treatment_facility) = $${paramIdx})`); params.push(facility.trim()); paramIdx++; }
     if (sex) { conditions.push(`TRIM(c.sex) ILIKE $${paramIdx}`); params.push(sex.trim()); paramIdx++; }
     if (bacteriological_status) { conditions.push(`TRIM(c.bacteriological_status) ILIKE $${paramIdx}`); params.push(bacteriological_status.trim()); paramIdx++; }
@@ -495,8 +500,8 @@ router.get('/dashboard/summary', async (req, res) => {
       paramIdx++;
     }
     if (outcome) {
-      conditions.push(`UPPER(TRIM(outcome_status)) = UPPER($${paramIdx})`);
-      params.push(outcome.trim());
+      conditions.push(`UPPER(TRIM(outcome_status)) = ANY($${paramIdx})`);
+      params.push(getOutcomeFilterValues(outcome));
       paramIdx++;
     }
     if (facility) {
