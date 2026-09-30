@@ -22,26 +22,39 @@ const RISK_COLORS = {
   'No Data': '#94A3B8',
 };
 
+// Fixed categorical slot order (dataviz skill's validated default palette),
+// assigned in OUTCOME_ORDER's sequence — never reassigned/cycled per filter,
+// so a given outcome always renders the same color everywhere. Validated via
+// scripts/validate_palette.js: all CVD/lightness/chroma checks pass; aqua,
+// yellow, and magenta fall under the 3:1 surface-contrast floor, which is why
+// this chart always pairs each slice with a direct text label in the legend
+// (never color-alone identification). Previously TREATMENT FAILED/DIED and
+// LOST TO FF-UP/EXCLUDED were near-indistinguishable dark-red and gray pairs.
 const OUTCOME_COLORS = {
-  'CURED': '#047857',
-  'TREATMENT COMPLETED': '#2E6FAF',
-  'ON TREATMENT': '#92400E',
-  'TREATMENT FAILED': '#991B1B',
-  'FAILED': '#991B1B',
-  'DIED': '#7F1D1D',
-  'LOST TO FF-UP': '#6B7280',
-  'LOST TO FOLLOW-UP': '#6B7280',
-  'EXCLUDED': '#64748B',
-  'NOT EVALUATED': '#94A3B8',
-  'DIAGNOSED': '#0369A1',
-  'SCREENED': '#0E7490',
+  'CURED': '#2a78d6',               // slot 1 — blue
+  'TREATMENT COMPLETED': '#eb6834', // slot 2 — orange
+  'ON TREATMENT': '#1baf7a',        // slot 3 — aqua
+  'TREATMENT FAILED': '#eda100',    // slot 4 — yellow
+  'FAILED': '#eda100',              // same slot as TREATMENT FAILED (synonym)
+  'DIED': '#e87ba4',                // slot 5 — magenta
+  'LOST TO FF-UP': '#008300',       // slot 6 — green
+  'LOST TO FOLLOW-UP': '#008300',   // same slot as LOST TO FF-UP (synonym)
+  'EXCLUDED': '#4a3aa7',            // slot 7 — violet
 };
 
+// Genuine treatment outcomes only. NOT EVALUATED, DIAGNOSED, and SCREENED are
+// deliberately excluded — those are pre-treatment / pending case-lifecycle
+// stages, not outcomes (BACKEND/tbinsight/treatmentCascade.js's own
+// EVALUATED_OUTCOMES list excludes them for the same reason). FAILED and
+// LOST TO FOLLOW-UP are kept as tolerant fallbacks for raw, unnormalized
+// spellings that can enter tb_cases via BACKEND's own direct CSV import
+// (tbinsight/importCases.js), which — unlike PASIG_CLONE's dataCleaner.js —
+// does not canonicalize outcome_status before storing it.
 const OUTCOME_ORDER = [
   'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT',
   'TREATMENT FAILED', 'FAILED', 'DIED',
   'LOST TO FF-UP', 'LOST TO FOLLOW-UP',
-  'EXCLUDED', 'NOT EVALUATED', 'DIAGNOSED', 'SCREENED',
+  'EXCLUDED',
 ];
 
 const GIS_RISK_COLORS = {
@@ -308,6 +321,7 @@ export default function DashboardPage() {
   const [forecastsData, setForecastsData] = useState([]);
   const [alertsData, setAlertsData] = useState([]);
   const [riskData, setRiskData] = useState([]);
+  const [riskYear, setRiskYear] = useState(null);
   const [barangays, setBarangays] = useState([]);
   const [pipelineStatus, setPipelineStatus] = useState(null);
   const [demographicsData, setDemographicsData] = useState([]);
@@ -363,6 +377,7 @@ export default function DashboardPage() {
       setForecastsData(forecastsRes.data.forecasts || []);
       setAlertsData(alertsRes.data.alerts || []);
       setRiskData(riskRes.data.choropleth || []);
+      setRiskYear(riskRes.data.year || null);
       setBarangays(brgyRes.data.barangays || []);
       setPipelineStatus(pipelineRes.data.latest_run || null);
       setDemographicsData(demoRes.data.demographics || []);
@@ -400,12 +415,14 @@ export default function DashboardPage() {
     return { total, months: uniqueMonths };
   }, [monthlyData]);
 
-  /* ── 2. Active Cases (ON TREATMENT) ── */
-  const activeCases = useMemo(() => {
-    return outcomesData
-      .filter((r) => (r.outcome_status || '').toUpperCase() === 'ON TREATMENT')
-      .reduce((s, r) => s + Number(r.total || 0), 0);
-  }, [outcomesData]);
+  /* ── 2. New Cases (latest recorded month) ──
+   * Replaces the former "Active TB Cases" tile (unbounded ON TREATMENT
+   * count, and later a 9-month treatment-window variant) — both approaches
+   * could show a misleading 0 on a dataset whose most recent case predates
+   * the window. This instead reuses monthOverMonth (below), which finds
+   * whichever month actually has the latest data, not literal wall-clock
+   * "this month" — so it can never go stale just because today's calendar
+   * date has moved past the data. */
 
   /* ── 3. Treatment Success Rate (TSR) ──
    * From GET /api/tb/treatment-success-rate — the cohort-based methodology
@@ -418,6 +435,7 @@ export default function DashboardPage() {
   const successRate = useMemo(() => ({
     rate: tsrData?.successRate != null ? tsrData.successRate.toFixed(1) : null,
     evaluated: tsrData?.cohortTotal ?? 0,
+    cohortYear: tsrData?.cohortYear ?? null,
   }), [tsrData]);
 
   /* ── 4. High-Risk Barangays ──
@@ -547,6 +565,18 @@ export default function DashboardPage() {
 
     return { current: currentCases, previous: previousCases, change, month: latestMonth };
   }, [monthlyData]);
+
+  /* ── Monitoring period label — the latest month actually covered by
+   * imported data, not a hardcoded placeholder. Used by the hero card's
+   * "Monitoring Period" field and footer. */
+  const monitoringPeriodLabel = useMemo(() => {
+    if (!monthOverMonth.month) return '';
+    try {
+      return new Date(monthOverMonth.month).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    } catch {
+      return '';
+    }
+  }, [monthOverMonth.month]);
 
   const sexData = useMemo(() => {
     const totals = { Male: 0, Female: 0 };
@@ -701,10 +731,19 @@ export default function DashboardPage() {
     return null;
   }, [pipelineStatus, lastUpdatedDate]);
 
-  /* ── Relative time since last update ── */
-  const lastUpdatedRelative = (() => {
+  /* ── Relative time since last update ──
+   * `now` is state updated on an interval (not Date.now() called directly
+   * during render, which is an impure render call) so the "X ago" label
+   * actually advances over time instead of freezing at first render. */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  const lastUpdatedRelative = useMemo(() => {
     if (!lastUpdated) return '';
-    const diffMs = Date.now() - lastUpdated.getTime();
+    const diffMs = now - lastUpdated.getTime();
     const diffMins = Math.floor(diffMs / 60000);
     if (diffMins < 1) return 'Just now';
     if (diffMins < 60) return `${diffMins}m ago`;
@@ -715,11 +754,11 @@ export default function DashboardPage() {
     if (diffDays < 30) return `${diffDays} days ago`;
     const diffMonths = Math.floor(diffDays / 30);
     return `${diffMonths}mo ago`;
-  })();
+  }, [lastUpdated, now]);
 
   /* ── Animated KPI numbers ── */
   const animatedTotalCases = useAnimatedNumber(totalCases.total);
-  const animatedActiveCases = useAnimatedNumber(activeCases);
+  const animatedNewCases = useAnimatedNumber(monthOverMonth.current);
   const animatedSuccessRate = useAnimatedNumber(Number(successRate.rate), 600, 1);
   const animatedFatalityRate = useAnimatedNumber(Number(caseFatalityRate.rate), 600, 1);
   const animatedHighRisk = useAnimatedNumber(highRiskCount ?? 0);
@@ -815,8 +854,20 @@ export default function DashboardPage() {
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedTotalCases.toLocaleString()}</p>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{totalCases.months} months recorded (all-time)</span>
+                <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
+              </div>
+
+              {/* New Cases (latest recorded month) */}
+              <div className="flex flex-col px-5 py-5 relative">
+                <div className="flex items-center gap-2">
+                  <i className="ri-calendar-check-line text-sm" style={{ color: '#B8956A' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>New Cases</span>
+                </div>
+                <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedNewCases.toLocaleString()}</p>
                 <div className="flex items-center gap-1.5 mt-1">
-                  <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>{totalCases.months} months recorded</span>
+                  <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>{monitoringPeriodLabel || 'No data yet'}</span>
                   {monthOverMonth.previous > 0 && (
                     <span className="inline-flex items-center gap-0.5 text-[10px] font-bold" style={{ color: monthOverMonth.change > 0 ? '#B07070' : monthOverMonth.change < 0 ? '#6B9E8A' : '#64748B' }}>
                       <i className={`ri-arrow-${monthOverMonth.change > 0 ? 'up' : monthOverMonth.change < 0 ? 'down' : 'right'}-s-fill`} />
@@ -824,18 +875,6 @@ export default function DashboardPage() {
                     </span>
                   )}
                 </div>
-                <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
-              </div>
-
-              {/* Active TB Cases */}
-              <div className="flex flex-col px-5 py-5 relative">
-                <div className="flex items-center gap-2">
-                  <i className="ri-time-line text-sm" style={{ color: '#B8956A' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Active TB Cases</span>
-                </div>
-                <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{animatedActiveCases.toLocaleString()}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Cases currently on treatment</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
@@ -847,7 +886,9 @@ export default function DashboardPage() {
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{successRate.rate == null ? 'N/A' : `${animatedSuccessRate}%`}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{successRate.evaluated.toLocaleString()} treatment-cohort patients</span>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                  {successRate.evaluated.toLocaleString()} patients{successRate.cohortYear ? ` (${successRate.cohortYear} cohort)` : ''}
+                </span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
@@ -871,7 +912,9 @@ export default function DashboardPage() {
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{highRiskCount == null ? 'N/A' : `${animatedHighRisk}/30`}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Barangays requiring attention</span>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                  Barangays requiring attention{riskYear ? ` (${riskYear} assessment)` : ''}
+                </span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
@@ -899,6 +942,8 @@ export default function DashboardPage() {
             insightLoading={dashboardInsightLoading}
             insightError={dashboardInsightError}
             onRetryInsight={handleGenerateDashboardInsight}
+            monitoringPeriod={monitoringPeriodLabel}
+            forecastSummary={forecastSummary}
           />
 
           {/* ─── 4. TB Cases Trend + 5. Barangay Risk Overview ─── */}

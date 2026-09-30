@@ -27,12 +27,15 @@ export default function DashboardWelcomeInsightsSection({
   insightLoading = false,
   insightError = null,
   onRetryInsight = () => { },
+  monitoringPeriod = '',
+  forecastSummary = null,
 }) {
   const [activeSlide, setActiveSlide] = useState(0);
 
-  // Format last updated timestamp with fallback to prompt's default
+  // Format last updated timestamp — 'Not yet available' until real pipeline/
+  // import data exists, never a hardcoded placeholder date.
   const formattedLastUpdated = useMemo(() => {
-    if (!lastUpdated) return 'September 3, 2026 at 4:05 AM';
+    if (!lastUpdated) return 'Not yet available';
     try {
       const dateStr = lastUpdated.toLocaleDateString('en-US', {
         month: 'long',
@@ -46,11 +49,25 @@ export default function DashboardWelcomeInsightsSection({
       });
       return `${dateStr} at ${timeStr}`;
     } catch {
-      return 'September 3, 2026 at 4:05 AM';
+      return 'Not yet available';
     }
   }, [lastUpdated]);
 
-  const displayRelative = lastUpdatedRelative || '5 days ago';
+  const displayRelative = lastUpdatedRelative || '';
+
+  const monitoringPeriodLabel = monitoringPeriod || 'N/A';
+
+  // Forecast outlook text — reflects the real forecastSummary (growth rate +
+  // period) computed in DashboardPage.jsx from live ARIMA predictions,
+  // instead of a fixed claim that cases are increasing regardless of reality.
+  const forecastOutlookText = useMemo(() => {
+    if (!forecastSummary?.period) {
+      return 'No forecast is available yet. Run the prediction pipeline to generate an outlook for the upcoming period.';
+    }
+    const rate = forecastSummary.growthRate;
+    const direction = rate > 5 ? 'increase' : rate < -5 ? 'decrease' : 'remain relatively stable';
+    return `TB cases are projected to ${direction} in ${forecastSummary.period}, based on the current ARIMA forecast. Continue monitoring case activity across high-risk barangays.`;
+  }, [forecastSummary]);
 
   // Define 3 insight slides
   const slides = useMemo(() => [
@@ -60,14 +77,13 @@ export default function DashboardWelcomeInsightsSection({
       title: 'ANALYTICS SUMMARY',
       text:
         insightData?.sections?.find((s) => s.id === 'overallSummary' || s.id === 'keyTrend')?.text ||
-        'TB activity is increasing during the current monitoring period, with several barangays showing elevated risk.',
+        'No analytics interpretation available yet for the current monitoring period.',
     },
     {
       id: 'forecast',
       icon: <ChartLineIcon />,
       title: 'FORECAST OUTLOOK',
-      text:
-        'TB cases are projected to increase over the next three months, indicating the need for continued monitoring of future case activity.',
+      text: forecastOutlookText,
     },
     {
       id: 'overall',
@@ -75,9 +91,9 @@ export default function DashboardWelcomeInsightsSection({
       title: 'OVERALL TB SITUATION',
       text:
         insightData?.summary ||
-        'TB activity is increasing, with several barangays requiring closer monitoring. Forecasted cases are also expected to rise, while treatment performance remains an important area for continued attention.',
+        'No AI-generated interpretation available yet. Review the metrics and charts below for the latest TB monitoring data.',
     },
-  ], [insightData]);
+  ], [insightData, forecastOutlookText]);
 
   const currentSlide = slides[activeSlide] || slides[0];
 
@@ -133,12 +149,13 @@ export default function DashboardWelcomeInsightsSection({
           </div>
 
           <p className="text-xs sm:text-[13px] leading-relaxed" style={{ color: '#E2E8F0' }}>
-            Recent TB activity indicates an increasing trend, highlighting the need to monitor areas with elevated risk and review projected case activity for the coming months.
+            {insightData?.summary ||
+              'Review today’s TB case activity, risk classifications, and forecasts below for the latest monitoring update.'}
           </p>
 
           <div className="mt-2.5 flex items-center gap-1.5 text-[10px]" style={{ color: '#94A3B8' }}>
             <i className="ri-sparkling-line text-[11px]" style={{ color: '#38BDF8' }} />
-            <span>Generated from current TB monitoring results</span>
+            <span>{insightData?.summary ? 'Generated from current TB monitoring results' : 'Awaiting AI-generated interpretation'}</span>
           </div>
         </div>
 
@@ -170,7 +187,7 @@ export default function DashboardWelcomeInsightsSection({
                 MONITORING PERIOD
               </span>
               <p className="text-xs sm:text-[13px] font-semibold mt-1" style={{ color: '#FFFFFF' }}>
-                August 2026
+                {monitoringPeriodLabel}
               </p>
             </div>
 
@@ -183,34 +200,38 @@ export default function DashboardWelcomeInsightsSection({
                 LAST UPDATED
               </span>
               <p className="text-xs sm:text-[13px] font-semibold mt-1" style={{ color: '#FFFFFF' }}>
-                September 3, 2026 at 4:05 AM
+                {formattedLastUpdated}
               </p>
-              <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
-                5 days ago
-              </span>
+              {displayRelative && (
+                <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+                  {displayRelative}
+                </span>
+              )}
             </div>
           </div>
 
-          {/* Refresh Action (Visual only) */}
+          {/* Refresh Action */}
           <button
             type="button"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition shrink-0 self-start sm:self-end"
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition shrink-0 self-start sm:self-end disabled:opacity-60 disabled:cursor-not-allowed"
             style={{
               background: 'rgba(255, 255, 255, 0.08)',
               color: '#FFFFFF',
               border: '1px solid rgba(255, 255, 255, 0.22)',
-              cursor: 'pointer',
+              cursor: refreshing ? 'not-allowed' : 'pointer',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.16)';
+              if (!refreshing) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.16)';
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
             }}
             title="Refresh dashboard data"
           >
-            <i className="ri-refresh-line text-sm" />
-            Refresh Data
+            <i className={`ri-refresh-line text-sm ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Refreshing...' : 'Refresh Data'}
           </button>
         </div>
       </div>
@@ -357,7 +378,7 @@ export default function DashboardWelcomeInsightsSection({
           className="pt-2 flex flex-col gap-0.5 text-[10px]"
           style={{ borderTop: '1px solid #F1F5F9', color: '#94A3B8' }}
         >
-          <span>Based on: August 2026 • Pasig City</span>
+          <span>Based on: {monitoringPeriodLabel} • Pasig City</span>
           <span>Generated from calculated TBInsight model results</span>
         </div>
       </div>
