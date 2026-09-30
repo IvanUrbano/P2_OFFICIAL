@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const pool = require('../db');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { loginLimiter } = require('../middleware/rateLimiter');
@@ -148,9 +149,10 @@ const result = await pool.query(
     await resetFailedAttempts(username);
     await logLoginAttempt(username, ipAddress, true);
 
-    // Generate JWT
+    // Generate JWT — includes a per-login CSRF nonce (see middleware/auth.js)
+    const csrfToken = crypto.randomBytes(32).toString('hex');
     const token = jwt.sign(
-      { id: user.id, username: user.username, email: user.email, role: user.role },
+      { id: user.id, username: user.username, email: user.email, role: user.role, csrf: csrfToken },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN }
     );
@@ -188,6 +190,7 @@ const result = await pool.query(
         facility_id: user.facility_id || null,
         facility,
       },
+      csrfToken,
       passwordRecentlyChanged: recentlyChanged,
     });
   } catch (err) {

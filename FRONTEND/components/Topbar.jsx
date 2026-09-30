@@ -91,6 +91,7 @@ export default function Topbar({ user }) {
     } catch { /* ignore */ }
     localStorage.removeItem('user');
     localStorage.removeItem('tbinsight_session');
+    sessionStorage.removeItem('csrf_token');
     navigate('/login');
   };
 

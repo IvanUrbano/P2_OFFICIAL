@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const fileUpload = require('express-fileupload');
+const helmet = require('helmet');
 require('dotenv').config();
 
 // Validate required environment variables
@@ -28,6 +29,11 @@ const PORT = process.env.PORT || 5000;
 
 // Trust first proxy (required for rate limiting behind Render's reverse proxy)
 app.set('trust proxy', 1);
+
+// Security headers (HSTS, X-Content-Type-Options, X-Frame-Options, etc.)
+// This is a JSON API with no HTML views, so the default CSP is left as-is —
+// it only affects browser-rendered documents, not fetch/XHR JSON responses.
+app.use(helmet());
 
 // ==================== MIDDLEWARE ====================
 const allowedOrigins = [

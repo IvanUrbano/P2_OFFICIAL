@@ -858,11 +858,17 @@ router.get('/dashboard/outcomes', async (req, res) => {
     if (month) { conditions.push(`EXTRACT(MONTH FROM date_of_diagnosis) = $${idx}`); params.push(Number(month)); idx++; }
     if (barangay) { conditions.push(`TRIM(barangay_name) = $${idx}`); params.push(barangay); idx++; }
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+    // Normalize case/whitespace before grouping — matches the UPPER(TRIM(...))
+    // pattern used elsewhere (treatmentSuccessRate.js, treatmentCascade.js).
+    // Without this, a stray casing difference (e.g. "Cured" vs "CURED") would
+    // silently split one real outcome into two separate rows/pie slices.
     const result = await pool.query(`
-      SELECT barangay_name, COALESCE(outcome_status, 'Unknown') AS outcome_status, COUNT(*)::INTEGER as total
+      SELECT barangay_name,
+             COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status,
+             COUNT(*)::INTEGER as total
       FROM tb_cases
       ${where}
-      GROUP BY barangay_name, outcome_status
+      GROUP BY barangay_name, COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
       ORDER BY barangay_name, total DESC
     `, params);
     res.json({ outcomes: result.rows });
