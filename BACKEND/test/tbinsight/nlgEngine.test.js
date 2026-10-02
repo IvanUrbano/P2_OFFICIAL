@@ -504,7 +504,7 @@ describe('generateGisInsight', () => {
     const text = sectionId(result, 'casesVsRiskPatterns').text;
     assert.ok(text.includes('**2**'));
     assert.ok(text.includes('**1**'));
-    assert.ok(text.includes('population-adjusted incidence, trend, neighboring barangay risk, and forecast error'));
+    assert.ok(text.includes('population-adjusted incidence, trend, recent monthly cases and the risk in bordering barangays'));
     assert.ok(text.includes('Oranbo'));
   });
 

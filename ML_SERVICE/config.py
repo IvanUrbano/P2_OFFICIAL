@@ -68,7 +68,7 @@ TERTILE_THRESHOLDS = {
 
 # ==================== FEATURE CONFIG ====================
 
-# RF features (8 features — replaced duplicate population_density with lag features).
+# RF features (7 features).
 # NOTE: rf_classifier.py:FEATURES is the list actually used by the classifier
 # (_vec); these two names are kept in sync manually and must not drift.
 FEATURE_NAMES = [
@@ -78,8 +78,7 @@ FEATURE_NAMES = [
     "lag_1m",                # Case count 1 month ago (momentum)
     "lag_2m",                # Case count 2 months ago (momentum)
     "lag_3m",                # Case count 3 months ago (momentum)
-    "neighbor_risk",         # Average incidence of neighboring barangays, normalized [0,1]
-    "historical_bias",       # AVG(|actual - forecasted|) from past predictions (Approach B feedback)
+    "neighbor_risk",         # Mean incidence of barangays sharing a border (month t-1), normalized [0,1]
 ]
 
 # Feature scaling ranges (for normalization if needed)
@@ -91,7 +90,6 @@ FEATURE_RANGES = {
     "lag_2m": (0, 50),
     "lag_3m": (0, 50),
     "neighbor_risk": (0, 1),
-    "historical_bias": (-50, 50),
 }
 
 # ==================== RISK CLASSES ====================

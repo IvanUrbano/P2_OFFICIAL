@@ -35,11 +35,10 @@ const RF_FEATURE_LABELS = {
   lag_1m: '1-Month Lag Cases',
   lag_2m: '2-Month Lag Cases',
   lag_3m: '3-Month Lag Cases',
-  neighbor_risk: 'Neighbor Risk Indicator',
-  historical_bias: 'Historical Forecast Error',
+  neighbor_risk: 'Bordering Barangays Risk',
 };
 const RF_FEATURE_ORDER = [
-  'rolling_12m_incidence', 'recent_trend', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk', 'seasonality_flag', 'historical_bias',
+  'rolling_12m_incidence', 'recent_trend', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk', 'seasonality_flag',
 ];
 function formatRfFeatureValue(key, value) {
   if (value == null) return 'N/A';
@@ -48,7 +47,6 @@ function formatRfFeatureValue(key, value) {
     case 'recent_trend': return `${value > 0 ? '+' : ''}${Number(value).toFixed(2)} cases/mo`;
     case 'seasonality_flag': return value ? 'Detected' : 'Not detected';
     case 'neighbor_risk': return `${Math.round(Number(value) * 100)}%`;
-    case 'historical_bias': return Number(value).toFixed(1);
     default: return String(Math.round(Number(value)));
   }
 }

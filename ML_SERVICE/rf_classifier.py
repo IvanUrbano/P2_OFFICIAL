@@ -4,7 +4,8 @@ TBInsight ML Service — Random Forest Classifier
 Predicts Low/Medium/High risk classes from historical/current case-data
 features only. Independent of ARIMA: no feature here is derived from a
 forecast, so RF classification does not require ARIMA to run or succeed.
-Uses 8 features including lag features and historical_bias from Approach B feedback loop.
+Uses 7 features: rolling incidence, trend, seasonality, three monthly lags and
+the incidence of the barangays that share a border (neighbor_risk).
 
 Design spec:
   - Labels derived from incidence tertiles, auto-calibrated per run from the
@@ -41,7 +42,9 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# Fixed feature order (8 features — lag features replace duplicate population_density).
+# Fixed feature order (7 features). historical_bias (past ARIMA error) was removed:
+# it measured the forecaster rather than TB risk, contributed nothing in
+# walk-forward evaluation, and tied the classifier to ARIMA output.
 # Training and prediction rows MUST supply this exact key set, in any order
 # (values are read by name via _vec below), but changing a name here without
 # updating every caller (BACKEND/tbinsight/pipeline.js:buildFeatureRow) would
@@ -58,8 +61,7 @@ FEATURES = [
     "lag_1m",
     "lag_2m",
     "lag_3m",
-    "neighbor_risk",
-    "historical_bias",
+    "neighbor_risk",  # mean incidence of the barangays sharing a border, month t-1
 ]
 
 _BANDS = ["Low", "Medium", "High"]
@@ -314,6 +316,7 @@ def walk_forward_rf(
     steps = []
     all_actuals = []
     all_predicted = []
+    all_baseline = []
 
     # Reorder rows from barangay-first to time-first grouping
     # _buildTrainingRows produces: [B1-M1, B1-M2, ..., B1-M36, B2-M1, B2-M2, ...]
@@ -379,6 +382,19 @@ def walk_forward_rf(
         clf.fit(X_train, y_train)
         y_test_pred = clf.predict(X_test)
 
+        # Reference classifier on the same month: the simple rule, labelling
+        # the barangays by their last-12-month incidence with the same
+        # labelling scheme as the target (thirds within the month).
+        y_test_base = derive_labels(
+            [
+                {**r, "incidence": float(r["features"].get("rolling_12m_incidence", 0))}
+                for r in test_data
+            ],
+            low_max,
+            med_max,
+        )
+        all_baseline.extend(y_test_base)
+
         # Record step results
         correct = sum(1 for a, p in zip(y_test_actual, y_test_pred) if a == p)
         steps.append({
@@ -423,6 +439,10 @@ def walk_forward_rf(
             for i, cls in enumerate(all_classes)
         },
         "n_steps": len(steps),
+        "baseline_accuracy": round(float(accuracy_score(all_actuals, all_baseline)), 4),
+        "baseline_f1_macro": round(float(
+            f1_score(all_actuals, all_baseline, average="macro", zero_division=0)
+        ), 4),
     }
 
     logger.info(

@@ -131,6 +131,14 @@ function SectionSkeleton({ rows = 3 }) {
   );
 }
 
+/** 'YYYY-MM' from a date value using local date parts; null if unparseable. */
+function localMonthKey(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 /* ─── Model Evaluation results (walk-forward metrics from the ML service) ─── */
 
 function EvalMetric({ label, value }) {
@@ -140,6 +148,24 @@ function EvalMetric({ label, value }) {
       <div className="text-sm font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{value}</div>
     </div>
   );
+}
+
+/* Plain-language comparison of a model score against its simple reference,
+   so the evaluation can be read as "better / about the same / worse". */
+function BaselineNote({ children }) {
+  return (
+    <p className="text-[11px] mt-2.5 pt-2.5 leading-relaxed" style={{ color: '#475569', borderTop: '1px solid #E2E8F0' }}>
+      {children}
+    </p>
+  );
+}
+
+function compareLabel(model, reference, lowerIsBetter) {
+  if (model == null || reference == null || reference === 0) return null;
+  const rel = (model - reference) / reference;
+  if (Math.abs(rel) < 0.03) return 'about the same as';
+  const better = lowerIsBetter ? rel < 0 : rel > 0;
+  return better ? 'better than' : 'worse than';
 }
 
 function EvaluationResults({ evaluation }) {
@@ -186,6 +212,13 @@ function EvaluationResults({ evaluation }) {
             {arimaSteps} real ARIMA fit{arimaSteps === 1 ? '' : 's'} across barangays · one-step-ahead walk-forward.
           </p>
         )}
+        {arima.baseline_mae != null && arima.mae != null && (
+          <BaselineNote>
+            Reference — plain 12-month average on the same steps: MAE {fmt(arima.baseline_mae)}
+            {arima.baseline_mape != null ? ` · MAPE ${arima.baseline_mape}%` : ''}.
+            {' '}ARIMA is <strong>{compareLabel(arima.mae, arima.baseline_mae, true)}</strong> this reference.
+          </BaselineNote>
+        )}
         {Array.isArray(arima.failed_barangays) && arima.failed_barangays.length > 0 && (
           <div className="mt-2.5 pt-2.5" style={{ borderTop: '1px solid #FECACA' }}>
             <p className="text-[11px] font-bold" style={{ color: '#B91C1C' }}>
@@ -221,6 +254,13 @@ function EvaluationResults({ evaluation }) {
             </div>
           ))}
         </div>
+        {rf.baseline_accuracy != null && rf.accuracy != null && (
+          <BaselineNote>
+            Reference — rank the last 12 months' incidence into thirds: accuracy {pct(rf.baseline_accuracy)}
+            {rf.baseline_f1_macro != null ? ` · F1 ${pct(rf.baseline_f1_macro)}` : ''}. Chance is 33.3%.
+            {' '}Random Forest is <strong>{compareLabel(rf.accuracy, rf.baseline_accuracy, false)}</strong> this reference.
+          </BaselineNote>
+        )}
         {rf.confusion_matrix && (
           <div className="mt-3">
             <p className="text-[10px] font-bold mb-1" style={{ color: '#64748B' }}>Confusion matrix (rows = actual)</p>
@@ -575,10 +615,27 @@ export default function Forecasting() {
     [aggregatedMonthly]
   );
 
+  /** Latest month with actual case data (YYYY-MM), across all barangays.
+   * Keys use local date parts, like the rest of this page: DATE columns
+   * arrive as ISO timestamps shifted to UTC (Oct 1 → "…09-30T16:00Z"). */
+  const latestActualMonth = useMemo(() => {
+    let latest = null;
+    monthlyData.forEach((r) => {
+      const key = localMonthKey(r.month);
+      if (key && (!latest || key > latest)) latest = key;
+    });
+    return latest;
+  }, [monthlyData]);
+
   /** Filter forecasts by barangay and aggregate by period */
   const filteredForecasts = useMemo(() => {
     if (!appliedBarangay && !appliedMonths) return [];
-    let data = forecastsData;
+    // Only periods AFTER the latest actual month are forecasts to show.
+    // Older rows are past runs' targets (kept for forecast-error tracking)
+    // and were being sliced in ahead of the real forecast, out of order.
+    let data = latestActualMonth
+      ? forecastsData.filter((r) => (localMonthKey(r.period || r.forecast_period) || '') > latestActualMonth)
+      : forecastsData;
     if (appliedBarangay) {
       data = data.filter((r) => (r.barangay_name || '') === appliedBarangay);
     }
@@ -637,7 +694,7 @@ export default function Forecasting() {
     // Limit to horizon
     if (appliedMonths) result = result.slice(0, appliedMonths);
     return result;
-  }, [forecastsData, appliedBarangay, appliedMonths]);
+  }, [forecastsData, appliedBarangay, appliedMonths, latestActualMonth]);
 
   // Resolves the transient 'checking' state (set right after a successful
   // fetch) into 'success' or 'no_data' once historicalCases/filteredForecasts

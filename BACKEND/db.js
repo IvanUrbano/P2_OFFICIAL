@@ -229,6 +229,17 @@ const initDb = async () => {
       console.error('❌ Case identity migration failed (continuing with remaining migrations):', caseIdentityErr.message);
     }
 
+    // 2026 barangay population projection (never overwrites an entered figure)
+    try {
+      const pop2026MigPath = path.join(__dirname, 'db', 'migrations', '022_population_2026_projection.sql');
+      if (fs.existsSync(pop2026MigPath)) {
+        await execSql(fs.readFileSync(pop2026MigPath, 'utf8'));
+        console.log('✅ 2026 population projection migration completed successfully.');
+      }
+    } catch (pop2026Err) {
+      console.error('❌ 2026 population projection migration failed (continuing with remaining migrations):', pop2026Err.message);
+    }
+
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,
     // undoing two earlier over-broad attempts, and keep only the Kapasigan Extension ->
     // Bagong Katipunan rename/population fix (idempotent)

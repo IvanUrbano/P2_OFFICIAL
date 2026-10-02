@@ -94,8 +94,9 @@ describe('buildTrainingRows', () => {
 
   it('yields rows from 12 months of history (window shrinks to 6)', () => {
     const rows = build({ A: twelve(10), B: twelve(5) }, { A: 100000, B: 100000 });
-    // 12 months, window 6 -> 6 target months x 2 barangays
-    assert.strictEqual(rows.length, 12);
+    // 12 months, window 6 -> 6 target months, minus the last 2 that lack a full
+    // 3-month forward label window (LABEL_HORIZON_MONTHS) -> 4 x 2 barangays
+    assert.strictEqual(rows.length, 8);
   });
 
   it('returns no rows when history is too short', () => {
@@ -381,5 +382,46 @@ describe('classifyByTertile', () => {
 
   it('handles empty input', () => {
     assert.deepStrictEqual(classifyByTertile([]), { classes: [], low_max: null, med_max: null });
+  });
+});
+
+describe('neighbor_risk with real (bordering) neighbours', () => {
+  const popMapByYear = _uniformPopMapByYear({
+    A: { population: 100000, available: true },
+    B: { population: 100000, available: true },
+    C: { population: 100000, available: true },
+  });
+  const mk = (name, counts) => counts.map((c, i) => ({
+    barangay_name: name, month: `2025-${String(i + 1).padStart(2, '0')}-01`, case_count: c,
+  }));
+
+  it('ignores a barangay that does not share a border', () => {
+    // A borders B only; C is far away. A surge in C must not move A's neighbor_risk.
+    const adjacency = { A: ['B'], B: ['A', 'C'], C: ['B'] };
+    const base = { A: mk('A', [5, 5, 5]), B: mk('B', [5, 5, 5]), C: mk('C', [5, 5, 5]) };
+    const surge = { ...base, C: mk('C', [5, 90, 5]) };
+    const before = _neighborRisksAt(base, popMapByYear, 1, adjacency);
+    const after = _neighborRisksAt(surge, popMapByYear, 1, adjacency);
+    // B borders C, so B's raw neighbour average rises; A's raw average (B only) is unchanged.
+    assert.strictEqual(after.B, 1);
+    assert.ok(after.A <= before.A + 1e-12);
+  });
+
+  it('falls back to all other barangays without an adjacency map', () => {
+    const series = { A: mk('A', [5, 5]), B: mk('B', [5, 5]), C: mk('C', [5, 90]) };
+    const risks = _neighborRisksAt(series, popMapByYear, 1, null);
+    // C's own surge is excluded from C's average, so C has the lowest neighbour risk.
+    assert.strictEqual(risks.C, 0);
+  });
+
+  it('feature rows no longer carry historical_bias', () => {
+    const series = { A: mk('A', [1, 2, 3, 4, 5, 6, 7, 8]), B: mk('B', [8, 7, 6, 5, 4, 3, 2, 1]) };
+    const rows = buildTrainingRows(series, popMapByYear, null);
+    assert.ok(rows.length > 0);
+    for (const r of rows) {
+      assert.deepStrictEqual(Object.keys(r.features).sort(), [
+        'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk', 'recent_trend', 'rolling_12m_incidence', 'seasonality_flag',
+      ]);
+    }
   });
 });

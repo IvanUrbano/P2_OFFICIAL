@@ -309,7 +309,43 @@ def test_evaluate_walk_forward():
     assert data["rf"]["n_steps"] > 0
     assert data["arima"]["mae"] is not None
     assert data["rf"]["accuracy"] is not None
+    # Reference scores are reported next to the model scores
+    assert data["arima"]["baseline_mae"] is not None
+    assert data["rf"]["baseline_accuracy"] is not None
     print(f"  PASS: test_evaluate_walk_forward (ARIMA MAE={data['arima']['mae']:.2f}, RF acc={data['rf']['accuracy']:.2f})")
+
+
+def test_classify_uses_month_for_balanced_labels():
+    """Rows carrying `month` must be labelled by rank within their month.
+
+    With absolute cut points every row here would be High (all incidences are
+    far above med_max); ranking within each month yields thirds instead, so a
+    forest trained on them can predict Low for the lowest-incidence barangay.
+    """
+    import rf_classifier
+
+    train = []
+    # 24 months x 3 barangays = 72 rows, above RF_MIN_TRAIN_ROWS so the RF trains
+    for m in range(24):
+        month = f"{2024 + m // 12}-{m % 12 + 1:02d}-01"
+        for b, inc in enumerate([1000.0, 2000.0, 3000.0]):
+            train.append({
+                "features": {"rolling_12m_incidence": inc, "recent_trend": 0, "seasonality_flag": 0,
+                             "lag_1m": b, "lag_2m": b, "lag_3m": b, "neighbor_risk": 0.5},
+                "incidence": inc,
+                "month": month,
+            })
+    labels = rf_classifier.derive_labels(train, 150.0, 350.0)
+    assert set(labels) == {"Low", "Medium", "High"}
+
+    r = client.post("/api/ml/classify", json={
+        "thresholds": {"low_max": 150.0, "med_max": 350.0},
+        "train": train,
+        "predict": [{"barangay_name": "Lowest", "features": train[0]["features"]}],
+    })
+    assert r.status_code == 200
+    assert r.json()["method"] == "random_forest"
+    assert r.json()["predictions"][0]["risk_class"] == "Low"
 
 
 # ==================== 404 ====================

@@ -1894,7 +1894,7 @@ router.post('/alerts/evaluate', authenticateToken, authorizeRoles('admin'), asyn
 
 /**
  * PUT /api/tb/predictions/backfill
- * Backfill actual_case counts for a past period to activate the historical_bias feedback loop.
+ * Backfill actual_case counts for a past period (feeds the risk index's forecast-error component).
  *
  * Body: { period: "YYYY-MM-DD", actual_counts: { "Barangay A": 45, "Barangay B": 32, ... } }
  *
@@ -2114,8 +2114,8 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
 
     // Build training rows with the SAME feature pipeline the classifier uses
     // at prediction time (pipeline.buildTrainingRows): 12-month window mean,
-    // window slope, seasonality from pre-target data only, lag-1 neighbor
-    // cross-section normalized identically, per-barangay historical bias.
+    // window slope, seasonality from pre-target data only, lag-1 cross-section
+    // of bordering barangays normalized identically.
     // Replaces an inline builder that diverged from the train/predict code
     // (un-normalized neighbor scale, target-month seasonality, bias fixed at 0).
     const { _buildTrainingRows, buildDenseSeries } = require('./pipeline');

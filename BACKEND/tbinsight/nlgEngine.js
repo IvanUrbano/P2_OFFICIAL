@@ -542,7 +542,7 @@ function buildGisCasesVsRiskPatterns(m) {
   let text = `**${highLow}** barangay(s) show **High** risk despite below-median case counts, while **${caseLow}** barangay(s) report top-quarter case counts without a **High** classification.`;
   const incidenceAvailable = m.incidence && m.incidence.available === true;
   if (incidenceAvailable) {
-    text += ' This reflects that risk classification incorporates population-adjusted incidence, trend, neighboring barangay risk, and forecast error — not raw case volume alone.';
+    text += ' This reflects that risk classification incorporates population-adjusted incidence, trend, recent monthly cases and the risk in bordering barangays — not raw case volume alone.';
   } else {
     text += ' This indicates that risk classification draws on indicators beyond raw case volume.';
   }

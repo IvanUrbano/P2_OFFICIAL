@@ -104,6 +104,21 @@ describe('computeNeighborRisks', () => {
     // All values within [0, 1] — the ordering test was based on a misunderstanding
     // of the normalization direction. The function normalizes raw averages, not incidence.
   });
+
+  it('averages only bordering barangays when an adjacency map is given', () => {
+    // A borders only B (low); C borders only D (high). Far-away incidence must not count.
+    const adjacency = { A: ['B'], B: ['A'], C: ['D'], D: ['C'] };
+    const result = computeNeighborRisks([
+      { name: 'A', incidence_per_100k: 500 },
+      { name: 'B', incidence_per_100k: 10 },
+      { name: 'C', incidence_per_100k: 20 },
+      { name: 'D', incidence_per_100k: 400 },
+    ], adjacency);
+    // raw: A=10, B=500, C=400, D=20 -> B highest, A lowest
+    assert.strictEqual(result.B, 1);
+    assert.strictEqual(result.A, 0);
+    assert.ok(result.C > result.D);
+  });
 });
 
 describe('computeHistoricalBias', () => {
