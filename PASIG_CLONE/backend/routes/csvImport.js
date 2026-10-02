@@ -6,6 +6,7 @@ const { calculateFileHash } = require('../utils/fileHash');
 const { logAuditEvent } = require('../utils/auditLogger');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
+const { getCaseListScope } = require('../policies/caseAccessPolicy');
 
 // Large-file parsing is expensive — cap how often it can be triggered per IP.
 const importLimiter = rateLimit({
@@ -315,13 +316,159 @@ router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req,
 // ==================== RECORDS (TB Records page) ====================
 router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
-    const result = await db.pool.query(
-      'SELECT * FROM validated_tb_cases WHERE is_archived = false ORDER BY id DESC LIMIT 500'
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 50), 200);
+    const offset = (page - 1) * limit;
+
+    // Get facility-scoped WHERE clause
+    const scope = getCaseListScope(req.user);
+
+    // Build WHERE clause with optional filters
+    let where = `is_archived = false AND ${scope.where}`;
+    const params = [...scope.params];
+    let paramIdx = params.length + 1;
+
+    if (req.query.barangay) {
+      where += ` AND barangay_name = $${paramIdx++}`;
+      params.push(req.query.barangay);
+    }
+    if (req.query.source_type) {
+      where += ` AND source_type = $${paramIdx++}`;
+      params.push(req.query.source_type);
+    }
+    if (req.query.search) {
+      where += ` AND (barangay_name ILIKE $${paramIdx} OR city ILIKE $${paramIdx} OR screening_facility ILIKE $${paramIdx} OR treatment_facility ILIKE $${paramIdx} OR itis_case_id ILIKE $${paramIdx})`;
+      params.push(`%${req.query.search}%`);
+      paramIdx++;
+    }
+
+    // Count query
+    const countResult = await db.pool.query(
+      `SELECT COUNT(*)::int AS total FROM validated_tb_cases WHERE ${where}`,
+      params
     );
-    res.json({ records: result.rows });
+
+    // Data query
+    const dataResult = await db.pool.query(
+      `SELECT * FROM validated_tb_cases WHERE ${where} ORDER BY id DESC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`,
+      [...params, limit, offset]
+    );
+
+    res.json({
+      records: dataResult.rows,
+      pagination: {
+        page,
+        limit,
+        total: countResult.rows[0].total,
+        totalPages: Math.ceil(countResult.rows[0].total / limit),
+      },
+    });
   } catch (error) {
     console.error('Error fetching records:', error);
     res.status(500).json({ error: 'Failed to fetch records' });
+  }
+});
+
+// ==================== RECORD DETAIL ====================
+router.get('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { canViewCase, isReadOnlyForUser } = require('../policies/caseAccessPolicy');
+
+    const result = await db.pool.query(
+      'SELECT * FROM validated_tb_cases WHERE id = $1',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Record not found.' });
+    }
+
+    const record = result.rows[0];
+
+    if (!canViewCase(req.user, record)) {
+      return res.status(403).json({ error: 'Access denied. This record is outside your facility scope.' });
+    }
+
+    const readOnly = isReadOnlyForUser(req.user, record);
+
+    // Fetch transfer history for this case
+    const transfers = await db.pool.query(
+      `SELECT ct.*, 
+              hf1.name AS from_facility_name,
+              hf2.name AS to_facility_name,
+              u1.username AS initiated_by_username,
+              u2.username AS accepted_by_username
+       FROM case_transfers ct
+       LEFT JOIN health_facilities hf1 ON ct.from_facility_id = hf1.id
+       LEFT JOIN health_facilities hf2 ON ct.to_facility_id = hf2.id
+       LEFT JOIN users u1 ON ct.initiated_by_user_id = u1.id
+       LEFT JOIN users u2 ON ct.accepted_by_user_id = u2.id
+       WHERE ct.validated_case_id = $1
+       ORDER BY ct.created_at DESC`,
+      [id]
+    );
+
+    res.json({
+      record,
+      isReadOnly: readOnly,
+      transfers: transfers.rows,
+    });
+  } catch (error) {
+    console.error('Error fetching record detail:', error);
+    res.status(500).json({ error: 'Failed to fetch record detail' });
+  }
+});
+
+// ==================== LIMITED CASE LOOKUP ====================
+router.post('/records/lookup', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  try {
+    const { itis_case_id } = req.body;
+
+    if (!itis_case_id) {
+      return res.status(400).json({ error: 'ITIS Case ID is required for lookup.' });
+    }
+
+    // Search by stable identifier only — NOT demographics
+    const result = await db.pool.query(
+      `SELECT id, barangay_name, current_responsible_facility_id,
+              screening_facility, treatment_facility, source_type, date_of_diagnosis
+       FROM validated_tb_cases
+       WHERE itis_case_id = $1 AND is_archived = false
+       LIMIT 5`,
+      [itis_case_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ exists: false });
+    }
+
+    const record = result.rows[0];
+    const isInScope = req.user.role === 'admin' ||
+      record.current_responsible_facility_id === req.user.facility_id ||
+      record.current_responsible_facility_id === null;
+
+    if (isInScope) {
+      return res.json({
+        exists: true,
+        case_id: record.id,
+        access_status: 'CURRENT_SCOPE',
+        record,
+      });
+    }
+
+    // Outside scope — return minimal info only
+    return res.json({
+      exists: true,
+      case_id: record.id,
+      access_status: 'OUTSIDE_CURRENT_SCOPE',
+      current_facility_id: record.current_responsible_facility_id,
+      barangay: record.barangay_name,
+      source_type: record.source_type,
+    });
+  } catch (error) {
+    console.error('Error in case lookup:', error);
+    res.status(500).json({ error: 'Failed to lookup case' });
   }
 });
 

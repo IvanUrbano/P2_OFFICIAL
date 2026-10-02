@@ -24,6 +24,7 @@ const validationRoutes = require('./routes/validation');
 const manualEntryRoutes = require('./routes/manualEntry');
 const webhookRoutes = require('./routes/webhook');
 const facilitiesRoutes = require('./routes/facilities');
+const transfersRoutes = require('./routes/transfers');
  
 const app = express();
  
@@ -54,6 +55,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/data', csvImportRoutes);
 app.use('/api/data', validationRoutes);
 app.use('/api/data', manualEntryRoutes);
+app.use('/api/data/transfers', transfersRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/facilities', facilitiesRoutes);
  

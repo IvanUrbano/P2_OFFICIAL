@@ -50,7 +50,7 @@ function ProtectedRoute() {
 
 function App() {
   return (
-    <Router>
+    <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <ErrorBoundary>
         <Routes>
         <Route path="/" element={<LandingPage />} />

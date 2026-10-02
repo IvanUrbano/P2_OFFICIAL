@@ -215,6 +215,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
             record.microscopy_result, record.microscopy_release_date,
             record.rdt_result, record.rdt_release_date, record.outcome_reason,
             dstbFingerprint,
+            record.current_responsible_facility_id ?? null,
           ]);
           // NOT incremented here — this only means "passed validation".
           // The real insert count (importedCount, set below) reflects what
@@ -227,7 +228,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       }
     }
 
-    const COLS = 31;
+    const COLS = 32;
     const chunkSize = 100;
     let insertedCount = 0;
     const insertedDstbFingerprints = new Set();
@@ -254,7 +255,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
           referred_to_dots, referral_status,
           microscopy_result, microscopy_release_date,
           rdt_result, rdt_release_date, outcome_reason,
-          dstb_fingerprint
+          dstb_fingerprint, current_responsible_facility_id
         ) VALUES ${placeholders}
         RETURNING id, dstb_fingerprint, itis_case_id, source_type`,
         flatParams
@@ -342,8 +343,8 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
     // Log webhook — handle duplicate-key violation gracefully
     try {
       await pool.query(
-        `INSERT INTO webhook_logs (source, batch_id, payload, status, records_received, records_imported)
-         VALUES ($1, $2, $3, 'processed', $4, $5)`,
+        `INSERT INTO webhook_logs (source, batch_id, payload, status, records_received, records_imported, processed_at)
+         VALUES ($1, $2, $3, 'processed', $4, $5, NOW())`,
         [source, batch_id, JSON.stringify(req.body), totalRecords, importedCount]
       );
       console.log(`✅ Webhook logged: batch ${batch_id}, ${importedCount} records imported`);

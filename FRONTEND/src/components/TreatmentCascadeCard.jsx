@@ -26,7 +26,7 @@ const RATE_TILES = [
 const fmtCount = (n) => (n == null ? 'N/A' : Number(n).toLocaleString());
 const fmtPct = (v) => (v == null ? 'N/A' : `${v}%`);
 
-function TreatmentCascadeCard({ data, loading = false, description }) {
+function TreatmentCascadeCard({ data, loading = false, failed = false, description }) {
   const cascade = data?.cascade || null;
   const rates = data?.rates || null;
   const breakdown = data?.breakdown || null;
@@ -63,14 +63,21 @@ function TreatmentCascadeCard({ data, loading = false, description }) {
         </div>
       )}
 
-      {!loading && !cascade && (
+      {!loading && failed && (
+        <div className="flex flex-col items-center justify-center py-12 gap-2">
+          <i className="ri-cloud-off-line text-xl" style={{ color: '#B07070' }} />
+          <p className="text-xs" style={{ color: '#B07070' }}>Treatment cascade could not be loaded.</p>
+        </div>
+      )}
+
+      {!loading && !failed && !cascade && (
         <div className="flex flex-col items-center justify-center py-12 gap-2">
           <i className="ri-flow-chart text-xl" style={{ color: '#CBD5E1' }} />
           <p className="text-xs" style={{ color: '#94A3B8' }}>No cascade data available.</p>
         </div>
       )}
 
-      {!loading && cascade && (
+      {!loading && !failed && cascade && (
         <div className="px-5 pb-5">
           {/* Funnel stages */}
           <div className="space-y-3 pt-1">

@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
+import {
+  APPROVED_OUTCOMES, normalizeRecordOutcome, isApprovedOutcome,
+} from '../utils/outcomeStatus';
 import API from "../api/axios";
 
 /* --- Debounce hook --- */
@@ -26,7 +29,12 @@ const statusColors = {
 };
 
 function StatusBadge({ status }) {
-  const value = (status || "PENDING").trim();
+  // The API returns the source-aligned label (a legacy 'TREATMENT FAILED' row
+  // arrives as 'FAILED'); normalizing again here keeps the badge correct for
+  // any value that reaches it unmapped.
+  const raw = (status || "PENDING").trim();
+  const value = raw === 'PENDING' ? raw : (normalizeRecordOutcome(raw) || raw);
+  const unverified = raw !== 'PENDING' && !isApprovedOutcome(raw);
   const colors = statusColors[value] || { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' };
   return (
     <span
@@ -35,6 +43,19 @@ function StatusBadge({ status }) {
     >
       <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: colors.dot }} />
       {value.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
+      {/* A value outside the 9 verified source categories is shown as stored
+          (traceability) but marked, so it is never read as an Excel-defined
+          Outcome/Status. It is deliberately not remapped onto another
+          category without evidence. */}
+      {unverified && (
+        <span
+          className="ml-0.5 text-[9px] font-extrabold"
+          style={{ color: '#B45309' }}
+          title="Not one of the verified source Outcome/Status categories - shown as stored, pending review"
+        >
+          ⚠
+        </span>
+      )}
     </span>
   );
 }
@@ -97,10 +118,10 @@ function FilterSelect({ label, value, onChange, options, placeholder }) {
 
 const ALL_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const ALL_YEARS = ["2026","2025","2024","2023"];
-const ALL_OUTCOME_STATUSES = [
-  "ON TREATMENT", "CURED", "TREATMENT COMPLETED", "FAILED",
-  "DIED", "LOST TO FF-UP", "EXCLUDED", "NOT EVALUATED", "DIAGNOSED",
-];
+// Shared frontend contract (src/utils/outcomeStatus.js) — the same 9
+// Excel-verified categories the API's /filter-options returns. SCREENED is not
+// among them and is therefore never offered as a filter option.
+const ALL_OUTCOME_STATUSES = APPROVED_OUTCOMES;
 const ALL_SEX_OPTIONS = ["Male", "Female"];
 const ALL_VALIDATION_STATUSES = ["Validated", "Not Validated"];
 const ALL_SOURCE_TYPES = ["DSTB", "MN"];

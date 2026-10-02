@@ -200,6 +200,20 @@ const initDb = async () => {
       console.error('❌ Forecast method / model status migration failed (continuing with remaining migrations):', methodErr.message);
     }
 
+    // Case access & transfers: current_responsible_facility_id on tb_cases + case_transfers table (idempotent)
+    try {
+      const caseAccessMigPath = path.join(__dirname, 'db', 'migrations', '020_case_access_transfers.sql');
+      if (fs.existsSync(caseAccessMigPath)) {
+        const caseAccessSql = fs.readFileSync(caseAccessMigPath, 'utf8');
+        await execSql(caseAccessSql);
+        console.log('✅ Case access & transfers migration completed successfully.');
+      } else {
+        console.log('⚠️ Case access & transfers migration not found, skipping.');
+      }
+    } catch (caseAccessErr) {
+      console.error('❌ Case access & transfers migration failed (continuing with remaining migrations):', caseAccessErr.message);
+    }
+
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,
     // undoing two earlier over-broad attempts, and keep only the Kapasigan Extension ->
     // Bagong Katipunan rename/population fix (idempotent)

@@ -177,9 +177,14 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
       ORDER BY c.barangay_name, month
     `, params), 'significance'),
 
-    // 4. Risk data from barangay_risk_scores (latest period)
+    // 4. Risk data from barangay_risk_scores (latest period).
+    // `period` is carried through so the assessment year can be reported
+    // instead of implied: a snapshot stored at period YYYY-01-01 IS the
+    // assessment made through the end of YYYY-1 (same contract as
+    // /gis/choropleth).
     safe(pool.query(`
-      SELECT barangay_name, risk_class, risk_score, incidence_per_100k
+      SELECT barangay_name, risk_class, risk_score, incidence_per_100k,
+             EXTRACT(YEAR FROM period)::INTEGER AS period_year
       FROM barangay_risk_scores
       WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)
     `), 'risk'),
@@ -280,7 +285,12 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
   let highRiskBarangays = null;
   let riskByBarangay = null;
   if (riskRes) {
-    riskCounts = { high: 0, medium: 0, low: 0 };
+    // `assessed` is the number of barangays that actually have a persisted
+    // classification in this snapshot — the real denominator for "N of M
+    // barangays". It is counted here rather than assumed to be 30, so a
+    // snapshot that skipped a barangay can never be reported as though
+    // every barangay had been assessed.
+    riskCounts = { high: 0, medium: 0, low: 0, noData: 0, assessed: 0 };
     highRiskBarangays = [];
     riskByBarangay = {};
     for (const r of riskRes.rows) {
@@ -288,13 +298,20 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
       const cls = (r.risk_class || '').toLowerCase();
       if (cls === 'high') {
         riskCounts.high++;
+        riskCounts.assessed++;
         highRiskBarangays.push(r.barangay_name);
       } else if (cls === 'medium') {
         riskCounts.medium++;
+        riskCounts.assessed++;
       } else if (cls === 'low') {
         riskCounts.low++;
+        riskCounts.assessed++;
+      } else {
+        riskCounts.noData++;
       }
     }
+    const periodYear = riskRes.rows[0]?.period_year;
+    riskCounts.assessmentYear = periodYear ? Number(periodYear) - 1 : null;
   } else {
     unavailable.push('risk');
   }

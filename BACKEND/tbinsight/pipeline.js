@@ -24,6 +24,7 @@ const { forecast, classify, thresholds: callThresholds, healthCheck, evaluate } 
 const {
   monthKey,
   computeRiskScore,
+  classifyByTertile,
   computeNeighborRisks,
   computeHistoricalBias,
   classifyTrend,
@@ -53,6 +54,12 @@ const ARIMA_MIN_HISTORY_NONSEASONAL = 10;
 // Leading months whose city-wide total is below this share of the median month
 // are treated as stray records (e.g. one old case) and dropped from the calendar.
 const LEADING_TRIM_SHARE = 0.2;
+
+// Months averaged to form one RF training label, starting at the target month
+// and running forward (see buildTrainingRows). Three scored best in walk-forward
+// evaluation: one month is dominated by noise in small barangays, while six
+// discards twice as many rows for no gain.
+const LABEL_HORIZON_MONTHS = 3;
 
 /**
  * Put every barangay on ONE shared monthly calendar with zero-filled gaps.
@@ -449,27 +456,19 @@ async function runPipeline({
     );
 
     // ── Step 6: Auto-calibrate thresholds and call Python /classify ──
+    // Resolved BEFORE the ML-health branch because the rule-based fallback
+    // below compares against these same cut points — leaving them unset when
+    // the service is down silently handed that path DEFAULT_THRESHOLDS.
+    const { thresholds: runThresholds, source: thresholdSource } = await _resolveThresholds({
+      thresholdsOverride, barangayIncidences, predictRows,
+    });
+    results.thresholds = runThresholds;
+    results.thresholdSource = thresholdSource;
+
     let classifyResults = [];
     if (results.mlServiceHealthy && predictRows.length > 0) {
       try {
-        // Auto-calibrate thresholds from current data (tertile method)
-        let thresholds = thresholdsOverride;
-        if (!thresholds) {
-          try {
-            const allIncs = barangayIncidences.map(b => b.incidence_per_100k);
-            if (allIncs.length > 0) {
-              const thresholdResult = await callThresholds(allIncs, 'tertile');
-              thresholds = { low_max: thresholdResult.low_max, med_max: thresholdResult.med_max };
-              console.log(`📐 Auto-calibrated thresholds: Low≤${thresholds.low_max.toFixed(1)}, High≥${thresholds.med_max.toFixed(1)}`);
-            } else {
-              thresholds = DEFAULT_THRESHOLDS;
-            }
-          } catch {
-            thresholds = DEFAULT_THRESHOLDS;
-            console.log('📐 Using default thresholds (calibration failed)');
-          }
-        }
-        results.thresholds = thresholds;
+        const thresholds = runThresholds;
 
         // Build monthly snapshot training rows from historical data
         const trainRows = await _buildTrainingRows(client, popMapByYear, thresholds, historyCutoffMonth);
@@ -489,7 +488,7 @@ async function runPipeline({
 
     // Rule-based fallback if ML service is down or classify failed
     if (classifyResults.length === 0 && predictRows.length > 0) {
-      classifyResults = _ruleBasedClassify(predictRows, results.thresholds || DEFAULT_THRESHOLDS);
+      classifyResults = _ruleBasedClassify(predictRows, runThresholds);
       results.classifierMethod = 'rule_based';
       results.classificationsCount = classifyResults.length;
       console.log(`🏷️  Rule-based fallback: ${classifyResults.length} barangays classified`);
@@ -660,6 +659,11 @@ async function runPipeline({
         }),
         JSON.stringify({
           thresholds: results.thresholds,
+          // How the cut points above were arrived at: 'tertile_incidence' and
+          // 'tertile_features' are both calibrated from this run's own data;
+          // 'default' means nothing could be calibrated and the bands are not
+          // scale-matched, which makes the run's classifications unreliable.
+          thresholdSource: results.thresholdSource || null,
           period: results.period,
           historyCutoffMonth: historyCutoffMonth || null,
         }),
@@ -791,6 +795,71 @@ async function _backfillActualCounts() {
 }
 
 /**
+ * Resolve this run's Low/Medium/High incidence cut points.
+ *
+ * Preference order:
+ *   1. override          — caller-supplied, used as-is.
+ *   2. tertile_incidence — Python /thresholds over the barangays' current
+ *                          incidences. The normal path.
+ *   3. tertile_features  — the same tertile split computed locally over
+ *                          rolling_12m_incidence from the prediction rows.
+ *   4. default           — DEFAULT_THRESHOLDS, last resort only.
+ *
+ * Step 3 exists because a year with no population reference of its own has a
+ * null current incidence for every barangay, leaving step 2 nothing to
+ * calibrate from — while the RF features still hold real values (built via
+ * _popForFeature's nearest-year fallback). Calibrating from the feature the
+ * classifier actually compares against keeps the cut points on the same scale
+ * as the values being classified.
+ *
+ * That scale match is the whole point. DEFAULT_THRESHOLDS are fixed constants
+ * (150/350); the annualized-monthly incidence they would be compared against
+ * runs in the hundreds to thousands, so nearly every barangay lands above
+ * med_max. Falling through to them silently is what made the 2023 snapshot
+ * classify 26 of 30 barangays High. The chosen source is returned so the run
+ * can record it and callers can flag a snapshot that had no real basis.
+ */
+async function _resolveThresholds({
+  thresholdsOverride, barangayIncidences, predictRows,
+  // Injectable so the calibration logic can be tested without the ML service.
+  callThresholds: callThresholdsFn = callThresholds,
+}) {
+  if (thresholdsOverride) return { thresholds: thresholdsOverride, source: 'override' };
+
+  const validIncidences = (barangayIncidences || [])
+    .map(b => b.incidence_per_100k)
+    .filter(v => v != null && Number.isFinite(v));
+
+  if (validIncidences.length > 0) {
+    try {
+      const t = await callThresholdsFn(validIncidences, 'tertile');
+      if (Number.isFinite(t?.low_max) && Number.isFinite(t?.med_max)) {
+        console.log(`📐 Thresholds (tertile over ${validIncidences.length} incidences): ` +
+                    `Low≤${t.low_max.toFixed(1)}, High>${t.med_max.toFixed(1)}`);
+        return { thresholds: { low_max: t.low_max, med_max: t.med_max }, source: 'tertile_incidence' };
+      }
+    } catch (err) {
+      console.warn(`📐 Threshold service unavailable (${err.message}) — calibrating locally`);
+    }
+  }
+
+  const featureIncidences = (predictRows || [])
+    .map(r => r.features?.rolling_12m_incidence)
+    .filter(v => v != null && Number.isFinite(v));
+
+  if (featureIncidences.length >= 3) {
+    const { low_max, med_max } = classifyByTertile(featureIncidences);
+    console.log(`📐 Thresholds (tertile over ${featureIncidences.length} feature incidences): ` +
+                `Low≤${low_max.toFixed(1)}, High>${med_max.toFixed(1)}`);
+    return { thresholds: { low_max, med_max }, source: 'tertile_features' };
+  }
+
+  console.warn('📐 No calibration basis — using default thresholds. Classifications from ' +
+               'this run are NOT scale-matched to the data and should be treated as unreliable.');
+  return { thresholds: DEFAULT_THRESHOLDS, source: 'default' };
+}
+
+/**
  * Compute ANNUAL incidence per 100k from monthly case count and population.
  * WHO standard is annual incidence per 100,000 population.
  * Returns null if population is unavailable (NOT zero).
@@ -819,34 +888,74 @@ function _linearSlope(values) {
   return den === 0 ? 0 : num / den;
 }
 
+// Lag-12 autocorrelation at or above this counts as a seasonal pattern. 0.3 is
+// the conventional "weak but real" cutoff for a seasonal signal in a short
+// monthly public-health series.
+const SEASONALITY_MIN_AUTOCORRELATION = 0.3;
+
 /**
- * Detect seasonality: if there's at least 24 months,
- * check if the same month last year correlates with this month.
+ * Detect seasonality as the lag-12 autocorrelation of the DETRENDED series,
+ * over at least 24 months.
+ *
+ * The previous implementation split the series in half and counted how often
+ * consecutive month-to-month changes shared a sign. That measures whether the
+ * series moves in a consistent direction, not whether it repeats annually: a
+ * barangay with steadily rising cases has a positive change almost everywhere
+ * in both halves, matched on nearly every position, and was flagged seasonal.
+ * A trend is not a season, and seasonality_flag is one of the eight RF inputs,
+ * so the false positives landed directly in the classifier.
+ *
+ * Detrending is what makes the lag-12 comparison mean what it should. Pearson
+ * correlation measures a LINEAR relationship, and a straight line shifted by
+ * twelve months is still perfectly linearly related to itself — correlating the
+ * raw series against its own lag would score a pure trend at 1.0 and reproduce
+ * the original bug in a new form. Removing the least-squares trend line first
+ * leaves only the variation around it, so what remains correlates at lag 12
+ * when, and only when, the series genuinely repeats year over year. A series
+ * that is purely linear leaves no residual variation at all and is correctly
+ * reported as non-seasonal.
  */
 function _detectSeasonality(series) {
   if (series.length < 24) return false;
-  const sorted = series.sort((a, b) => a.month.localeCompare(b.month));
-  const counts = sorted.map(s => s.case_count);
+  const counts = [...series]
+    .sort((a, b) => a.month.localeCompare(b.month))
+    .map(s => s.case_count);
 
-  // Simple check: compare first half vs second half season patterns
-  const half = Math.floor(counts.length / 2);
-  const firstHalf = counts.slice(0, half);
-  const secondHalf = counts.slice(half);
+  // Remove the least-squares trend line; what is left is the variation around it.
+  const slope = _linearSlope(counts);
+  const meanIndex = (counts.length - 1) / 2;
+  const meanCount = counts.reduce((a, b) => a + b, 0) / counts.length;
+  const intercept = meanCount - slope * meanIndex;
+  const residuals = counts.map((value, i) => value - (intercept + slope * i));
 
-  // Check if seasonal pattern (same relative peaks) persists
-  // Simple: check if month-to-month changes have similar sign patterns
-  const changes1 = firstHalf.slice(1).map((v, i) => v - firstHalf[i]);
-  const changes2 = secondHalf.slice(1).map((v, i) => v - secondHalf[i]);
+  // A flat or perfectly linear series leaves no residual variation to analyse.
+  // Compared against the original scale so the check is unit-independent and
+  // tolerant of floating-point dust from the subtraction above.
+  const residualSpread = residuals.reduce((sum, r) => sum + r * r, 0) / residuals.length;
+  const scale = Math.max(Math.abs(meanCount), 1);
+  if (residualSpread / (scale * scale) < 1e-6) return false;
 
-  if (changes1.length < 6 || changes2.length < 6) return false;
+  // Pair each month's residual with the same month's residual a year earlier.
+  const pairs = residuals.slice(12).map((value, i) => [value, residuals[i]]);
+  if (pairs.length < 12) return false;
 
-  // Count matching sign patterns in aligned positions
-  let matches = 0;
-  const len = Math.min(changes1.length, changes2.length, 12);
-  for (let i = 0; i < len; i++) {
-    if ((changes1[i] >= 0) === (changes2[i] >= 0)) matches++;
+  const meanCurrent = pairs.reduce((sum, p) => sum + p[0], 0) / pairs.length;
+  const meanLagged = pairs.reduce((sum, p) => sum + p[1], 0) / pairs.length;
+
+  let covariance = 0;
+  let varCurrent = 0;
+  let varLagged = 0;
+  for (const [current, lagged] of pairs) {
+    const dCurrent = current - meanCurrent;
+    const dLagged = lagged - meanLagged;
+    covariance += dCurrent * dLagged;
+    varCurrent += dCurrent ** 2;
+    varLagged += dLagged ** 2;
   }
-  return matches / len > 0.6;
+  if (varCurrent === 0 || varLagged === 0) return false;
+
+  const correlation = covariance / Math.sqrt(varCurrent * varLagged);
+  return correlation >= SEASONALITY_MIN_AUTOCORRELATION;
 }
 
 /**
@@ -1111,7 +1220,28 @@ function buildTrainingRows(seriesByBarangay, popMapByYear, historicalBiasAvg = {
       // and no row (skip), never a zero/estimated incidence.
       const targetYear = Number(months[i].month.slice(0, 4));
       const pop = _popFor(popMapByYear, name, targetYear);
-      const incidence = _computeIncidence(months[i].case_count, pop);
+
+      // The label is the mean monthly case count over the target month and the
+      // LABEL_HORIZON_MONTHS - 1 months after it, annualized. A single month was
+      // used before, which for a small barangay is mostly noise rather than
+      // signal: Bagong Katipunan averages under two cases a month against a
+      // population under a thousand, so one extra case moves its annualized rate
+      // by more than a thousand per 100k and flips its band. No model can learn
+      // that, and walk-forward evaluation showed it scoring below the trivial
+      // majority-class baseline. Averaging the window suppresses that noise
+      // while keeping the question forward-looking.
+      //
+      // The window starts AT the target month and runs forward, never backward:
+      // every feature is built strictly before the target month, so a backward
+      // label window would share months with the features and inflate accuracy
+      // without the model having learned anything. A barangay without the full
+      // forward window (the final months of the series) yields no label and no
+      // row, rather than one averaged over a short window that is not comparable
+      // to the rest.
+      const labelMonths = months.slice(i, i + LABEL_HORIZON_MONTHS);
+      if (labelMonths.length < LABEL_HORIZON_MONTHS) continue;
+      const meanCases = labelMonths.reduce((sum, m) => sum + m.case_count, 0) / labelMonths.length;
+      const incidence = _computeIncidence(meanCases, pop);
       if (incidence == null) continue;
 
       const row = buildFeatureRow({
@@ -1126,15 +1256,25 @@ function buildTrainingRows(seriesByBarangay, popMapByYear, historicalBiasAvg = {
 }
 
 /**
- * Rule-based classification when ML service is unavailable.
- * Simple threshold-based: Low if incidence ≤ low_max, High if > med_max, else Medium.
+ * Rule-based classification when the ML service is unavailable.
+ * Low if incidence ≤ low_max, High if > med_max, else Medium.
+ *
+ * Only rolling_12m_incidence is comparable to the thresholds — both are
+ * incidence per 100k. The previous `|| row.features.lag_1m` fallback put a raw
+ * monthly case count (single digits to low hundreds) up against a per-100k cut
+ * point, which reads as "well below low_max" for any barangay and classified it
+ * Low regardless of its actual risk. When incidence is genuinely unavailable
+ * the honest answer is that this barangay cannot be placed in a band, so it
+ * defaults to Medium rather than being asserted as Low.
  */
 function _ruleBasedClassify(predictRows, thresholds) {
   const { low_max, med_max } = thresholds;
   return predictRows.map(row => {
-    const inc = row.features.rolling_12m_incidence || row.features.lag_1m || 0;
+    const inc = row.features?.rolling_12m_incidence;
+    const known = inc != null && Number.isFinite(inc);
     let riskClass;
-    if (inc <= low_max) riskClass = 'Low';
+    if (!known) riskClass = 'Medium';
+    else if (inc <= low_max) riskClass = 'Low';
     else if (inc > med_max) riskClass = 'High';
     else riskClass = 'Medium';
 
@@ -1326,5 +1466,7 @@ module.exports = {
   _uniformPopMapByYear,
   _resolveClassification,
   _ruleBasedClassify,
+  _resolveThresholds,
+  _detectSeasonality,
   _backfillActualCounts,
 };

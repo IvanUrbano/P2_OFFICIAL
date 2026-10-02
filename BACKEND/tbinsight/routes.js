@@ -12,8 +12,12 @@ const {
 const { buildAnalyticsMetrics, buildForecastingMetrics, buildGisMetrics } = require('./insightDataBuilder');
 const { generateAnalyticsInsight, generateForecastingInsight, generateGisInsight } = require('./nlgEngine');
 const { computeTreatmentCascade } = require('./treatmentCascade');
+const { buildDashboardMetrics, generateDashboardInsight } = require('./dashboardInsight');
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
-const { APPROVED_OUTCOMES, normalizeDisplayOutcome, getOutcomeFilterValues } = require('./outcomeNormalization');
+const {
+  APPROVED_OUTCOMES, normalizeDisplayOutcome, normalizeRecordOutcome,
+  isApprovedOutcome, getOutcomeFilterValues, foldOutcomeCounts, SUCCESS_OUTCOMES_SQL,
+} = require('./outcomeNormalization');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
 const {
   getPopulation, getPopulationMap, calculateAnnualizedIncidence,
@@ -25,6 +29,36 @@ const {
 } = require('./populationService');
 
 const router = express.Router();
+
+// ==================== AUTHORIZATION ====================
+//
+// TBInsight holds internal TB surveillance and analytical data, so EVERY
+// /api/tb/* route requires an authenticated Staff or Admin user. Frontend
+// route protection (ProtectedRoute) guards navigation only — the API is
+// directly reachable, so authorization has to be enforced here.
+//
+// Applied once at the router level rather than per route: a per-route list is
+// exactly how the read endpoints (dashboard, analytics, GIS, forecasts,
+// alerts, reports, insights, pipeline status, data freshness, cases/export,
+// webhook-logs) came to be unauthenticated while the mutating ones were
+// protected. A router-level guard cannot be forgotten when a route is added.
+//
+// This is the BASELINE. Routes that already carry stricter guards keep them —
+// `authorizeRoles('admin')` on a route still narrows it to Admin, so no
+// Admin-only operation is downgraded to Staff by this line. The duplicated
+// `authenticateToken` on those routes is harmless (it re-verifies the same
+// token and re-sets req.user).
+//
+// It reuses the existing middleware in BACKEND/middleware/auth.js — JWT from
+// the httpOnly cookie or an Authorization: Bearer header, with CSRF nonce
+// enforcement for cookie-authenticated unsafe methods. No second auth system
+// is introduced.
+//
+// Deliberately NOT covered by this router: the Pasig TB-IS webhook receiver
+// (mounted separately at /api/webhook, authenticated by HMAC signature rather
+// than a user JWT) and the app health check GET /api/health, which must stay
+// reachable for platform health probes and exposes no surveillance data.
+router.use(authenticateToken, authorizeRoles('admin', 'staff'));
 
 // ==================== REFERENCE DATA ====================
 
@@ -256,6 +290,16 @@ router.get('/cases', async (req, res) => {
       paramIdx++;
     }
 
+    // Facility-scoped access for STAFF users
+    // STAFF can only see cases where their facility is the current responsible facility,
+    // OR where current_responsible_facility_id is NULL (historical/unresolved).
+    // ADMIN sees all cases city-wide.
+    if (req.user.role === 'staff' && req.user.facility_id) {
+      conditions.push(`(c.current_responsible_facility_id = $${paramIdx} OR c.current_responsible_facility_id IS NULL)`);
+      params.push(req.user.facility_id);
+      paramIdx++;
+    }
+
     const whereClause = conditions.length > 0
       ? 'WHERE ' + conditions.join(' AND ')
       : '';
@@ -294,7 +338,8 @@ router.get('/cases', async (req, res) => {
         c.validation_status,
         c.itis_case_id,
         c.source_type,
-        c.location_classification
+        c.location_classification,
+        c.current_responsible_facility_id
       FROM tb_cases c
       ${whereClause}
       ORDER BY c.${safeSortField} ${safeSortDir}
@@ -302,8 +347,19 @@ router.get('/cases', async (req, res) => {
       [...params, safeLimit, offset]
     );
 
+    // Record rows carry the SOURCE-ALIGNED outcome label, not the raw storage
+    // form: a legacy 'TREATMENT FAILED' row is returned as 'FAILED', which is
+    // the only user-facing terminology. The raw stored value is preserved
+    // alongside it for traceability, and `outcome_status_approved` is false for
+    // any value outside the 9 Excel-verified categories (e.g. SCREENED) so the
+    // UI can mark it rather than present it as a verified source category.
     res.json({
-      cases: dataResult.rows,
+      cases: dataResult.rows.map((r) => ({
+        ...r,
+        outcome_status: normalizeRecordOutcome(r.outcome_status),
+        outcome_status_raw: r.outcome_status,
+        outcome_status_approved: isApprovedOutcome(r.outcome_status),
+      })),
       pagination: {
         page: safePage,
         limit: safeLimit,
@@ -389,6 +445,13 @@ router.get('/cases/export', async (req, res) => {
     if (source_type) { conditions.push(`TRIM(c.source_type) = $${paramIdx}`); params.push(source_type.trim()); paramIdx++; }
     if (location_classification) { conditions.push(`TRIM(c.location_classification) = $${paramIdx}`); params.push(location_classification.trim()); paramIdx++; }
 
+    // Facility-scoped access for STAFF users
+    if (req.user.role === 'staff' && req.user.facility_id) {
+      conditions.push(`(c.current_responsible_facility_id = $${paramIdx} OR c.current_responsible_facility_id IS NULL)`);
+      params.push(req.user.facility_id);
+      paramIdx++;
+    }
+
     const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
     const result = await pool.query(
@@ -441,7 +504,7 @@ router.get('/cases/export', async (req, res) => {
         row.registration_group || '',
         row.bacteriological_status || '',
         row.date_started_treatment ? new Date(row.date_started_treatment).toISOString().split('T')[0] : '',
-        row.outcome_status || '',
+        normalizeRecordOutcome(row.outcome_status) || '',
         row.date_of_outcome ? new Date(row.date_of_outcome).toISOString().split('T')[0] : '',
         row.validation_status || '',
         row.location_classification || '',
@@ -544,13 +607,13 @@ router.get('/dashboard/summary', async (req, res) => {
         COUNT(DISTINCT DATE_TRUNC('month', date_of_diagnosis))::INTEGER as months_covered,
         MIN(date_of_diagnosis) as earliest_date,
         MAX(date_of_diagnosis) as latest_date,
-        SUM(CASE WHEN UPPER(outcome_status) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER as on_treatment_count,
-        SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER as cured_count,
-        SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER as treatment_completed_count,
-        SUM(CASE WHEN UPPER(outcome_status) = 'DIED' THEN 1 ELSE 0 END)::INTEGER as died_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER as on_treatment_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'CURED' THEN 1 ELSE 0 END)::INTEGER as cured_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER as treatment_completed_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'DIED' THEN 1 ELSE 0 END)::INTEGER as died_count,
         SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN ('LOST TO FF-UP','LOST TO FOLLOW-UP') THEN 1 ELSE 0 END)::INTEGER as ltfu_count,
-        SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER as successful_count,
-        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(outcome_status) != 'NOT EVALUATED')::INTEGER as total_outcomes,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER as successful_count,
+        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(TRIM(outcome_status)) != 'NOT EVALUATED')::INTEGER as total_outcomes,
         SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as current_month_cases,
         SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
                   AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as prev_month_cases
@@ -722,7 +785,12 @@ router.get('/dashboard/barangay/:name', async (req, res) => {
          ORDER BY total DESC`,
         [name]
       );
-      outcomesRows = outcomes.rows;
+      outcomesRows = outcomes.rows.map((r) => ({
+        ...r,
+        outcome_status: normalizeRecordOutcome(r.outcome_status),
+        outcome_status_raw: r.outcome_status,
+        outcome_status_approved: isApprovedOutcome(r.outcome_status),
+      }));
     } catch (e) {
       console.error('Outcomes query error:', e.message);
     }
@@ -876,7 +944,17 @@ router.get('/dashboard/outcomes', async (req, res) => {
       GROUP BY barangay_name, COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
       ORDER BY barangay_name, total DESC
     `, params);
-    res.json({ outcomes: result.rows });
+    // Emit the source-aligned label per row (legacy 'TREATMENT FAILED' becomes
+    // 'FAILED') and flag anything outside the 9 verified categories, so every
+    // consumer gets the same terminology from one place instead of each page
+    // re-implementing the alias mapping. Barangay grouping is preserved.
+    const outcomes = result.rows.map((r) => ({
+      ...r,
+      outcome_status: normalizeRecordOutcome(r.outcome_status),
+      outcome_status_raw: r.outcome_status,
+      outcome_status_approved: isApprovedOutcome(r.outcome_status),
+    }));
+    res.json({ outcomes });
   } catch (err) {
     console.error('Outcomes error:', err.message);
     res.status(500).json({ error: 'Server error fetching outcomes.' });
@@ -1006,19 +1084,18 @@ router.get('/gis/geojson', async (req, res) => {
     // always showed the latest (e.g. 2026) forecast regardless of the
     // selected year, which misattributed today's forecast to a historical
     // view.
+    // forecasted_count is NOT coalesced to 0: a historical snapshot skips ARIMA
+    // entirely, so a past year has no forecast at all, and 0 would read as "the
+    // model predicted zero cases" — a claim never made. Null renders as N/A.
+    const forecastSelect = `barangay_name, forecasted_count,
+             confidence_lower, confidence_upper`;
     const forecastResult = isValidYear
       ? await pool.query(
-          `SELECT barangay_name, COALESCE(forecasted_count, 0) as forecasted_count,
-             COALESCE(confidence_lower, 0) as confidence_lower,
-             COALESCE(confidence_upper, 0) as confidence_upper
-           FROM model_predictions WHERE period = $1::date`,
+          `SELECT ${forecastSelect} FROM model_predictions WHERE period = $1::date`,
           [`${yearInt + 1}-01-01`]
         )
       : await pool.query(
-          `SELECT barangay_name, COALESCE(forecasted_count, 0) as forecasted_count,
-             COALESCE(confidence_lower, 0) as confidence_lower,
-             COALESCE(confidence_upper, 0) as confidence_upper
-           FROM model_predictions
+          `SELECT ${forecastSelect} FROM model_predictions
            WHERE period = (SELECT MAX(period) FROM model_predictions)`
         );
 
@@ -1106,9 +1183,10 @@ router.get('/gis/geojson', async (req, res) => {
             cases.total_cases || 0, yearPopMap[row.name]
           ),
           trend_direction: risk.trend_direction || 'Stable',
-          forecasted_count: forecast.forecasted_count || 0,
-          confidence_lower: forecast.confidence_lower || 0,
-          confidence_upper: forecast.confidence_upper || 0,
+          // Null (not 0) when this year has no forecast — see forecastSelect.
+          forecasted_count: forecast.forecasted_count ?? null,
+          confidence_lower: forecast.confidence_lower ?? null,
+          confidence_upper: forecast.confidence_upper ?? null,
           total_cases: cases.total_cases || 0,
           norm_incidence: risk.norm_incidence || 0,
           norm_trend: risk.norm_trend || 0,
@@ -2244,14 +2322,15 @@ router.get('/reports/summary', async (req, res) => {
       pool.query(`
         SELECT
           COUNT(*)::INTEGER AS total_cases,
-          SUM(CASE WHEN UPPER(outcome_status) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS active_cases,
-          SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful_count,
-          COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(outcome_status) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated_count
+          SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS active_cases,
+          SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER AS successful_count,
+          COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(TRIM(outcome_status)) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated_count
         FROM tb_cases c
         ${whereClause}
       `, params),
 
-      // Outcomes breakdown
+      // Outcomes breakdown — raw grouping; the rows are folded into the
+      // approved source-aligned categories after the query (see below).
       pool.query(`
         SELECT COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status, COUNT(*)::INTEGER AS count
         FROM tb_cases c
@@ -2361,9 +2440,9 @@ router.get('/reports/summary', async (req, res) => {
         SELECT
           TRIM(screening_facility) AS facility,
           COUNT(*)::INTEGER AS total_cases,
-          SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful,
+          SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER AS successful,
           COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != ''
-            AND UPPER(outcome_status) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated
+            AND UPPER(TRIM(outcome_status)) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated
         FROM tb_cases c
         ${whereClause}
         AND screening_facility IS NOT NULL AND screening_facility != ''
@@ -2390,12 +2469,25 @@ router.get('/reports/summary', async (req, res) => {
     // reimplement the evaluated-outcomes denominator here.
     const { rate: fatalityRate, evaluated: fatalityEvaluated } = await computeCaseFatalityRate(pool, { year: yr, barangay });
 
-    // Compute outcomes with percentages
-    const outcomes = outcomesRes.rows.map(r => ({
-      outcome_status: r.outcome_status,
-      count: r.count,
-      percentage: totalCases > 0 ? Number(((r.count / totalCases) * 100).toFixed(1)) : 0,
+    // Outcome breakdown: the shared fold into the 9 approved source-aligned
+    // categories (see foldOutcomeCounts). This previously echoed the raw stored
+    // values straight to the report, so a legacy 'TREATMENT FAILED' row and the
+    // unverified 'SCREENED' value were both printed as though they were Excel
+    // Outcome/Status categories. Records outside the approved set are now
+    // reported in a separate reconciliation block instead of being shown as a
+    // category or silently dropped.
+    const folded = foldOutcomeCounts(outcomesRes.rows, { labelKey: 'outcome_status', countKey: 'count' });
+    const outcomes = folded.categories.map(c => ({
+      outcome_status: c.outcome_status,
+      count: c.count,
+      percentage: totalCases > 0 ? Number(((c.count / totalCases) * 100).toFixed(1)) : 0,
     }));
+    const outcomeReconciliation = {
+      totalCases,
+      approvedTotal: folded.approvedTotal,
+      unapprovedTotal: folded.unapprovedTotal,
+      unapproved: folded.unapproved,
+    };
 
     // Compute sex distribution with percentages
     const sex = sexRes.rows.map(r => ({
@@ -2510,6 +2602,7 @@ router.get('/reports/summary', async (req, res) => {
       },
       summary: { totalCases, activeCases, successRate, evaluatedCount, fatalityRate, fatalityEvaluated },
       outcomes,
+      outcomeReconciliation,
       demographics: { sex, ageGroups },
       caseProfile,
       trend,
@@ -2799,6 +2892,106 @@ router.get('/insights/analytics', async (req, res) => {
   } catch (err) {
     console.error('Analytics insight error:', err.message);
     res.status(500).json({ error: 'Server error generating analytics insight.' });
+  }
+});
+
+/**
+ * GET /api/tb/insights/dashboard
+ * Concise, Dashboard-specific template NLG (see dashboardInsight.js).
+ *
+ * Deliberately separate from /insights/analytics: the Dashboard is an
+ * overview page and must not render the seven-section Analytics narrative.
+ * Takes no filters — the Dashboard has no global filter controls.
+ *
+ * Returns { type, summary, sections, meta }. `summary` is the headline
+ * paragraph the Dashboard highlight panel renders.
+ */
+router.get('/insights/dashboard', async (req, res) => {
+  try {
+    const metrics = await buildDashboardMetrics(pool);
+    const insight = generateDashboardInsight(metrics);
+    res.json(insight);
+  } catch (err) {
+    console.error('Dashboard insight error:', err.message);
+    res.status(500).json({ error: 'Server error generating dashboard insight.' });
+  }
+});
+
+/**
+ * GET /api/tb/data-freshness
+ * Freshness metadata for the Dashboard header. These are THREE DISTINCT
+ * concepts and are returned separately rather than collapsed into one
+ * "last updated" timestamp:
+ *
+ *   lastSynced   — last data transfer received from PASIG TB-IS
+ *                  (webhook_logs.received_at), falling back to the newest
+ *                  tb_cases.imported_at when no webhook delivery is logged
+ *                  (e.g. records loaded by file import). `syncSource` says which.
+ *   lastModelRun — newest model_metadata row for run_type 'pipeline', i.e.
+ *                  the last full analytics/model pipeline execution.
+ *   latestCaseDate — the most recent date_of_diagnosis in the data. This is a
+ *                  CLINICAL date describing data coverage, never a system
+ *                  freshness timestamp, and is labelled as such.
+ *
+ * Read-only: this never triggers a synchronisation or a model run.
+ */
+router.get('/data-freshness', async (req, res) => {
+  try {
+    const safe = (promise, label) => promise.catch((err) => {
+      console.error(`Data freshness query failed (${label}):`, err.message);
+      return null;
+    });
+
+    const [webhookRes, importRes, modelRes, caseRes] = await Promise.all([
+      // Only a webhook that actually finished importing counts as a data
+      // sync. webhook_logs.status is constrained to ('received','processed',
+      // 'failed'): 'processed' is written after the import succeeds, 'failed'
+      // on error, and 'received' is the column default meaning "arrived but
+      // not yet processed". Filtering to 'processed' therefore excludes both
+      // failed attempts and payloads that were received but never imported.
+      // processed_at is preferred over received_at (it is the completion
+      // time); COALESCE covers historical rows written before processed_at
+      // began being set.
+      safe(pool.query(
+        `SELECT MAX(COALESCE(processed_at, received_at)) AS last_received
+         FROM webhook_logs
+         WHERE status = 'processed'`
+      ), 'webhook'),
+      safe(pool.query(`SELECT MAX(imported_at) AS last_imported FROM tb_cases`), 'import'),
+      safe(pool.query(
+        `SELECT trained_at, model_version, rf_status, arima_status, training_months
+         FROM model_metadata
+         WHERE run_type = 'pipeline'
+         ORDER BY trained_at DESC
+         LIMIT 1`
+      ), 'model'),
+      safe(pool.query(`SELECT MAX(date_of_diagnosis) AS latest_case FROM tb_cases`), 'cases'),
+    ]);
+
+    const lastWebhook = webhookRes?.rows[0]?.last_received || null;
+    const lastImport = importRes?.rows[0]?.last_imported || null;
+    const model = modelRes?.rows[0] || null;
+
+    // Prefer the webhook delivery timestamp — that is the actual transfer
+    // from PASIG TB-IS. Only fall back to imported_at when no delivery is
+    // logged, and say so, rather than presenting an import time as a sync.
+    const lastSynced = lastWebhook || lastImport;
+    const syncSource = lastWebhook ? 'webhook' : lastImport ? 'import' : null;
+
+    res.json({
+      lastSynced,
+      syncSource,
+      lastModelRun: model ? model.trained_at : null,
+      modelVersion: model ? model.model_version : null,
+      modelRfStatus: model ? model.rf_status : null,
+      modelArimaStatus: model ? model.arima_status : null,
+      modelTrainingMonths: model ? model.training_months : null,
+      latestCaseDate: caseRes?.rows[0]?.latest_case || null,
+      dataSource: 'PASIG TB-IS',
+    });
+  } catch (err) {
+    console.error('Data freshness error:', err.message);
+    res.status(500).json({ error: 'Server error fetching data freshness.' });
   }
 });
 

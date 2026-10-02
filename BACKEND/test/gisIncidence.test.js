@@ -52,6 +52,14 @@ function clearTbinsightCache() {
     .forEach(k => delete require.cache[k]);
 }
 
+/* /api/tb/* requires an authenticated Staff or Admin user (router-level guard
+ * in tbinsight/routes.js). These tests are about GIS incidence and the year
+ * contract, not authorization, so the app injects a REAL signed Staff token and
+ * the genuine middleware still verifies it — nothing is stubbed. Authorization
+ * itself is covered in test/tbinsight/tbAuthorization.test.js. */
+const jwt = require('jsonwebtoken');
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-for-gis-tests';
+
 function buildApp() {
   uninstallMockDb();
   installMockDb();
@@ -60,6 +68,8 @@ function buildApp() {
 
   const app = express();
   app.use(express.json());
+  const token = jwt.sign({ id: 1, role: 'staff' }, process.env.JWT_SECRET, { expiresIn: '1h' });
+  app.use((req, _res, next) => { req.headers.authorization = `Bearer ${token}`; next(); });
   app.use('/api/tb', require('../tbinsight/routes'));
   return app;
 }
@@ -433,6 +443,70 @@ describe('GisMap.jsx risk-ranking UI contract (source assertions)', () => {
     assert.ok(
       memo.includes("groups['No Data'].length > 0"),
       'No Assessment section only rendered when count > 0 (never an empty section)'
+    );
+  });
+});
+
+/* ════════════════ M: absent forecast is null, never 0 ════════════════ */
+
+describe('GET /api/tb/gis/geojson — absent forecast', () => {
+  it('M: a year with no forecast rows reports null, not a predicted zero', async () => {
+    // Historical snapshots skip ARIMA entirely (pipeline.js:runHistoricalSnapshots),
+    // so a past year has no forecast at all. Coalescing that to 0 would state the
+    // model predicted zero cases — a claim it never made.
+    mockQueryFn = makeDispatcher({
+      geo: [{ id: 1, name: 'San Nicolas', population: 2724, geometry: POLY, centroid_lon: 0.5, centroid_lat: 0.5 }],
+      risk: [{ barangay_name: 'San Nicolas', risk_score: 41, risk_class: 'Low', model_type: 'rule_based', trend_direction: 'Stable', period: '2024-01-01' }],
+      forecast: [],
+      cases: [{ barangay_name: 'San Nicolas', total_cases: 17 }],
+      pop: [{ barangay_name: 'San Nicolas', population: 2700 }],
+    });
+    const res = await request(buildApp()).get('/api/tb/gis/geojson?year=2023');
+    assert.strictEqual(res.status, 200);
+
+    const p = res.body.features[0].properties;
+    assert.strictEqual(p.forecasted_count, null, 'no forecast must be null, not 0');
+    assert.strictEqual(p.confidence_lower, null);
+    assert.strictEqual(p.confidence_upper, null);
+
+    const forecastQ = capturedQueries.find(q => q.sql.includes('model_predictions'));
+    assert.ok(
+      !/COALESCE\(forecasted_count/i.test(forecastQ.sql),
+      'the query must not coalesce an absent forecast to 0'
+    );
+  });
+
+  it('M: a real forecast of 0 is still reported as 0', async () => {
+    mockQueryFn = makeDispatcher({
+      geo: [{ id: 1, name: 'San Nicolas', population: 2724, geometry: POLY, centroid_lon: 0.5, centroid_lat: 0.5 }],
+      risk: [],
+      forecast: [{ barangay_name: 'San Nicolas', forecasted_count: 0, confidence_lower: 0, confidence_upper: 0 }],
+      cases: [],
+    });
+    const res = await request(buildApp()).get('/api/tb/gis/geojson');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.features[0].properties.forecasted_count, 0,
+      'a genuine zero prediction must survive as 0, distinct from null');
+  });
+
+  it('M: the GIS page shows "Not forecasted" rather than a zero', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'FRONTEND', 'src', 'pages', 'GisMap.jsx'), 'utf8'
+    );
+    assert.ok(
+      src.includes("merged.forecasted_count != null ? formatNum(merged.forecasted_count) : 'Not forecasted'"),
+      'absent forecast must read as Not forecasted'
+    );
+  });
+
+  it('M: the GIS page flags a rule-based snapshot at map level', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'FRONTEND', 'src', 'pages', 'GisMap.jsx'), 'utf8'
+    );
+    assert.ok(src.includes('snapshotClassifier'), 'rule-based share must be derived from the features');
+    assert.ok(
+      src.includes('Rule-based fallback — not model-classified'),
+      'an all-fallback snapshot must say so without opening a barangay'
     );
   });
 });

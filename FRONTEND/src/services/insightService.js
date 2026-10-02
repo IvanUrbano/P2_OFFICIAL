@@ -26,8 +26,23 @@ export async function getForecastingInsight(filters = {}) {
   return res.data;
 }
 
+// Dashboard NLG — its OWN concise endpoint, not the Analytics one.
+// This previously called /api/tb/insights/analytics, which (a) made the
+// Dashboard render the seven-section Analytics narrative it has no room for,
+// and (b) returns no top-level `summary` field, so the Dashboard's headline
+// panel silently fell back to placeholder text on every single load even
+// though valid NLG output existed. /insights/dashboard returns
+// { type, summary, sections, meta }.
 export async function getDashboardInsight() {
-  const res = await API.get('/api/tb/insights/analytics');
+  const res = await API.get('/api/tb/insights/dashboard');
+  return res.data;
+}
+
+// Freshness metadata: Last Synced (transfer from PASIG TB-IS) and Last Model
+// Run (pipeline execution) are separate concepts and are fetched separately
+// from the data endpoints so that an NLG or model failure cannot blank them.
+export async function getDataFreshness() {
+  const res = await API.get('/api/tb/data-freshness');
   return res.data;
 }
 

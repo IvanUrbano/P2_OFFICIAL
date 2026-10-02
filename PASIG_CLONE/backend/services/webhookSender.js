@@ -61,6 +61,7 @@ function formatRecord(record) {
     rdt_result: record.rdt_result ?? null,
     rdt_release_date: toYmd(record.rdt_release_date),
     outcome_reason: record.outcome_reason ?? null,
+    current_responsible_facility_id: record.current_responsible_facility_id ?? null,
   };
 }
 

@@ -10,6 +10,9 @@ import TreatmentCascadeCard from '../components/TreatmentCascadeCard';
 import FilterSelect from '../components/FilterSelect';
 import { getAnalyticsInsight } from '../services/insightService';
 import {
+  APPROVED_OUTCOMES, OUTCOME_FILTER_OPTIONS, OUTCOME_COLORS, ACTIVE_OUTCOMES,
+} from '../utils/outcomeStatus';
+import {
   categorizeAge,
   matchesNonYearFilters,
   buildMonthlySeries,
@@ -30,22 +33,10 @@ const COLORS = {
   gray: '#94A3B8',
 };
 
-const OUTCOME_COLORS = {
-  'CURED': '#2a78d6',
-  'TREATMENT COMPLETED': '#eb6834',
-  'ON TREATMENT': '#1baf7a',
-  'FAILED': '#eda100',
-  'DIED': '#e87ba4',
-  'LOST TO FF-UP': '#008300',
-  'EXCLUDED': '#4a3aa7',
-  'DIAGNOSED': '#0369A1',
-  'NOT EVALUATED': '#94A3B8',
-};
-
-const OUTCOME_ORDER = [
-  'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT', 'FAILED',
-  'DIAGNOSED', 'NOT EVALUATED', 'DIED', 'LOST TO FF-UP', 'EXCLUDED',
-];
+// Categories, order and colours come from the single shared frontend contract
+// (src/utils/outcomeStatus.js), which mirrors the backend's
+// outcomeNormalization.js — not a private copy per page.
+const OUTCOME_ORDER = APPROVED_OUTCOMES;
 
 const AGE_GROUP_ORDER = ['0-14', '15-24', '25-34', '35-44', '45-54', '55-64', '65+'];
 
@@ -54,12 +45,7 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-const OUTCOMES = [
-  'All', 'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT', 'FAILED',
-  'DIAGNOSED', 'NOT EVALUATED', 'DIED', 'LOST TO FF-UP', 'EXCLUDED',
-];
-
-const ACTIVE_OUTCOMES = ['ON TREATMENT'];
+const OUTCOMES = OUTCOME_FILTER_OPTIONS;
 
 /* ─── Helper Components ──────────────────────────────────────────────── */
 

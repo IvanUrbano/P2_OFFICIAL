@@ -82,9 +82,9 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
           anatomical_site, registration_group, bacteriological_status, date_started_treatment,
           outcome_status, date_of_outcome, date_of_screening, validation_status, itis_case_id,
           is_valid, validation_errors, validation_warnings, record_status,
-          entered_by_user_id, entered_by_facility_id
+          entered_by_user_id, entered_by_facility_id, current_responsible_facility_id
         ) VALUES ($1,'MANUAL',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-                  true,$20,$21,'new',$22,$23)
+                  true,$20,$21,'new',$22,$23,$24)
         RETURNING id`,
         [
           batchId,
@@ -110,6 +110,7 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
           JSON.stringify([]),
           req.user.id,
           enteredByFacilityId,
+          enteredByFacilityId, // current_responsible_facility_id = entering user's facility
         ]
       );
       recordId = recRes.rows[0].id;

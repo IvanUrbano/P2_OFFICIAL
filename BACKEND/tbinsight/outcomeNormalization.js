@@ -115,6 +115,94 @@ function getOutcomeFilterValues(displayValue) {
   return [s];
 }
 
+
+/**
+ * Display label for an INDIVIDUAL RECORD's outcome_status.
+ *
+ * Differs from normalizeDisplayOutcome, which returns null for a value outside
+ * the approved set so that aggregates (charts, dropdowns, category lists) can
+ * drop it. A record row cannot be dropped — hiding the stored value would
+ * destroy traceability — so an unapproved value is returned verbatim
+ * (UPPER/TRIM'd) and `isApprovedOutcome` reports false, letting the UI mark it
+ * as not a verified source category instead of presenting it as one.
+ *
+ * Approved and legacy-aliased values map to their source-aligned form:
+ *   TREATMENT FAILED  -> FAILED
+ *   LOST TO FOLLOW-UP -> LOST TO FF-UP
+ */
+function normalizeRecordOutcome(dbValue) {
+  if (dbValue == null) return null;
+  const s = String(dbValue).trim().toUpperCase();
+  if (!s) return null;
+  return normalizeDisplayOutcome(s) || s;
+}
+
+/**
+ * True when the stored value corresponds to one of the 9 Excel-verified
+ * source Outcome/Status categories (after legacy aliasing).
+ * SCREENED, REFUSED and any other unverified value return false.
+ */
+function isApprovedOutcome(dbValue) {
+  return normalizeDisplayOutcome(dbValue) != null;
+}
+
+
+/**
+ * Fold raw (value, count) outcome rows into the approved source-aligned
+ * categories — the single shared rule behind every outcome CATEGORY list
+ * (Dashboard chart, Analytics chart, Reports breakdown).
+ *
+ * Legacy values are merged into their canonical category (TREATMENT FAILED
+ * into FAILED), categories are returned in APPROVED_OUTCOMES order, and
+ * anything outside the 9 verified categories is reported separately in
+ * `unapproved` rather than displayed as an Excel category or silently dropped.
+ * That makes the reconciliation explicit: approvedTotal + unapprovedTotal
+ * equals the record count the caller passed in.
+ *
+ * @param {Array<object>} rows - rows with a label and a count field
+ * @param {object} [opts]
+ * @param {string} [opts.labelKey='outcome_status']
+ * @param {string} [opts.countKey='count']
+ * @returns {{categories: Array<{outcome_status: string, count: number}>,
+ *   unapproved: Array<{value: string, count: number}>,
+ *   approvedTotal: number, unapprovedTotal: number}}
+ */
+function foldOutcomeCounts(rows, { labelKey = 'outcome_status', countKey = 'count' } = {}) {
+  const byCategory = new Map();
+  const unapprovedMap = new Map();
+  for (const row of rows || []) {
+    const count = Number(row?.[countKey] || 0);
+    const label = normalizeDisplayOutcome(row?.[labelKey]);
+    if (label) {
+      byCategory.set(label, (byCategory.get(label) || 0) + count);
+    } else {
+      const raw = row?.[labelKey] == null ? 'UNKNOWN' : String(row[labelKey]).trim().toUpperCase() || 'UNKNOWN';
+      unapprovedMap.set(raw, (unapprovedMap.get(raw) || 0) + count);
+    }
+  }
+  const categories = APPROVED_OUTCOMES
+    .filter((o) => byCategory.has(o))
+    .map((o) => ({ outcome_status: o, count: byCategory.get(o) }));
+  const unapproved = [...unapprovedMap.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count);
+  return {
+    categories,
+    unapproved,
+    approvedTotal: categories.reduce((t, c) => t + c.count, 0),
+    unapprovedTotal: unapproved.reduce((t, c) => t + c.count, 0),
+  };
+}
+
+
+/**
+ * SQL fragment listing the success outcomes, for use inside an IN (...) clause.
+ * Lets every "successful outcome" count reference the one shared definition
+ * instead of repeating a literal ('CURED','TREATMENT COMPLETED') pair that can
+ * drift between routes.
+ */
+const SUCCESS_OUTCOMES_SQL = SUCCESS_OUTCOMES.map((v) => `'${v}'`).join(',');
+
 module.exports = {
   NORMALIZE_OUTCOME_SQL,
   EVALUATED_TERMINAL_OUTCOMES,
@@ -123,5 +211,9 @@ module.exports = {
   APPROVED_OUTCOMES,
   normalizeOutcome,
   normalizeDisplayOutcome,
+  normalizeRecordOutcome,
+  isApprovedOutcome,
   getOutcomeFilterValues,
+  foldOutcomeCounts,
+  SUCCESS_OUTCOMES_SQL,
 };

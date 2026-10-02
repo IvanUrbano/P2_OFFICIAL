@@ -41,6 +41,30 @@ async function initSchema() {
   } else {
     console.warn('[pasig-clone] init.sql not found, skipping schema initialization');
   }
+
+  // Run migration 001 (audit fields + hash) if it exists
+  const mig001Path = path.join(__dirname, 'migrations', '001_add_audit_and_hash_fields.sql');
+  if (fs.existsSync(mig001Path)) {
+    try {
+      const mig001Sql = fs.readFileSync(mig001Path, 'utf8');
+      await execSql(mig001Sql);
+      console.log('[pasig-clone] Migration 001 (audit/hash fields) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 001 failed (continuing):', err.message);
+    }
+  }
+
+  // Run migration 002 (case access + transfers) if it exists
+  const mig002Path = path.join(__dirname, 'migrations', '002_case_access_and_transfers.sql');
+  if (fs.existsSync(mig002Path)) {
+    try {
+      const mig002Sql = fs.readFileSync(mig002Path, 'utf8');
+      await execSql(mig002Sql);
+      console.log('[pasig-clone] Migration 002 (case access + transfers) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 002 failed (continuing):', err.message);
+    }
+  }
 }
 
 // --- CRUD Helpers ---

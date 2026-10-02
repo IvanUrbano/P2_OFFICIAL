@@ -36,7 +36,7 @@ function fullMetrics(overrides = {}) {
     significantChanges: [
       { barangay: 'Manggahan', month: '2026-08-01', caseCount: 30, zScore: 2.1, historicalMean: 15 },
     ],
-    riskCounts: { high: 4, medium: 8, low: 18 },
+    riskCounts: { high: 4, medium: 8, low: 18, noData: 0, assessed: 30, assessmentYear: 2025 },
     highRiskBarangays: ['San Jose', 'Manggahan', 'Pinagbuhatan', 'Sta. Cruz'],
     riskByBarangay: {
       'San Jose': 'High',
@@ -227,7 +227,25 @@ describe('analytics NLG — single-barangay risk findings', () => {
     const m = fullMetrics({ riskByBarangay: undefined });
     const r = generateAnalyticsInsight(m, { barangay: 'Bagong Ilog' });
     const risk = r.sections.find((s) => s.id === 'riskFindings');
-    assert.ok(risk && risk.text.includes('of 30 barangays'));
+    assert.ok(risk, 'riskFindings expected');
+    // Aggregate form, not the single-barangay sentence.
+    assert.ok(risk.text.includes('classified **4**'), `got: "${risk.text}"`);
+    assert.ok(!risk.text.includes('classifies **Bagong Ilog**'), 'must not claim a per-barangay class');
+  });
+
+  it('takes the risk denominator from the assessed count, never a hardcoded 30', () => {
+    // 10 assessed of a 30-barangay reference set: saying "of 30" would claim
+    // coverage the snapshot does not have.
+    const m = fullMetrics({
+      riskCounts: { high: 2, medium: 3, low: 5, noData: 20, assessed: 10, assessmentYear: 2025 },
+      riskByBarangay: undefined,
+    });
+    const r = generateAnalyticsInsight(m, {});
+    const risk = r.sections.find((s) => s.id === 'riskFindings');
+    assert.ok(risk.text.includes('of 10 assessed barangays'), `got: "${risk.text}"`);
+    assert.ok(!risk.text.includes('of 30'), 'denominator is not hardcoded');
+    assert.ok(risk.text.includes('20 barangay(s) have no classification'),
+      'unassessed barangays are reported, not folded into a risk band');
   });
 });
 

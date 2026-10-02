@@ -34,16 +34,51 @@ function clearTbinsightCache() {
     .forEach(k => delete require.cache[k]);
 }
 
-function buildApp() {
+/* ─── Auth ───
+ * /api/tb/* now requires an authenticated Staff or Admin user (router-level
+ * guard in tbinsight/routes.js). These route tests are about route behaviour,
+ * not authorization, so the app under test injects a REAL signed token for the
+ * requested role and the genuine authenticateToken/authorizeRoles middleware
+ * still runs and verifies it — nothing is stubbed out.
+ *
+ * Authorization itself (401 without a token, 403 for Staff on Admin-only
+ * routes, invalid and expired tokens) is covered separately in
+ * BACKEND/test/tbinsight/tbAuthorization.test.js, which builds the app
+ * WITHOUT this injector.
+ */
+const jwt = require('jsonwebtoken');
+
+// The real middleware verifies against process.env.JWT_SECRET; provide one for
+// the test process if the environment has not set it.
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-for-route-tests';
+
+function signToken(role = 'admin', overrides = {}) {
+  return jwt.sign(
+    { id: 1, username: 'tester', email: 'tester@example.com', role, ...overrides },
+    process.env.JWT_SECRET,
+    { expiresIn: '1h' }
+  );
+}
+
+function buildApp(role = 'admin') {
   uninstallMockDb();
   installMockDb();
   clearTbinsightCache();
 
   const app = express();
   app.use(express.json());
+  const token = signToken(role);
+  // Bearer auth (not cookie), so the CSRF nonce check does not apply — these
+  // tests exercise route logic, and Bearer requests are exempt by design.
+  app.use((req, _res, next) => {
+    req.headers.authorization = `Bearer ${token}`;
+    next();
+  });
   app.use('/api/tb', require('../../tbinsight/routes'));
   return app;
 }
+
+module.exports = { signToken };
 
 function teardown() {
   uninstallMockDb();
@@ -140,17 +175,79 @@ describe('GET /api/tb/cases', () => {
     assert.ok(capturedParams.includes(6));
   });
 
-  it('applies outcome filter', async () => {
+  /* The outcome filter binds an ARRAY of accepted DB values to `= ANY($n)`,
+   * not a scalar string. That is deliberate: the source Excel records a
+   * treatment failure as FAILED, but rows imported before the canonical form
+   * was aligned to the source are stored as TREATMENT FAILED, so selecting
+   * FAILED has to match both. This test previously asserted
+   * `capturedParams.includes('CURED')`, which looks for the bare string and
+   * cannot see inside the bound array — it was written against the older
+   * scalar binding and kept failing after the alias expansion was introduced,
+   * even though the filter itself was correct. It now asserts the real
+   * contract: the bound value is the expanded array, and the SQL compares
+   * against it with ANY on a normalized column. */
+  it('applies outcome filter as an array bound to = ANY', async () => {
     let capturedParams = [];
+    let capturedSql = '';
     let callCount = 0;
     mockQueryFn = async (sql, params) => {
       capturedParams = params || [];
+      capturedSql = sql;
       callCount++;
       if (callCount === 1) return { rows: [{ total: 200 }] };
       return { rows: [] };
     };
     await request(buildApp()).get('/api/tb/cases?outcome=CURED');
-    assert.ok(capturedParams.includes('CURED'));
+
+    const outcomeParam = capturedParams.find((p) => Array.isArray(p) && p.includes('CURED'));
+    assert.ok(outcomeParam, `expected a bound array containing CURED, got ${JSON.stringify(capturedParams)}`);
+    assert.deepStrictEqual(outcomeParam, ['CURED']);
+    assert.match(capturedSql, /UPPER\(TRIM\(c\.outcome_status\)\)\s*=\s*ANY\(\$\d+\)/);
+  });
+
+  it('expands FAILED to the legacy TREATMENT FAILED value', async () => {
+    // The 56 pre-alignment rows are stored as TREATMENT FAILED. Selecting the
+    // source-aligned FAILED must still find them, without the user ever being
+    // shown or asked to select TREATMENT FAILED.
+    let capturedParams = [];
+    let callCount = 0;
+    mockQueryFn = async (sql, params) => {
+      capturedParams = params || [];
+      callCount++;
+      if (callCount === 1) return { rows: [{ total: 56 }] };
+      return { rows: [] };
+    };
+    await request(buildApp()).get('/api/tb/cases?outcome=FAILED');
+
+    const outcomeParam = capturedParams.find((p) => Array.isArray(p));
+    assert.ok(outcomeParam, 'outcome filter binds an array');
+    assert.ok(outcomeParam.includes('FAILED'), 'matches the source-aligned value');
+    assert.ok(outcomeParam.includes('TREATMENT FAILED'), 'also matches the legacy stored value');
+  });
+
+  it('returns record outcomes as the source-aligned label, never the legacy form', async () => {
+    let callCount = 0;
+    mockQueryFn = async () => {
+      callCount++;
+      if (callCount === 1) return { rows: [{ total: 2 }] };
+      return {
+        rows: [
+          { id: 1, outcome_status: 'TREATMENT FAILED' },
+          { id: 2, outcome_status: 'SCREENED' },
+        ],
+      };
+    };
+    const res = await request(buildApp()).get('/api/tb/cases');
+    assert.strictEqual(res.status, 200);
+
+    const [failed, screened] = res.body.cases;
+    // Legacy value is presented under the source-aligned label...
+    assert.strictEqual(failed.outcome_status, 'FAILED');
+    assert.strictEqual(failed.outcome_status_raw, 'TREATMENT FAILED');
+    assert.strictEqual(failed.outcome_status_approved, true);
+    // ...and an unverified value is preserved, not remapped, but flagged.
+    assert.strictEqual(screened.outcome_status, 'SCREENED');
+    assert.strictEqual(screened.outcome_status_approved, false);
   });
 });
 

@@ -73,12 +73,20 @@ export default function TBRecordsPage() {
   const [options, setOptions] = useState({ registration_group: [], source_of_patient: [], anatomical_site: [], bacteriological_status: [] });
   const [user, setUser] = useState(null);
 
-  const fetchRecords = async () => {
+  const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 0 });
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const fetchRecords = async (page = 1) => {
     setLoading(true);
     setError('');
     try {
-      const res = await API.get('/api/data/records');
+      const params = new URLSearchParams({ page, limit: 50 });
+      if (searchTerm) params.set('search', searchTerm);
+      const res = await API.get(`/api/data/records?${params}`);
       setRecords(Array.isArray(res.data.records) ? res.data.records : (Array.isArray(res.data) ? res.data : []));
+      if (res.data.pagination) {
+        setPagination(res.data.pagination);
+      }
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to load records.');
     } finally {

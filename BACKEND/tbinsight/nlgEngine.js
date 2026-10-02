@@ -101,6 +101,11 @@ function buildRiskFindings(m, filters = {}) {
   const highCount = m.riskCounts.high;
   const medCount = m.riskCounts.medium;
   const names = m.highRiskBarangays || [];
+  // Denominator comes from the snapshot's own assessed count, never a
+  // hardcoded 30: if a barangay has no persisted classification it is not
+  // part of "N of M", and saying 30 would claim coverage that does not exist.
+  const assessed = m.riskCounts.assessed;
+  const ofAssessed = assessed ? ` of ${assessed} assessed barangays` : ' barangays';
   let text;
   if (highCount === 0) {
     text = 'No barangays are currently classified as high-risk based on the selected results.';
@@ -108,11 +113,14 @@ function buildRiskFindings(m, filters = {}) {
       text += ` However, ${medCount} barangay(s) are classified as medium-risk and should continue to be monitored.`;
     }
   } else if (highCount <= 5) {
-    text = `The Random Forest risk model classified **${highCount}** of 30 barangays as **High Risk**: ${names.join(', ')}.`;
+    text = `The Random Forest risk model classified **${highCount}**${ofAssessed} as **High Risk**: ${names.join(', ')}.`;
   } else {
     const top4 = names.slice(0, 4).join(', ');
     const others = highCount - 4;
-    text = `The Random Forest risk model classified **${highCount}** of 30 barangays as **High Risk**. These include ${top4}, and ${others} others.`;
+    text = `The Random Forest risk model classified **${highCount}**${ofAssessed} as **High Risk**. These include ${top4}, and ${others} others.`;
+  }
+  if (m.riskCounts.noData > 0) {
+    text += ` ${m.riskCounts.noData} barangay(s) have no classification in this snapshot.`;
   }
   text += caveat;
   return { id: 'riskFindings', title: 'Risk Findings', text };
@@ -193,9 +201,11 @@ function buildAnalyticsOverallSummary(m, filters = {}) {
   // Risk — omitted when the risk metric is unavailable
   if (m.riskCounts) {
     if (m.riskCounts.high > 0) {
-      parts.push(parts.length > 0
-        ? `while ${m.riskCounts.high} of 30 barangays are classified as High Risk`
-        : `${m.riskCounts.high} of 30 barangays are classified as High Risk`);
+      const assessed = m.riskCounts.assessed;
+      const phrase = assessed
+        ? `${m.riskCounts.high} of ${assessed} assessed barangays are classified as High Risk`
+        : `${m.riskCounts.high} barangays are classified as High Risk`;
+      parts.push(parts.length > 0 ? `while ${phrase}` : phrase);
     } else {
       parts.push(parts.length > 0
         ? 'and no barangays are currently classified as High Risk'

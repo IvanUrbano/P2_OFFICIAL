@@ -120,7 +120,15 @@ export default function Layout() {
             </div>
             <div className="flex items-center gap-2.5">
               <span className="text-lg font-extrabold tracking-tight" style={{ color: '#ffffff' }}>PASIG TB-IS</span>
-              <span className="text-[11px] font-medium hidden sm:inline" style={{ color: '#64748B' }}>Tuberculosis Information System</span>
+              {!isAdmin && user.facility_name && (
+                <span className="text-[11px] font-semibold hidden md:inline px-2 py-0.5 rounded-full" style={{ background: 'rgba(16,185,129,0.15)', color: '#10B981' }}>
+                  <i className="ri-hospital-line mr-1" style={{ fontSize: '10px' }} />
+                  {user.facility_name}
+                </span>
+              )}
+              {isAdmin && (
+                <span className="text-[11px] font-medium hidden sm:inline" style={{ color: '#64748B' }}>Tuberculosis Information System</span>
+              )}
             </div>
           </div>
 
@@ -287,7 +295,12 @@ export default function Layout() {
                         <span className="w-1.5 h-1.5 rounded-full" style={{ background: isAdmin ? '#2563EB' : '#00A9D8' }} />
                         {user.role}
                       </span>
-                      <span className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>{user.position || 'System Administrator'}</span>
+                      {!isAdmin && user.facility_name && (
+                        <span className="text-[9px] font-medium truncate" style={{ color: '#94A3B8' }}>{user.facility_name}</span>
+                      )}
+                      {isAdmin && (
+                        <span className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>{user.position || 'System Administrator'}</span>
+                      )}
                     </div>
                   </div>
 

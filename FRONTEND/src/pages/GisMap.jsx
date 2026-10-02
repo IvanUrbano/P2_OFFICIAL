@@ -459,6 +459,20 @@ export default function GisMap() {
     return new Date(d.getTime() + 8 * 3600 * 1000).getUTCFullYear() - 1;
   }, [data]);
 
+  // Whether the snapshot on screen came from the rule-based fallback rather
+  // than the trained Random Forest. A year with no population reference of its
+  // own produces no usable training rows, so its snapshot degrades to the
+  // fallback — a real difference in reliability that was previously only
+  // visible after opening an individual barangay.
+  const snapshotClassifier = React.useMemo(() => {
+    const classified = (data?.features || [])
+      .map(f => f.properties?.model_type)
+      .filter(Boolean);
+    if (classified.length === 0) return null;
+    const ruleBased = classified.filter(t => t !== 'random_forest').length;
+    return { ruleBased, total: classified.length, allRuleBased: ruleBased === classified.length };
+  }, [data]);
+
   // Click-to-zoom on barangay polygon
   const handlePolygonClick = useCallback((feature, layer) => {
     if (layer.getBounds) {
@@ -883,6 +897,26 @@ export default function GisMap() {
                 </span>
               ) : null;
             })()}
+
+            {/* A snapshot built by the rule-based fallback is a weaker result
+                than a Random Forest one, so say so at map level rather than
+                only inside a barangay's detail panel. */}
+            {snapshotClassifier?.ruleBased > 0 && (
+              <span
+                className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
+                style={{ background: '#FFFBEB', color: '#B45309', border: '1px solid #FDE68A' }}
+                title={
+                  'The Random Forest model could not be trained for this period — typically because the ' +
+                  'selected year has no matching population reference, leaving no usable training data. ' +
+                  'These classifications came from incidence thresholds alone and carry no confidence score.'
+                }
+              >
+                <i className="ri-error-warning-line mr-1" />
+                {snapshotClassifier.allRuleBased
+                  ? 'Rule-based fallback — not model-classified'
+                  : `${snapshotClassifier.ruleBased} of ${snapshotClassifier.total} rule-based`}
+              </span>
+            )}
 
             {hasActiveFilters && (
               <button
@@ -1387,7 +1421,15 @@ export default function GisMap() {
                         <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Total Cases</span>
                         <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.total_cases)}</p>
                       </div>
-                      <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                      <div
+                        className="rounded-lg p-3"
+                        style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}
+                        title={
+                          "Cases diagnosed in the selected year divided by that year's population, per 100,000. " +
+                          'The model classifies risk from a 12-month rolling incidence instead, shown under ' +
+                          'Indicators Used — the two are measured differently and need not match.'
+                        }
+                      >
                         <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Incidence / 100k</span>
                         <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.incidence_per_100k)}</p>
                       </div>
@@ -1524,6 +1566,9 @@ export default function GisMap() {
                           <p className="text-[10px] font-bold uppercase mb-2" style={{ color: '#64748B' }}>Indicators Used</p>
                           <p className="text-[10px] mb-2 leading-relaxed" style={{ color: '#94A3B8' }}>
                             The values the model was given for this classification — not individually-ranked reasons.
+                            Rolling 12-Month Incidence is the model&apos;s own measure, annualised from the preceding
+                            12 months, so it will not equal the Incidence / 100k shown above, which uses the selected
+                            year&apos;s own case total and population.
                           </p>
                           <div className="space-y-1.5">
                             {RF_FEATURE_ORDER.filter(k => k in merged.rf_features).map(key => (
@@ -1681,7 +1726,13 @@ export default function GisMap() {
                       <DetailRow label="Population" value={formatNum(merged.population)} />
                       <DetailRow label="Risk Score" value={formatNum(merged.risk_score)} />
                       <DetailRow label="Trend Direction" value={merged.trend_direction || '—'} />
-                      <DetailRow label="Forecasted Cases" value={formatNum(merged.forecasted_count)} />
+                      {/* Null means ARIMA never ran for this period (historical
+                          snapshots skip forecasting) — distinct from a real
+                          forecast of 0, which this must not be read as. */}
+                      <DetailRow
+                        label="Forecasted Cases"
+                        value={merged.forecasted_count != null ? formatNum(merged.forecasted_count) : 'Not forecasted'}
+                      />
                     </div>
                   </div>
 

@@ -115,6 +115,57 @@ def _vec(features: dict) -> list[float]:
     return [float(features.get(f, 0)) for f in FEATURES]
 
 
+def derive_labels(train: list[dict], low_max: float, med_max: float) -> list[str]:
+    """
+    Label each training row Low/Medium/High by its rank WITHIN its own month.
+
+    Each month's barangays are ranked by incidence and cut into thirds, so every
+    month contributes the same number of each band and the labels are balanced by
+    construction. This is what "tertile" was always meant to denote, and it is the
+    relative question the risk map actually asks: which barangays are the worst
+    affected right now.
+
+    The previous approach applied one pair of absolute cut points to every row.
+    Those cut points were calibrated from a single month's cross-section and then
+    used to label years of data, so most rows fell above them: the labels came out
+    roughly 11% Low, 22% Medium, 67% High rather than thirds. A classifier trained
+    on that learns to answer High almost always, and walk-forward evaluation scored
+    it below simply answering High every time — worse than no model at all.
+
+    Rows without a 'month' fall back to the absolute cut points, which keeps older
+    callers and the /classify contract working.
+
+    Note this makes the band explicitly relative: about a third of barangays are
+    always High, and a barangay moves band only by moving relative to the others.
+    """
+    rows_with_month = [r for r in train if r.get("month")]
+    if len(rows_with_month) < len(train):
+        return [
+            classify_incidence_tertile(r["incidence"], {"low_max": low_max, "med_max": med_max})
+            for r in train
+        ]
+
+    by_month: dict[str, list[int]] = {}
+    for idx, r in enumerate(train):
+        by_month.setdefault(r["month"], []).append(idx)
+
+    labels = [""] * len(train)
+    for _month, idxs in by_month.items():
+        if len(idxs) < 3:
+            # Too few barangays in the month to split into three; fall back.
+            for i in idxs:
+                labels[i] = classify_incidence_tertile(
+                    train[i]["incidence"], {"low_max": low_max, "med_max": med_max}
+                )
+            continue
+        order = sorted(idxs, key=lambda i: train[i]["incidence"])
+        n = len(order)
+        for rank, i in enumerate(order):
+            q = rank / (n - 1) if n > 1 else 0.0
+            labels[i] = "Low" if q < 1 / 3 else ("High" if q >= 2 / 3 else "Medium")
+    return labels
+
+
 def _make_rf(n_samples: int) -> RandomForestClassifier:
     """Random forest sized to the amount of training data."""
     large = n_samples >= RF_LARGE_SAMPLE
@@ -154,10 +205,7 @@ def train_and_predict(
 
     # Build training set
     X_train = [_vec(r["features"]) for r in train]
-    y_train = [
-        classify_incidence_tertile(r["incidence"], {"low_max": low_max, "med_max": med_max})
-        for r in train
-    ]
+    y_train = derive_labels(train, low_max, med_max)
 
     clf = _make_rf(len(X_train))
     clf.fit(X_train, y_train)
@@ -316,10 +364,7 @@ def walk_forward_rf(
 
         # Build training set
         X_train = [_vec(r["features"]) for r in train_data]
-        y_train = [
-            classify_incidence_tertile(r["incidence"], {"low_max": low_max, "med_max": med_max})
-            for r in train_data
-        ]
+        y_train = derive_labels(train_data, low_max, med_max)
 
         # Skip if only one class in training set
         if len(set(y_train)) < 2:
@@ -327,10 +372,7 @@ def walk_forward_rf(
 
         # Build test set
         X_test = [_vec(r["features"]) for r in test_data]
-        y_test_actual = [
-            classify_incidence_tertile(r["incidence"], {"low_max": low_max, "med_max": med_max})
-            for r in test_data
-        ]
+        y_test_actual = derive_labels(test_data, low_max, med_max)
 
         # Train and predict
         clf = _make_rf(len(X_train))
