@@ -5,6 +5,8 @@ import {
 } from 'recharts';
 import API from '../api/axios';
 import AiInsightPanel from '../components/AiInsightPanel';
+import ChartInsight from '../components/ChartInsight';
+import { forecastInsight, accuracyInsight } from '../utils/chartInsights';
 import FilterSelect from '../components/FilterSelect';
 import { getForecastingInsight } from '../services/insightService';
 
@@ -975,8 +977,33 @@ export default function Forecasting() {
     );
   }
 
+  // What the forecast is based on, from the last analysis run: the forecast always starts
+  // the month after the latest month of data — not from today's date.
+  const monthLabel = (ymd) => {
+    const m = String(ymd || '').match(/^(\d{4})-(\d{2})/);
+    return m ? new Date(Number(m[1]), Number(m[2]) - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : null;
+  };
+  const runMetrics = pipelineStatus?.metrics || {};
+  const basisStart = monthLabel(runMetrics.dataStart);
+  const basisEnd = monthLabel(runMetrics.dataEnd);
+  const forecastStart = monthLabel(pipelineStatus?.config?.period);
+  const usedFallback = (runMetrics.forecastMethods || []).some(m => String(m).includes('fallback') || String(m).includes('baseline'));
+  const runMethods = (runMetrics.forecastMethods || []).map(String);
+  const forecastMethodLabel = runMethods.length === 0 ? null
+    : runMethods.every(m => m === 'arima') ? 'ARIMA'
+      : runMethods.includes('arima') ? 'ARIMA for most barangays, a simpler baseline where history is short'
+        : 'a simple baseline (not ARIMA) — too little history or the ML service was unavailable';
+
   return (
     <div className="space-y-6">
+
+      {basisStart && basisEnd && (
+        <div className="rounded-xl px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs" style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', color: '#1E3A5F' }}>
+          <span><i className="ri-database-2-line mr-1" />Based on monthly TB data from <b>{basisStart}</b> to <b>{basisEnd}</b>{pipelineStatus?.training_months ? ` (${pipelineStatus.training_months} months)` : ''}</span>
+          {forecastStart && <span><i className="ri-calendar-event-line mr-1" />Forecast starts <b>{forecastStart}</b> — the month after the latest data</span>}
+          {usedFallback && <span style={{ color: '#92400E' }}><i className="ri-error-warning-line mr-1" />Some barangays use a simpler fallback forecast (too little history or the ML service was unavailable)</span>}
+        </div>
+      )}
 
       {/* ─── Header + Forecast Settings ─── */}
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
@@ -1538,6 +1565,7 @@ export default function Forecasting() {
                   <p className="text-xs" style={{ color: '#94A3B8' }}>No forecast chart data available.</p>
                 </div>
               )}
+              <ChartInsight text={forecastInsight(forecastChartData, { methodLabel: forecastMethodLabel })} />
             </div>
           </div>
 
@@ -1615,6 +1643,7 @@ export default function Forecasting() {
                     <p className="text-xs" style={{ color: '#94A3B8' }}>No comparison data available.</p>
                   </div>
                 )}
+                <ChartInsight text={accuracyInsight(avpChartData)} />
               </div>
             </div>
 

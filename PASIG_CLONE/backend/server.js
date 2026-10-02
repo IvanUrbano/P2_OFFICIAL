@@ -51,6 +51,7 @@ app.use(express.json({ limit: '50mb' })); // Default for other routes
 app.use(cookieParser());
 app.use('/api', csrfProtection);
 
+app.use('/api/auth/pin', require('./routes/pin'));
 app.use('/api/auth', authRoutes);
 app.use('/api/data', csvImportRoutes);
 app.use('/api/data', validationRoutes);
@@ -71,7 +72,26 @@ app.use((err, req, res, next) => {
  
 async function start() {
   try {
-    await initSchema();
+    // Same opt-in as TBInsight's BACKEND/db.js — skip re-running init.sql + migrations
+    // on every local nodemon restart once the schema is already caught up.
+    if (process.env.SKIP_MIGRATIONS === 'true') {
+      console.log('⏭️  Skipping schema init (SKIP_MIGRATIONS=true).');
+    } else {
+      await initSchema();
+    }
+    // Pre-open a few connections to both databases so the first page load doesn't pay
+    // ~1.5 s of connection setup per request
+    const { pool, authPool } = require('./db/pasigSchema');
+    await Promise.all([
+      ...Array.from({ length: 4 }, () => pool.query('SELECT 1')),
+      ...Array.from({ length: 3 }, () => authPool.query('SELECT 1')),
+    ]).catch(() => {});
+
+    // Barangay list comes from the database (refreshed every 10 minutes)
+    const { loadBarangays, startBarangayRefresh } = require('./services/barangayRegistry');
+    const brgy = await loadBarangays(authPool);
+    console.log(`🏘️  Barangays: ${brgy.count} loaded from ${brgy.source}`);
+    startBarangayRefresh(authPool);
     app.listen(config.port, () => {
       console.log(`🚀 Pasig Clone backend running on port ${config.port}`);
       console.log(`📦 File upload limits:`);

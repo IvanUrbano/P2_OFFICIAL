@@ -3,11 +3,19 @@ const router = express.Router();
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { validateRecord, getValidBarangays } = require('../services/validator');
-const { cleanRecord, PASIG_BARANGAYS } = require('../services/dataCleaner');
+const { cleanRecord, isPasigBarangay } = require('../services/dataCleaner');
 const { logAuditEvent } = require('../utils/auditLogger');
 const { sendWebhook } = require('../services/webhookSender');
+const { resolveMatch, createPatient, nextCaseNo, RESOLUTIONS } = require('../services/matchResolution');
+const { canViewCase, resolveUserFacility } = require('../policies/caseAccessPolicy');
 
-const PASIG_BARANGAY_SET = new Set(PASIG_BARANGAYS.map(n => n.toLowerCase()));
+
+function ymd(v) {
+  if (v instanceof Date) {
+    return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
+  }
+  return v ? String(v).slice(0, 10) : null;
+}
 
 // ==================== MANUAL TB RECORD ENTRY ====================
 // Creates one validated record (source_type='MANUAL') inside its own batch, then
@@ -18,19 +26,15 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
     const b = req.body || {};
     const manualErrors = [];
 
-    // Manual-specific: age is required (validateRecord treats age as optional 0–120)
-    if (b.age === null || b.age === undefined || String(b.age).trim() === '') {
-      manualErrors.push('Age is required');
-    }
-
-    // Normalize first (dates, sex, age, city, barangay canonicalization, outcome)
-    const { record: cleaned, notes } = cleanRecord({ ...b });
+    // Normalize first (names, dates, sex, city, barangay canonicalization, outcome).
+    // Age is always calculated from date of birth + date of diagnosis, never typed.
+    const { record: cleaned, notes } = cleanRecord({ ...b, age: null });
 
     // Manual entry is Pasig-only — the barangay must exist regardless of city
     const bgy = String(cleaned.barangay_name || '').trim();
     if (!bgy) {
       manualErrors.push('Barangay is required');
-    } else if (!PASIG_BARANGAY_SET.has(bgy.toLowerCase())) {
+    } else if (!isPasigBarangay(bgy)) {
       manualErrors.push(`Unknown barangay: "${bgy}"`);
     }
 
@@ -55,6 +59,40 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
       return res.status(400).json({ errors: allErrors, warnings: [...notes, ...validation.warnings] });
     }
 
+    // Possible returning patient: same Last + First name + date of birth as an existing case.
+    const candidate = (await db.pool.query(
+      `SELECT v.*, p.patient_no FROM validated_tb_cases v
+       LEFT JOIN patients p ON p.id = v.patient_id
+       WHERE v.case_no IS NOT NULL AND v.is_archived = false
+         AND lower(v.last_name) = lower($1) AND lower(v.first_name) = lower($2) AND v.date_of_birth = $3
+       ORDER BY v.date_of_diagnosis DESC NULLS LAST LIMIT 1`,
+      [cleaned.last_name, cleaned.first_name, cleaned.date_of_birth]
+    )).rows[0] || null;
+
+    const resolution = candidate ? b.match_resolution : null;
+    if (candidate && !RESOLUTIONS.includes(resolution)) {
+      // Ask the user to decide. Details beyond the IDs are only shown when the
+      // existing case is within this user's barangay/facility.
+      // Name shown only if the existing case is in this user's scope AND names are unlocked
+      const visible = canViewCase(req.user, await resolveUserFacility(req.user), candidate)
+        && require('../services/pinService').isUnlocked(req);
+      const sameDx = String(candidate.date_of_diagnosis ? ymd(candidate.date_of_diagnosis) : '') === cleaned.date_of_diagnosis;
+      return res.status(409).json({
+        possibleMatch: {
+          case_no: candidate.case_no,
+          patient_no: candidate.patient_no,
+          date_of_diagnosis: candidate.date_of_diagnosis ? ymd(candidate.date_of_diagnosis) : null,
+          suggestion: sameDx ? 'same_case' : 'new_episode',
+          ...(visible ? {
+            name: [candidate.last_name, candidate.first_name, candidate.middle_name].filter(Boolean).join(', '),
+            barangay_name: candidate.barangay_name,
+            outcome_status: candidate.outcome_status,
+            treatment_facility: candidate.treatment_facility,
+          } : {}),
+        },
+      });
+    }
+
     // Attribution: the entering user's own assigned facility (staff), NULL for admins
     const userRes = await db.authPool.query('SELECT facility_id FROM users WHERE id = $1', [req.user.id]);
     const enteredByFacilityId = userRes.rows[0]?.facility_id ?? null;
@@ -62,6 +100,7 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
     const client = await db.pool.connect();
     let batchId;
     let recordId;
+    let identity;
     try {
       await client.query('BEGIN');
 
@@ -75,6 +114,12 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
       );
       batchId = batchRes.rows[0].id;
 
+      let newIdentity = null;
+      if (!candidate) {
+        const patient = await createPatient(client, batchId);
+        newIdentity = { patientId: patient.id, caseNo: await nextCaseNo(client, cleaned.date_of_diagnosis) };
+      }
+
       const recRes = await client.query(
         `INSERT INTO validated_tb_cases (
           batch_id, source_type, barangay_name, date_of_diagnosis, date_of_notification,
@@ -82,10 +127,12 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
           anatomical_site, registration_group, bacteriological_status, date_started_treatment,
           outcome_status, date_of_outcome, date_of_screening, validation_status, itis_case_id,
           is_valid, validation_errors, validation_warnings, record_status,
-          entered_by_user_id, entered_by_facility_id, current_responsible_facility_id
+          entered_by_user_id, entered_by_facility_id, current_responsible_facility_id,
+          last_name, first_name, middle_name, suffix, date_of_birth,
+          patient_id, case_no, match_status, match_candidate_case_no
         ) VALUES ($1,'MANUAL',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-                  true,$20,$21,'new',$22,$23,$24)
-        RETURNING id`,
+                  true,$20,$21,'new',$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
+        RETURNING *`,
         [
           batchId,
           cleaned.barangay_name,
@@ -111,9 +158,20 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
           req.user.id,
           enteredByFacilityId,
           enteredByFacilityId, // current_responsible_facility_id = entering user's facility
+          cleaned.last_name, cleaned.first_name, cleaned.middle_name || null, cleaned.suffix || null,
+          cleaned.date_of_birth,
+          newIdentity ? newIdentity.patientId : null,
+          newIdentity ? newIdentity.caseNo : null,
+          candidate ? 'pending' : 'none',
+          candidate ? candidate.case_no : null,
         ]
       );
       recordId = recRes.rows[0].id;
+
+      // A returning patient: apply the user's decision in the same transaction
+      identity = candidate
+        ? await resolveMatch(client, recRes.rows[0], resolution, req.user.id)
+        : { resolution: null, caseNo: newIdentity.caseNo };
 
       await client.query('COMMIT');
     } catch (txErr) {
@@ -139,6 +197,8 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
         screeningFacility: cleaned.screening_facility || null,
         treatmentFacility: cleaned.treatment_facility || null,
         enteredByFacilityId,
+        caseNo: identity.caseNo,
+        matchResolution: identity.resolution,
       },
     });
 
@@ -155,15 +215,19 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
       sync = { status: 'failed', message: syncErr.message };
     }
 
+    const what = identity.resolution === 'same_case'
+      ? `Existing case ${identity.caseNo} updated`
+      : `TB record created (Case ID ${identity.caseNo})`;
     res.status(201).json({
-      message: sync.status === 'synced'
-        ? 'TB record created and synced to TBInsight.'
-        : 'TB record created.',
+      message: sync.status === 'synced' ? `${what} and synced to TBInsight.` : `${what}.`,
       batch_id: batchId,
       record_id: recordId,
+      case_no: identity.caseNo,
+      match_resolution: identity.resolution,
       sync,
     });
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
     console.error('Manual entry error:', error);
     res.status(500).json({ error: 'Failed to create TB record.' });
   }

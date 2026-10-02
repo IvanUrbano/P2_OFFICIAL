@@ -7,6 +7,7 @@ const { normalizeOutcome } = require('./outcomeNormalization');
 const { rebuildAggregations } = require('./aggregateMonthly');
 const { schedulePipelineRun } = require('./pipeline');
 const { verifyWebhookSignature } = require('../middleware/webhookAuth');
+const { flagPossibleDuplicates } = require('./duplicateFlags');
 
 /**
  * Duplicate detection (record level) has two independent signals, both
@@ -202,8 +203,12 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
           // post-insert possible-duplicate detection below.
           const dstbFingerprint = source_type === 'DSTB' ? computeDstbFingerprint(record) : null;
 
+          // A case re-sent inside a later batch keeps its original PASIG batch, so undoing
+          // that original batch still removes it.
+          const rowBatchId = uuidRegex.test(String(record.source_batch_id || '')) ? record.source_batch_id : batch_id;
+
           allValidRows.push([
-            batch_id,
+            rowBatchId,
             record.date_of_diagnosis, record.date_of_screening, record.date_of_notification,
             record.age, record.sex, record.barangay_name, record.screening_facility,
             record.treatment_facility, record.source_of_patient, record.anatomical_site,
@@ -216,6 +221,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
             record.rdt_result, record.rdt_release_date, record.outcome_reason,
             dstbFingerprint,
             record.current_responsible_facility_id ?? null,
+            record.case_no || null, record.patient_no || null,
           ]);
           // NOT incremented here — this only means "passed validation".
           // The real insert count (importedCount, set below) reflects what
@@ -228,9 +234,10 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       }
     }
 
-    const COLS = 32;
+    const COLS = 34;
     const chunkSize = 100;
     let insertedCount = 0;
+    let updatedCount = 0;
     const insertedDstbFingerprints = new Set();
     const insertedMnItisCaseIds = new Set();
     for (let i = 0; i < allValidRows.length; i += chunkSize) {
@@ -240,10 +247,11 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
         return `(${Array.from({ length: COLS }, (_, c) => `$${base + c + 1}`).join(',')})`;
       }).join(', ');
       const flatParams = chunk.flat();
-      // No ON CONFLICT clause: neither itis_case_id nor dstb_fingerprint is a
-      // DB uniqueness constraint (see the doc comment above). Every validated
-      // row is inserted unconditionally; possible-duplicate detection runs
-      // as a separate, non-blocking flagging pass below.
+      // case_no (PASIG's Case ID) is the only uniqueness key: a case sent again
+      // updates its outcome/treatment fields in place instead of becoming a second
+      // row. Rows without a case_no (and itis_case_id / dstb_fingerprint, which are
+      // NOT unique — see the doc comment above) are always inserted; possible-
+      // duplicate detection runs as a separate, non-blocking flagging pass below.
       const result = await client.query(
         `INSERT INTO tb_cases (
           batch_id, date_of_diagnosis, date_of_screening, date_of_notification,
@@ -255,13 +263,20 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
           referred_to_dots, referral_status,
           microscopy_result, microscopy_release_date,
           rdt_result, rdt_release_date, outcome_reason,
-          dstb_fingerprint, current_responsible_facility_id
+          dstb_fingerprint, current_responsible_facility_id,
+          case_no, patient_no
         ) VALUES ${placeholders}
-        RETURNING id, dstb_fingerprint, itis_case_id, source_type`,
+        ON CONFLICT (case_no) WHERE case_no IS NOT NULL DO UPDATE SET
+          outcome_status = EXCLUDED.outcome_status,
+          date_of_outcome = EXCLUDED.date_of_outcome,
+          date_started_treatment = EXCLUDED.date_started_treatment,
+          treatment_facility = EXCLUDED.treatment_facility
+        RETURNING id, dstb_fingerprint, itis_case_id, source_type, (xmax = 0) AS inserted`,
         flatParams
       );
-      insertedCount += result.rows.length;
       for (const row of result.rows) {
+        if (row.inserted === false) { updatedCount++; continue; }
+        insertedCount++;
         if (row.dstb_fingerprint) insertedDstbFingerprints.add(row.dstb_fingerprint);
         if (row.source_type === 'MN' && row.itis_case_id) insertedMnItisCaseIds.add(row.itis_case_id);
       }
@@ -274,57 +289,19 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
     // except the earliest as a possible duplicate. Never deletes, merges, or
     // blocks anything — every row keeps existing exactly as inserted; this
     // only sets a review flag and a reason.
-    let dstbCollisionsFlagged = 0;
-    if (insertedDstbFingerprints.size > 0) {
-      const flagResult = await client.query(
-        `UPDATE tb_cases t
-         SET duplicate_status = 'possible_duplicate', duplicate_of_case_id = earliest.id,
-             duplicate_flag_reason = 'DSTB_FINGERPRINT_COLLISION'
-         FROM (
-           SELECT dstb_fingerprint, MIN(id) AS id
-           FROM tb_cases
-           WHERE source_type = 'DSTB' AND dstb_fingerprint = ANY($1::text[])
-           GROUP BY dstb_fingerprint
-           HAVING COUNT(*) > 1
-         ) earliest
-         WHERE t.dstb_fingerprint = earliest.dstb_fingerprint
-           AND t.id != earliest.id
-           AND t.source_type = 'DSTB'
-           AND t.duplicate_status = 'unique'
-         RETURNING t.id`,
-        [[...insertedDstbFingerprints]]
-      );
-      dstbCollisionsFlagged = flagResult.rows.length;
-    }
-
-    let mnCollisionsFlagged = 0;
-    if (insertedMnItisCaseIds.size > 0) {
-      const flagResult = await client.query(
-        `UPDATE tb_cases t
-         SET duplicate_status = 'possible_duplicate', duplicate_of_case_id = earliest.id,
-             duplicate_flag_reason = 'MN_ITIS_ID_COLLISION'
-         FROM (
-           SELECT itis_case_id, MIN(id) AS id
-           FROM tb_cases
-           WHERE source_type = 'MN' AND itis_case_id = ANY($1::text[])
-           GROUP BY itis_case_id
-           HAVING COUNT(*) > 1
-         ) earliest
-         WHERE t.itis_case_id = earliest.itis_case_id
-           AND t.id != earliest.id
-           AND t.source_type = 'MN'
-           AND t.duplicate_status = 'unique'
-         RETURNING t.id`,
-        [[...insertedMnItisCaseIds]]
-      );
-      mnCollisionsFlagged = flagResult.rows.length;
-    }
+    const flagged = await flagPossibleDuplicates(client, {
+      dstbFingerprints: [...insertedDstbFingerprints],
+      mnItisCaseIds: [...insertedMnItisCaseIds],
+    });
+    const dstbCollisionsFlagged = flagged.dstb;
+    const mnCollisionsFlagged = flagged.mn;
     const possibleDuplicatesFlagged = dstbCollisionsFlagged + mnCollisionsFlagged;
 
     await client.query('COMMIT');
 
-    // Rebuild aggregations separately — data is already committed
-    if (importedCount > 0) {
+    // Rebuild aggregations separately — data is already committed. Updated cases
+    // (new outcomes) change the summaries just as much as new ones.
+    if (importedCount > 0 || updatedCount > 0) {
       try {
         await rebuildAggregations();
       } catch (aggErr) {
@@ -359,8 +336,8 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
 
     res.json({
       success: true,
-      message: `Webhook processed: ${importedCount} imported, ${possibleDuplicatesFlagged} possible duplicates flagged, ${errorCount} errors`,
-      totalRecords, importedCount, errorCount,
+      message: `Webhook processed: ${importedCount} imported, ${updatedCount} existing cases updated, ${possibleDuplicatesFlagged} possible duplicates flagged, ${errorCount} errors`,
+      totalRecords, importedCount, updatedCount, errorCount,
       possibleDuplicatesFlagged, mnCollisionsFlagged, dstbCollisionsFlagged,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
     });

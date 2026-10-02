@@ -12,14 +12,6 @@ const ADMIN_TABS = [
   { key: 'maintenance', label: 'Model & Data Maintenance', icon: 'ri-tools-line' },
 ];
 
-const FALLBACK_BARANGAYS = [
-  'Bagong Ilog', 'Bagong Katipunan', 'Bambang', 'Buting', 'Caniogan',
-  'Dela Paz', 'Kalawaan', 'Kapasigan', 'Kapitolyo', 'Malinao',
-  'Manggahan', 'Maybunga', 'Oranbo', 'Palatiw', 'Pinagbuhatan',
-  'Pineda', 'Rosario', 'Sagad', 'San Antonio', 'San Joaquin',
-  'San Jose', 'San Miguel', 'San Nicolas', 'Santa Cruz', 'Santa Lucia',
-  'Santa Rosa', 'Santo Tomas', 'Santolan', 'Sumilang', 'Ugong',
-];
 
 export default function Settings() {
   const { t } = useTheme();
@@ -150,18 +142,15 @@ export default function Settings() {
     setXlsxFile(null);
     setPopForm({ reference_year: '', source_organization: '', source_reference: '', notes: '' });
 
-    // Load 30 barangay names from API, with hardcoded fallback
+    // Barangay names come from the database (the official reference list)
     try {
       const res = await API.get('/api/tb/barangays');
       const barangays = res.data.barangays || [];
-      if (barangays.length > 0) {
-        setPopRecords(barangays.map(b => ({ barangay_name: b.name, population: '' })));
-      } else {
-        setPopRecords(FALLBACK_BARANGAYS.map(name => ({ barangay_name: name, population: '' })));
-      }
+      setPopRecords(barangays.map(b => ({ barangay_name: b.name, population: '' })));
+      if (barangays.length === 0) setPopMsg({ kind: 'error', text: 'No barangays found in the database.' });
     } catch {
-      setPopRecords(FALLBACK_BARANGAYS.map(name => ({ barangay_name: name, population: '' })));
-      setPopMsg({ kind: 'info', text: 'Loaded barangay list from local fallback.' });
+      setPopRecords([]);
+      setPopMsg({ kind: 'error', text: 'Could not load the barangay list. Please try again.' });
     }
   };
 
@@ -928,7 +917,7 @@ export default function Settings() {
                         <p className="text-[10px]" style={{ color: '#991B1B' }}>Unmatched: {popValidation.unmatched.join(', ')}</p>
                       )}
                       {popValidation.matched === popValidation.expected && (
-                        <p className="text-[10px] font-semibold" style={{ color: '#047857' }}>All 30 barangays matched. Dataset will be saved as ACTIVE.</p>
+                        <p className="text-[10px] font-semibold" style={{ color: '#047857' }}>All {popValidation.expected} barangays matched. Dataset will be saved as ACTIVE.</p>
                       )}
                       {popValidation.matched < popValidation.expected && popValidation.matched > 0 && (
                         <p className="text-[10px] font-semibold" style={{ color: '#92400E' }}>Dataset will be saved as INCOMPLETE ({popValidation.matched}/{popValidation.expected} barangays).</p>

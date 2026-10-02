@@ -44,6 +44,11 @@ export default function DataImportPage() {
   const [archiveReason, setArchiveReason] = useState('');
   const [archiving, setArchiving] = useState(false);
 
+  const [user, setUser] = useState(null);
+  const [showDelete, setShowDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
   const [showDetails, setShowDetails] = useState(null);
   const [detailsData, setDetailsData] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -52,6 +57,12 @@ export default function DataImportPage() {
     const tab = searchParams.get('tab');
     if (tab === 'history') setMainTab('history');
   }, [searchParams]);
+
+  useEffect(() => {
+    try { setUser(JSON.parse(localStorage.getItem('user') || 'null')); } catch { setUser(null); }
+  }, []);
+
+  const isAdmin = user?.role === 'admin';
 
   const fetchHistory = async (status) => {
     setHistoryLoading(true);
@@ -116,6 +127,21 @@ export default function DataImportPage() {
       console.error(err);
     } finally {
       setArchiving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!showDelete) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await API.delete(`/api/data/batches/${showDelete.id}`);
+      setShowDelete(null);
+      fetchHistory(historyTab);
+    } catch (err) {
+      setDeleteError(err.response?.data?.error || 'Failed to delete batch.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -359,6 +385,9 @@ export default function DataImportPage() {
                           {!b.isArchived && (b.status === 'validated' || b.syncStatus === 'synced') && (
                             <button onClick={() => setShowArchive(b)} className="px-2 py-1 text-[10px] font-semibold rounded cursor-pointer" style={{ color: '#D97706' }}>Archive</button>
                           )}
+                          {isAdmin && (
+                            <button onClick={() => { setShowDelete(b); setDeleteError(''); }} className="px-2 py-1 text-[10px] font-semibold rounded cursor-pointer" style={{ color: '#EF4444' }}>Delete</button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -405,6 +434,38 @@ export default function DataImportPage() {
             <div className="px-5 py-3.5 bg-gray-50 border-t border-gray-100 flex justify-end gap-2">
               <button onClick={() => { setShowArchive(null); setArchiveReason(''); }} className="px-4 py-2 text-xs font-bold rounded-md cursor-pointer border border-gray-300 text-gray-600 bg-white">Cancel</button>
               <button onClick={handleArchive} disabled={archiving} className="px-4 py-2 text-xs font-bold text-white rounded-md cursor-pointer disabled:opacity-50" style={{ background: '#D97706' }}>{archiving ? 'Archiving...' : 'Archive Batch'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => { if (!deleting) { setShowDelete(null); setDeleteError(''); } }}>
+          <div className="bg-white border border-gray-200 shadow-xl w-full max-w-[420px] mx-4 overflow-hidden" style={{ borderRadius: '5px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100" style={{ background: '#FEF2F2' }}>
+              <div className="flex items-center gap-2">
+                <i className="ri-delete-bin-line text-lg" style={{ color: '#EF4444' }} />
+                <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Permanently Delete Batch?</h3>
+              </div>
+              <button onClick={() => { if (!deleting) { setShowDelete(null); setDeleteError(''); } }} className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded cursor-pointer">
+                <i className="ri-close-line text-lg" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="grid grid-cols-2 gap-2 p-3 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #F1F5F9' }}>
+                <div><span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Batch</span><p className="text-xs font-mono font-bold" style={{ color: '#0F2D52' }}>{showDelete.id?.slice(0, 8)}</p></div>
+                <div><span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>File</span><p className="text-xs font-bold" style={{ color: '#0F2D52' }}>{showDelete.filename}</p></div>
+              </div>
+              <p className="text-xs leading-relaxed" style={{ color: '#475569' }}>
+                This permanently removes the batch's records from PASIG TB-IS <strong>and</strong> from TBInsight (if it was already synced), along with TBInsight's analysis results (forecasts, risk levels, alerts). The analysis is re-run automatically on the remaining data. This cannot be undone.
+              </p>
+              {deleteError && (
+                <div className="px-3 py-2 rounded-lg text-xs" style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C' }}>{deleteError}</div>
+              )}
+            </div>
+            <div className="px-5 py-3.5 bg-gray-50 border-t border-gray-100 flex justify-end gap-2">
+              <button onClick={() => { setShowDelete(null); setDeleteError(''); }} disabled={deleting} className="px-4 py-2 text-xs font-bold rounded-md cursor-pointer border border-gray-300 text-gray-600 bg-white disabled:opacity-50">Cancel</button>
+              <button onClick={handleDelete} disabled={deleting} className="px-4 py-2 text-xs font-bold text-white rounded-md cursor-pointer disabled:opacity-50" style={{ background: '#EF4444' }}>{deleting ? 'Deleting...' : 'Delete Permanently'}</button>
             </div>
           </div>
         </div>

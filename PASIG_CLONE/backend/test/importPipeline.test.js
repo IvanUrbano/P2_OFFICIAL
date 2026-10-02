@@ -231,19 +231,70 @@ describe('cleaning', () => {
 });
 
 describe('clean + validate', () => {
+  const person = { last_name: '  dela   cruz ', first_name: 'Maria', date_of_birth: '1963-05-20' };
+
   it('accepts a messy but valid Pasig record after cleaning', async () => {
     const valid = await getValidBarangays();
-    const { record } = cleanRecord({ barangay_name: 'STA. CRUZ', city: 'pasig', sex: 'F', date_of_diagnosis: '07-Mar-25', age: '61' });
+    const { record } = cleanRecord({ ...person, barangay_name: 'STA. CRUZ', city: 'pasig', sex: 'F', date_of_diagnosis: '07-Mar-25', age: '61' });
     const result = validateRecord(record, 'DSTB', valid);
     assert.equal(result.valid, true, JSON.stringify(result.errors));
+    assert.equal(record.last_name, 'dela cruz', 'name whitespace is collapsed');
   });
 
-  it('rejects a Pasig record with an unknown barangay', async () => {
+  it('keeps a Pasig record with an unknown barangay for Needs Assignment', async () => {
     const valid = await getValidBarangays();
-    const { record } = cleanRecord({ barangay_name: 'Nowhere', city: 'Pasig City', sex: 'M', date_of_diagnosis: '2025-01-01' });
+    const { record } = cleanRecord({ ...person, barangay_name: 'Nowhere', city: 'Pasig City', sex: 'M', date_of_diagnosis: '2025-01-01' });
     const result = validateRecord(record, 'DSTB', valid);
-    assert.equal(result.valid, false);
-    assert.ok(result.errors[0].includes('Unknown barangay'));
+    assert.equal(result.valid, true);
+    assert.ok(result.warnings.some(w => w.includes('Unknown barangay')));
+  });
+
+  it('calculates age from date of birth and diagnosis, warning when the file disagrees', () => {
+    const { record, notes } = cleanRecord({ ...person, barangay_name: 'Ugong', sex: 'F', date_of_diagnosis: '2025-03-07', age: '64' });
+    assert.equal(record.age, 61, 'birthday (May 20) not yet reached by March 7');
+    assert.ok(notes.some(n => n.includes('Age 64') && n.includes('(61)')));
+  });
+
+  it('reads 2-digit years as 19xx when 20xx would be in the future (Excel-saved CSVs)', () => {
+    assert.equal(cleanDate('11-Apr-57'), '1957-04-11');
+    assert.equal(cleanDate('3-May-91'), '1991-05-03');
+    assert.equal(cleanDate('14-Jun-09'), '2009-06-14');
+    assert.equal(cleanDate('22-Feb-24'), '2024-02-22');
+    assert.equal(cleanDate('4/11/57'), '1957-04-11');
+  });
+
+  it('does not warn about capitalization-only barangay changes or "No Data" dates', () => {
+    const { record, notes } = cleanRecord({
+      barangay_name: 'SAN ANTONIO', date_of_diagnosis: '2025-01-05', date_started_treatment: 'No Data',
+    });
+    assert.equal(record.barangay_name, 'San Antonio');
+    assert.equal(record.date_started_treatment, null);
+    assert.deepEqual(notes, []);
+    const messy = cleanRecord({ barangay_name: 'STA. LUCIA' });
+    assert.ok(messy.notes.some(n => n.includes('standardized to "Santa Lucia"')));
+  });
+
+  it('uses the barangay list loaded from the database (setBarangays)', () => {
+    const { setBarangays, isPasigBarangay, matchBarangay: match } = require('../services/dataCleaner');
+    const original = [...PASIG_BARANGAYS];
+    try {
+      assert.equal(isPasigBarangay('Bagong Silang'), false);
+      setBarangays([...original, 'Bagong Silang']);
+      assert.equal(isPasigBarangay('bagong silang'), true);
+      assert.equal(match('BRGY. BAGONG SILANG').name, 'Bagong Silang');
+      assert.equal(setBarangays([]), false, 'an empty list from the database is ignored');
+      assert.equal(PASIG_BARANGAYS.length, original.length + 1);
+    } finally {
+      setBarangays(original);
+    }
+  });
+
+  it('splits a single "LAST, FIRST MIDDLE" name column', () => {
+    const { record } = cleanRecord({ full_name: 'SANTOS, ANA MARIE REYES', barangay_name: 'Ugong' });
+    assert.equal(record.last_name, 'SANTOS');
+    assert.equal(record.first_name, 'ANA MARIE');
+    assert.equal(record.middle_name, 'REYES');
+    assert.equal('full_name' in record, false);
   });
 });
 

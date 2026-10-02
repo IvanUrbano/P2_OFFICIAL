@@ -3,57 +3,69 @@ const router = express.Router();
 const { logAuditEvent } = require('../utils/auditLogger');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
-const { canTransferCase } = require('../policies/caseAccessPolicy');
+const { canViewCase, resolveUserFacility } = require('../policies/caseAccessPolicy');
+const { addTransferNames } = require('../services/transferNames');
 
-// ==================== INITIATE TRANSFER ====================
+// ==================== INITIATE TRANSFER / REFERRAL ====================
+// Anyone who can see the case (admin, or staff whose barangay/facility covers it) can
+// refer or transfer it. The receiving facility then accepts and completes it; completing
+// makes that facility the case's current responsible facility. The full trail is kept.
 router.post('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
-    const { validated_case_id, to_facility_id, transfer_type, notes } = req.body;
+    const { validated_case_id, transfer_type, notes } = req.body;
+    const toFacilityId = Number(req.body.to_facility_id);
     const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
-    if (!validated_case_id || !to_facility_id) {
-      return res.status(400).json({ error: 'Case ID and receiving facility are required.' });
+    if (!validated_case_id || !Number.isInteger(toFacilityId)) {
+      return res.status(400).json({ error: 'Case and receiving facility are required.' });
     }
 
     if (!['referral', 'transfer'].includes(transfer_type)) {
       return res.status(400).json({ error: 'Transfer type must be "referral" or "transfer".' });
     }
 
-    // Fetch the case
     const caseResult = await db.pool.query(
-      'SELECT id, current_responsible_facility_id FROM validated_tb_cases WHERE id = $1',
+      `SELECT id, barangay_name, treatment_facility, current_responsible_facility_id
+       FROM validated_tb_cases
+       WHERE id = $1 AND match_status <> 'pending' AND merged_into_case_no IS NULL`,
       [validated_case_id]
     );
     if (caseResult.rows.length === 0) {
       return res.status(404).json({ error: 'Case not found.' });
     }
-
     const caseRecord = caseResult.rows[0];
 
-    if (!canTransferCase(req.user, caseRecord)) {
-      return res.status(403).json({ error: 'Access denied. Only the current responsible facility can initiate transfers.' });
+    if (!canViewCase(req.user, await resolveUserFacility(req.user), caseRecord)) {
+      return res.status(403).json({ error: 'You can only refer or transfer cases you can see.' });
     }
 
-    // Verify receiving facility exists
-    const facResult = await db.pool.query(
-      'SELECT id, name FROM health_facilities WHERE id = $1',
-      [to_facility_id]
-    );
+    // Facilities live in TBInsight's database (AUTH_DATABASE_URL)
+    const facResult = await db.authPool.query('SELECT id, name FROM health_facilities WHERE id = $1', [toFacilityId]);
     if (facResult.rows.length === 0) {
       return res.status(400).json({ error: 'Receiving facility not found.' });
     }
 
-    // Cannot transfer to same facility
-    if (caseRecord.current_responsible_facility_id === to_facility_id) {
+    // From: the case's responsible facility; for cases that never had one (imports),
+    // the referring staff member's own facility.
+    const fromFacilityId = caseRecord.current_responsible_facility_id
+      ?? (req.user.role !== 'admin' ? req.user.facility_id ?? null : null);
+    if (fromFacilityId === toFacilityId) {
       return res.status(400).json({ error: 'Cannot transfer to the same facility.' });
     }
 
-    // Create transfer record
+    const open = await db.pool.query(
+      `SELECT 1 FROM case_transfers WHERE validated_case_id = $1 AND status IN ('pending', 'accepted') LIMIT 1`,
+      [validated_case_id]
+    );
+    if (open.rows.length > 0) {
+      return res.status(409).json({ error: 'This case already has an open referral/transfer. Complete or cancel it first.' });
+    }
+
     const result = await db.pool.query(
       `INSERT INTO case_transfers (validated_case_id, from_facility_id, to_facility_id, transfer_type, status, initiated_by_user_id, notes)
        VALUES ($1, $2, $3, $4, 'pending', $5, $6)
        RETURNING *`,
-      [validated_case_id, caseRecord.current_responsible_facility_id, to_facility_id, transfer_type, req.user.id, notes || null]
+      [validated_case_id, fromFacilityId, toFacilityId, transfer_type, req.user.id, notes || null]
     );
 
     await logAuditEvent({
@@ -66,8 +78,8 @@ router.post('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res
       ipAddress,
       details: {
         transfer_id: result.rows[0].id,
-        from_facility_id: caseRecord.current_responsible_facility_id,
-        to_facility_id,
+        from_facility_id: fromFacilityId,
+        to_facility_id: toFacilityId,
         transfer_type,
       },
     });
@@ -249,8 +261,10 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
     const params = [];
     let paramIdx = 1;
 
-    // Staff only see transfers involving their facility
-    if (req.user.role !== 'admin' && req.user.facility_id) {
+    // Staff only see transfers involving their own facility (sending or receiving);
+    // staff with no assigned facility see none.
+    if (req.user.role !== 'admin') {
+      if (!req.user.facility_id) return res.json({ transfers: [] });
       where += ` AND (ct.from_facility_id = $${paramIdx} OR ct.to_facility_id = $${paramIdx})`;
       params.push(req.user.facility_id);
       paramIdx++;
@@ -261,26 +275,23 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
       params.push(req.query.status);
     }
 
+    // The patient's name is shown because both facilities involved need to know who is
+    // being referred/transferred.
     const result = await db.pool.query(
       `SELECT ct.*,
-              hf1.name AS from_facility_name,
-              hf2.name AS to_facility_name,
-              u1.username AS initiated_by_username,
-              u2.username AS accepted_by_username,
-              vtc.barangay_name, vtc.date_of_diagnosis, vtc.source_type
+              vtc.case_no, p.patient_no, vtc.last_name, vtc.first_name, vtc.middle_name, vtc.suffix,
+              vtc.barangay_name, vtc.date_of_diagnosis, vtc.source_type, vtc.outcome_status
        FROM case_transfers ct
-       LEFT JOIN health_facilities hf1 ON ct.from_facility_id = hf1.id
-       LEFT JOIN health_facilities hf2 ON ct.to_facility_id = hf2.id
-       LEFT JOIN users u1 ON ct.initiated_by_user_id = u1.id
-       LEFT JOIN users u2 ON ct.accepted_by_user_id = u2.id
        LEFT JOIN validated_tb_cases vtc ON ct.validated_case_id = vtc.id
+       LEFT JOIN patients p ON p.id = vtc.patient_id
        WHERE ${where}
        ORDER BY ct.created_at DESC
        LIMIT 100`,
       params
     );
 
-    res.json({ transfers: result.rows });
+    const { maskUnlessUnlocked } = require('../services/pinService');
+    res.json({ transfers: maskUnlessUnlocked(req, await addTransferNames(result.rows)) });
   } catch (error) {
     console.error('Error fetching transfers:', error);
     res.status(500).json({ error: 'Failed to fetch transfers.' });

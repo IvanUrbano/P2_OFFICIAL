@@ -3,9 +3,7 @@ const fetch = require('node-fetch');
 const config = require('../config');
 const db = require('../db/pasigSchema');
 const { logAuditEvent } = require('../utils/auditLogger');
-const { PASIG_BARANGAYS, isPasigCity } = require('./dataCleaner');
-
-const PASIG_BARANGAY_SET = new Set(PASIG_BARANGAYS.map(n => n.toLowerCase()));
+const { isPasigBarangay, isPasigCity } = require('./dataCleaner');
 
 function signPayload(payload, secret) {
   const body = JSON.stringify(payload);
@@ -62,6 +60,12 @@ function formatRecord(record) {
     rdt_release_date: toYmd(record.rdt_release_date),
     outcome_reason: record.outcome_reason ?? null,
     current_responsible_facility_id: record.current_responsible_facility_id ?? null,
+    // Identity: IDs only. Names and date of birth are deliberately never sent.
+    case_no: record.case_no ?? null,
+    patient_no: record.patient_no ?? null,
+    // The PASIG batch the case originally came from, so undoing that batch in
+    // TBInsight removes it even when it was (re)sent inside a later batch.
+    source_batch_id: record.batch_id ?? null,
   };
 }
 
@@ -71,7 +75,7 @@ function formatRecord(record) {
 function isPasigRecord(record) {
   // Records were cleaned before validation, so barangay names are already canonical.
   const barangay = String(record.barangay_name || '').trim().toLowerCase();
-  if (!PASIG_BARANGAY_SET.has(barangay)) return false;
+  if (!isPasigBarangay(barangay)) return false;
   const city = String(record.city || '').trim();
   return !city || isPasigCity(city);
 }
@@ -82,7 +86,7 @@ function isPasigRecord(record) {
  * @param {number} userId - ID of user initiating sync
  * @returns {Object} { success, status, message, recordsSent, recordsAccepted }
  */
-async function sendWebhook(batchId, userId) {
+async function sendWebhook(batchId, userId, { extraCaseNos = [] } = {}) {
   const client = await db.pool.connect();
   
   try {
@@ -98,11 +102,29 @@ async function sendWebhook(batchId, userId) {
 
     const recordsResult = await db.getValidatedCases(batchId);
 
-    // Filter: only send Pasig City records to TBInsight, and skip exact
-    // duplicates of records already sent in a prior batch (record_status
-    // is set by recordDuplicateDetector during validation).
-    const pasigOnly = recordsResult.rows.filter(isPasigRecord);
-    const nonPasigCount = recordsResult.rows.length - pasigOnly.length;
+    const pendingMatches = recordsResult.rows.filter(r => r.match_status === 'pending').length;
+    if (pendingMatches > 0) {
+      throw new Error(
+        `This batch has ${pendingMatches} possible patient match${pendingMatches === 1 ? '' : 'es'} to review first. ` +
+        'Open TB Records → Possible Matches.'
+      );
+    }
+
+    // Records that are cases in their own right. A record confirmed as the "same case"
+    // as an earlier one is not itself a case: its update was applied to that earlier
+    // case, which is re-sent below and updated in TBInsight by its Case ID.
+    const ownCases = recordsResult.rows.filter(r => !r.merged_into_case_no);
+    const resendCaseNos = new Set([
+      ...recordsResult.rows.map(r => r.merged_into_case_no).filter(Boolean),
+      ...extraCaseNos,
+    ]);
+    for (const r of ownCases) resendCaseNos.delete(r.case_no);
+    const resent = resendCaseNos.size > 0 ? (await db.getCasesByCaseNo([...resendCaseNos])).rows : [];
+    const candidates = [...ownCases, ...resent];
+
+    // Filter: only send Pasig City records to TBInsight
+    const pasigOnly = candidates.filter(isPasigRecord);
+    const nonPasigCount = candidates.length - pasigOnly.length;
     const pasigRecords = pasigOnly.filter(r => r.record_status !== 'duplicate');
 
     const dstbRecords = pasigRecords.filter(r => r.source_type === 'DSTB');

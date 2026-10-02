@@ -1,12 +1,26 @@
 const express = require('express');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
+const fetch = require('node-fetch');
 const { parseRegistryFile } = require('../services/multiSheetParser');
 const { calculateFileHash } = require('../utils/fileHash');
 const { logAuditEvent } = require('../utils/auditLogger');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
-const { getCaseListScope } = require('../policies/caseAccessPolicy');
+const { getCaseListScope, resolveUserFacility, canViewCase } = require('../policies/caseAccessPolicy');
+const { PASIG_BARANGAYS } = require('../services/dataCleaner');
+const { sendWebhook } = require('../services/webhookSender');
+const pinService = require('../services/pinService');
+const config = require('../config');
+
+// Needs Assignment: no barangay, a barangay outside the official list, or a non-Pasig
+// city. Rebuilt on each use from the current list (loaded from the database); names are
+// quote-escaped, so the literal is safe.
+function unassignedSql() {
+  const list = `ARRAY[${PASIG_BARANGAYS.map(n => `'${n.toLowerCase().replace(/'/g, "''")}'`).join(',')}]::text[]`;
+  return `(v.barangay_name IS NULL OR lower(v.barangay_name) <> ALL(${list})
+  OR (v.city IS NOT NULL AND lower(v.city) NOT IN ('pasig city', 'pasig')))`;
+}
 
 // Large-file parsing is expensive — cap how often it can be triggered per IP.
 const importLimiter = rateLimit({
@@ -252,59 +266,70 @@ router.get('/import-history', authenticate, authorizeRoles('admin', 'staff'), as
 // ==================== STATS (Dashboard KPIs) ====================
 router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
-    // ========== Organization-wide stats (not per-user) ==========
-    const totalResult = await db.pool.query('SELECT COUNT(*)::int AS count FROM validated_tb_cases');
-    const validResult = await db.pool.query('SELECT COUNT(*)::int AS count FROM validated_tb_cases WHERE is_valid = true');
-    const invalidResult = await db.pool.query('SELECT COUNT(*)::int AS count FROM validated_tb_cases WHERE is_valid = false');
-    const pendingResult = await db.pool.query("SELECT COUNT(*)::int AS count FROM import_batches WHERE status NOT IN ('validated', 'sent')");
-
-    // Synced count from batches with successful sync
-    let syncedCount = 0;
-    const syncedResult = await db.pool.query("SELECT COUNT(DISTINCT batch_id)::int AS count FROM import_batches WHERE sync_status = 'synced'");
-    syncedCount = syncedResult.rows[0]?.count || 0;
+    // ========== Organization-wide stats (counts only — no names) ==========
+    // Total    = every row imported (including rows that failed validation)
+    // Validated = rows that passed validation
+    // Pending  = rows in batches not yet validated + possible matches awaiting review
+    // Synced   = records actually sent to TBInsight: own cases (not merged into another
+    //            case, not awaiting a match decision) with a Pasig barangay, in synced batches
+    const counts = (await db.pool.query(
+      `SELECT
+         (SELECT COUNT(*) FROM raw_tb_cases)::int AS total,
+         (SELECT COUNT(*) FROM validated_tb_cases v WHERE v.is_valid AND NOT v.is_archived)::int AS validated,
+         (SELECT COUNT(*) FROM raw_tb_cases r JOIN import_batches b ON b.id = r.batch_id WHERE b.status = 'uploaded')::int AS unvalidated_rows,
+         (SELECT COUNT(*) FROM validated_tb_cases v WHERE v.match_status = 'pending' AND NOT v.is_archived)::int AS possible_matches,
+         (SELECT COUNT(*) FROM validated_tb_cases v
+            WHERE NOT v.is_archived AND v.match_status <> 'pending' AND v.merged_into_case_no IS NULL
+              AND ${unassignedSql()})::int AS needs_assignment,
+         (SELECT COUNT(*) FROM validated_tb_cases v JOIN import_batches b ON b.id = v.batch_id
+            WHERE b.sync_status = 'synced' AND NOT v.is_archived AND v.match_status <> 'pending'
+              AND v.merged_into_case_no IS NULL AND NOT ${unassignedSql()})::int AS synced`
+    )).rows[0];
 
     // Recent imports for dashboard
-    const recentResult = await db.pool.query(
-      `SELECT b.id, b.filename, u.username, b.total_rows, b.status, b.sync_status, b.created_at
-       FROM import_batches b
-       LEFT JOIN users u ON b.uploaded_by = u.id
-       ORDER BY b.created_at DESC
-       LIMIT 5`
-    );
-
-    // Latest sync info
-    const latestSyncResult = await db.pool.query(
-      `SELECT b.id, b.filename, u.username, b.total_rows, b.sync_status, b.synced_at
-       FROM import_batches b
-       LEFT JOIN users u ON b.synced_by = u.id
-       WHERE b.sync_status = 'synced'
-       ORDER BY b.synced_at DESC
-       LIMIT 1`
-    );
-
-    // Pending actions
-    const pendingValidationResult = await db.pool.query(
-      "SELECT COUNT(*)::int AS count FROM import_batches WHERE status = 'uploaded'"
-    );
-    const readyForSyncResult = await db.pool.query(
-      "SELECT COUNT(*)::int AS count FROM import_batches WHERE status = 'validated' AND sync_status = 'pending'"
-    );
-    const failedSyncResult = await db.pool.query(
-      "SELECT COUNT(*)::int AS count FROM import_batches WHERE sync_status = 'sync_failed'"
-    );
+    // Recent imports, latest sync and pending-action counts — independent, so run at once
+    const [recentResult, latestSyncResult, pendingResult] = await Promise.all([
+      db.pool.query(
+        `SELECT b.id, b.filename, u.username, b.total_rows, b.status, b.sync_status, b.created_at
+         FROM import_batches b
+         LEFT JOIN users u ON b.uploaded_by = u.id
+         ORDER BY b.created_at DESC
+         LIMIT 5`
+      ),
+      db.pool.query(
+        `SELECT b.id, b.filename, u.username, b.total_rows, b.sync_status, b.synced_at
+         FROM import_batches b
+         LEFT JOIN users u ON b.synced_by = u.id
+         WHERE b.sync_status = 'synced'
+         ORDER BY b.synced_at DESC
+         LIMIT 1`
+      ),
+      db.pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE status = 'uploaded')::int AS requires_validation,
+           COUNT(*) FILTER (WHERE status = 'validated' AND sync_status = 'pending')::int AS ready_for_sync,
+           COUNT(*) FILTER (WHERE sync_status = 'sync_failed')::int AS failed_sync
+         FROM import_batches`
+      ),
+    ]);
+    const pending = pendingResult.rows[0];
+    const pendingValidationResult = { rows: [{ count: pending.requires_validation }] };
+    const readyForSyncResult = { rows: [{ count: pending.ready_for_sync }] };
+    const failedSyncResult = { rows: [{ count: pending.failed_sync }] };
 
     res.json({
-      total: totalResult.rows[0]?.count || 0,
-      validated: validResult.rows[0]?.count || 0,
-      invalid: invalidResult.rows[0]?.count || 0,
-      pending: pendingResult.rows[0]?.count || 0,
-      synced: syncedCount,
+      total: counts.total,
+      validated: counts.validated,
+      pending: counts.unvalidated_rows + counts.possible_matches,
+      synced: counts.synced,
       recentImports: recentResult.rows,
       latestSync: latestSyncResult.rows[0] || null,
       pendingActions: {
         requiresValidation: pendingValidationResult.rows[0]?.count || 0,
         readyForSync: readyForSyncResult.rows[0]?.count || 0,
         failedSync: failedSyncResult.rows[0]?.count || 0,
+        possibleMatches: counts.possible_matches,
+        needsAssignment: req.user.role === 'admin' ? counts.needs_assignment : 0,
       },
     });
   } catch (error) {
@@ -319,43 +344,79 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 50), 200);
     const offset = (page - 1) * limit;
+    const view = ['all', 'matches', 'unassigned'].includes(req.query.view) ? req.query.view : 'all';
+    const isAdmin = req.user.role === 'admin';
+    if (view === 'unassigned' && !isAdmin) {
+      return res.status(403).json({ error: 'Needs Assignment is available to admins only.' });
+    }
 
-    // Get facility-scoped WHERE clause
-    const scope = getCaseListScope(req.user);
-
-    // Build WHERE clause with optional filters
-    let where = `is_archived = false AND ${scope.where}`;
+    const facility = await resolveUserFacility(req.user);
+    const scope = getCaseListScope(req.user, facility, 'v');
     const params = [...scope.params];
-    let paramIdx = params.length + 1;
+    const base = `v.is_archived = false AND ${scope.where}`;
+    const viewSql = {
+      all: `v.match_status <> 'pending' AND v.merged_into_case_no IS NULL`,
+      matches: `v.match_status = 'pending'`,
+      unassigned: `v.match_status <> 'pending' AND v.merged_into_case_no IS NULL AND ${unassignedSql()}`,
+    };
 
+    let filters = '';
     if (req.query.barangay) {
-      where += ` AND barangay_name = $${paramIdx++}`;
       params.push(req.query.barangay);
+      filters += ` AND v.barangay_name = $${params.length}`;
     }
     if (req.query.source_type) {
-      where += ` AND source_type = $${paramIdx++}`;
       params.push(req.query.source_type);
+      filters += ` AND v.source_type = $${params.length}`;
     }
+    const namesUnlocked = pinService.isUnlocked(req);
     if (req.query.search) {
-      where += ` AND (barangay_name ILIKE $${paramIdx} OR city ILIKE $${paramIdx} OR screening_facility ILIKE $${paramIdx} OR treatment_facility ILIKE $${paramIdx} OR itis_case_id ILIKE $${paramIdx})`;
       params.push(`%${req.query.search}%`);
-      paramIdx++;
+      const s = `$${params.length}`;
+      // Searching by name is only allowed once names are unlocked with the records PIN —
+      // otherwise a locked user could still find out whether a person is in the system.
+      const nameClauses = namesUnlocked
+        ? `v.last_name ILIKE ${s} OR v.first_name ILIKE ${s} OR v.middle_name ILIKE ${s}
+           OR (v.last_name || ', ' || v.first_name) ILIKE ${s} OR `
+        : '';
+      filters += ` AND (${nameClauses}v.case_no ILIKE ${s} OR p.patient_no ILIKE ${s}
+        OR v.barangay_name ILIKE ${s} OR v.treatment_facility ILIKE ${s} OR v.itis_case_id ILIKE ${s})`;
     }
 
-    // Count query
-    const countResult = await db.pool.query(
-      `SELECT COUNT(*)::int AS total FROM validated_tb_cases WHERE ${where}`,
-      params
-    );
+    const from = 'FROM validated_tb_cases v LEFT JOIN patients p ON p.id = v.patient_id';
+    const where = `${base} AND ${viewSql[view]}${filters}`;
 
-    // Data query
-    const dataResult = await db.pool.query(
-      `SELECT * FROM validated_tb_cases WHERE ${where} ORDER BY id DESC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`,
-      [...params, limit, offset]
-    );
+    // Tab badges use the same visibility scope, without the search filter. All five queries
+    // are independent, so they run at once (each is a ~0.2 s round trip to the database).
+    const countView = async (key) =>
+      (await db.pool.query(`SELECT COUNT(*)::int AS n ${from} WHERE ${base} AND ${viewSql[key]}`,
+        scope.params)).rows[0].n;
+    const [countResult, dataResult, allCount, matchCount, unassignedCount] = await Promise.all([
+      db.pool.query(`SELECT COUNT(*)::int AS total ${from} WHERE ${where}`, params),
+      db.pool.query(
+        `SELECT v.*, p.patient_no ${from} WHERE ${where}
+         ORDER BY v.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset]
+      ),
+      countView('all'),
+      countView('matches'),
+      isAdmin ? countView('unassigned') : Promise.resolve(null),
+    ]);
+    const counts = { all: allCount, matches: matchCount, unassigned: unassignedCount };
+
+    // Possible matches: attach the existing case each one resembles
+    let records = dataResult.rows;
+    if (view === 'matches' && records.length > 0) {
+      const candNos = [...new Set(records.map(r => r.match_candidate_case_no).filter(Boolean))];
+      const cands = candNos.length ? (await db.getCasesByCaseNo(candNos)).rows : [];
+      const byNo = new Map(cands.map(c => [c.case_no, c]));
+      records = records.map(r => ({ ...r, candidate: byNo.get(r.match_candidate_case_no) || null }));
+    }
 
     res.json({
-      records: dataResult.rows,
+      records: pinService.maskUnlessUnlocked(req, records),
+      identityUnlocked: namesUnlocked,
+      counts,
       pagination: {
         page,
         limit,
@@ -373,10 +434,11 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
 router.get('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { canViewCase, isReadOnlyForUser } = require('../policies/caseAccessPolicy');
+    const { isReadOnlyForUser } = require('../policies/caseAccessPolicy');
 
     const result = await db.pool.query(
-      'SELECT * FROM validated_tb_cases WHERE id = $1',
+      `SELECT v.*, p.patient_no FROM validated_tb_cases v
+       LEFT JOIN patients p ON p.id = v.patient_id WHERE v.id = $1`,
       [id]
     );
 
@@ -386,33 +448,29 @@ router.get('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
 
     const record = result.rows[0];
 
-    if (!canViewCase(req.user, record)) {
-      return res.status(403).json({ error: 'Access denied. This record is outside your facility scope.' });
+    const facility = await resolveUserFacility(req.user);
+    if (!canViewCase(req.user, facility, record)) {
+      return res.status(403).json({ error: 'Access denied. This record is outside your barangay and facility.' });
     }
 
     const readOnly = isReadOnlyForUser(req.user, record);
 
-    // Fetch transfer history for this case
+    // Transfer/referral history (facility and user names come from TBInsight's database)
+    const { addTransferNames } = require('../services/transferNames');
     const transfers = await db.pool.query(
-      `SELECT ct.*, 
-              hf1.name AS from_facility_name,
-              hf2.name AS to_facility_name,
-              u1.username AS initiated_by_username,
-              u2.username AS accepted_by_username
-       FROM case_transfers ct
-       LEFT JOIN health_facilities hf1 ON ct.from_facility_id = hf1.id
-       LEFT JOIN health_facilities hf2 ON ct.to_facility_id = hf2.id
-       LEFT JOIN users u1 ON ct.initiated_by_user_id = u1.id
-       LEFT JOIN users u2 ON ct.accepted_by_user_id = u2.id
-       WHERE ct.validated_case_id = $1
-       ORDER BY ct.created_at DESC`,
+      `SELECT * FROM case_transfers WHERE validated_case_id = $1 ORDER BY created_at DESC`,
       [id]
     );
+    const responsible = record.current_responsible_facility_id
+      ? (await db.authPool.query('SELECT name FROM health_facilities WHERE id = $1', [record.current_responsible_facility_id])).rows[0]
+      : null;
 
+    const fullRecord = { ...record, current_responsible_facility_name: responsible?.name || null };
     res.json({
-      record,
+      record: pinService.isUnlocked(req) ? fullRecord : pinService.maskIdentity(fullRecord),
+      identityUnlocked: pinService.isUnlocked(req),
       isReadOnly: readOnly,
-      transfers: transfers.rows,
+      transfers: await addTransferNames(transfers.rows),
     });
   } catch (error) {
     console.error('Error fetching record detail:', error);
@@ -444,9 +502,7 @@ router.post('/records/lookup', authenticate, authorizeRoles('admin', 'staff'), a
     }
 
     const record = result.rows[0];
-    const isInScope = req.user.role === 'admin' ||
-      record.current_responsible_facility_id === req.user.facility_id ||
-      record.current_responsible_facility_id === null;
+    const isInScope = canViewCase(req.user, await resolveUserFacility(req.user), record);
 
     if (isInScope) {
       return res.json({
@@ -469,6 +525,160 @@ router.post('/records/lookup', authenticate, authorizeRoles('admin', 'staff'), a
   } catch (error) {
     console.error('Error in case lookup:', error);
     res.status(500).json({ error: 'Failed to lookup case' });
+  }
+});
+
+// ==================== RESOLVE A POSSIBLE PATIENT MATCH ====================
+router.post('/records/:id/resolve-match', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  const { resolveMatch } = require('../services/matchResolution');
+  const client = await db.pool.connect();
+  try {
+    const row = (await db.pool.query('SELECT * FROM validated_tb_cases WHERE id = $1', [req.params.id])).rows[0];
+    if (!row) return res.status(404).json({ error: 'Record not found.' });
+    if (!canViewCase(req.user, await resolveUserFacility(req.user), row)) {
+      return res.status(403).json({ error: 'Access denied. This record is outside your barangay and facility.' });
+    }
+
+    await client.query('BEGIN');
+    const result = await resolveMatch(client, row, req.body?.resolution, req.user.id);
+    await client.query('COMMIT');
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'RESOLVE_MATCH',
+      resourceType: 'validated_tb_cases',
+      resourceId: row.id,
+      result: 'SUCCESS',
+      details: { resolution: result.resolution, caseNo: result.caseNo, candidate: row.match_candidate_case_no },
+    });
+    res.json({ message: 'Match resolved.', ...result });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    console.error('Error resolving match:', error);
+    res.status(500).json({ error: 'Failed to resolve match' });
+  } finally {
+    client.release();
+  }
+});
+
+// ==================== RESOLVE SELECTED POSSIBLE MATCHES (bulk) ====================
+// body: { ids: [...], resolution: 'suggested' | 'same_case' | 'new_episode' | 'different_person' }
+// 'suggested' applies each record's own suggestion. Each record is resolved in its own
+// transaction, so one failure (e.g. its matched case was deleted) doesn't undo the rest.
+const BULK_RESOLVE_MAX = 500;
+router.post('/records/resolve-matches', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  const { resolveMatch, RESOLUTIONS } = require('../services/matchResolution');
+  const ids = Array.isArray(req.body?.ids)
+    ? [...new Set(req.body.ids.map(Number).filter(Number.isInteger))]
+    : [];
+  const choice = req.body?.resolution;
+  if (ids.length === 0) return res.status(400).json({ error: 'Select at least one match.' });
+  if (ids.length > BULK_RESOLVE_MAX) {
+    return res.status(400).json({ error: `Select at most ${BULK_RESOLVE_MAX} matches at a time.` });
+  }
+  if (choice !== 'suggested' && !RESOLUTIONS.includes(choice)) {
+    return res.status(400).json({ error: 'Choose: suggested, same case, new episode, or different person.' });
+  }
+
+  let facility;
+  let rows;
+  try {
+    facility = await resolveUserFacility(req.user);
+    rows = (await db.pool.query('SELECT * FROM validated_tb_cases WHERE id = ANY($1::bigint[])', [ids])).rows;
+  } catch (error) {
+    console.error('Bulk resolve setup failed:', error);
+    return res.status(500).json({ error: 'Failed to load the selected matches.' });
+  }
+  const byId = new Map(rows.map(r => [Number(r.id), r]));
+  const result = { resolved: 0, counts: { same_case: 0, new_episode: 0, different_person: 0 }, failed: [] };
+
+  const client = await db.pool.connect();
+  try {
+    for (const id of ids) {
+      const row = byId.get(id);
+      if (!row) { result.failed.push({ id, error: 'Record not found.' }); continue; }
+      if (!canViewCase(req.user, facility, row)) {
+        result.failed.push({ id, error: 'Outside your barangay and facility.' });
+        continue;
+      }
+      const resolution = choice === 'suggested' ? row.match_suggestion : choice;
+      try {
+        await client.query('BEGIN');
+        const r = await resolveMatch(client, row, resolution, req.user.id);
+        await client.query('COMMIT');
+        result.resolved++;
+        result.counts[r.resolution]++;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        if (!err.status) console.error(`Bulk resolve failed for record ${id}:`, err);
+        result.failed.push({ id, error: err.status ? err.message : 'Failed to resolve.' });
+      }
+    }
+  } finally {
+    client.release();
+  }
+
+  await logAuditEvent({
+    userId: req.user.id,
+    username: req.user.username,
+    action: 'RESOLVE_MATCHES_BULK',
+    resourceType: 'validated_tb_cases',
+    resourceId: null,
+    result: result.failed.length === 0 ? 'SUCCESS' : 'PARTIAL',
+    details: { requested: ids.length, choice, ...result.counts, failed: result.failed.length },
+  });
+  res.json(result);
+});
+
+// ==================== NEEDS ASSIGNMENT: SET BARANGAY (admin) ====================
+router.patch('/records/:id/assign', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const wanted = String(req.body?.barangay_name || '').trim().toLowerCase();
+    const barangay = PASIG_BARANGAYS.find(n => n.toLowerCase() === wanted);
+    if (!barangay) return res.status(400).json({ error: 'Choose one of the 30 Pasig barangays.' });
+
+    const updated = await db.pool.query(
+      `UPDATE validated_tb_cases SET barangay_name = $2, city = 'Pasig City', updated_by = $3, updated_at = NOW()
+       WHERE id = $1 AND match_status <> 'pending' AND merged_into_case_no IS NULL
+       RETURNING id, case_no, batch_id`,
+      [req.params.id, barangay, req.user.id]
+    );
+    const row = updated.rows[0];
+    if (!row) return res.status(404).json({ error: 'Record not found.' });
+
+    // If its batch was already synced, send just this case now (as its own small
+    // batch); otherwise it goes out with its batch as usual.
+    let sync = { status: 'pending' };
+    const batch = (await db.getBatch(row.batch_id)).rows[0];
+    if (batch?.sync_status === 'synced' && row.case_no) {
+      const corr = await db.pool.query(
+        `INSERT INTO import_batches (filename, uploaded_by, total_rows, valid_count, error_count, status, validated_by, validated_at)
+         VALUES ($1, $2, 0, 0, 0, 'validated', $2, NOW()) RETURNING id`,
+        [`Correction — ${req.user.username}`, req.user.id]
+      );
+      try {
+        const result = await sendWebhook(corr.rows[0].id, req.user.id, { extraCaseNos: [row.case_no] });
+        sync = { status: result.success ? 'synced' : 'failed', message: result.message };
+      } catch (err) {
+        sync = { status: 'failed', message: err.message };
+      }
+    }
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'ASSIGN_BARANGAY',
+      resourceType: 'validated_tb_cases',
+      resourceId: row.id,
+      result: 'SUCCESS',
+      details: { barangay, caseNo: row.case_no, sync: sync.status },
+    });
+    res.json({ message: `Assigned to ${barangay}.`, sync });
+  } catch (error) {
+    console.error('Error assigning barangay:', error);
+    res.status(500).json({ error: 'Failed to assign barangay' });
   }
 });
 
@@ -552,6 +762,86 @@ router.patch('/batches/:id/unarchive', authenticate, authorizeRoles('admin'), as
   }
 });
 
+// ==================== DELETE BATCH (hard delete, admin only) ====================
+/**
+ * Permanently removes a batch: first asks TBInsight to undo the same batch (if it was
+ * ever synced), then deletes the batch's rows here. Lets admins import/delete/re-import
+ * freely while testing, without the batch lingering in either system.
+ *
+ * If TBInsight can't be reached or refuses the delete, nothing is removed on either side
+ * so the two systems never drift out of sync — retry once TBInsight is reachable.
+ */
+router.delete('/batches/:id', authenticate, authorizeRoles('admin'), async (req, res) => {
+  const { id } = req.params;
+  try {
+    const existing = await db.getBatch(id);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Batch not found' });
+    }
+
+    let tbInsight = { attempted: false };
+    if (config.webhook.url) {
+      try {
+        // The PASIG frontend authenticates with an httpOnly cookie, not a header, so pass
+        // the same token on explicitly. Both systems share JWT_SECRET; a Bearer header is
+        // also exempt from TBInsight's cookie-CSRF check.
+        const authHeader = req.headers.authorization;
+        const token = authHeader && authHeader.startsWith('Bearer ')
+          ? authHeader.slice(7)
+          : req.cookies && req.cookies.token;
+        const origin = new URL(config.webhook.url).origin;
+        const tbRes = await fetch(`${origin}/api/tb/integration/batches/${id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (tbRes.status === 404) {
+          tbInsight = { attempted: true, foundInTbInsight: false };
+        } else if (tbRes.ok) {
+          tbInsight = { attempted: true, foundInTbInsight: true, ...(await tbRes.json()) };
+        } else {
+          const details = await tbRes.text();
+          return res.status(502).json({
+            error: 'Could not remove this batch from TBInsight. Nothing was deleted.',
+            tbInsightStatus: tbRes.status,
+            details: details.slice(0, 500),
+          });
+        }
+      } catch (err) {
+        console.error('TBInsight delete call failed:', err);
+        return res.status(502).json({
+          error: `Could not reach TBInsight to remove this batch. Nothing was deleted. (${err.code || err.name}: ${err.message})`,
+        });
+      }
+    }
+
+    const result = await db.deleteBatch(id);
+    if (!result) {
+      return res.status(404).json({ error: 'Batch not found' });
+    }
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'DELETE_BATCH',
+      resourceType: 'import_batch',
+      resourceId: id,
+      result: 'SUCCESS',
+      details: { batchId: id, filename: result.batch.filename, deletedLocally: result.deleted, tbInsight },
+    });
+
+    res.json({
+      message: 'Batch permanently deleted.',
+      batchId: id,
+      deletedLocally: result.deleted,
+      tbInsight,
+    });
+  } catch (error) {
+    console.error('Error deleting batch:', error);
+    res.status(500).json({ error: 'Failed to delete batch' });
+  }
+});
+
 // ==================== BATCH DETAILS ====================
 router.get('/batches/:id/details', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
@@ -563,7 +853,7 @@ router.get('/batches/:id/details', authenticate, authorizeRoles('admin', 'staff'
     }
 
     const syncResult = await db.pool.query(
-      `SELECT wl.*, u.username 
+      `SELECT ${db.WEBHOOK_LOG_COLUMNS}, u.username
        FROM webhook_logs wl
        LEFT JOIN users u ON wl.initiated_by = u.id
        WHERE wl.batch_id = $1

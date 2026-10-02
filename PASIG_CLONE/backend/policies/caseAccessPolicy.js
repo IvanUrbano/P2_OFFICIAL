@@ -1,62 +1,68 @@
 /**
  * Centralized Case Access Policy
  * 
- * Controls which TB cases a user can view/edit based on:
- * - User role (admin/staff)
- * - User's assigned facility
- * - Case's current responsible facility
- * - Transfer history
+ * Viewing: role + the patient's barangay / treatment facility (see below).
+ * Editing / transfers: role + the case's current responsible facility.
  */
 
-/**
- * Returns SQL WHERE clause fragment and params for facility-scoped case listing.
- * @param {Object} user - req.user from JWT (id, username, email, role, facility_id)
- * @param {string} alias - Table alias (e.g., 'v' for validated_tb_cases)
- * @returns {{ where: string, params: number[] }}
- */
-function getCaseListScope(user, alias = '') {
-  const prefix = alias ? `${alias}.` : '';
+const db = require('../db/pasigSchema');
 
-  if (user.role === 'admin') {
-    // ADMIN: city-wide access
-    return { where: '1=1', params: [] };
-  }
+// VISIBILITY (who can see a record, names included):
+//   ADMIN — every record.
+//   STAFF — a record is visible when ANY of these is true:
+//     1. the patient lives in the barangay of the staff's assigned facility,
+//     2. the patient is treated at the staff's assigned facility, or
+//     3. the case was transferred to the staff's facility (it is the case's current
+//        responsible facility after a completed transfer).
+//   Staff with no assigned facility see no records.
+// The treatment facility on a record is free text from the source file, so it is
+// compared by name with case/punctuation ignored; an unmatched name simply falls
+// back to rule 1. Edit/transfer permissions below are separate and unchanged.
 
-  // STAFF: facility-scoped
-  if (!user.facility_id) {
-    // No facility assigned = no case access
-    return { where: '1=0', params: [] };
-  }
+function normFacility(name) {
+  const n = String(name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return n || null;
+}
 
-  // Staff can see:
-  // 1. Cases where their facility is the current responsible facility
-  // 2. Cases where current_responsible_facility_id is NULL (historical/unresolved)
-  return {
-    where: `(${prefix}current_responsible_facility_id = $1 OR ${prefix}current_responsible_facility_id IS NULL)`,
-    params: [user.facility_id],
-  };
+/** The staff user's assigned facility ({ id, name, barangay_name }), or null. */
+async function resolveUserFacility(user) {
+  if (!user || user.role === 'admin' || !user.facility_id) return null;
+  const res = await db.authPool.query(
+    'SELECT id, name, barangay_name FROM health_facilities WHERE id = $1',
+    [user.facility_id]
+  );
+  return res.rows[0] || null;
 }
 
 /**
- * Check if a user can view a specific case.
- * @param {Object} user
- * @param {Object} caseRecord
- * @returns {boolean}
+ * SQL WHERE fragment for record listing.
+ * @param {Object} user      req.user
+ * @param {Object|null} facility  from resolveUserFacility(user)
+ * @param {string} alias     table alias for validated_tb_cases
+ * @param {number} startIdx  first $n placeholder number to use
  */
-function canViewCase(user, caseRecord) {
+function getCaseListScope(user, facility, alias = '', startIdx = 1) {
+  const p = alias ? `${alias}.` : '';
+  if (user.role === 'admin') return { where: '1=1', params: [] };
+  if (!facility) return { where: '1=0', params: [] };
+  return {
+    where: `(lower(${p}barangay_name) = lower($${startIdx})
+             OR regexp_replace(lower(coalesce(${p}treatment_facility, '')), '[^a-z0-9]', '', 'g') = $${startIdx + 1}
+             OR ${p}current_responsible_facility_id = $${startIdx + 2})`,
+    params: [facility.barangay_name || null, normFacility(facility.name), facility.id],
+  };
+}
+
+function canViewCase(user, facility, caseRecord) {
   if (user.role === 'admin') return true;
-  if (!user.facility_id) return false;
-
-  // Current responsible facility
-  if (caseRecord.current_responsible_facility_id === user.facility_id) return true;
-
-  // NULL responsibility (historical/unresolved) — visible to all staff
-  if (caseRecord.current_responsible_facility_id === null) return true;
-
-  // Historical transferred case — check if user's facility was ever involved
-  // For now, allow read access to historical cases (previous facility)
-  // This is checked via the transfer history in the detail endpoint
-  return false;
+  if (!facility) return false;
+  const livesHere = facility.barangay_name && caseRecord.barangay_name &&
+    String(caseRecord.barangay_name).toLowerCase() === String(facility.barangay_name).toLowerCase();
+  const fac = normFacility(facility.name);
+  const treatedHere = fac !== null && normFacility(caseRecord.treatment_facility) === fac;
+  const transferredHere = caseRecord.current_responsible_facility_id != null
+    && Number(caseRecord.current_responsible_facility_id) === Number(facility.id);
+  return Boolean(livesHere || treatedHere || transferredHere);
 }
 
 /**
@@ -106,6 +112,7 @@ function isReadOnlyForUser(user, caseRecord) {
 }
 
 module.exports = {
+  resolveUserFacility,
   getCaseListScope,
   canViewCase,
   canEditCase,

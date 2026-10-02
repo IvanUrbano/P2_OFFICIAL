@@ -42,6 +42,7 @@ router.post('/validate/:batchId', authenticate, authorizeRoles('admin', 'staff')
         cleaned: results.cleaned,
         nonPasig: results.nonPasig,
         skippedBlank: results.skippedBlank,
+        possibleMatches: results.possibleMatches,
         validatedBy: req.user.username,
         validatedAt: new Date().toISOString(),
       },
@@ -61,7 +62,7 @@ router.post('/validate/:batchId', authenticate, authorizeRoles('admin', 'staff')
       result: 'FAILURE',
       details: { error: error.message },
     });
-    res.status(500).json({ error: 'Validation failed' });
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Validation failed' });
   }
 });
 

@@ -10,6 +10,8 @@ import 'leaflet/dist/leaflet.css';
 import API from '../api/axios';
 import DashboardWelcomeInsightsSection from '../components/DashboardWelcomeInsightsSection';
 import TreatmentCascadeCard from '../components/TreatmentCascadeCard';
+import ChartInsight from '../components/ChartInsight';
+import { trendInsight, riskInsight, shareInsight, outcomeInsight, forecastInsight } from '../utils/chartInsights';
 import { getDashboardInsight } from '../services/insightService';
 import {
   APPROVED_OUTCOMES, OUTCOME_COLORS, normalizeDisplayOutcome,
@@ -221,7 +223,7 @@ function RiskBadge({ risk }) {
   );
 }
 
-function SectionCard({ title, iconColor, description, action, actionTo, children }) {
+function SectionCard({ title, iconColor, description, action, actionTo, insight, children }) {
   const navigate = useNavigate();
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
@@ -243,7 +245,7 @@ function SectionCard({ title, iconColor, description, action, actionTo, children
           </button>
         )}
       </div>
-      <div className="px-5 pb-5">{children}</div>
+      <div className="px-5 pb-5">{children}<ChartInsight text={insight} /></div>
     </div>
   );
 }
@@ -1172,6 +1174,7 @@ export default function DashboardPage() {
             {/* TB Cases Trend */}
             <SectionCard
               title="TB Cases Trend"
+              insight={trendInsight(trendChartData, { valueKey: 'cases' })}
               iconColor="#6B7FA3"
               description="Monthly tuberculosis cases based on recorded TB data."
               action="View Analytics"
@@ -1217,6 +1220,7 @@ export default function DashboardPage() {
             {/* Barangay Risk Overview — GIS Map */}
             <SectionCard
               title="Barangay Risk Overview"
+              insight={riskInsight(riskData)}
               iconColor="#EF4444"
               description="Current risk classification across Pasig City barangays."
               action="View GIS Hotspots"
@@ -1246,6 +1250,9 @@ export default function DashboardPage() {
             {/* Top High-Risk Barangays */}
             <SectionCard
               title="Top High-Risk Barangays"
+              insight={topBarangays[0]
+                ? `${topBarangays[0].name} ranks first (${topBarangays[0].risk ? `${topBarangays[0].risk} risk` : 'no risk assessment yet'}, ${Number(topBarangays[0].cases || 0).toLocaleString('en-US')} recorded cases). Barangays are ordered by risk level first, then by case burden.`
+                : null}
               iconColor="#6B7280"
               description="Barangays with the highest recorded TB burden and risk classification."
               action="View GIS Hotspots"
@@ -1289,6 +1296,7 @@ export default function DashboardPage() {
             {/* Age Group Distribution */}
             <SectionCard
               title="Demographics — Age Distribution"
+              insight={shareInsight(ageData, { nameKey: 'age_group', valueKey: 'total', noun: 'age group' })}
               iconColor="#6B7280"
               description="TB cases by age group."
             >
@@ -1332,6 +1340,7 @@ export default function DashboardPage() {
             {/* Sex Distribution */}
             <SectionCard
               title="Demographics — Sex Distribution"
+              insight={shareInsight(Object.entries(sexData).map(([name, value]) => ({ name, value })), { noun: 'sex' })}
               iconColor="#3B82F6"
               description="Male vs female TB case distribution."
             >
@@ -1393,6 +1402,7 @@ export default function DashboardPage() {
             {/* Treatment Outcomes */}
             <SectionCard
               title="Case Status / Outcome Distribution"
+              insight={outcomeInsight(outcomeChartData, { nameKey: 'outcome', valueKey: 'count' })}
               iconColor="#10B981"
               description="Distribution of reported TB records by the Outcome/Status values recorded in the source data."
               action="View Analytics"
@@ -1541,6 +1551,7 @@ export default function DashboardPage() {
                         Forecasted
                       </div>
                     </div>
+                    <ChartInsight text={forecastInsight(forecastChartData, { actualKey: 'actual', forecastKey: 'projected', methodLabel: forecastSummary.tierLabel })} />
                   </div>
                 )}
               </div>

@@ -3,6 +3,8 @@ const router = express.Router();
 const pool = require('../db');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { rebuildAllAggregations } = require('./aggregateMonthly');
+const { flagPossibleDuplicates } = require('./duplicateFlags');
+const { schedulePipelineRun } = require('./pipeline');
 
 // ==================== INTEGRATION STATUS ====================
 router.get('/status', authenticateToken, async (req, res) => {
@@ -188,8 +190,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * again) — then rebuilds the aggregated tables from the remaining cases, all in ONE
  * transaction. If anything fails, nothing is deleted.
  *
- * Predictions (forecasts, risk scores, alerts) are NOT recomputed here; they were built
- * from the removed data, so the response flags them as stale and the pipeline should be re-run.
+ * Predictions (forecasts, risk scores, alerts) were built from the removed data, so they
+ * are deleted in the same transaction and the analysis is re-run on any remaining cases.
  */
 router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   const { batchId } = req.params;
@@ -201,12 +203,36 @@ router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), a
   try {
     await client.query('BEGIN');
 
+    // Cases in OTHER batches may be flagged as possible duplicates of a case in this
+    // batch (duplicate_of_case_id always points at the earliest match). Release those
+    // flags first — the FK would otherwise block the delete — then re-flag the same
+    // groups among the remaining rows below, so flags end up as if this batch had never
+    // been imported.
+    const released = await client.query(
+      `UPDATE tb_cases
+       SET duplicate_status = 'unique', duplicate_of_case_id = NULL, duplicate_flag_reason = NULL
+       WHERE batch_id IS DISTINCT FROM $1
+         AND duplicate_of_case_id IN (
+           SELECT id FROM tb_cases WHERE batch_id = $1 AND COALESCE(source_type, '') <> 'MANUAL'
+         )
+       RETURNING source_type, dstb_fingerprint, itis_case_id`,
+      [batchId]
+    );
+
     // Guard: manually entered cases (source_type='MANUAL') are never part of an
     // import batch (they get a per-record batch_id only as a schema requirement).
     const cases = await client.query(
       `DELETE FROM tb_cases WHERE batch_id = $1 AND COALESCE(source_type, '') <> 'MANUAL'`,
       [batchId]
     );
+
+    const releasedRows = released.rows || [];
+    const reflagged = await flagPossibleDuplicates(client, {
+      dstbFingerprints: [...new Set(releasedRows
+        .filter(r => r.source_type === 'DSTB' && r.dstb_fingerprint).map(r => r.dstb_fingerprint))],
+      mnItisCaseIds: [...new Set(releasedRows
+        .filter(r => r.source_type === 'MN' && r.itis_case_id).map(r => r.itis_case_id))],
+    });
     const raw = await client.query('DELETE FROM tb_cases_raw WHERE batch_id = $1', [batchId]);
     const logs = await client.query(
       `DELETE FROM webhook_logs WHERE batch_id = $1
@@ -220,6 +246,13 @@ router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), a
     }
 
     await rebuildAllAggregations(client);
+
+    // Forecasts, risk levels (GIS colors) and alerts were computed from data that
+    // included this batch, so they are removed with it. If cases remain, the analysis
+    // is re-run on them after commit; model_metadata (run history) is kept.
+    const clearedRisk = await client.query('DELETE FROM barangay_risk_scores');
+    const clearedForecasts = await client.query('DELETE FROM model_predictions');
+    const clearedAlerts = await client.query('DELETE FROM alerts');
 
     // Permanent record of the undo. Written inside the transaction on purpose: if the audit
     // row cannot be saved, the whole undo rolls back instead of deleting data untraceably.
@@ -239,10 +272,14 @@ router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), a
           recordsReceived: original.records_received ?? null,
           recordsImported: original.records_imported ?? null,
           deleted: { cases: cases.rowCount, rawRows: raw.rowCount, logs: logs.rowCount },
+          duplicateFlags: { released: releasedRows.length, reflagged: reflagged.dstb + reflagged.mn },
         }),
       ]
     );
     await client.query('COMMIT');
+
+    const remaining = Number((await pool.query('SELECT COUNT(*)::int AS n FROM tb_cases')).rows[0].n);
+    if (remaining > 0) schedulePipelineRun(`undo:${batchId}`, 5000);
 
     console.log(
       `🗑️  Batch ${batchId} undone by ${req.user?.username || req.user?.id || 'unknown'}: ` +
@@ -252,8 +289,12 @@ router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), a
       success: true,
       batchId,
       deleted: { cases: cases.rowCount, rawRows: raw.rowCount, logs: logs.rowCount },
+      duplicateFlags: { released: releasedRows.length, reflagged: reflagged.dstb + reflagged.mn },
       aggregatesRebuilt: true,
-      predictionsStale: true,
+      modelResultsCleared: {
+        riskScores: clearedRisk.rowCount, forecasts: clearedForecasts.rowCount, alerts: clearedAlerts.rowCount,
+      },
+      analysisRerunScheduled: remaining > 0,
     });
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch { /* connection already gone */ }

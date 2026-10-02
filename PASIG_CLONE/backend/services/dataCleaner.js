@@ -13,7 +13,12 @@
  * validation screen can show what was corrected.
  */
 
-// Official PSGC names of the 30 barangays of Pasig City (canonical spelling used by TBInsight).
+const { computeAge, splitFullName } = require('./patientIdentity');
+
+// Pasig City barangays (canonical spelling used by TBInsight). The live list is loaded
+// from the database at startup and refreshed periodically (services/barangayRegistry.js
+// -> setBarangays); this built-in list is only the fallback when the database can't be
+// reached. The array is updated IN PLACE so every module holding it sees the new list.
 const PASIG_BARANGAYS = [
   'Bagong Ilog', 'Bagong Katipunan', 'Bambang', 'Buting', 'Caniogan', 'Dela Paz',
   'Kalawaan', 'Kapasigan', 'Kapitolyo', 'Malinao', 'Manggahan', 'Maybunga',
@@ -68,6 +73,7 @@ const OUTCOME_MAP = {
 };
 
 const DATE_FIELDS = [
+  'date_of_birth',
   'date_of_screening', 'date_of_diagnosis', 'date_of_notification',
   'date_started_treatment', 'date_of_outcome',
   'microscopy_release_date', 'rdt_release_date',
@@ -78,6 +84,7 @@ const TEXT_FIELDS = [
   'registration_group', 'bacteriological_status', 'validation_status', 'itis_case_id',
   'type', 'province', 'region', 'referred_to_dots', 'referral_status',
   'microscopy_result', 'rdt_result', 'outcome_reason',
+  'last_name', 'first_name', 'middle_name', 'suffix', 'full_name',
 ];
 
 const MONTH_ABBR = {
@@ -99,6 +106,13 @@ function cleanText(val) {
 
 function pad2(n) {
   return String(n).padStart(2, '0');
+}
+
+// Two-digit years (Excel re-saves CSV dates as e.g. "11-Apr-57"): 20YY unless that
+// would be in the future, else 19YY — so birth years like 57 become 1957, not 2057.
+function expandYear(y) {
+  if (y >= 100) return y;
+  return y <= new Date().getUTCFullYear() % 100 ? 2000 + y : 1900 + y;
 }
 
 function validYmd(y, m, d) {
@@ -136,8 +150,7 @@ function cleanDate(val) {
 
   m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})$/); // 1/5/2025 (M/D/Y, Philippine registry default)
   if (m) {
-    let y = +m[3];
-    if (y < 100) y += 2000;
+    const y = expandYear(+m[3]);
     let mo = +m[1];
     let d = +m[2];
     if (mo > 12 && d <= 12) [mo, d] = [d, mo]; // clearly D/M/Y
@@ -147,9 +160,7 @@ function cleanDate(val) {
   m = s.match(/^(\d{1,2})[-\s]([A-Za-z]{3,9})\.?[-\s,]*(\d{2}|\d{4})$/); // 07-Jan-25, 7 January 2025
   if (m) {
     const mon = MONTH_ABBR[m[2].toLowerCase().slice(0, 4)] || MONTH_ABBR[m[2].toLowerCase().slice(0, 3)];
-    let y = +m[3];
-    if (y < 100) y += 2000;
-    if (mon) return validYmd(y, mon, +m[1]);
+    if (mon) return validYmd(expandYear(+m[3]), mon, +m[1]);
   }
 
   m = s.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})$/); // January 5, 2025 / Jan. 5 2025
@@ -202,6 +213,22 @@ function barangayKey(val) {
 
 const CANONICAL_BY_KEY = new Map(PASIG_BARANGAYS.map(n => [barangayKey(n), n]));
 
+/** Replace the barangay list (from the database). Ignores empty input. */
+function setBarangays(names) {
+  const clean = [...new Set((names || []).map(n => String(n || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  if (clean.length === 0) return false;
+  PASIG_BARANGAYS.splice(0, PASIG_BARANGAYS.length, ...clean);
+  CANONICAL_BY_KEY.clear();
+  for (const n of clean) CANONICAL_BY_KEY.set(barangayKey(n), n);
+  return true;
+}
+
+function isPasigBarangay(name) {
+  const n = String(name || '').trim().toLowerCase();
+  return n !== '' && PASIG_BARANGAYS.some(b => b.toLowerCase() === n);
+}
+
 function levenshtein(a, b) {
   const dp = Array.from({ length: a.length + 1 }, (_, i) => [i]);
   for (let j = 1; j <= b.length; j++) dp[0][j] = j;
@@ -233,11 +260,12 @@ function matchBarangay(val) {
   for (const k of keys) {
     if (CANONICAL_BY_KEY.has(k)) {
       const name = CANONICAL_BY_KEY.get(k);
-      return { name, matched: true, corrected: name !== s };
+      // A capitalization-only change ("SAN ANTONIO" -> "San Antonio") is not a correction.
+      return { name, matched: true, corrected: name.toLowerCase() !== s.toLowerCase() };
     }
     if (BARANGAY_ALIASES[k]) {
       const name = BARANGAY_ALIASES[k];
-      return { name, matched: true, corrected: name !== s };
+      return { name, matched: true, corrected: name.toLowerCase() !== s.toLowerCase() };
     }
   }
 
@@ -310,15 +338,34 @@ function cleanRecord(input) {
     if (!(f in rec)) continue;
     const raw = rec[f];
     const cleaned = cleanDate(raw);
-    if (raw !== null && raw !== undefined && cleanText(raw) !== null && !cleaned) {
+    // "No Data" is how the registry export writes an empty date — blank, not unreadable.
+    const noData = /^no\s*data$/i.test(String(raw ?? '').trim());
+    if (raw !== null && raw !== undefined && cleanText(raw) !== null && !noData && !cleaned) {
       notes.push(`Unreadable ${f.replace(/_/g, ' ')} "${raw}" was cleared`);
     }
     rec[f] = cleaned;
   }
 
-  // Sex / age
+  // Name: a single "LAST, FIRST MIDDLE" column fills the separate fields when they're empty
+  if (rec.full_name && !rec.last_name && !rec.first_name) {
+    const parts = splitFullName(rec.full_name);
+    if (parts) Object.assign(rec, parts);
+  }
+  delete rec.full_name;
+
+  // Sex / age. Age is calculated from date of birth and date of diagnosis; the file's
+  // own Age column is only used to warn when it disagrees.
   rec.sex = cleanSex(rec.sex);
-  rec.age = cleanAge(rec.age);
+  const reportedAge = cleanAge(rec.age);
+  const computedAge = computeAge(rec.date_of_birth, rec.date_of_diagnosis);
+  if (computedAge !== null) {
+    if (reportedAge !== null && reportedAge !== computedAge) {
+      notes.push(`Age ${reportedAge} in the file differs from the age calculated from date of birth (${computedAge}); using ${computedAge}`);
+    }
+    rec.age = computedAge;
+  } else {
+    rec.age = reportedAge;
+  }
 
   // City
   const rawCity = rec.city;
@@ -350,6 +397,10 @@ function cleanRecord(input) {
     notes.push('Diagnosis date is in the future');
   }
 
+  if (rec.date_of_birth && rec.date_of_birth > today) {
+    notes.push('Date of birth is in the future');
+  }
+
   const isPasig = bgy.matched && (rec.city === 'Pasig City' || !rawCity);
   return { record: rec, notes, isPasig };
 }
@@ -364,6 +415,8 @@ function isBlankRecord(rec) {
 
 module.exports = {
   PASIG_BARANGAYS,
+  setBarangays,
+  isPasigBarangay,
   cleanRecord,
   cleanText,
   cleanDate,

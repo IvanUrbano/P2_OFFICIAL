@@ -203,6 +203,8 @@ router.get('/cases', async (req, res) => {
         `TRIM(c.screening_facility) ILIKE $${paramIdx}`,
         `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
         `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
+        `c.case_no ILIKE $${paramIdx}`,
+        `c.patient_no ILIKE $${paramIdx}`,
         `TRIM(c.source_type) ILIKE $${paramIdx}`,
         `TRIM(c.validation_status) ILIKE $${paramIdx}`,
         `TRIM(c.sex) ILIKE $${paramIdx}`,
@@ -339,6 +341,8 @@ router.get('/cases', async (req, res) => {
         c.itis_case_id,
         c.source_type,
         c.location_classification,
+        c.case_no,
+        c.patient_no,
         c.current_responsible_facility_id
       FROM tb_cases c
       ${whereClause}
@@ -407,6 +411,8 @@ router.get('/cases/export', async (req, res) => {
         `TRIM(c.screening_facility) ILIKE $${paramIdx}`,
         `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
         `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
+        `c.case_no ILIKE $${paramIdx}`,
+        `c.patient_no ILIKE $${paramIdx}`,
         `TRIM(c.source_type) ILIKE $${paramIdx}`,
         `TRIM(c.validation_status) ILIKE $${paramIdx}`,
         `TRIM(c.sex) ILIKE $${paramIdx}`,
@@ -1012,8 +1018,10 @@ router.get('/gis/geojson', async (req, res) => {
     const yearInt = year ? parseInt(year, 10) : null;
     const isValidYear = yearInt && !isNaN(yearInt) && yearInt >= 2000 && yearInt <= 2099;
 
+    // The five lookups below are independent, so they are started together and awaited
+    // once (each is a ~0.2 s round trip to the remote database).
     // Fetch barangays with geometry from PostGIS
-    const geoResult = await pool.query(`
+    const geoQ = pool.query(`
       SELECT
         id,
         name,
@@ -1055,18 +1063,14 @@ router.get('/gis/geojson', async (req, res) => {
          COALESCE(norm_forecast_error, 0) as norm_forecast_error,
          model_type, model_version, classification_confidence,
          prob_low, prob_medium, prob_high, features, period`;
-    const riskResult = isValidYear
-      ? await pool.query(
+    const riskQ = isValidYear
+      ? pool.query(
           `SELECT ${riskSelect} FROM barangay_risk_scores WHERE period = $1::date`,
           [`${yearInt + 1}-01-01`]
         )
-      : await pool.query(
+      : pool.query(
           `SELECT ${riskSelect} FROM barangay_risk_scores WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)`
         );
-    const riskAssessmentPeriod = riskResult.rows[0]?.period || null;
-    // Distinguishes "All Years showing the latest snapshot" from "this
-    // specific year has no snapshot at all yet" for the frontend's label.
-    const requestedYearHasSnapshot = isValidYear ? riskResult.rows.length > 0 : null;
 
     // Effective incidence year — ONLY from an explicit ?year filter.
     // Snapshots are keyed by (assessment year + 1)-01-01 (period 2026-01-01
@@ -1089,12 +1093,12 @@ router.get('/gis/geojson', async (req, res) => {
     // model predicted zero cases" — a claim never made. Null renders as N/A.
     const forecastSelect = `barangay_name, forecasted_count,
              confidence_lower, confidence_upper`;
-    const forecastResult = isValidYear
-      ? await pool.query(
+    const forecastQ = isValidYear
+      ? pool.query(
           `SELECT ${forecastSelect} FROM model_predictions WHERE period = $1::date`,
           [`${yearInt + 1}-01-01`]
         )
-      : await pool.query(
+      : pool.query(
           `SELECT ${forecastSelect} FROM model_predictions
            WHERE period = (SELECT MAX(period) FROM model_predictions)`
         );
@@ -1115,7 +1119,7 @@ router.get('/gis/geojson', async (req, res) => {
          FROM tb_cases
          WHERE date_of_diagnosis IS NOT NULL
          GROUP BY barangay_name`;
-    const caseResult = await pool.query(
+    const caseQ = pool.query(
       caseQuery, effectiveCaseYear !== null ? [effectiveCaseYear] : []
     );
 
@@ -1127,16 +1131,27 @@ router.get('/gis/geojson', async (req, res) => {
     // incidence renders N/A. A population from a different year is never
     // substituted, because that would misrepresent incidence for the
     // selected year.
+    const popQ = incidenceYear !== null && incidenceYear !== GEOJSON_REFERENCE_YEAR
+      ? pool.query(
+          `SELECT barangay_name, population FROM barangay_population
+           WHERE reference_year = $1 AND status = 'ACTIVE'`,
+          [incidenceYear]
+        )
+      : Promise.resolve(null);
+
+    const [geoResult, riskResult, forecastResult, caseResult, popResult] =
+      await Promise.all([geoQ, riskQ, forecastQ, caseQ, popQ]);
+
+    const riskAssessmentPeriod = riskResult.rows[0]?.period || null;
+    // Distinguishes "All Years showing the latest snapshot" from "this
+    // specific year has no snapshot at all yet" for the frontend's label.
+    const requestedYearHasSnapshot = isValidYear ? riskResult.rows.length > 0 : null;
+
     let yearPopMap = {};
     if (incidenceYear !== null) {
       if (incidenceYear === GEOJSON_REFERENCE_YEAR) {
         for (const row of geoResult.rows) yearPopMap[row.name] = row.population;
       } else {
-        const popResult = await pool.query(
-          `SELECT barangay_name, population FROM barangay_population
-           WHERE reference_year = $1 AND status = 'ACTIVE'`,
-          [incidenceYear]
-        );
         for (const row of popResult.rows) yearPopMap[row.barangay_name] = row.population;
       }
     }

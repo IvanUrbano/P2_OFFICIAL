@@ -236,6 +236,7 @@ router.post('/logout', (req, res) => {
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
   });
+  require('../services/pinService').clearUnlock(res); // hide patient names again
   res.json({ message: 'Logged out successfully.' });
 });
 

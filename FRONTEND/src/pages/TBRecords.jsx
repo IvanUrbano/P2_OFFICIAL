@@ -719,7 +719,7 @@ export default function TBRecords() {
                     <tr key={record.id} className="hover:bg-blue-50 transition-colors"
                       style={{ borderBottom: '1px solid #E2E8F0', background: idx % 2 === 0 ? '#ffffff' : '#F8FAFC' }}>
                       <td className="pl-6 pr-3 py-2" style={{ borderRight: '1px solid #E2E8F0' }}>
-                        <span className="font-bold" style={{ color: '#0F2D52' }}>{String(record.id).padStart(4, "0")}</span>
+                        <span className="font-bold" style={{ color: '#0F2D52' }}>{record.case_no || String(record.id).padStart(4, "0")}</span>
                       </td>
                       <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.barangay_name}</td>
                       <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.age}</td>
@@ -971,12 +971,13 @@ export default function TBRecords() {
             <div className="px-6 py-5 space-y-6">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Case ID</p>
-                <p className="text-2xl font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{String(selectedRecord.id).padStart(4, "0")}</p>
+                <p className="text-2xl font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{selectedRecord.case_no || String(selectedRecord.id).padStart(4, "0")}</p>
                 <div className="mt-2"><StatusBadge status={selectedRecord.outcome_status} /></div>
               </div>
               <div>
                 <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Case Summary</h3>
                 <div className="space-y-2.5">
+                  <DetailRow label="Patient #" value={selectedRecord.patient_no} />
                   <DetailRow label="ITIS Case ID" value={selectedRecord.itis_case_id} />
                   <DetailRow label="Source Type" value={selectedRecord.source_type} />
                   <DetailRow label="Validation Status" value={selectedRecord.validation_status} />

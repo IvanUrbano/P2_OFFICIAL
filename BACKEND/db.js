@@ -7,12 +7,16 @@ require('dotenv').config();
 const isProduction = process.env.NODE_ENV === 'production' || process.env.DATABASE_URL;
 const isNeon = process.env.DATABASE_URL && process.env.DATABASE_URL.includes('neon.tech');
 
+// Opening a connection to the remote (Neon) database costs ~1.5 s of TLS/auth round
+// trips vs ~0.2 s per query on an open one, so idle connections are kept for 10 minutes
+// (instead of being closed after 30 s and reopened on the next page load).
 const poolConfig = process.env.DATABASE_URL
   ? {
     connectionString: process.env.DATABASE_URL,
     ssl: isNeon ? { rejectUnauthorized: false } : false,
     max: 20,
-    idleTimeoutMillis: 30000,
+    idleTimeoutMillis: 600000,
+    keepAlive: true,
     connectionTimeoutMillis: 10000,
   }
   : {
@@ -214,6 +218,17 @@ const initDb = async () => {
       console.error('❌ Case access & transfers migration failed (continuing with remaining migrations):', caseAccessErr.message);
     }
 
+    // Patient # / Case ID from PASIG (unique case_no enables update-instead-of-duplicate)
+    try {
+      const caseIdentityMigPath = path.join(__dirname, 'db', 'migrations', '021_case_identity.sql');
+      if (fs.existsSync(caseIdentityMigPath)) {
+        await execSql(fs.readFileSync(caseIdentityMigPath, 'utf8'));
+        console.log('✅ Case identity migration completed successfully.');
+      }
+    } catch (caseIdentityErr) {
+      console.error('❌ Case identity migration failed (continuing with remaining migrations):', caseIdentityErr.message);
+    }
+
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,
     // undoing two earlier over-broad attempts, and keep only the Kapasigan Extension ->
     // Bagong Katipunan rename/population fix (idempotent)
@@ -275,7 +290,16 @@ pool.connect()
   .then(async (client) => {
     console.log('✅ Connected to PostgreSQL database');
     client.release();
-    await initDb();
+    // ~275 statements across 17 migration files run serially on every boot — each one a
+    // round trip to Neon. That's fine on a cold deploy, but it adds up on every nodemon
+    // restart in local dev. Set SKIP_MIGRATIONS=true locally once the schema is caught up.
+    if (process.env.SKIP_MIGRATIONS === 'true') {
+      console.log('⏭️  Skipping migrations (SKIP_MIGRATIONS=true).');
+    } else {
+      await initDb();
+    }
+    // Pre-open a few connections so the first page load doesn't pay connection setup
+    await Promise.all(Array.from({ length: 6 }, () => pool.query('SELECT 1'))).catch(() => {});
   })
   .catch((err) => {
     console.error('❌ FATAL: Failed to connect to PostgreSQL:', err.message);

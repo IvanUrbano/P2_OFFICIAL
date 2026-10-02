@@ -9,19 +9,43 @@ const SETTINGS_TABS = [
   { key: 'security', label: 'Security', desc: 'Password and security settings' },
 ];
 
-// Must match the canonical 30 PSGC barangays in BACKEND/services/dataCleaner.js.
-const PASIG_BARANGAYS = [
-  'Bagong Ilog', 'Bagong Katipunan', 'Bambang', 'Buting', 'Caniogan', 'Dela Paz',
-  'Kalawaan', 'Kapasigan', 'Kapitolyo', 'Malinao', 'Manggahan', 'Maybunga',
-  'Oranbo', 'Palatiw', 'Pinagbuhatan', 'Pineda', 'Rosario', 'Sagad',
-  'San Antonio', 'San Joaquin', 'San Jose', 'San Miguel', 'San Nicolas',
-  'Santa Cruz', 'Santa Lucia', 'Santa Rosa', 'Santo Tomas', 'Santolan',
-  'Sumilang', 'Ugong',
-];
-
 export default function SettingsPage() {
   const { t } = useTheme();
-  const [activeTab, setActiveTab] = useState('general');
+  const [activeTab, setActiveTab] = useState(
+    ['general', 'population', 'security'].includes(new URLSearchParams(window.location.search).get('tab'))
+      ? new URLSearchParams(window.location.search).get('tab') : 'general'
+  );
+  // Records PIN (unlocks patient names/birth dates in TB Records)
+  const [hasPin, setHasPin] = useState(false);
+  const [pinForm, setPinForm] = useState({ password: '', pin: '', confirm: '' });
+  const [pinMsg, setPinMsg] = useState(null);
+  const [savingPin, setSavingPin] = useState(false);
+  useEffect(() => {
+    API.get('/api/auth/pin/status').then(r => setHasPin(Boolean(r.data.hasPin))).catch(() => {});
+  }, []);
+  const handlePinSave = async () => {
+    if (!/^\d{4,6}$/.test(pinForm.pin)) { setPinMsg({ kind: 'error', text: 'PIN must be 4 to 6 digits.' }); return; }
+    if (pinForm.pin !== pinForm.confirm) { setPinMsg({ kind: 'error', text: 'PINs do not match.' }); return; }
+    if (!pinForm.password) { setPinMsg({ kind: 'error', text: 'Enter your account password to confirm.' }); return; }
+    setSavingPin(true);
+    try {
+      await API.post('/api/auth/pin', { password: pinForm.password, pin: pinForm.pin });
+      setPinMsg({ kind: 'success', text: 'Records PIN saved. Use it in TB Records to show patient names.' });
+      setPinForm({ password: '', pin: '', confirm: '' });
+      setHasPin(true);
+    } catch (err) {
+      setPinMsg({ kind: 'error', text: err.response?.data?.error || 'Failed to save PIN.' });
+    } finally {
+      setSavingPin(false);
+    }
+  };
+  // Official barangay list from the database (same reference list TBInsight uses)
+  const [PASIG_BARANGAYS, setPasigBarangays] = useState([]);
+  useEffect(() => {
+    API.get('/api/facilities')
+      .then(r => setPasigBarangays((r.data?.barangays || []).map(b => b.name)))
+      .catch(() => setPasigBarangays([]));
+  }, []);
   const [user, setUser] = useState(null);
   const [pw, setPw] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [pwMsg, setPwMsg] = useState(null);
@@ -224,6 +248,33 @@ export default function SettingsPage() {
           <button onClick={handlePasswordSave} disabled={savingPw} className="mt-3 px-4 py-2 text-xs font-semibold rounded-lg disabled:opacity-50" style={{ background: '#0F2D52', color: '#ffffff' }}>
             {savingPw ? 'Updating...' : 'Update Password'}
           </button>
+
+          <div className="mt-8 pt-5" style={{ borderTop: `1px solid ${t.border}` }}>
+            <h2 className="text-sm font-bold" style={{ color: t.text }}>{hasPin ? 'Change Records PIN' : 'Set Up Records PIN'}</h2>
+            <p className="text-[11px] mt-1 mb-3" style={{ color: '#64748B' }}>
+              Patient names and birth dates stay hidden until you enter this PIN in TB Records. It unlocks them for 15 minutes; 5 wrong attempts block PIN entry for 15 minutes.
+            </p>
+            <div className="space-y-2">
+              {[
+                { key: 'pin', label: 'New PIN (4–6 digits)', numeric: true },
+                { key: 'confirm', label: 'Confirm PIN', numeric: true },
+                { key: 'password', label: 'Your account password', numeric: false },
+              ].map((field) => (
+                <input key={field.key} type="password" placeholder={field.label} value={pinForm[field.key]} autoComplete="off"
+                  inputMode={field.numeric ? 'numeric' : undefined} maxLength={field.numeric ? 6 : undefined}
+                  onChange={(e) => setPinForm({ ...pinForm, [field.key]: field.numeric ? e.target.value.replace(/\D/g, '') : e.target.value })}
+                  className="w-full px-3 py-2 text-xs rounded-lg outline-none" style={{ background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text }} />
+              ))}
+            </div>
+            {pinMsg && (
+              <div className="mt-2 px-3 py-2 rounded-lg text-[11px]" style={{ background: pinMsg.kind === 'error' ? 'rgba(239,68,68,0.05)' : 'rgba(16,185,129,0.05)', color: pinMsg.kind === 'error' ? '#991B1B' : '#047857' }}>
+                {pinMsg.text}
+              </div>
+            )}
+            <button onClick={handlePinSave} disabled={savingPin} className="mt-3 px-4 py-2 text-xs font-semibold rounded-lg disabled:opacity-50" style={{ background: '#0F2D52', color: '#ffffff' }}>
+              {savingPin ? 'Saving...' : hasPin ? 'Change PIN' : 'Save PIN'}
+            </button>
+          </div>
         </div>
       )}
 

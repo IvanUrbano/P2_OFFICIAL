@@ -2,8 +2,11 @@ const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const authPool = new Pool({ connectionString: process.env.AUTH_DATABASE_URL });
+// Opening a connection to the remote (Neon) database costs ~1.5 s vs ~0.2 s per query on
+// an open one, so idle connections are kept for 10 minutes instead of pg's default 10 s.
+const POOL_OPTIONS = { idleTimeoutMillis: 600000, keepAlive: true, max: 10 };
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, ...POOL_OPTIONS });
+const authPool = new Pool({ connectionString: process.env.AUTH_DATABASE_URL, ...POOL_OPTIONS });
 
 pool.on('error', (err) => {
   console.error('[pasig-clone] Unexpected pool error:', err.message);
@@ -63,6 +66,16 @@ async function initSchema() {
       console.log('[pasig-clone] Migration 002 (case access + transfers) completed.');
     } catch (err) {
       console.error('[pasig-clone] Migration 002 failed (continuing):', err.message);
+    }
+  }
+
+  const mig003Path = path.join(__dirname, 'migrations', '003_patient_case_identity.sql');
+  if (fs.existsSync(mig003Path)) {
+    try {
+      await execSql(fs.readFileSync(mig003Path, 'utf8'));
+      console.log('[pasig-clone] Migration 003 (patient # / case ID) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 003 failed (continuing):', err.message);
     }
   }
 }
@@ -156,8 +169,19 @@ function getRawCases(batchId) {
 
 function getValidatedCases(batchId) {
   return pool.query(
-    `SELECT * FROM validated_tb_cases WHERE batch_id = $1 AND is_valid = true`,
+    `SELECT v.*, p.patient_no FROM validated_tb_cases v
+     LEFT JOIN patients p ON p.id = v.patient_id
+     WHERE v.batch_id = $1 AND v.is_valid = true`,
     [batchId]
+  );
+}
+
+function getCasesByCaseNo(caseNos) {
+  return pool.query(
+    `SELECT v.*, p.patient_no FROM validated_tb_cases v
+     LEFT JOIN patients p ON p.id = v.patient_id
+     WHERE v.case_no = ANY($1::text[])`,
+    [caseNos]
   );
 }
 
@@ -187,9 +211,14 @@ function logWebhookError(batchId, payload, errorMessage, initiatedBy) {
   );
 }
 
+// Never select wl.payload in list views: it holds every record sent in that sync
+// (megabytes per row) and made this list take over a minute to load.
+const WEBHOOK_LOG_COLUMNS = `wl.id, wl.batch_id, wl.status, wl.response_code, wl.response_body, wl.error_message,
+       wl.initiated_by, wl.initiated_at, wl.sent_at, wl.acknowledged_at`;
+
 function getWebhookLogs() {
   return pool.query(
-    `SELECT wl.*, ib.filename, u.username
+    `SELECT ${WEBHOOK_LOG_COLUMNS}, ib.filename, u.username
      FROM webhook_logs wl
      LEFT JOIN import_batches ib ON wl.batch_id = ib.id
      LEFT JOIN users u ON wl.initiated_by = u.id
@@ -313,6 +342,51 @@ function deleteValidatedCases(batchId) {
   );
 }
 
+/**
+ * Permanently delete a batch and everything it brought in (raw rows, validated cases,
+ * webhook send logs, then the batch row itself) in one transaction. Children are deleted
+ * before the parent because import_batches has no ON DELETE CASCADE. Frees up the batch's
+ * file_hash so the same file can be re-uploaded.
+ *
+ * Returns null if the batch doesn't exist, otherwise { batch, deleted }.
+ */
+async function deleteBatch(batchId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `DELETE FROM case_transfers WHERE validated_case_id IN (SELECT id FROM validated_tb_cases WHERE batch_id = $1)`,
+      [batchId]
+    );
+    const raw = await client.query('DELETE FROM raw_tb_cases WHERE batch_id = $1', [batchId]);
+    const validated = await client.query('DELETE FROM validated_tb_cases WHERE batch_id = $1', [batchId]);
+    // Patients this batch created, unless a record from another batch now belongs to them
+    await client.query(
+      `DELETE FROM patients p WHERE p.created_by_batch_id = $1
+       AND NOT EXISTS (SELECT 1 FROM validated_tb_cases v WHERE v.patient_id = p.id)`,
+      [batchId]
+    );
+    const logs = await client.query('DELETE FROM webhook_logs WHERE batch_id = $1', [batchId]);
+    const batch = await client.query('DELETE FROM import_batches WHERE id = $1 RETURNING *', [batchId]);
+
+    if (batch.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    await client.query('COMMIT');
+    return {
+      batch: batch.rows[0],
+      deleted: { rawRows: raw.rowCount, validatedCases: validated.rowCount, webhookLogs: logs.rowCount },
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   pool,
   authPool,
@@ -322,17 +396,20 @@ module.exports = {
   insertRawCases,
   insertValidatedCase,
   deleteValidatedCases,
+  deleteBatch,
   updateBatchValidation,
   updateBatchSent,
   getBatch,
   getBatchWithUsers,
   getRawCases,
   getValidatedCases,
+  getCasesByCaseNo,
   getPendingCases,
   getAllCases,
   logWebhook,
   logWebhookError,
   getWebhookLogs,
+  WEBHOOK_LOG_COLUMNS,
   getBatches,
   getImportHistory,
   archiveBatch,

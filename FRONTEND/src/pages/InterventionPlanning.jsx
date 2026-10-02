@@ -5,15 +5,6 @@ import FilterSelect from '../components/FilterSelect';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
-const BARANGAYS = [
-  'Bagong Ilog', 'Bagong Katipunan', 'Bambang', 'Buting', 'Caniogan',
-  'Dela Paz', 'Kalawaan', 'Kapasigan', 'Kapitolyo', 'Malinao',
-  'Manggahan', 'Maybunga', 'Oranbo', 'Palatiw', 'Pinagbuhatan',
-  'Pineda', 'Rosario', 'Sagad', 'San Antonio', 'San Joaquin',
-  'San Jose', 'San Miguel', 'San Nicolas', 'Santa Cruz', 'Santa Lucia',
-  'Santa Rosa', 'Santo Tomas', 'Santolan', 'Sumilang', 'Ugong',
-];
-
 const INTERVENTION_TYPES = [
   { key: 'screening', label: 'TB Screening Campaign', icon: 'ri-stethoscope-line' },
   { key: 'contact_tracing', label: 'Contact Tracing', icon: 'ri-user-search-line' },
@@ -93,6 +84,14 @@ export default function InterventionPlanning() {
 
   /* ── Form state ── */
   const [form, setForm] = useState(EMPTY_FORM);
+
+  /* ── Barangay list (from the database) ── */
+  const [BARANGAYS, setBarangays] = useState([]);
+  useEffect(() => {
+    API.get('/api/tb/barangays')
+      .then(res => setBarangays((res.data.barangays || []).map(b => b.name)))
+      .catch(() => setBarangays([]));
+  }, []);
 
   /* ── Debounce search ── */
   useEffect(() => {

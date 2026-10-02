@@ -6,6 +6,8 @@ import {
 } from 'recharts';
 import API from '../api/axios';
 import AiInsightPanel from '../components/AiInsightPanel';
+import ChartInsight from '../components/ChartInsight';
+import { trendInsight, yoyInsight, rankingInsight, incidenceInsight, shareInsight, outcomeInsight } from '../utils/chartInsights';
 import TreatmentCascadeCard from '../components/TreatmentCascadeCard';
 import FilterSelect from '../components/FilterSelect';
 import { getAnalyticsInsight } from '../services/insightService';
@@ -1124,6 +1126,7 @@ export default function Analytics() {
               ) : (
                 <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No trend data available for the selected filters.</p>
               )}
+              <ChartInsight text={trendInsight(trendData, { valueKey: 'Cases' })} />
               {compareYear && aYear && !previousComparison.available && (
                 <p className="text-[11px] mt-2 text-center" style={{ color: '#94A3B8' }}>
                   <i className="ri-information-line" /> Previous-year comparison unavailable due to incomplete {prevYearLabel} data.
@@ -1192,6 +1195,7 @@ export default function Analytics() {
               ) : (
                 <p className="text-sm text-center py-8" style={{ color: '#94A3B8' }}>No yearly data available for the selected filters.</p>
               )}
+              <ChartInsight text={yoyInsight(yoyData.rows, yoyData.latestYoy)} />
               <p className="text-[9px] mt-2" style={{ color: '#CBD5E1' }}>
                 YoY% = (current − previous) / previous × 100. Years with fewer than 3 months of data are marked Incomplete. A zero previous-year count shows N/A.
               </p>
@@ -1258,6 +1262,7 @@ export default function Analytics() {
                 ) : (
                   <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No barangay data available.</p>
                 )}
+                <ChartInsight text={[rankingInsight(barangayIncidenceData, { valueKey: 'Cases' }), incidenceInsight(barangayIncidenceData)].filter(Boolean).join(' ') || null} />
               </div>
             </div>
 
@@ -1308,6 +1313,7 @@ export default function Analytics() {
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
+                  <ChartInsight text={rankingInsight(facilityData, { valueKey: 'Cases', noun: 'facility' })} />
                 </div>
               </div>
             )}
@@ -1364,6 +1370,7 @@ export default function Analytics() {
                       <p className="text-xs" style={{ color: '#94A3B8' }}>No outcome data available.</p>
                     </div>
                   )}
+                  <ChartInsight text={outcomeInsight(outcomeData)} />
                 </div>
               </div>
             </div>
@@ -1418,6 +1425,7 @@ export default function Analytics() {
                   ) : (
                     <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
                   )}
+                  <ChartInsight text={shareInsight(sexData, { noun: 'sex' })} />
                 </div>
               </div>
 
@@ -1452,6 +1460,7 @@ export default function Analytics() {
                   ) : (
                     <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No age data available for the selected filters.</p>
                   )}
+                  <ChartInsight text={shareInsight(ageData, { nameKey: 'group', valueKey: 'Cases', noun: 'age group' })} />
                 </div>
               </div>
             </div>

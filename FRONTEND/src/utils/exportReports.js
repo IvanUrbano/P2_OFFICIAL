@@ -1,11 +1,10 @@
-import jsPDF from 'jspdf';
-import { applyPlugin } from 'jspdf-autotable';
-applyPlugin(jsPDF);
-import * as XLSX from 'xlsx';
-import { saveAs } from 'file-saver';
+// jspdf/xlsx/file-saver are loaded on demand (dynamic import) instead of at module load —
+// they're only needed when someone actually exports, not on every visit to the Reports page.
+let pdfPluginApplied = false;
 
-export function exportCSV(cases) {
+export async function exportCSV(cases) {
   if (!cases?.length) return;
+  const { saveAs } = await import('file-saver');
   const headers = ['Case ID', 'Date', 'Barangay', 'Sex', 'Age', 'Registration Group', 'Anatomical Site', 'Outcome', 'Bacteriological Status'];
   const rows = cases.map(r => [
     r.id,
@@ -23,8 +22,9 @@ export function exportCSV(cases) {
   saveAs(blob, `TBInsight_Report_${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
-export function exportExcel(reportData) {
+export async function exportExcel(reportData) {
   if (!reportData) return;
+  const XLSX = await import('xlsx');
   const wb = XLSX.utils.book_new();
 
   // Summary sheet
@@ -84,8 +84,14 @@ export function exportExcel(reportData) {
   XLSX.writeFile(wb, `TBInsight_Report_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
-export function exportPDF(report) {
+export async function exportPDF(report) {
   if (!report) return;
+  const { default: jsPDF } = await import('jspdf');
+  if (!pdfPluginApplied) {
+    const { applyPlugin } = await import('jspdf-autotable');
+    applyPlugin(jsPDF);
+    pdfPluginApplied = true;
+  }
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
