@@ -6,7 +6,7 @@
  * Run: node --test BACKEND/test/webhook.test.js
  */
 
-const { describe, it, before, after } = require('node:test');
+const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
 const crypto = require('crypto');
 const express = require('express');
@@ -18,12 +18,25 @@ const TEST_SECRET = 'test-webhook-secret';
 const MODULE_DB = require.resolve('../db');
 let mockQueryFn;
 let mockConnectFn;
+// Result of the batch claim (INSERT ... ON CONFLICT into webhook_logs). Claimed by
+// default; a test simulating a duplicate / in-flight batch sets it to { rows: [] }.
+let mockClaimResult;
+const claimLogUpdates = [];
+
+const isClaimSql = (sql) => sql.includes('INSERT INTO webhook_logs') && sql.includes('ON CONFLICT');
 
 function installMockDb() {
   require.cache[MODULE_DB] = {
     id: MODULE_DB, filename: MODULE_DB, loaded: true,
     exports: {
-      get query() { return mockQueryFn || (async () => ({ rows: [] })); },
+      get query() {
+        const fn = mockQueryFn || (async () => ({ rows: [] }));
+        return async (sql, params) => {
+          if (isClaimSql(sql)) return mockClaimResult || { rows: [{ id: 42 }] };
+          if (sql.includes('UPDATE webhook_logs')) claimLogUpdates.push({ sql, params });
+          return fn(sql, params);
+        };
+      },
       get connect() { return mockConnectFn || (async () => ({
         query: async () => ({ rows: [] }),
         release: () => {},
@@ -136,6 +149,11 @@ describe('Webhook Endpoint', () => {
     installMockDb();
     installMockAgg();
     installMockPipeline();
+  });
+
+  beforeEach(() => {
+    mockClaimResult = undefined;
+    claimLogUpdates.length = 0;
   });
 
   after(() => {
@@ -326,7 +344,8 @@ describe('Webhook Endpoint', () => {
   });
 
   it('returns success for duplicate webhook (idempotent)', async () => {
-    // Mock: batch already processed in webhook_logs
+    // Mock: batch already processed in webhook_logs, so the claim is refused
+    mockClaimResult = { rows: [] };
     mockQueryFn = async (sql, params) => {
       if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }] };
@@ -981,6 +1000,7 @@ describe('Webhook Endpoint', () => {
   });
 
   it('TEST B2 — same batch_id resent: batch-level idempotency handles it before any record-level processing', async () => {
+    mockClaimResult = { rows: [] };
     mockQueryFn = async (sql) => {
       if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
       if (sql.includes('FROM webhook_logs WHERE batch_id')) return { rows: [{ id: 1, status: 'processed' }] };
@@ -1169,5 +1189,146 @@ describe('Webhook Endpoint', () => {
     assert.equal(res.status, 200);
     assert.equal(res.body.importedCount, 2, 'both distinct patients must be preserved even though they share a fingerprint');
     assert.equal(res.body.dstbCollisionsFlagged, 1, 'only the non-earliest row is flagged, the earliest stays unique');
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  //  Batch claim — a retry must not re-import a batch that is
+  //  still being imported by an earlier (timed-out) attempt
+  // ══════════════════════════════════════════════════════════════
+
+  function webhookApp() {
+    clearWebhookCache();
+    const webhook = require('../tbinsight/webhook');
+    const app = express();
+    app.use(express.json(RAW_BODY_CAPTURE));
+    app.use('/api/webhook', webhook);
+    return app;
+  }
+
+  it('claims the batch before importing, and only takes over failed or stale claims', async () => {
+    let claimSql = null;
+    let claimParams = null;
+    mockClaimResult = undefined;
+    const origQuery = mockQueryFn;
+    mockQueryFn = async (sql) => {
+      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ id: 11, name: 'San Antonio' }] };
+      return { rows: [] };
+    };
+    // Capture the claim statement itself through the module-level wrapper.
+    const wrapped = require.cache[MODULE_DB].exports;
+    const realGetter = Object.getOwnPropertyDescriptor(wrapped, 'query').get;
+    Object.defineProperty(wrapped, 'query', {
+      configurable: true,
+      get() {
+        const inner = realGetter.call(wrapped);
+        return async (sql, params) => {
+          if (isClaimSql(sql)) { claimSql = sql; claimParams = params; }
+          return inner(sql, params);
+        };
+      },
+    });
+    mockConnectFn = async () => ({
+      query: async (sql) => (sql.includes('INSERT INTO tb_cases')
+        ? { rows: [{ id: 1, dstb_fingerprint: null, itis_case_id: null, source_type: 'DSTB' }] }
+        : { rows: [] }),
+      release: () => {},
+    });
+
+    try {
+      const payload = buildPayload();
+      payload.sheets[0].records[0].barangay_id = 11;
+      const res = await request(webhookApp())
+        .post('/api/webhook/pasig-clone')
+        .set('X-Webhook-Signature', generateSignature(payload))
+        .send(payload);
+
+      assert.equal(res.status, 200);
+      assert.ok(claimSql, 'the batch must be claimed in webhook_logs');
+      assert.match(claimSql, /status = 'received'/);
+      assert.match(claimSql, /webhook_logs\.status = 'failed'/, 'a failed attempt may be retried');
+      assert.match(claimSql, /received_at < NOW\(\)/, 'only a stale in-progress claim may be taken over');
+      assert.deepEqual(claimParams.slice(0, 2), ['pasig-clone', payload.batch_id]);
+      // The claim row is completed (not a second row inserted) once the import commits.
+      const done = claimLogUpdates.find(u => u.sql.includes("status = 'processed'"));
+      assert.ok(done, 'the claimed row must be marked processed');
+      assert.equal(done.params[0], 42);
+    } finally {
+      Object.defineProperty(wrapped, 'query', { configurable: true, get: realGetter });
+      mockQueryFn = origQuery;
+    }
+  });
+
+  it('does not re-import a batch another attempt is still importing (sender retry after timeout)', async () => {
+    mockClaimResult = { rows: [] }; // claim refused: someone holds it
+    let tbCasesInserts = 0;
+    mockQueryFn = async (sql) => {
+      if (sql.includes('FROM webhook_logs WHERE batch_id')) return { rows: [{ id: 7, status: 'received' }] };
+      return { rows: [] };
+    };
+    mockConnectFn = async () => ({
+      query: async (sql) => {
+        if (sql.includes('INSERT INTO tb_cases')) tbCasesInserts++;
+        return { rows: [] };
+      },
+      release: () => {},
+    });
+
+    const payload = buildPayload();
+    const schedBefore = mockScheduleCalls.length;
+    const res = await request(webhookApp())
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 202);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.inProgress, true);
+    assert.equal(tbCasesInserts, 0, 'nothing may be imported a second time');
+    assert.equal(mockScheduleCalls.length, schedBefore, 'no extra pipeline run');
+  });
+
+  it('marks the claim failed when the import errors, so a retry can take it over', async () => {
+    mockQueryFn = async (sql) => {
+      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
+      return { rows: [] };
+    };
+    mockConnectFn = async () => ({
+      query: async (sql) => {
+        if (sql.includes('INSERT INTO tb_cases')) throw new Error('DB insert failed');
+        return { rows: [] };
+      },
+      release: () => {},
+    });
+
+    const payload = buildPayload();
+    const res = await request(webhookApp())
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 500);
+    const failed = claimLogUpdates.find(u => u.sql.includes("status = 'failed'"));
+    assert.ok(failed, 'the claim must be released as failed');
+    assert.equal(failed.params[0], 42);
+  });
+
+  it('releases the claim when the payload is rejected mid-validation', async () => {
+    mockQueryFn = async (sql) => {
+      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
+      return { rows: [] };
+    };
+    mockConnectFn = async () => ({ query: async () => ({ rows: [] }), release: () => {} });
+
+    const payload = buildPayload({
+      sheets: [{ sheet_name: 'X', source_type: 'UNKNOWN', record_count: 0, records: [] }],
+    });
+    const res = await request(webhookApp())
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 400);
+    assert.ok(claimLogUpdates.some(u => u.sql.includes("status = 'failed'")),
+      'a rejected payload must not leave the batch blocked behind an in-progress claim');
   });
 });

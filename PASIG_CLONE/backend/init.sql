@@ -133,6 +133,8 @@ ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS synced_by INTEGER;
 ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS synced_at TIMESTAMP;
 ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_status TEXT DEFAULT 'pending';
 ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_error TEXT;
+-- When the current/last sync attempt began; lets an interrupted 'syncing' batch be recovered.
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_started_at TIMESTAMP;
 
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS source_record_id TEXT;
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS record_status TEXT DEFAULT 'new';

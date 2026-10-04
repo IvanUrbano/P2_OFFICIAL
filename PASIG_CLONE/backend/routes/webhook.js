@@ -12,13 +12,16 @@ async function notifySync(batchId, result, user) {
   try {
     const batch = (await db.pool.query('SELECT filename, uploaded_by FROM import_batches WHERE id = $1', [batchId])).rows[0];
     if (!batch) return;
+    const partial = result.success && result.recordsRejected > 0;
     const n = {
       type: result.success ? 'sync_completed' : 'sync_failed',
-      severity: result.success ? 'success' : 'danger',
+      severity: !result.success ? 'danger' : partial ? 'warning' : 'success',
       actorId: user.id,
-      title: result.success ? `${batch.filename} synced to TBInsight` : `Sync to TBInsight failed: ${batch.filename}`,
+      title: result.success
+        ? `${batch.filename} synced to TBInsight${partial ? ` (${result.recordsRejected} rejected)` : ''}`
+        : `Sync to TBInsight failed: ${batch.filename}`,
       message: result.success
-        ? `${result.recordsAccepted ?? result.recordsSent ?? 0} record(s) sent by ${user.username}.`
+        ? `${result.message} Synced by ${user.username}.`
         : `${result.message || 'TBInsight did not accept the records.'} Try again from Data Sync.`,
       link: '/sync-history', entityType: 'import_batch', entityId: batchId,
     };
@@ -56,6 +59,13 @@ router.post('/send', sendLimiter, authenticate, authorizeRoles('admin'), async (
       status: result.status,
       recordsSent: result.recordsSent,
       recordsAccepted: result.recordsAccepted,
+      recordsImported: result.recordsImported,
+      recordsUpdated: result.recordsUpdated,
+      recordsRejected: result.recordsRejected,
+      rejectedSamples: result.rejectedSamples,
+      nonPasigExcluded: result.nonPasigExcluded,
+      alreadySynced: result.alreadySynced,
+      inProgress: result.inProgress,
     });
   } catch (error) {
     console.error('Webhook send error:', error);

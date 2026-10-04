@@ -64,10 +64,28 @@ function computeDstbFingerprint(record) {
   return crypto.createHash('md5').update(input).digest('hex');
 }
 
+// A 'received' (in-progress) claim older than this is treated as abandoned.
+const STALE_CLAIM_MINUTES = 15;
+
+// Release a claimed batch that was rejected before importing, so a corrected resend
+// is not blocked behind the in-progress claim.
+async function failClaim(claimId, message) {
+  if (!claimId) return;
+  try {
+    await pool.query(
+      `UPDATE webhook_logs SET status = 'failed', error_message = $2 WHERE id = $1`,
+      [claimId, message]
+    );
+  } catch (err) {
+    console.error('Failed to release webhook claim:', err.message);
+  }
+}
+
 router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
   console.log('📥 Webhook received from Pasig Clone');
-  
+
   const client = await pool.connect();
+  let claimId = null;
   try {
     const { source, batch_id, timestamp, sheets, schema_version } = req.body;
     
@@ -106,24 +124,43 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       return res.status(400).json({ error: 'timestamp is required' });
     }
 
-    // Idempotency: check if this batch was already processed (or attempted)
-    const existing = await pool.query(
-      "SELECT id, status FROM webhook_logs WHERE batch_id = $1",
-      [batch_id]
+    // Idempotency: claim the batch BEFORE importing anything. The unique index on
+    // (source, batch_id) makes this atomic, so when the sender times out and retries
+    // while the first attempt is still importing, only one attempt can hold the claim.
+    // A 'received' row is an import in progress; one older than STALE_CLAIM_MINUTES
+    // belongs to an attempt that died (e.g. a restart) and may be taken over, as may
+    // a 'failed' one.
+    const claim = await pool.query(
+      `INSERT INTO webhook_logs (source, batch_id, status, received_at)
+       VALUES ($1, $2, 'received', NOW())
+       ON CONFLICT (source, batch_id) WHERE batch_id IS NOT NULL DO UPDATE
+         SET status = 'received', received_at = NOW(), processed_at = NULL, error_message = NULL
+         WHERE webhook_logs.status = 'failed'
+            OR (webhook_logs.status = 'received'
+                AND webhook_logs.received_at < NOW() - make_interval(mins => $3))
+       RETURNING id`,
+      [source, batch_id, STALE_CLAIM_MINUTES]
     );
-    if (existing.rows.length > 0) {
-      const existingStatus = existing.rows[0].status;
-      if (existingStatus === 'processed') {
-        console.log(`   ⚠️ Batch ${batch_id} already processed (duplicate)`);
-        return res.json({
+    if (claim.rows.length === 0) {
+      const existing = await pool.query(
+        'SELECT id, status FROM webhook_logs WHERE batch_id = $1 AND source = $2',
+        [batch_id, source]
+      );
+      if (existing.rows[0]?.status === 'received') {
+        console.log(`   ⏳ Batch ${batch_id} is already being imported by another attempt`);
+        return res.status(202).json({
           success: true,
-          message: 'Webhook already processed (duplicate)',
+          inProgress: true,
+          message: 'Webhook already in progress for this batch',
         });
       }
-      // If status is 'failed', delete the old log and retry
-      console.log(`   🔄 Batch ${batch_id} has a previous failed attempt — clearing for retry`);
-      await pool.query('DELETE FROM webhook_logs WHERE batch_id = $1', [batch_id]);
+      console.log(`   ⚠️ Batch ${batch_id} already processed (duplicate)`);
+      return res.json({
+        success: true,
+        message: 'Webhook already processed (duplicate)',
+      });
     }
+    claimId = claim.rows[0].id;
 
     const barangaysResult = await pool.query('SELECT id, name FROM barangays');
     const validBarangays = new Set(barangaysResult.rows.map(r => r.name.toLowerCase()));
@@ -149,18 +186,21 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
 
       if (!source_type || !['DSTB', 'MN', 'MANUAL'].includes(source_type)) {
         await client.query('ROLLBACK');
+        await failClaim(claimId, `Invalid source_type: ${source_type}`);
         console.error(`   ❌ Invalid source_type: ${source_type}`);
         return res.status(400).json({ error: `Invalid source_type: "${source_type}"` });
       }
 
       if (!Array.isArray(records)) {
         await client.query('ROLLBACK');
+        await failClaim(claimId, 'records is not an array');
         console.error('   ❌ records is not an array');
         return res.status(400).json({ error: 'records must be an array' });
       }
 
       if (sheet.record_count !== undefined && sheet.record_count !== records.length) {
         await client.query('ROLLBACK');
+        await failClaim(claimId, `record_count mismatch: expected ${sheet.record_count}, got ${records.length}`);
         console.error(`   ❌ record_count mismatch: expected ${sheet.record_count}, got ${records.length}`);
         return res.status(400).json({
           error: `record_count mismatch: expected ${sheet.record_count}, got ${records.length}`,
@@ -328,21 +368,17 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       schedulePipelineRun(`webhook:${batch_id}`, 5000);
     }
 
-    // Log webhook — handle duplicate-key violation gracefully
+    // Complete the claim taken at the start: the batch now counts as processed.
     try {
       await pool.query(
-        `INSERT INTO webhook_logs (source, batch_id, payload, status, records_received, records_imported, processed_at)
-         VALUES ($1, $2, $3, 'processed', $4, $5, NOW())`,
-        [source, batch_id, JSON.stringify(req.body), totalRecords, importedCount]
+        `UPDATE webhook_logs
+         SET payload = $2, status = 'processed', records_received = $3, records_imported = $4, processed_at = NOW()
+         WHERE id = $1`,
+        [claimId, JSON.stringify(req.body), totalRecords, importedCount]
       );
       console.log(`✅ Webhook logged: batch ${batch_id}, ${importedCount} records imported`);
     } catch (logErr) {
-      if (logErr.code === '23505') {
-        // Unique constraint violation — duplicate webhook, already logged
-        console.log(`⚠️ Webhook log for batch ${batch_id} already exists (duplicate)`);
-      } else {
-        console.error('Failed to log webhook:', logErr.message);
-      }
+      console.error('Failed to log webhook:', logErr.message);
     }
 
     res.json({
@@ -369,16 +405,23 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       console.error('   Stack:', error.stack.split('\n').slice(0, 5).join('\n'));
     }
     
-    // Try to log the webhook failure, but be defensive about req.body
+    // Mark the claimed batch as failed so the sender's retry can take it over.
+    // Without a claim the failure happened before the batch was identified; log it
+    // on its own row (batch_id NULL keeps it out of the per-batch unique index).
     try {
-      const source = req.body?.source || 'unknown';
-      const batchId = req.body?.batch_id || 'unknown';
-      const payload = req.body ? JSON.stringify(req.body) : '{}';
-      await pool.query(
-        `INSERT INTO webhook_logs (source, batch_id, payload, status, error_message)
-         VALUES ($1, $2, $3, 'failed', $4)`,
-        [source, batchId, payload, `${error.code || 'ERROR'}: ${error.message}`]
-      );
+      const errorMessage = `${error.code || 'ERROR'}: ${error.message}`;
+      if (claimId) {
+        await pool.query(
+          `UPDATE webhook_logs SET status = 'failed', error_message = $2 WHERE id = $1`,
+          [claimId, errorMessage]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO webhook_logs (source, batch_id, status, error_message)
+           VALUES ($1, NULL, 'failed', $2)`,
+          [req.body?.source || 'unknown', errorMessage]
+        );
+      }
     } catch (logErr) {
       console.error('Failed to log webhook error:', logErr.message);
     }
