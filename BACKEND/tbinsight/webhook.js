@@ -82,6 +82,19 @@ function summarizeWebhookPayload(body) {
   };
 }
 
+// Which sent record a rejection belongs to: PASIG's Case ID and its own record id (sent
+// as `record_id`). Neither identifies a person; they let PASIG point at the record to fix.
+function rejectionRef(record) {
+  const recordId = Number(record.record_id);
+  return {
+    case_no: record.case_no || null,
+    record_id: Number.isInteger(recordId) && recordId > 0 ? recordId : null,
+  };
+}
+
+// Upper bound on rejections listed back to the sender in one response.
+const MAX_REJECTED_RETURNED = 5000;
+
 // A 'received' (in-progress) claim older than this is treated as abandoned.
 const STALE_CLAIM_MINUTES = 15;
 
@@ -241,7 +254,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
         } else {
           // Barangay not in Pasig — skip this record (already counted in totalRecords above)
           errorCount++;
-          errors.push({ row: record.row_number || totalRecords, source_type, errors: ['Unknown barangay ID or name: not a Pasig City barangay'] });
+          errors.push({ ...rejectionRef(record), row: record.row_number || totalRecords, source_type, errors: ['Unknown barangay ID or name: not a Pasig City barangay'] });
           continue;
         }
 
@@ -296,7 +309,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
           // record-level duplicate detection never blocks an insert.
         } else {
           errorCount++;
-          errors.push({ row: record.row_number, source_type, errors: validation.errors });
+          errors.push({ ...rejectionRef(record), row: record.row_number, source_type, errors: validation.errors });
         }
       }
     }
@@ -408,6 +421,9 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       totalRecords, importedCount, updatedCount, errorCount,
       possibleDuplicatesFlagged, mnCollisionsFlagged, dstbCollisionsFlagged,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
+      // Every rejected record with the sender's identifiers, so PASIG can mark each one
+      // for fixing (`errors` above stays a 10-item sample for older senders).
+      rejected: errors.length > 0 ? errors.slice(0, MAX_REJECTED_RETURNED) : undefined,
     });
 
     console.log(`✅ Webhook batch ${batch_id} completed successfully`);

@@ -144,6 +144,10 @@ ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS record_status TEXT DEFAU
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS updated_by INTEGER;
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false;
+-- Set when TBInsight rejected this record in its latest sync (reason text); cleared when a
+-- later sync of the record is accepted. Lets staff find and fix records that didn't arrive.
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS tbinsight_rejection TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS tbinsight_rejected_at TIMESTAMP;
 
 -- New MN-specific clinical/laboratory columns
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS type TEXT;

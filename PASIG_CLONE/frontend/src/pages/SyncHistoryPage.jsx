@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import { useTheme } from '../theme';
 import EmptyState from '../components/EmptyState';
@@ -23,12 +24,23 @@ export default function SyncHistoryPage() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [filter, setFilter] = useState('all');
+  const [rejections, setRejections] = useState([]);
+  const navigate = useNavigate();
 
   useEffect(() => {
     API.get('/api/webhook/logs')
       .then(res => setLogs(Array.isArray(res.data) ? res.data : []))
       .catch(() => {})
       .finally(() => setLoading(false));
+    // Admin-only list; only asked for by admins (this app's API client signs the user
+    // out on a 403, so a staff user must never trigger one).
+    let role = null;
+    try { role = JSON.parse(localStorage.getItem('user') || 'null')?.role; } catch { /* not signed in */ }
+    if (role === 'admin') {
+      API.get('/api/webhook/rejections')
+        .then(res => setRejections(res.data.rejections || []))
+        .catch(() => {});
+    }
   }, []);
 
   const counts = {
@@ -43,6 +55,50 @@ export default function SyncHistoryPage() {
 
   return (
     <div className="space-y-5">
+      {rejections.length > 0 && (
+        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #FECACA', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
+          <div className="px-5 py-3.5 flex items-start gap-3" style={{ background: '#FEF2F2', borderBottom: '1px solid #FECACA' }}>
+            <i className="ri-error-warning-line text-lg mt-0.5" style={{ color: '#DC2626' }} />
+            <div>
+              <h2 className="text-sm font-bold" style={{ color: '#991B1B' }}>
+                {rejections.length} record{rejections.length === 1 ? '' : 's'} not accepted by TBInsight
+              </h2>
+              <p className="text-[11px] mt-0.5" style={{ color: '#7F1D1D' }}>
+                These records were sent but TBInsight rejected them, so they are missing from its maps and forecasts.
+                Open a record and fix it — saving re-sends it, and it leaves this list once TBInsight accepts it.
+              </p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr style={{ background: '#FAFCFF', borderBottom: '1px solid #E2E8F0' }}>
+                  {['Case ID', 'Barangay', 'Source', 'Reason', 'Rejected', ''].map(h => (
+                    <th key={h} className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider" style={{ color: '#0F2D52' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rejections.map(r => (
+                  <tr key={r.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                    <td className="px-4 py-2.5 text-xs font-bold font-mono" style={{ color: '#0F2D52' }}>{r.case_no || `#${r.id}`}</td>
+                    <td className="px-4 py-2.5 text-xs" style={{ color: '#475569' }}>{r.barangay_name || '—'}</td>
+                    <td className="px-4 py-2.5 text-xs" style={{ color: '#475569' }}>{r.source_type || '—'}</td>
+                    <td className="px-4 py-2.5 text-xs" style={{ color: '#991B1B' }}>{r.reason}</td>
+                    <td className="px-4 py-2.5 text-xs whitespace-nowrap" style={{ color: '#64748B' }}>{r.rejected_at ? new Date(r.rejected_at).toLocaleString() : '—'}</td>
+                    <td className="px-4 py-2.5 text-right">
+                      <button onClick={() => navigate(`/records?record=${r.id}`)} className="px-2.5 py-1 text-[11px] font-semibold rounded cursor-pointer" style={{ color: '#2E6FAF', border: '1px solid #BFDBFE' }}>
+                        Open record
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Card Header with Tabs */}
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
         {/* Title Section */}

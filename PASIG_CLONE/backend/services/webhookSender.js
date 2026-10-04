@@ -67,6 +67,9 @@ function formatRecord(record) {
     // The PASIG batch the case originally came from, so undoing that batch in
     // TBInsight removes it even when it was (re)sent inside a later batch.
     source_batch_id: record.batch_id ?? null,
+    // This record's row id in PASIG, echoed back by TBInsight if it rejects the record
+    // so the rejection can be marked on the right record (not a personal identifier).
+    record_id: record.id ?? null,
   };
 }
 
@@ -95,6 +98,7 @@ function summarizeTbInsightResponse(responseBody, recordsSent, nonPasigCount = 0
       recordsImported: null,
       recordsUpdated: null,
       recordsRejected: null,
+      rejected: [],
       rejectedSamples: [],
       alreadySynced: duplicate,
       inProgress,
@@ -108,16 +112,40 @@ function summarizeTbInsightResponse(responseBody, recordsSent, nonPasigCount = 0
   const parts = [`${recordsImported} imported`, `${recordsUpdated} updated`];
   if (recordsRejected > 0) parts.push(`${recordsRejected} rejected`);
 
+  // Newer TBInsight lists every rejection (`rejected`); older ones only a 10-item sample.
+  const rejected = Array.isArray(body.rejected) ? body.rejected : (Array.isArray(body.errors) ? body.errors : []);
+
   return {
     recordsAccepted: recordsImported + recordsUpdated,
     recordsImported,
     recordsUpdated,
     recordsRejected,
-    rejectedSamples: Array.isArray(body.errors) ? body.errors : [],
+    rejected,
+    rejectedSamples: rejected.slice(0, 10),
     alreadySynced: false,
     inProgress: false,
     message: `Sent ${recordsSent} record(s) to TBInsight: ${parts.join(', ')}.${excludedNote}`,
   };
+}
+
+/**
+ * Match TBInsight's rejections to the records that were sent: by record id, falling back
+ * to Case ID. Only records that were actually in this sync can be marked, whatever
+ * TBInsight replies.
+ * @returns {Map<number|string, string>} record id -> rejection reason(s)
+ */
+function rejectionsBySentRecord(sentRecords, rejected) {
+  const byId = new Map(sentRecords.filter(r => r.id != null).map(r => [String(r.id), r.id]));
+  const byCaseNo = new Map(sentRecords.filter(r => r.case_no).map(r => [r.case_no, r.id]));
+  const reasons = new Map();
+  for (const rej of Array.isArray(rejected) ? rejected : []) {
+    let id = rej.record_id != null ? byId.get(String(rej.record_id)) : undefined;
+    if (id === undefined && rej.case_no) id = byCaseNo.get(rej.case_no);
+    if (id === undefined) continue;
+    const text = (Array.isArray(rej.errors) ? rej.errors : []).join('; ') || 'Rejected by TBInsight';
+    reasons.set(id, reasons.has(id) ? `${reasons.get(id)}; ${text}` : text);
+  }
+  return reasons;
 }
 
 /**
@@ -272,6 +300,7 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [] } = {}) {
           // ========== Mark sync as successful ==========
           // Rows TBInsight rejected don't fail the batch (the rest were imported), but the
           // note is kept so Sync History shows that some records did not make it.
+          const { rejected, ...storedOutcome } = outcome; // the full list lives on the records
           await client.query('BEGIN');
           await client.query(
             `UPDATE import_batches
@@ -280,9 +309,30 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [] } = {}) {
             [
               batchId,
               outcome.recordsRejected > 0 ? `${outcome.recordsRejected} record(s) rejected by TBInsight` : null,
-              JSON.stringify({ recordsSent, nonPasigExcluded: nonPasigCount, ...outcome }),
+              JSON.stringify({ recordsSent, nonPasigExcluded: nonPasigCount, ...storedOutcome }),
             ]
           );
+          // TBInsight checked every record it was sent: mark the ones it rejected, and
+          // clear the mark on the ones it accepted (e.g. after the record was fixed).
+          if (typeof outcome.recordsImported === 'number') {
+            const sentRecords = [...dstbRecords, ...mnRecords, ...manualRecords];
+            const reasons = rejectionsBySentRecord(sentRecords, rejected);
+            const sentIds = sentRecords.map(r => r.id).filter(id => id != null);
+            await client.query(
+              `UPDATE validated_tb_cases SET tbinsight_rejection = NULL, tbinsight_rejected_at = NULL
+               WHERE id = ANY($1::bigint[]) AND tbinsight_rejection IS NOT NULL AND NOT (id = ANY($2::bigint[]))`,
+              [sentIds, [...reasons.keys()]]
+            );
+            if (reasons.size > 0) {
+              await client.query(
+                `UPDATE validated_tb_cases v
+                 SET tbinsight_rejection = x.reason, tbinsight_rejected_at = NOW()
+                 FROM unnest($1::bigint[], $2::text[]) AS x(id, reason)
+                 WHERE v.id = x.id`,
+                [[...reasons.keys()], [...reasons.values()]]
+              );
+            }
+          }
           await client.query('COMMIT');
 
           console.log(`✅ Webhook synced for batch ${batchId}: ${outcome.message}`);
@@ -476,4 +526,4 @@ async function recoverStuckSyncs(pool = db.pool, minutes = STUCK_SYNC_MINUTES) {
   return ids;
 }
 
-module.exports = { sendWebhook, recoverStuckSyncs, STUCK_SYNC_MINUTES, signPayload, formatRecord, isPasigRecord, toYmd, summarizeTbInsightResponse };
+module.exports = { sendWebhook, recoverStuckSyncs, STUCK_SYNC_MINUTES, rejectionsBySentRecord, signPayload, formatRecord, isPasigRecord, toYmd, summarizeTbInsightResponse };

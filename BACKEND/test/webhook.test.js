@@ -343,6 +343,47 @@ describe('Webhook Endpoint', () => {
     assert.equal(mockScheduleCalls.length, schedBeforeInvalid);
   });
 
+  it('lists every rejected record with the sender\'s Case ID and record id', async () => {
+    mockQueryFn = async (sql) => (sql.includes('SELECT id, name FROM barangays')
+      ? { rows: [{ id: 11, name: 'San Antonio' }] }
+      : { rows: [] });
+    mockConnectFn = async () => ({ query: async () => ({ rows: [] }), release: () => {} });
+
+    clearWebhookCache();
+    const webhook = require('../tbinsight/webhook');
+    const app = express();
+    app.use(express.json(RAW_BODY_CAPTURE));
+    app.use('/api/webhook', webhook);
+
+    const bad = (i) => ({ barangay_name: 'San Antonio', date_of_diagnosis: null, sex: 'Male', case_no: `C-${i}`, record_id: 100 + i });
+    const payload = buildPayload({
+      sheets: [{
+        sheet_name: 'DSTB', source_type: 'DSTB', record_count: 12,
+        records: [
+          ...Array.from({ length: 11 }, (_, i) => bad(i)),
+          { barangay_name: 'Nowhere', date_of_diagnosis: '2025-01-01', sex: 'Male', case_no: 'C-X', record_id: 'not-a-number' },
+        ],
+      }],
+    });
+    const res = await request(app)
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.errorCount, 12);
+    assert.equal(res.body.errors.length, 10, 'the old 10-item sample is unchanged');
+    assert.equal(res.body.rejected.length, 12, 'every rejection is listed');
+    assert.deepEqual(
+      { case_no: res.body.rejected[0].case_no, record_id: res.body.rejected[0].record_id },
+      { case_no: 'C-0', record_id: 100 }
+    );
+    assert.ok(res.body.rejected[0].errors.some(e => /Date of Diagnosis/.test(e)));
+    const unknown = res.body.rejected[11];
+    assert.equal(unknown.case_no, 'C-X');
+    assert.equal(unknown.record_id, null, 'a non-numeric record id is not echoed back');
+  });
+
   it('returns success for duplicate webhook (idempotent)', async () => {
     // Mock: batch already processed in webhook_logs, so the claim is refused
     mockClaimResult = { rows: [] };
