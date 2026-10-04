@@ -20,7 +20,8 @@ authPool.on('error', (err) => {
 const execSql = async (sqlContent) => {
   const client = await pool.connect();
   try {
-    await client.query(sqlContent);
+    // Strip a UTF-8 BOM: Postgres rejects it as a syntax error, aborting schema init.
+    await client.query(String(sqlContent).replace(/^﻿/, ''));
   } finally {
     client.release();
   }

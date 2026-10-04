@@ -1,4 +1,4 @@
-﻿-- Migration 015: barangay_population table for year-specific population references
+-- Migration 015: barangay_population table for year-specific population references
 -- 2025 population remains in GeoJSON (authoritative)
 -- Future years (2026+) stored here
 

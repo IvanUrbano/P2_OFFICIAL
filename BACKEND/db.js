@@ -41,7 +41,10 @@ pool.on('error', (err) => {
 const execSql = async (sqlContent) => {
   const client = await pool.connect();
   try {
-    await client.query(sqlContent);
+    // A file saved "UTF-8 with BOM" starts with an invisible U+FEFF that Postgres
+    // rejects as a syntax error — which aborted startup init and silently skipped every
+    // later migration (015 had one from 2026-09-27 to 2026-10-04). Strip it.
+    await client.query(String(sqlContent).replace(/^﻿/, ''));
   } finally {
     client.release();
   }
