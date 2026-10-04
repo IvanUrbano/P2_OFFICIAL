@@ -63,3 +63,19 @@ describe('summarizeTbInsightResponse', () => {
     assert.match(r.message, /did not report/);
   });
 });
+
+describe('summarizeWebhookPayload (sync log)', () => {
+  const { summarizeWebhookPayload } = require('../db/pasigSchema');
+
+  it('keeps batch and per-sheet counts but no records', () => {
+    const payload = {
+      schema_version: '1.0', source: 'pasig-clone', batch_id: 'b-1', timestamp: '2026-10-04T00:00:00Z',
+      sheets: [{ sheet_name: 'DSTB', source_type: 'DSTB', record_count: 1, records: [{ case_no: 'C-1', patient_no: 'P-1', barangay_name: 'Pinagbuhatan' }] }],
+    };
+    const s = summarizeWebhookPayload(payload);
+    assert.deepStrictEqual(s.sheets, [{ sheet_name: 'DSTB', source_type: 'DSTB', record_count: 1 }]);
+    assert.strictEqual(s.batch_id, 'b-1');
+    const text = JSON.stringify(s);
+    assert.ok(!text.includes('C-1') && !text.includes('P-1') && !text.includes('Pinagbuhatan'));
+  });
+});

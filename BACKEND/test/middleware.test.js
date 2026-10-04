@@ -129,6 +129,15 @@ describe('authenticateToken middleware', () => {
     assert.strictEqual(res.status, 401);
   });
 
+  it('rejects a token signed with an algorithm other than HS256', async () => {
+    // Same secret, different HMAC algorithm: only HS256 tokens are issued, so accept only those.
+    const token = jwt.sign({ id: 1, username: 'hs512' }, TEST_SECRET, { algorithm: 'HS512', expiresIn: '1h' });
+    const res = await request(buildApp())
+      .get('/protected')
+      .set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 401);
+  });
+
   it('passes through all decoded fields', async () => {
     const token = signToken({
       id: 42, username: 'fulluser', email: 'full@test.com',

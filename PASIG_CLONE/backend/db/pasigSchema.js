@@ -12,6 +12,10 @@ const authPool = new Pool({ connectionString: process.env.AUTH_DATABASE_URL, ...
 pool.on('error', (err) => {
   console.error('[pasig-clone] Unexpected pool error:', err.message);
 });
+// Same for the shared auth database: a dropped idle connection must not crash the process.
+authPool.on('error', (err) => {
+  console.error('[pasig-clone] Unexpected auth pool error:', err.message);
+});
 
 const execSql = async (sqlContent) => {
   const client = await pool.connect();
@@ -272,11 +276,27 @@ function getAllCases() {
   return pool.query(`SELECT * FROM validated_tb_cases ORDER BY id DESC`);
 }
 
+// The sync log keeps what was sent, not the records themselves: the full payload holds
+// every case (case/patient numbers included) and was never read back, so storing it
+// only duplicated patient data and bloated the table.
+function summarizeWebhookPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  return {
+    schema_version: payload.schema_version,
+    source: payload.source,
+    batch_id: payload.batch_id,
+    timestamp: payload.timestamp,
+    sheets: Array.isArray(payload.sheets)
+      ? payload.sheets.map(s => ({ sheet_name: s.sheet_name, source_type: s.source_type, record_count: s.record_count }))
+      : [],
+  };
+}
+
 function logWebhook(batchId, payload, status, responseCode, responseBody, initiatedBy) {
   return pool.query(
     `INSERT INTO webhook_logs (batch_id, payload, status, response_code, response_body, initiated_by, initiated_at)
      VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-    [batchId, JSON.stringify(payload), status, responseCode, responseBody, initiatedBy || null]
+    [batchId, JSON.stringify(summarizeWebhookPayload(payload)), status, responseCode, responseBody, initiatedBy || null]
   );
 }
 
@@ -284,7 +304,7 @@ function logWebhookError(batchId, payload, errorMessage, initiatedBy) {
   return pool.query(
     `INSERT INTO webhook_logs (batch_id, payload, status, error_message, initiated_by, initiated_at)
      VALUES ($1, $2, 'failed', $3, $4, NOW())`,
-    [batchId, JSON.stringify(payload), errorMessage, initiatedBy || null]
+    [batchId, JSON.stringify(summarizeWebhookPayload(payload)), errorMessage, initiatedBy || null]
   );
 }
 
@@ -460,6 +480,7 @@ module.exports = {
   getAllCases,
   logWebhook,
   logWebhookError,
+  summarizeWebhookPayload,
   getWebhookLogs,
   WEBHOOK_LOG_COLUMNS,
   getBatches,

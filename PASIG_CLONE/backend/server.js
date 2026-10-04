@@ -13,6 +13,7 @@ const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
+const compression = require('compression');
 const morgan = require('morgan');
 const config = require('./config');
 const { initSchema } = require('./db/pasigSchema');
@@ -37,6 +38,8 @@ app.use(cors({
   credentials: true,
 }));
 app.use(helmet());
+// Gzip responses (only when the client accepts it and the body is over 1 KB).
+app.use(compression());
 app.use(morgan('dev'));
 const fileUpload = require('express-fileupload');
 app.use(fileUpload({ 

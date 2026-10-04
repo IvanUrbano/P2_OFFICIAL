@@ -64,6 +64,24 @@ function computeDstbFingerprint(record) {
   return crypto.createHash('md5').update(input).digest('hex');
 }
 
+// What the sync log keeps about a payload: which batch and how many records per sheet.
+function summarizeWebhookPayload(body) {
+  if (!body || typeof body !== 'object') return null;
+  return {
+    schema_version: body.schema_version,
+    source: body.source,
+    batch_id: body.batch_id,
+    timestamp: body.timestamp,
+    sheets: Array.isArray(body.sheets)
+      ? body.sheets.map(s => ({
+        sheet_name: s?.sheet_name,
+        source_type: s?.source_type,
+        record_count: Array.isArray(s?.records) ? s.records.length : s?.record_count,
+      }))
+      : [],
+  };
+}
+
 // A 'received' (in-progress) claim older than this is treated as abandoned.
 const STALE_CLAIM_MINUTES = 15;
 
@@ -369,12 +387,15 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
     }
 
     // Complete the claim taken at the start: the batch now counts as processed.
+    // Only a summary of the payload is kept — the records themselves (case/patient
+    // numbers included) already live in tb_cases_raw/tb_cases and were never read back
+    // from here.
     try {
       await pool.query(
         `UPDATE webhook_logs
          SET payload = $2, status = 'processed', records_received = $3, records_imported = $4, processed_at = NOW()
          WHERE id = $1`,
-        [claimId, JSON.stringify(req.body), totalRecords, importedCount]
+        [claimId, JSON.stringify(summarizeWebhookPayload(req.body)), totalRecords, importedCount]
       );
       console.log(`✅ Webhook logged: batch ${batch_id}, ${importedCount} records imported`);
     } catch (logErr) {

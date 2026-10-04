@@ -1252,6 +1252,11 @@ describe('Webhook Endpoint', () => {
       const done = claimLogUpdates.find(u => u.sql.includes("status = 'processed'"));
       assert.ok(done, 'the claimed row must be marked processed');
       assert.equal(done.params[0], 42);
+      // The log keeps a summary, never the records (case/patient data) themselves.
+      const logged = JSON.parse(done.params[1]);
+      assert.equal(logged.batch_id, payload.batch_id);
+      assert.deepEqual(logged.sheets, [{ sheet_name: 'DSTB', source_type: 'DSTB', record_count: 1 }]);
+      assert.ok(!done.params[1].includes('San Antonio'), 'no record content in the log');
     } finally {
       Object.defineProperty(wrapped, 'query', { configurable: true, get: realGetter });
       mockQueryFn = origQuery;

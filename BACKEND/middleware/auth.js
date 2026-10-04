@@ -14,7 +14,8 @@ const authenticateToken = async (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // Tokens are signed with the jsonwebtoken default (HS256); accept nothing else.
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
     req.user = decoded;
 
     // CSRF protection: the auth cookie is SameSite=None (frontend and backend

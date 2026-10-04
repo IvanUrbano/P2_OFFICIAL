@@ -31,6 +31,13 @@ const poolConfig = process.env.DATABASE_URL
   };
 const pool = new Pool(poolConfig);
 
+// An idle connection the server drops (Neon closes idle ones) is reported as an 'error'
+// on the pool; without a listener Node treats it as unhandled and crashes the process.
+// The pool discards that connection and opens a new one on the next query.
+pool.on('error', (err) => {
+  console.error('[tbinsight] Unexpected pool error:', err.message);
+});
+
 const execSql = async (sqlContent) => {
   const client = await pool.connect();
   try {

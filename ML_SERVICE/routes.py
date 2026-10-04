@@ -100,7 +100,7 @@ def compute_risk_thresholds(req: ThresholdRequest):
         raise
     except Exception as e:
         logger.error(f"Threshold computation error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Threshold computation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Threshold computation failed. See the ML service log for details.")
 
 
 # ==================== POST /forecast ====================
@@ -171,7 +171,7 @@ def run_forecast(req: ForecastRequest):
         raise
     except Exception as e:
         logger.error(f"Forecast error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Forecast failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Forecast failed. See the ML service log for details.")
 
 
 # ==================== POST /classify ====================
@@ -229,7 +229,7 @@ def run_classify(req: ClassifyRequest):
         raise
     except Exception as e:
         logger.error(f"Classification error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Classification failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Classification failed. See the ML service log for details.")
 
 
 # ==================== POST /evaluate ====================
@@ -342,4 +342,4 @@ def evaluate_models(req: EvaluateRequest):
         raise
     except Exception as e:
         logger.error(f"Evaluation error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Evaluation failed. See the ML service log for details.")
