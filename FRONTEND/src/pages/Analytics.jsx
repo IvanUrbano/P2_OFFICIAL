@@ -1,13 +1,26 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  ComposedChart, Bar, Line, Area, PieChart, Pie, Cell,
+  ComposedChart, BarChart, Bar, Line, Area, PieChart, Pie, Cell,
   CartesianGrid, XAxis, YAxis, Tooltip,
   ResponsiveContainer,
 } from 'recharts';
 import API from '../api/axios';
 import AiInsightPanel from '../components/AiInsightPanel';
+import ChartInsight from '../components/ChartInsight';
+import { trendInsight, yoyInsight, rankingInsight, incidenceInsight, shareInsight, outcomeInsight } from '../utils/chartInsights';
 import TreatmentCascadeCard from '../components/TreatmentCascadeCard';
+import FilterSelect from '../components/FilterSelect';
 import { getAnalyticsInsight } from '../services/insightService';
+import {
+  APPROVED_OUTCOMES, OUTCOME_FILTER_OPTIONS, OUTCOME_COLORS, ACTIVE_OUTCOMES,
+} from '../utils/outcomeStatus';
+import {
+  categorizeAge,
+  matchesNonYearFilters,
+  buildMonthlySeries,
+  buildPreviousYearComparison,
+  mergeComparison,
+} from '../utils/trendComparison';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
@@ -22,48 +35,19 @@ const COLORS = {
   gray: '#94A3B8',
 };
 
-const OUTCOME_COLORS = {
-  'CURED': '#047857',
-  'TREATMENT COMPLETED': '#2E6FAF',
-  'ON TREATMENT': '#92400E',
-  'TREATMENT FAILED': '#991B1B',
-  'FAILED': '#991B1B',
-  'DIED': '#7F1D1D',
-  'LOST TO FF-UP': '#6B7280',
-  'LOST TO FOLLOW-UP': '#6B7280',
-  'EXCLUDED': '#64748B',
-  'NOT EVALUATED': '#94A3B8',
-  'DIAGNOSED': '#0369A1',
-  'SCREENED': '#0E7490',
-};
+// Categories, order and colours come from the single shared frontend contract
+// (src/utils/outcomeStatus.js), which mirrors the backend's
+// outcomeNormalization.js — not a private copy per page.
+const OUTCOME_ORDER = APPROVED_OUTCOMES;
 
 const AGE_GROUP_ORDER = ['0-14', '15-24', '25-34', '35-44', '45-54', '55-64', '65+'];
-
-function categorizeAge(age) {
-  const n = Number(age);
-  if (isNaN(n) || n < 0) return 'Unknown';
-  if (n <= 14) return '0-14';
-  if (n <= 24) return '15-24';
-  if (n <= 34) return '25-34';
-  if (n <= 44) return '35-44';
-  if (n <= 54) return '45-54';
-  if (n <= 64) return '55-64';
-  return '65+';
-}
 
 const MONTHS = [
   'All Months', 'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-const OUTCOMES = [
-  'All Outcomes', 'CURED', 'TREATMENT COMPLETED', 'ON TREATMENT',
-  'TREATMENT FAILED', 'FAILED', 'DIED',
-  'LOST TO FF-UP', 'LOST TO FOLLOW-UP',
-  'EXCLUDED', 'NOT EVALUATED', 'DIAGNOSED', 'SCREENED',
-];
-
-const ACTIVE_OUTCOMES = ['ON TREATMENT'];
+const OUTCOMES = OUTCOME_FILTER_OPTIONS;
 
 /* ─── Helper Components ──────────────────────────────────────────────── */
 
@@ -97,7 +81,7 @@ function TrendBadge({ current, previous, inverse }) {
   const isUp = diff > 0;
   const isGood = inverse ? !isUp : isUp;
   return (
-    <span className="inline-flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded"
+    <span className="inline-flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0"
       style={{ background: isGood ? '#ECFDF5' : '#FEF2F2', color: isGood ? '#047857' : '#991B1B' }}>
       <i className={`${isUp ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line'} text-[10px]`} />
       {pct}%
@@ -119,34 +103,16 @@ function EmptyState() {
   );
 }
 
-/* ─── Filter Select (same as DashboardPage) ─── */
-function FilterSelect({ label, value, onChange, children, selectStyle }) {
-  return (
-    <div className="relative">
-      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] pointer-events-none whitespace-nowrap" style={{ color: '#94A3B8' }}>{label}:</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg pr-7 py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-        style={{
-          background: '#ffffff',
-          color: '#0F2D52',
-          border: '1px solid #E2E8F0',
-          paddingLeft: `${(label.length * 6.5) + 24}px`,
-          ...selectStyle,
-        }}
-      >
-        {children}
-      </select>
-      <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-    </div>
-  );
-}
 
 /* ─── Main Analytics Component ───────────────────────────────────────── */
 
 export default function Analytics() {
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  /* Nonce re-triggering the metric-card effects (cascade/TSR/CFR/population)
+   * on header Refresh — their deps are filter values only, so identical
+   * filters would otherwise never refetch. */
+  const [refreshTick, setRefreshTick] = useState(0);
   const [error, setError] = useState(null);
 
   /* Raw data from API */
@@ -261,6 +227,7 @@ export default function Analytics() {
   }, []);
 
   const handleGenerateInsight = useCallback(async () => {
+    if (insightLoading) return;
     try {
       setInsightLoading(true);
       setInsightError(null);
@@ -268,6 +235,7 @@ export default function Analytics() {
         year: aYear,
         month: aMonth,
         barangay: aBarangay,
+        facility: aFacility,
         outcome: aOutcome,
         sex: aSex,
         ageGroup: aAgeGroup,
@@ -280,7 +248,22 @@ export default function Analytics() {
     } finally {
       setInsightLoading(false);
     }
-  }, [aYear, aMonth, aBarangay, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [insightLoading, aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
+
+  /* ── Header refresh: reload EVERYTHING — base data (loadAll), the metric
+   * cards (refreshTick re-fires their effects), and a fresh NLG insight
+   * (always regenerated, matching Dashboard's refresh). Spinner + disabled
+   * button cover the whole batch; no page skeleton flash. ── */
+  const handleRefresh = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshTick((t) => t + 1);
+    try {
+      await Promise.all([loadAll(), handleGenerateInsight()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadAll, refreshing, handleGenerateInsight]);
 
   /* ── Treatment Cascade — shared backend calculation with active filters ── */
   const activeCascadeFilters = useMemo(() => {
@@ -291,9 +274,8 @@ export default function Analytics() {
     if (aSex) f.sex = aSex;
     if (aAgeGroup) f.ageGroup = aAgeGroup;
     if (aBact) f.bacteriological = aBact;
-    if (aOutcome) f.outcome = aOutcome;
     return f;
-  }, [aYear, aMonth, aBarangay, aSex, aAgeGroup, aBact, aOutcome]);
+  }, [aYear, aMonth, aBarangay, aSex, aAgeGroup, aBact]);
 
   useEffect(() => {
     let cancelled = false;
@@ -312,7 +294,7 @@ export default function Analytics() {
       }
     })();
     return () => { cancelled = true; };
-  }, [activeCascadeFilters]);
+  }, [activeCascadeFilters, refreshTick]);
 
   /* ── Treatment Success Rate — shared backend cohort calculation ──
    * GET /api/tb/treatment-success-rate: (Cured+Completed) / patients whose
@@ -327,6 +309,10 @@ export default function Analytics() {
         const params = {};
         if (aYear) params.year = aYear;
         if (aBarangay) params.barangay = aBarangay;
+        if (aSex) params.sex = aSex;
+        if (aAgeGroup) params.ageGroup = aAgeGroup;
+        if (aFacility) params.facility = aFacility;
+        if (aBact) params.bacteriological = aBact;
         const res = await API.get('/api/tb/treatment-success-rate', { params });
         if (!cancelled) setTsrData(res.data);
       } catch (err) {
@@ -337,7 +323,7 @@ export default function Analytics() {
       }
     })();
     return () => { cancelled = true; };
-  }, [aYear, aBarangay]);
+  }, [aYear, aBarangay, aSex, aAgeGroup, aFacility, aBact, refreshTick]);
 
   /* ── Case Fatality Rate — shared backend calculation ──
    * GET /api/tb/case-fatality-rate: DIED / evaluated terminal outcomes,
@@ -349,7 +335,12 @@ export default function Analytics() {
       try {
         const params = {};
         if (aYear) params.year = aYear;
+        if (aMonth) params.month = aMonth;
         if (aBarangay) params.barangay = aBarangay;
+        if (aSex) params.sex = aSex;
+        if (aAgeGroup) params.ageGroup = aAgeGroup;
+        if (aFacility) params.facility = aFacility;
+        if (aBact) params.bacteriological = aBact;
         const res = await API.get('/api/tb/case-fatality-rate', { params });
         if (!cancelled) setCfrData(res.data);
       } catch (err) {
@@ -360,7 +351,7 @@ export default function Analytics() {
       }
     })();
     return () => { cancelled = true; };
-  }, [aYear, aBarangay]);
+  }, [aYear, aMonth, aBarangay, aSex, aAgeGroup, aFacility, aBact, refreshTick]);
 
   // Previous year's TSR, for the YoY trend badge — only meaningful when a
   // specific year is selected (mirrors previousMetrics' own aYear gate).
@@ -371,6 +362,10 @@ export default function Analytics() {
       try {
         const params = { year: String(Number(aYear) - 1) };
         if (aBarangay) params.barangay = aBarangay;
+        if (aSex) params.sex = aSex;
+        if (aAgeGroup) params.ageGroup = aAgeGroup;
+        if (aFacility) params.facility = aFacility;
+        if (aBact) params.bacteriological = aBact;
         const res = await API.get('/api/tb/treatment-success-rate', { params });
         if (!cancelled) setPrevTsrData(res.data);
       } catch (err) {
@@ -381,7 +376,7 @@ export default function Analytics() {
       }
     })();
     return () => { cancelled = true; };
-  }, [aYear, aBarangay]);
+  }, [aYear, aBarangay, aSex, aAgeGroup, aFacility, aBact, refreshTick]);
 
   /* ── Year-matched population (for Incidence per 100k) ──
    * Incidence must divide a year's cases by THAT SAME year's population
@@ -409,7 +404,7 @@ export default function Analytics() {
       }
     })();
     return () => { cancelled = true; };
-  }, [aYear]);
+  }, [aYear, refreshTick]);
 
   /* ── Remove a single filter chip ── */
   const removeFilter = useCallback((key) => {
@@ -443,30 +438,35 @@ export default function Analytics() {
     return [...years].sort((a, b) => b - a).map(String);
   }, [allCases]);
 
-  /* ── Filtered cases ── */
+  /* ── Filtered cases ──
+     Non-year filters go through the shared `matchesNonYearFilters`
+     predicate — the SAME one the previous-year comparison uses, so both
+     years of the trend chart can never diverge. Year/month stay here. */
   const filteredCases = useMemo(() => {
     if (!applied) return allCases;
     return allCases.filter((c) => {
-      if (aBarangay && c.barangay_name !== aBarangay) return false;
-      if (aFacility && c.screening_facility !== aFacility && c.treatment_facility !== aFacility) return false;
-      if (aSex && !(c.sex || '').toLowerCase().includes(aSex.toLowerCase())) return false;
-      if (aOutcome && c.outcome_status !== aOutcome) return false;
-      if (aBact && !(c.bacteriological_status || '').toLowerCase().includes(aBact.toLowerCase())) return false;
+      if (!matchesNonYearFilters(c, {
+        barangay: aBarangay,
+        facility: aFacility,
+        outcome: aOutcome,
+        sex: aSex,
+        ageGroup: aAgeGroup,
+        bacteriological: aBact,
+      })) return false;
       if (aYear || aMonth) {
         const d = new Date(c.date_of_diagnosis);
         if (isNaN(d.getTime())) return false;
         if (aYear && d.getFullYear() !== Number(aYear)) return false;
         if (aMonth && (d.getMonth() + 1) !== Number(aMonth)) return false;
       }
-      if (aAgeGroup) {
-        const group = categorizeAge(c.age);
-        if (group !== aAgeGroup) return false;
-      }
       return true;
     });
   }, [allCases, applied, aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
 
-  /* ── Previous year cases (for trend indicators) ── */
+  /* ── Previous year cases (for trend indicators) ──
+     Non-year filters go through the SAME `matchesNonYearFilters` predicate
+     as `filteredCases`, so the badge and the chart can never disagree
+     (the old inline substring check matched "Male" against "Female"). */
   const previousYearCases = useMemo(() => {
     if (!aYear) return [];
     const prevYear = String(Number(aYear) - 1);
@@ -474,14 +474,15 @@ export default function Analytics() {
       const d = new Date(c.date_of_diagnosis);
       if (isNaN(d.getTime())) return false;
       if (d.getFullYear() !== Number(prevYear)) return false;
-      if (aBarangay && c.barangay_name !== aBarangay) return false;
-      if (aFacility && c.screening_facility !== aFacility && c.treatment_facility !== aFacility) return false;
-      if (aSex && !(c.sex || '').toLowerCase().includes(aSex.toLowerCase())) return false;
-      if (aOutcome && c.outcome_status !== aOutcome) return false;
-      if (aBact && !(c.bacteriological_status || '').toLowerCase().includes(aBact.toLowerCase())) return false;
       if (aMonth && (d.getMonth() + 1) !== Number(aMonth)) return false;
-      if (aAgeGroup && categorizeAge(c.age) !== aAgeGroup) return false;
-      return true;
+      return matchesNonYearFilters(c, {
+        barangay: aBarangay,
+        facility: aFacility,
+        outcome: aOutcome,
+        sex: aSex,
+        ageGroup: aAgeGroup,
+        bacteriological: aBact,
+      });
     });
   }, [allCases, aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
 
@@ -548,102 +549,89 @@ export default function Analytics() {
     return { total, active, successRate };
   }, [previousYearCases, prevTsrData]);
 
-  /* ── TB Cases Trend (monthly) ── */
-  const trendData = useMemo(() => {
-    const byMonth = {};
-    filteredCases.forEach((c) => {
-      if (!c.date_of_diagnosis) return;
-      const d = new Date(c.date_of_diagnosis);
-      if (isNaN(d.getTime())) return;
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      if (!byMonth[key]) byMonth[key] = 0;
-      byMonth[key]++;
-    });
-    return Object.entries(byMonth)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([month, count]) => {
-        const d = new Date(month + '-01');
-        return {
-          key: month,
-          label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
-          Cases: count,
-        };
-      });
-  }, [filteredCases]);
+  /* ── TB Cases Trend (monthly, current selection) ── */
+  const trendData = useMemo(() => buildMonthlySeries(filteredCases), [filteredCases]);
 
-  /* ── Previous year trend (for YoY comparison) ── */
-  const previousYearTrendData = useMemo(() => {
-    if (!compareYear || !aYear) return [];
-    const prevYear = String(Number(aYear) - 1);
-    const prevCases = allCases.filter((c) => {
-      const d = new Date(c.date_of_diagnosis);
-      if (isNaN(d.getTime())) return false;
-      if (d.getFullYear() !== Number(prevYear)) return false;
-      if (aBarangay && c.barangay_name !== aBarangay) return false;
-      if (aFacility && c.screening_facility !== aFacility && c.treatment_facility !== aFacility) return false;
-      if (aSex && !(c.sex || '').toLowerCase().includes(aSex.toLowerCase())) return false;
-      if (aOutcome && c.outcome_status !== aOutcome) return false;
-      if (aBact && !(c.bacteriological_status || '').toLowerCase().includes(aBact.toLowerCase())) return false;
-      if (aAgeGroup && categorizeAge(c.age) !== aAgeGroup) return false;
-      return true;
+  /* ── Previous year trend (for YoY comparison) ──
+     Built from the FULL `allCases` list — never from `filteredCases`,
+     which already had the selected year removed — with the SAME non-year
+     filters applied, then split on year = selected-1 inside the helper.
+     Availability (complete coverage of the previous year) and the month
+     filter are handled there; unavailable → { available: false, rows: [] }
+     so no fabricated zero line is ever emitted. */
+  const previousComparison = useMemo(() => {
+    if (!compareYear || !aYear) {
+      return { available: false, prevYear: aYear ? String(Number(aYear) - 1) : '', incompleteMonths: 0, reason: 'off', rows: [] };
+    }
+    return buildPreviousYearComparison({
+      allCases,
+      year: aYear,
+      month: aMonth,
+      filters: {
+        barangay: aBarangay,
+        facility: aFacility,
+        outcome: aOutcome,
+        sex: aSex,
+        ageGroup: aAgeGroup,
+        bacteriological: aBact,
+      },
     });
-    const byMonth = {};
-    prevCases.forEach((c) => {
-      if (!c.date_of_diagnosis) return;
-      const d = new Date(c.date_of_diagnosis);
-      if (isNaN(d.getTime())) return;
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      if (!byMonth[key]) byMonth[key] = 0;
-      byMonth[key]++;
-    });
-    return Object.entries(byMonth)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([month, count]) => {
-        const d = new Date(month + '-01');
-        return {
-          key: month,
-          label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
-          [`Prev (${prevYear})`]: count,
-        };
-      });
-  }, [compareYear, aYear, allCases, aBarangay, aFacility, aOutcome, aSex, aBact, aAgeGroup]);
+  }, [compareYear, aYear, aMonth, allCases, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
 
-  /* ── Merged YoY trend data ── */
+  /* ── Merged YoY trend data ──
+     Merges by remapped month key ("2023-10" → "2024-10") and stores the
+     count under the EXACT key the chart's dataKey reads
+     (`Previous Year (YYYY)`). Unavailable comparison → current rows are
+     returned untouched (no previous-year key → no dashed line). */
   const mergedTrendData = useMemo(() => {
-    if (!compareYear || previousYearTrendData.length === 0) return trendData;
-    const prevMap = {};
-    previousYearTrendData.forEach((d) => { prevMap[d.key] = d; });
-    return trendData.map((item) => ({
-      ...item,
-      [`Prev (${Number(aYear) - 1})`]: prevMap[item.key]?.[`Prev (${Number(aYear) - 1})`] || 0,
-    }));
-  }, [compareYear, trendData, previousYearTrendData, aYear]);
+    if (!compareYear || !previousComparison.available) return trendData;
+    return mergeComparison(trendData, previousComparison);
+  }, [compareYear, trendData, previousComparison]);
 
   /* ── Year-over-Year Trending ──
      YoY% = (current − previous) / previous × 100; previous = 0 → null (N/A). */
   const yoyData = useMemo(() => {
-    const counts = new Map();
+    const yearMap = new Map(); // year -> { count, months: Set }
     filteredCases.forEach((c) => {
       if (!c.date_of_diagnosis) return;
-      const year = new Date(c.date_of_diagnosis).getFullYear();
+      const d = new Date(c.date_of_diagnosis);
+      const year = d.getFullYear();
       if (Number.isNaN(year)) return;
-      counts.set(year, (counts.get(year) || 0) + 1);
+      if (!yearMap.has(year)) yearMap.set(year, { count: 0, months: new Set() });
+      const entry = yearMap.get(year);
+      entry.count++;
+      entry.months.add(d.getMonth());
     });
-    const years = [...counts.keys()].sort((a, b) => a - b);
+    // A year is "complete" for YoY comparison if it spans ≥3 distinct months.
+    // An isolated historical record (e.g. 2022 with 1 case in 1 month) is incomplete.
+    const COMPLETE_THRESHOLD = 3;
+    const isComplete = (year) => {
+      const entry = yearMap.get(year);
+      return entry && entry.months.size >= COMPLETE_THRESHOLD;
+    };
+    const years = [...yearMap.keys()].sort((a, b) => a - b);
     const rows = years.map((year, i) => {
-      const cases = counts.get(year);
+      const cases = yearMap.get(year).count;
+      const complete = isComplete(year);
       let yoyPct = null;
-      if (i > 0) {
-        const prev = counts.get(years[i - 1]);
-        if (prev > 0) yoyPct = Math.round(((cases - prev) / prev) * 100 * 10) / 10;
+      if (i > 0 && complete) {
+        const prevYear = years[i - 1];
+        if (isComplete(prevYear)) {
+          const prev = yearMap.get(prevYear).count;
+          if (prev > 0) yoyPct = Math.round(((cases - prev) / prev) * 100 * 10) / 10;
+        }
       }
-      return { year, cases, yoyPct };
+      return { year, cases, yoyPct, complete };
     });
-    const valid = rows.filter((r) => r.yoyPct != null);
-    const avg = valid.length
-      ? Math.round((valid.reduce((s, r) => s + r.yoyPct, 0) / valid.length) * 10) / 10
-      : null;
-    return { rows, avg };
+    // Latest YoY Change: from the two most recent COMPLETE consecutive years
+    const completeRows = rows.filter((r) => r.complete);
+    let latestYoy = null;
+    if (completeRows.length >= 2) {
+      const curr = completeRows[completeRows.length - 1];
+      const prev = completeRows[completeRows.length - 2];
+      latestYoy = { pct: curr.yoyPct, currentYear: curr.year, previousYear: prev.year };
+    }
+    return { rows, latestYoy };
   }, [filteredCases]);
 
   /* ── TB Cases by Barangay ── */
@@ -727,13 +715,18 @@ export default function Analytics() {
   const outcomeData = useMemo(() => {
     const byOutcome = {};
     filteredCases.forEach((c) => {
-      const status = (c.outcome_status || 'Unknown').toUpperCase();
+      const raw = (c.outcome_status || 'Unknown').toUpperCase();
+      // Map DB variants to source-aligned display form
+      const status = raw === 'TREATMENT FAILED' ? 'FAILED'
+        : raw === 'LOST TO FOLLOW-UP' ? 'LOST TO FF-UP'
+        : raw;
+      if (!OUTCOME_ORDER.includes(status)) return; // exclude SCREENED etc.
       if (!byOutcome[status]) byOutcome[status] = 0;
       byOutcome[status]++;
     });
-    return Object.entries(byOutcome)
-      .map(([name, count]) => ({ name, Cases: count }))
-      .sort((a, b) => b.Cases - a.Cases);
+    return OUTCOME_ORDER
+      .filter((name) => byOutcome[name])
+      .map((name) => ({ name, Cases: byOutcome[name] }));
   }, [filteredCases]);
 
   /* ── Active Filter Chips ── */
@@ -743,7 +736,7 @@ export default function Analytics() {
     if (aMonth) chips.push({ key: 'month', label: 'Month', value: MONTHS[Number(aMonth)] || aMonth });
     if (aBarangay) chips.push({ key: 'barangay', label: 'Barangay', value: aBarangay });
     if (aFacility) chips.push({ key: 'facility', label: 'Facility', value: aFacility });
-    if (aOutcome) chips.push({ key: 'outcome', label: 'Outcome', value: aOutcome });
+    if (aOutcome) chips.push({ key: 'outcome', label: 'Case Status / Outcome', value: aOutcome });
     if (aSex) chips.push({ key: 'sex', label: 'Sex', value: aSex });
     if (aAgeGroup) chips.push({ key: 'age', label: 'Age Group', value: aAgeGroup });
     if (aBact) chips.push({ key: 'bacterio', label: 'Bacterio', value: aBact });
@@ -761,6 +754,39 @@ export default function Analytics() {
     const latest = new Date(Math.max(...dates));
     return latest.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   }, [allCases]);
+
+  /* ── Data coverage ── */
+  const dataCoverage = useMemo(() => {
+    const yearMonths = new Map(); // year -> Set of months
+    const barangaySet = new Set();
+    allCases.forEach((c) => {
+      if (c.date_of_diagnosis) {
+        const d = new Date(c.date_of_diagnosis);
+        const yr = d.getFullYear();
+        if (!Number.isNaN(yr)) {
+          if (!yearMonths.has(yr)) yearMonths.set(yr, new Set());
+          yearMonths.get(yr).add(d.getMonth());
+        }
+      }
+      if (c.barangay_name) barangaySet.add(c.barangay_name);
+    });
+    // A year is "covered" if it spans ≥3 distinct months
+    const coveredYears = [...yearMonths.entries()]
+      .filter(([, months]) => months.size >= 3)
+      .map(([yr]) => yr)
+      .sort((a, b) => a - b);
+    const range = coveredYears.length >= 2
+      ? `${coveredYears[0]}–${coveredYears[coveredYears.length - 1]}`
+      : coveredYears.length === 1
+        ? String(coveredYears[0])
+        : 'N/A';
+    const brgyCount = barangaySet.size;
+    // Population availability for selected year
+    const popAvail = aYear
+      ? (Object.keys(yearPopulationMap).length > 0 ? 'Available' : 'Unavailable')
+      : null;
+    return { range, brgyCount, popAvail };
+  }, [allCases, aYear, yearPopulationMap]);
 
   /* ── Error state ── */
   if (error) {
@@ -795,37 +821,32 @@ export default function Analytics() {
             <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Analyze tuberculosis trends, case distribution, demographics, and treatment outcomes across Pasig City.</p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            <span className="text-[11px] font-medium mr-2" style={{ color: '#94A3B8' }}>
-              Last updated: {lastUpdated}
-            </span>
-            <button onClick={() => {
-              if (!filteredCases.length) return;
-              const escapeCSV = (val) => {
-                const s = String(val == null ? '' : val);
-                if (s.includes(',') || s.includes('"') || s.includes('\n')) {
-                  return '"' + s.replace(/"/g, '""') + '"';
-                }
-                return s;
-              };
-              const headers = ['Barangay', 'Sex', 'Age', 'Date of Diagnosis', 'Outcome', 'Bacteriological Status'];
-              const rows = filteredCases.map((c) => [c.barangay_name, c.sex, c.age, c.date_of_diagnosis, c.outcome_status, c.bacteriological_status]);
-              const csv = [headers.map(escapeCSV).join(','), ...rows.map((r) => r.map(escapeCSV).join(','))].join('\n');
-              const blob = new Blob([csv], { type: 'text/csv' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `tb-analytics-${aYear || 'all'}.csv`;
-              a.click();
-              URL.revokeObjectURL(url);
-            }} className="text-xs font-semibold px-4 py-2" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
-              Download CSV
+            <div className="text-right mr-2">
+              <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+                Last updated: {lastUpdated}
+              </span>
+              <p className="text-[10px]" style={{ color: '#CBD5E1' }}>
+                Coverage: {dataCoverage.range} • {dataCoverage.brgyCount}/30 barangays
+                {dataCoverage.popAvail && ` • Population: ${dataCoverage.popAvail}`}
+              </p>
+            </div>
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="text-xs font-semibold px-4 py-2"
+              style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s', opacity: refreshing ? 0.7 : 1, cursor: refreshing ? 'wait' : 'pointer' }}
+              onMouseEnter={e => { if (!refreshing) { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; } }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}
+            >
+              <i className={`ri-refresh-line text-xs mr-1 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
         </div>
 
         {/* Filter bar */}
-        <div className="flex items-center justify-between px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
-          <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="flex items-start justify-between gap-3 px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
+          <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
             <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
               <option value="">All Years</option>
               {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
@@ -833,17 +854,17 @@ export default function Analytics() {
             <FilterSelect label="Month" value={filterMonth} onChange={setFilterMonth}>
               {MONTHS.map((m, i) => <option key={m} value={i === 0 ? '' : String(i)}>{m}</option>)}
             </FilterSelect>
-            <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 160 }}>
+            <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 140 }}>
               <option value="">All Barangays</option>
               {barangayNames.map((n) => <option key={n} value={n}>{n}</option>)}
             </FilterSelect>
-            <FilterSelect label="Facility" value={filterFacility} onChange={setFilterFacility} selectStyle={{ maxWidth: 180 }}>
+            <FilterSelect label="Facility" value={filterFacility} onChange={setFilterFacility} selectStyle={{ maxWidth: 140 }}>
               <option value="">All Facilities</option>
               {facilities.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
             </FilterSelect>
-            <FilterSelect label="Outcome" value={filterOutcome} onChange={setFilterOutcome} selectStyle={{ maxWidth: 160 }}>
-              <option value="">All Outcomes</option>
-              {(filterOptions.outcome_status || OUTCOMES.filter(o => o !== 'All Outcomes')).map((o) => (
+            <FilterSelect label="Case Status / Outcome" value={filterOutcome} onChange={setFilterOutcome} selectStyle={{ maxWidth: 150 }}>
+              <option value="">All</option>
+              {(filterOptions.outcome_status || OUTCOMES.filter(o => o !== 'All')).map((o) => (
                 <option key={o} value={o}>{o}</option>
               ))}
             </FilterSelect>
@@ -857,14 +878,14 @@ export default function Analytics() {
               <option value="">All Ages</option>
               {AGE_GROUP_ORDER.map((g) => <option key={g} value={g}>{g}</option>)}
             </FilterSelect>
-            <FilterSelect label="Bacterio" value={filterBact} onChange={setFilterBact} selectStyle={{ maxWidth: 180 }}>
+            <FilterSelect label="Bacterio" value={filterBact} onChange={setFilterBact} selectStyle={{ maxWidth: 130 }}>
               <option value="">All</option>
               {(filterOptions.bacteriological_status || []).map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </FilterSelect>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 shrink-0">
             <button onClick={handleClear} className="px-3 py-2 text-xs font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
               Clear
             </button>
@@ -891,7 +912,7 @@ export default function Analytics() {
 
       {/* ─── Loading ─── */}
       {loading ? (
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="rounded-xl p-5 animate-pulse" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
               <div className="h-3 w-24 rounded mb-3" style={{ background: '#E2E8F0' }} />
@@ -902,21 +923,18 @@ export default function Analytics() {
       ) : !hasData ? (
         <EmptyState />
       ) : (
-        <div className="flex gap-6">
-          {/* ─── LEFT COLUMN: KPI Cards + Charts (scrollable) ─── */}
-          <div className="flex-1 min-w-0 space-y-6">
-
-          {/* ─── Metric Cards (with Trend Indicators) ─── */}
+        <>
+          {/* ─── KPI STRIP (full-width, single row) ─── */}
           <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15,45,82,0.12), 0 2px 8px rgba(15,45,82,0.08)' }}>
-            <div className="grid grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
               {/* Total TB Cases */}
-              <div className="flex flex-col px-5 py-5 relative">
-                <div className="flex items-center gap-2">
-                  <i className="ri-file-list-3-line text-sm" style={{ color: '#6B7FA3' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Total TB Cases</span>
+              <div className="flex flex-col px-4 py-4 relative">
+                <div className="flex items-center gap-2 h-5 min-w-0">
+                  <i className="ri-file-list-3-line text-sm shrink-0" style={{ color: '#6B7FA3' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Total TB Cases</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <div className="flex items-end gap-2">
+                <div className="flex items-end gap-1.5 flex-wrap">
                   <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.total.toLocaleString()}</p>
                   {aYear && <TrendBadge current={metrics.total} previous={previousMetrics.total} inverse={true} />}
                 </div>
@@ -927,79 +945,102 @@ export default function Analytics() {
               </div>
 
               {/* Incidence per 100k */}
-              <div className="flex flex-col px-5 py-5 relative">
-                <div className="flex items-center gap-2">
-                  <i className="ri-pulse-line text-sm" style={{ color: '#6B9E9E' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Incidence / 100k</span>
+              <div className="flex flex-col px-4 py-4 relative">
+                <div className="flex items-center gap-2 h-5 min-w-0">
+                  <i className="ri-pulse-line text-sm shrink-0" style={{ color: '#6B9E9E' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Incidence / 100k</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.incidence == null ? 'N/A' : metrics.incidence}</p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
                   {!aYear ? 'Select a year — not applicable across combined years' : metrics.incidence == null ? 'No matching population data' : `${aYear} cases per 100,000 population`}
                 </span>
+                <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
               {/* Currently On Treatment */}
-              <div className="flex flex-col px-5 py-5 relative">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <i className="ri-first-aid-kit-line text-sm" style={{ color: '#B8956A' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Currently On Treatment</span>
+              <div className="flex flex-col px-4 py-4 relative">
+                <div className="flex items-center justify-between gap-2 h-5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <i className="ri-first-aid-kit-line text-sm shrink-0" style={{ color: '#B8956A' }} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Currently On Treatment</span>
                   </div>
                   {metrics.total > 0 && (
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FFFBEB', color: '#92400E' }}>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ background: '#FFFBEB', color: '#92400E' }}>
                       {((metrics.active / metrics.total) * 100).toFixed(1)}%
                     </span>
                   )}
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <div className="flex items-end gap-2">
+                <div className="flex items-end gap-1.5 flex-wrap">
                   <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.active.toLocaleString()}</p>
                   {aYear && <TrendBadge current={metrics.active} previous={previousMetrics.active} inverse={true} />}
                 </div>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
-              {/* Treatment Success Rate */}
-              <div className="flex flex-col px-5 py-5 relative">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <i className="ri-check-double-line text-sm" style={{ color: '#6B9E8A' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Success</span>
+              {/* Treatment Success Rate (TSR) */}
+              <div className="flex flex-col px-4 py-4 relative" title="TSR is a cohort-based indicator: (Cured + Treatment Completed) among patients whose treatment started in the previous year, divided by the total previous-year treatment cohort. This differs from the Treatment Cascade's Successful Outcome % of Evaluated.">
+                <div className="flex items-center justify-between gap-2 h-5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <i className="ri-check-double-line text-sm shrink-0" style={{ color: '#6B9E8A' }} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Treatment Success Rate (TSR)</span>
                   </div>
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#ECFDF5', color: '#047857' }}>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ background: '#ECFDF5', color: '#047857' }}>
                     {metrics.successRate == null ? 'N/A' : `${metrics.successRate}%`}
                   </span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <div className="flex items-end gap-2">
+                <div className="flex items-end gap-1.5 flex-wrap">
                   <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.successRate == null ? 'N/A' : `${metrics.successRate}%`}</p>
                   {aYear && metrics.successRate != null && previousMetrics.successRate != null &&
                     <TrendBadge current={Number(metrics.successRate)} previous={Number(previousMetrics.successRate)} inverse={false} />}
                 </div>
+                {tsrData?.cohortTotal != null && (
+                  <span className="text-[10px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                    Cohort: {tsrData.cohortYear || (aYear ? String(Number(aYear) - 1) : '—')} ({tsrData.cohortTotal.toLocaleString()} patients)
+                  </span>
+                )}
+                {(aMonth || aOutcome) && (
+                  <span className="text-[9px] mt-1 flex items-center gap-1" style={{ color: '#94A3B8' }}>
+                    <i className="ri-information-line" />
+                    TSR excludes Month and Outcome filters (annual cohort indicator)
+                  </span>
+                )}
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
               {/* Case Fatality Rate */}
-              <div className="flex flex-col px-5 py-5 relative">
-                <div className="flex items-center gap-2">
-                  <i className="ri-heart-pulse-line text-sm" style={{ color: '#B07070' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Fatality Rate</span>
+              <div className="flex flex-col px-4 py-4 relative">
+                <div className="flex items-center gap-2 h-5 min-w-0">
+                  <i className="ri-heart-pulse-line text-sm shrink-0" style={{ color: '#B07070' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Case Fatality Rate</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.fatalityRate == null ? 'N/A' : `${metrics.fatalityRate}%`}</p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Deaths / evaluated terminal outcomes</span>
+                {cfrData?.total > 0 && cfrData?.evaluated != null && (cfrData.evaluated / cfrData.total) < 0.5 && (
+                  <span className="text-[9px] mt-1" style={{ color: '#D97706' }}>
+                    Only {cfrData.evaluated} of {cfrData.total} cases have reached a terminal outcome. CFR may not be representative.
+                  </span>
+                )}
+                {aOutcome && (
+                  <span className="text-[9px] mt-1 flex items-center gap-1" style={{ color: '#94A3B8' }}>
+                    <i className="ri-information-line" />
+                    CFR excludes Outcome filter (outcome is the indicator)
+                  </span>
+                )}
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
               {/* High-Risk Barangays */}
-              <div className="flex flex-col px-5 py-5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <i className="ri-alarm-warning-line text-sm" style={{ color: '#C4886A' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk Barangays</span>
+              <div className="flex flex-col px-4 py-4">
+                <div className="flex items-center justify-between gap-2 h-5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <i className="ri-alarm-warning-line text-sm shrink-0" style={{ color: '#C4886A' }} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>High-Risk Barangays</span>
                   </div>
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEF2F2', color: '#991B1B' }}>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ background: '#FEF2F2', color: '#991B1B' }}>
                     {metrics.highRisk}/{barangayNames.length || 30}
                   </span>
                 </div>
@@ -1009,12 +1050,22 @@ export default function Analytics() {
             </div>
           </div>
 
+          <div className="flex gap-6">
+            {/* ─── LEFT COLUMN: Cascade + Charts (scrollable) ─── */}
+            <div className="flex-1 min-w-0 space-y-6">
+
           {/* ─── Treatment Cascade (shared backend calculation) ─── */}
           <TreatmentCascadeCard
             data={cascadeData}
             loading={cascadeLoading}
             description="Diagnosis-to-outcome progression for the active filters."
           />
+          {aOutcome && (
+            <p className="text-[9px] -mt-4 flex items-center gap-1" style={{ color: '#94A3B8' }}>
+              <i className="ri-information-line" />
+              Treatment Cascade excludes the Case Status / Outcome filter because outcome determines treatment progression stages.
+            </p>
+          )}
 
           {/* ─── TB Cases Trend (with YoY Comparison) ─── */}
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
@@ -1032,10 +1083,10 @@ export default function Analytics() {
                     <span className="w-6 h-[3px] rounded-full" style={{ background: '#2563EB' }} />
                     <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Cases</span>
                   </div>
-                  {compareYear && prevYearLabel && (
-                    <div className="flex items-center gap-1.5">
+                  {compareYear && prevYearLabel && previousComparison.available && (
+          <div className="flex items-center gap-1.5 shrink-0">
                       <span className="w-4 h-0 border-t-2" style={{ borderColor: '#CBD5E1', borderStyle: 'dashed' }} />
-                      <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>Prev ({prevYearLabel})</span>
+                      <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>Previous Year ({prevYearLabel})</span>
                     </div>
                   )}
                 </div>
@@ -1045,7 +1096,7 @@ export default function Analytics() {
                     style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
                     onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
                     onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
-                    {compareYear ? `Comparing ${prevYearLabel}` : `Compare Year`}
+                    {compareYear ? (previousComparison.available ? `Comparing ${prevYearLabel}` : 'Comparison Unavailable') : `Compare Year`}
                   </button>
                 )}
               </div>
@@ -1066,14 +1117,20 @@ export default function Analytics() {
                       <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={40} tickMargin={4} />
                       <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#E2E8F0', strokeWidth: 1 }} />
                       <Area type="monotone" dataKey="Cases" stroke="#2563EB" strokeWidth={2.5} fill="url(#trendGrad)" dot={{ fill: '#2563EB', r: 3.5, strokeWidth: 2, stroke: '#ffffff' }} activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }} name="Cases" />
-                      {compareYear && prevYearLabel && (
-                        <Line type="monotone" dataKey={`Prev (${prevYearLabel})`} stroke="#CBD5E1" strokeWidth={1.5} strokeDasharray="6 4" dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: '#ffffff' }} name={`Prev Year (${prevYearLabel})`} connectNulls />
+                      {compareYear && prevYearLabel && previousComparison.available && (
+                        <Line type="monotone" dataKey={`Previous Year (${prevYearLabel})`} stroke="#CBD5E1" strokeWidth={1.5} strokeDasharray="6 4" dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: '#ffffff' }} name={`Previous Year (${prevYearLabel})`} connectNulls />
                       )}
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>
               ) : (
                 <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No trend data available for the selected filters.</p>
+              )}
+              <ChartInsight text={trendInsight(trendData, { valueKey: 'Cases' })} />
+              {compareYear && aYear && !previousComparison.available && (
+                <p className="text-[11px] mt-2 text-center" style={{ color: '#94A3B8' }}>
+                  <i className="ri-information-line" /> Previous-year comparison unavailable due to incomplete {prevYearLabel} data.
+                </p>
               )}
             </div>
           </div>
@@ -1089,13 +1146,18 @@ export default function Analytics() {
                 </div>
               </div>
               <div className="text-right">
-                <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Average YoY Change</p>
+                <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Latest YoY Change</p>
                 <p
                   className="text-lg font-extrabold"
-                  style={{ color: yoyData.avg == null ? '#94A3B8' : yoyData.avg > 0 ? '#DC2626' : yoyData.avg < 0 ? '#047857' : '#64748B' }}
+                  style={{ color: yoyData.latestYoy?.pct == null ? '#94A3B8' : yoyData.latestYoy.pct > 0 ? '#DC2626' : yoyData.latestYoy.pct < 0 ? '#047857' : '#64748B' }}
                 >
-                  {yoyData.avg == null ? 'N/A' : `${yoyData.avg > 0 ? '+' : ''}${yoyData.avg}%`}
+                  {yoyData.latestYoy?.pct == null ? 'N/A' : `${yoyData.latestYoy.pct > 0 ? '+' : ''}${yoyData.latestYoy.pct}%`}
                 </p>
+                {yoyData.latestYoy && (
+                  <p className="text-[9px] mt-0.5" style={{ color: '#94A3B8' }}>
+                    {yoyData.latestYoy.currentYear} vs {yoyData.latestYoy.previousYear}
+                  </p>
+                )}
               </div>
             </div>
             <div className="px-5 pb-5">
@@ -1115,7 +1177,9 @@ export default function Analytics() {
                           <td className="px-3 py-2 text-[12px] font-bold" style={{ color: '#0F2D52' }}>{row.year}</td>
                           <td className="px-3 py-2 text-[12px] text-right font-semibold" style={{ color: '#475569' }}>{row.cases.toLocaleString()}</td>
                           <td className="px-3 py-2 text-right">
-                            {row.yoyPct == null ? (
+                            {!row.complete ? (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded" style={{ background: '#FEF3C7', color: '#92400E' }}>Incomplete Data</span>
+                            ) : row.yoyPct == null ? (
                               <span className="text-[11px] font-bold" style={{ color: '#94A3B8' }}>N/A</span>
                             ) : (
                               <span className="text-[11px] font-bold" style={{ color: row.yoyPct > 0 ? '#DC2626' : row.yoyPct < 0 ? '#047857' : '#64748B' }}>
@@ -1131,8 +1195,9 @@ export default function Analytics() {
               ) : (
                 <p className="text-sm text-center py-8" style={{ color: '#94A3B8' }}>No yearly data available for the selected filters.</p>
               )}
+              <ChartInsight text={yoyInsight(yoyData.rows, yoyData.latestYoy)} />
               <p className="text-[9px] mt-2" style={{ color: '#CBD5E1' }}>
-                YoY% = (current − previous) / previous × 100. A zero previous-year count shows N/A.
+                YoY% = (current − previous) / previous × 100. Years with fewer than 3 months of data are marked Incomplete. A zero previous-year count shows N/A.
               </p>
             </div>
           </div>
@@ -1159,14 +1224,31 @@ export default function Analytics() {
               </div>
               <div className="px-5 pb-5">
                 {barangayIncidenceData.length > 0 ? (
-                  <div className="w-full" style={{ height: Math.max(380, barangayIncidenceData.length * 26) }}>
+                  <div className="w-full" style={{ height: 420 }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={barangayIncidenceData} layout="vertical" margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                      <ComposedChart data={barangayIncidenceData} margin={{ top: 10, right: 10, left: 0, bottom: 60 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
-                        <XAxis type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
-                        <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={105} tickMargin={4} />
+                        <XAxis
+                          type="category"
+                          dataKey="name"
+                          interval={0}
+                          angle={-45}
+                          textAnchor="end"
+                          height={65}
+                          tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickMargin={4}
+                        />
+                        <YAxis
+                          type="number"
+                          tick={{ fontSize: 10, fill: '#94A3B8' }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickMargin={4}
+                        />
                         <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
-                        <Bar dataKey={incidenceViewActive ? 'Incidence' : 'Cases'} radius={[0, 6, 6, 0]} barSize={16} name={incidenceViewActive ? 'Per 100k' : 'Cases'}>
+                        <Bar dataKey={incidenceViewActive ? 'Incidence' : 'Cases'} radius={[6, 6, 0, 0]} barSize={20} name={incidenceViewActive ? 'Per 100k' : 'Cases'}>
                           {barangayIncidenceData.map((entry, i) => (
                             <Cell key={i} fill={incidenceViewActive
                                ? (entry.Incidence == null ? '#94A3B8' : entry.Incidence > 100 ? '#991B1B' : entry.Incidence > 50 ? '#92400E' : '#047857')
@@ -1180,12 +1262,14 @@ export default function Analytics() {
                 ) : (
                   <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No barangay data available.</p>
                 )}
+                <ChartInsight text={[rankingInsight(barangayIncidenceData, { valueKey: 'Cases' }), incidenceInsight(barangayIncidenceData)].filter(Boolean).join(' ') || null} />
               </div>
             </div>
 
-            {/* ─── Cases by Health Facility ─── */}
+            {/* ─── Cases by Health Facility + Treatment Outcomes (2:1 row) ─── */}
+            <div className={`grid grid-cols-1 gap-6 ${facilityData.length > 0 ? 'lg:grid-cols-3' : ''}`}>
             {facilityData.length > 0 && (
-              <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+              <div className="lg:col-span-2 rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
                 <div className="px-5 py-4">
                   <div className="flex items-center gap-3">
                     <div className="w-1 h-8 rounded-full" style={{ background: '#6B7280' }} />
@@ -1196,14 +1280,32 @@ export default function Analytics() {
                   </div>
                 </div>
                 <div className="px-5 pb-5">
-                  <div className="w-full" style={{ height: Math.max(260, facilityData.length * 28) }}>
+                  <div className="w-full" style={{ height: 400 }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={facilityData} layout="vertical" margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                      <ComposedChart data={facilityData} margin={{ top: 10, right: 10, left: 0, bottom: 75 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
-                        <XAxis type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
-                        <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={140} tickMargin={4} />
+                        <XAxis
+                          type="category"
+                          dataKey="name"
+                          interval={0}
+                          angle={-45}
+                          textAnchor="end"
+                          height={75}
+                          tickFormatter={(v) => (String(v).length > 16 ? String(v).slice(0, 15) + '…' : v)}
+                          tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickMargin={4}
+                        />
+                        <YAxis
+                          type="number"
+                          tick={{ fontSize: 10, fill: '#94A3B8' }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickMargin={4}
+                        />
                         <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
-                        <Bar dataKey="Cases" radius={[0, 6, 6, 0]} barSize={16} name="Cases">
+                        <Bar dataKey="Cases" radius={[6, 6, 0, 0]} barSize={24} name="Cases">
                           {facilityData.map((entry, i) => (
                             <Cell key={i} fill={i === 0 ? '#374151' : i < 5 ? '#6B7280' : '#9CA3AF'} />
                           ))}
@@ -1211,11 +1313,69 @@ export default function Analytics() {
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
+                  <ChartInsight text={rankingInsight(facilityData, { valueKey: 'Cases', noun: 'facility' })} />
                 </div>
               </div>
             )}
 
-            {/* ─── Age + Sex Cross-Tabulation + Treatment Outcomes ─── */}
+              {/* Treatment Outcomes Pie Chart (aligned beside the facility chart) */}
+              <div className="lg:col-span-1 rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+                <div className="px-5 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-1 h-8 rounded-full" style={{ background: '#047857' }} />
+                    <div>
+                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Case Status / Outcome Distribution</h3>
+                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Distribution of reported TB records by the Outcome/Status values recorded in the source data.</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="px-5 pb-5">
+                  {outcomeData.length > 0 ? (
+                    <div className="flex flex-wrap items-center justify-center gap-6">
+                      <div className="w-[180px] h-[180px] shrink-0">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={outcomeData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={45}
+                              outerRadius={80}
+                              paddingAngle={2}
+                              dataKey="Cases"
+                            >
+                              {outcomeData.map((entry) => (
+                                <Cell key={entry.name} fill={OUTCOME_COLORS[entry.name] || '#94A3B8'} />
+                              ))}
+                            </Pie>
+                            <Tooltip formatter={(value) => value.toLocaleString()} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="space-y-1.5">
+                        {outcomeData.map((entry) => (
+                          <div key={entry.name} className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: OUTCOME_COLORS[entry.name] || '#94A3B8' }} />
+                            <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>
+                              {entry.name?.length > 16 ? entry.name.slice(0, 14) + '...' : entry.name}
+                            </span>
+                            <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{entry.Cases}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-16 gap-2">
+                      <i className="ri-pie-chart-2-line text-xl" style={{ color: '#CBD5E1' }} />
+                      <p className="text-xs" style={{ color: '#94A3B8' }}>No outcome data available.</p>
+                    </div>
+                  )}
+                  <ChartInsight text={outcomeInsight(outcomeData)} />
+                </div>
+              </div>
+            </div>
+
+            {/* ─── Demographics: Sex + Age Group ─── */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Sex Distribution Pie Chart */}
               <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
@@ -1265,63 +1425,42 @@ export default function Analytics() {
                   ) : (
                     <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
                   )}
+                  <ChartInsight text={shareInsight(sexData, { noun: 'sex' })} />
                 </div>
               </div>
 
-              {/* Treatment Outcomes Pie Chart */}
+              {/* Age Group Distribution Bar Chart */}
               <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-                <div className="px-5 py-4">
+                <div className="flex items-center justify-between px-5 py-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-1 h-8 rounded-full" style={{ background: '#047857' }} />
+                    <div className="w-1 h-8 rounded-full" style={{ background: '#7C3AED' }} />
                     <div>
-                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Treatment Outcomes</h3>
-                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Distribution of treatment outcomes.</p>
+                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Cases by Age Group</h3>
+                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>TB case distribution by age group.</p>
                     </div>
                   </div>
                 </div>
                 <div className="px-5 pb-5">
-                  {outcomeData.length > 0 ? (
-                    <div className="flex items-center justify-center gap-6">
-                      <div className="w-[180px] h-[180px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <PieChart>
-                            <Pie
-                              data={outcomeData}
-                              cx="50%"
-                              cy="50%"
-                              innerRadius={45}
-                              outerRadius={80}
-                              paddingAngle={2}
-                              dataKey="Cases"
-                            >
-                              {outcomeData.map((entry) => (
-                                <Cell key={entry.name} fill={OUTCOME_COLORS[entry.name] || '#94A3B8'} />
-                              ))}
-                            </Pie>
-                            <Tooltip formatter={(value) => value.toLocaleString()} />
-                          </PieChart>
-                        </ResponsiveContainer>
-                      </div>
-                      <div className="space-y-1.5">
-                        {outcomeData.map((entry) => {
-                          const total = outcomeData.reduce((s, e) => s + e.Cases, 0);
-                          const pct = total > 0 ? ((entry.Cases / total) * 100).toFixed(1) : '0.0';
-                          return (
-                            <div key={entry.name} className="flex items-center gap-2">
-                              <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: OUTCOME_COLORS[entry.name] || '#94A3B8' }} />
-                              <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>
-                                {entry.name?.length > 18 ? entry.name.slice(0, 16) + '...' : entry.name}
-                              </span>
-                              <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{entry.Cases.toLocaleString()}</span>
-                              <span className="text-[10px]" style={{ color: '#94A3B8' }}>({pct}%)</span>
-                            </div>
-                          );
-                        })}
-                      </div>
+                  {ageData.some((d) => d.Cases > 0) ? (
+                    <div style={{ height: Math.max(220, ageData.length * 30) }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={ageData} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                          <XAxis type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
+                          <YAxis type="category" dataKey="group" tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={50} tickMargin={4} />
+                          <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
+                          <Bar dataKey="Cases" radius={[0, 6, 6, 0]} barSize={16} name="Cases">
+                            {ageData.map((entry, i) => (
+                              <Cell key={entry.group} fill={`hsl(250, 40%, ${55 + i * 5}%)`} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
                     </div>
                   ) : (
-                    <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
+                    <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No age data available for the selected filters.</p>
                   )}
+                  <ChartInsight text={shareInsight(ageData, { nameKey: 'group', valueKey: 'Cases', noun: 'age group' })} />
                 </div>
               </div>
             </div>
@@ -1329,7 +1468,7 @@ export default function Analytics() {
           </div>
 
           {/* ─── RIGHT COLUMN: Sticky NLG Insight Panel ─── */}
-          <div className="w-[320px] shrink-0 hidden lg:block">
+          <div className="w-[420px] shrink-0 hidden lg:block">
             <div className="sticky top-4">
               <AiInsightPanel
                 type="analytics"
@@ -1342,6 +1481,7 @@ export default function Analytics() {
             </div>
           </div>
         </div>
+        </>
       )}
     </div>
   );

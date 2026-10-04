@@ -48,13 +48,13 @@ describe('generateAnalyticsInsight', () => {
     assert.strictEqual(result.sections.length, 7);
   });
 
-  it('each section has required fields', () => {
+  it('each section has required fields and no icon', () => {
     const result = generateAnalyticsInsight(baseMetrics);
     for (const section of result.sections) {
       assert.ok(section.id, `Section missing id`);
       assert.ok(section.title, `Section ${section.id} missing title`);
       assert.ok(section.text, `Section ${section.id} missing text`);
-      assert.ok(section.icon, `Section ${section.id} missing icon`);
+      assert.ok(!('icon' in section), `Section ${section.id} must not carry an icon`);
     }
   });
 
@@ -67,14 +67,14 @@ describe('generateAnalyticsInsight', () => {
     const result = generateAnalyticsInsight(baseMetrics);
     const keyTrend = result.sections[0];
     assert.strictEqual(keyTrend.id, 'keyTrend');
-    assert.ok(keyTrend.text.includes('increasing trend'));
+    assert.ok(keyTrend.text.includes('increased'));
     assert.ok(keyTrend.text.includes('18.4%'));
   });
 
   it('generates decreasing trend text when changePercent < -5', () => {
     const metrics = { ...baseMetrics, trend: { ...baseMetrics.trend, direction: 'decreasing', changePercent: -12.5 } };
     const result = generateAnalyticsInsight(metrics);
-    assert.ok(result.sections[0].text.includes('decreasing trend'));
+    assert.ok(result.sections[0].text.includes('decreased'));
     assert.ok(result.sections[0].text.includes('12.5%'));
   });
 
@@ -127,7 +127,7 @@ describe('generateAnalyticsInsight', () => {
     const section = result.sections[3];
     assert.strictEqual(section.id, 'riskFindings');
     assert.ok(section.text.includes('4'));
-    assert.ok(section.text.includes('high-risk'));
+    assert.ok(section.text.includes('High Risk'));
     assert.ok(section.text.includes('San Jose'));
   });
 
@@ -186,6 +186,71 @@ describe('generateAnalyticsInsight', () => {
     const result = generateAnalyticsInsight(baseMetrics, {});
     assert.ok(result.meta.basedOn.includes('All Barangays'));
   });
+
+  it('risk findings attributes classification to the Random Forest model', () => {
+    const result = generateAnalyticsInsight(baseMetrics);
+    const section = result.sections.find((s) => s.id === 'riskFindings');
+    assert.ok(section.text.includes('Random Forest risk model classified'));
+    assert.ok(section.text.includes('latest barangay-level'));
+  });
+
+  it('treatment includes cohort year and patient count when provided', () => {
+    const metrics = {
+      ...baseMetrics,
+      treatment: { ...baseMetrics.treatment, cohortYear: 2025, cohortTotal: 5203 },
+    };
+    const result = generateAnalyticsInsight(metrics);
+    const section = result.sections.find((s) => s.id === 'treatment');
+    assert.ok(section.text.includes('2025 treatment cohort'));
+    assert.ok(section.text.includes('5,203 patients'));
+    assert.ok(section.text.includes('82%'));
+  });
+
+  it('suppresses highest/lowest when a single barangay is selected', () => {
+    const result = generateAnalyticsInsight(baseMetrics, { barangay: 'San Jose' });
+    assert.strictEqual(result.sections.length, 6);
+    assert.ok(!result.sections.some((s) => s.id === 'highestLowest'));
+    assert.ok(result.meta.basedOn.includes('San Jose'));
+  });
+
+  it('suppresses redundant sex split when a sex filter is active', () => {
+    const result = generateAnalyticsInsight(baseMetrics, { sex: 'Female' });
+    const section = result.sections.find((s) => s.id === 'demographics');
+    assert.ok(section);
+    assert.ok(!section.text.includes('account for'));
+    assert.ok(section.text.includes('25-34'));
+    assert.ok(result.meta.basedOn.includes('Female'));
+  });
+
+  it('omits demographics clause from overall summary when a sex filter is active', () => {
+    const result = generateAnalyticsInsight(baseMetrics, { sex: 'Male' });
+    const summary = result.sections.find((s) => s.id === 'overallSummary');
+    assert.ok(!summary.text.includes('majority of reported cases'));
+  });
+
+  it('returns a single no-data section when zero records match', () => {
+    const metrics = {
+      ...baseMetrics,
+      summary: { ...baseMetrics.summary, totalCases: 0 },
+    };
+    const result = generateAnalyticsInsight(metrics, { year: '2022', barangay: 'San Jose' });
+    assert.strictEqual(result.sections.length, 1);
+    assert.strictEqual(result.sections[0].id, 'overallSummary');
+    assert.ok(result.sections[0].text.includes('No analytical insight is available'));
+    assert.ok(result.meta.basedOn.includes('2022'));
+    assert.ok(result.meta.basedOn.includes('San Jose'));
+  });
+
+  it('does not state a 0% or stable trend when there are no records', () => {
+    const metrics = {
+      ...baseMetrics,
+      summary: { ...baseMetrics.summary, totalCases: 0 },
+    };
+    const result = generateAnalyticsInsight(metrics);
+    assert.strictEqual(result.sections.length, 1);
+    assert.ok(!result.sections[0].text.includes('stable'));
+    assert.ok(!result.sections[0].text.includes('0%'));
+  });
 });
 
 // ==================== FORECASTING INSIGHT ====================
@@ -212,13 +277,13 @@ describe('generateForecastingInsight', () => {
     assert.strictEqual(result.sections.length, 7);
   });
 
-  it('each section has required fields', () => {
+  it('each section has required fields and no icon', () => {
     const result = generateForecastingInsight(baseMetrics);
     for (const section of result.sections) {
       assert.ok(section.id, `Section missing id`);
       assert.ok(section.title, `Section ${section.id} missing title`);
       assert.ok(section.text, `Section ${section.id} missing text`);
-      assert.ok(section.icon, `Section ${section.id} missing icon`);
+      assert.ok(!('icon' in section), `Section ${section.id} must not carry an icon`);
     }
   });
 
@@ -393,13 +458,13 @@ describe('generateGisInsight', () => {
     );
   });
 
-  it('each section has required fields', () => {
+  it('each section has required fields and no icon', () => {
     const result = generateGisInsight(baseMetrics);
     for (const section of result.sections) {
       assert.ok(section.id, 'Section missing id');
       assert.ok(section.title, `Section ${section.id} missing title`);
       assert.ok(section.text, `Section ${section.id} missing text`);
-      assert.ok(section.icon, `Section ${section.id} missing icon`);
+      assert.ok(!('icon' in section), `Section ${section.id} must not carry an icon`);
     }
   });
 
@@ -439,7 +504,7 @@ describe('generateGisInsight', () => {
     const text = sectionId(result, 'casesVsRiskPatterns').text;
     assert.ok(text.includes('**2**'));
     assert.ok(text.includes('**1**'));
-    assert.ok(text.includes('population-adjusted incidence, trend, neighboring barangay risk, and forecast error'));
+    assert.ok(text.includes('population-adjusted incidence, trend, recent monthly cases and the risk in bordering barangays'));
     assert.ok(text.includes('Oranbo'));
   });
 

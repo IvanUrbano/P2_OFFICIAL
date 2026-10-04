@@ -15,6 +15,8 @@
  *   - low_success_rate: treatment success < 60%
  */
 
+const { neighboursOf } = require('./barangayAdjacency');
+
 /**
  * Compute weighted risk score for a single barangay.
  *
@@ -99,16 +101,18 @@ function classifyByTertile(scores) {
 
 /**
  * Compute neighbor risk for all barangays.
- * neighbor_risk for barangay X = average incidence of all OTHER barangays,
- * normalized to [0, 1] using min-max across all barangays. Barangays with
- * unavailable (null) incidence are excluded from the average — an unknown
- * incidence must never pull neighbors' scores toward "low risk" by being
- * counted as 0.
+ * neighbor_risk for barangay X = average incidence of the barangays that
+ * share a border with X (see barangayAdjacency.js), normalized to [0, 1]
+ * using min-max across all barangays. Without an adjacency map every other
+ * barangay counts as a neighbour. Barangays with unavailable (null)
+ * incidence are excluded from the average — an unknown incidence must never
+ * pull neighbors' scores toward "low risk" by being counted as 0.
  *
  * @param {Array} barangays - [{name, incidence_per_100k}]
+ * @param {Object|null} [adjacency] - {name: [bordering barangay names]}
  * @returns {Object} { barangayName: normalizedNeighborRisk }
  */
-function computeNeighborRisks(barangays) {
+function computeNeighborRisks(barangays, adjacency = null) {
   const incidenceMap = {};
   for (const b of barangays) {
     incidenceMap[b.name] = b.incidence_per_100k;
@@ -118,7 +122,7 @@ function computeNeighborRisks(barangays) {
   const result = {};
 
   for (const name of names) {
-    const others = names.filter(n => n !== name && incidenceMap[n] != null);
+    const others = neighboursOf(name, names, adjacency).filter(n => incidenceMap[n] != null);
     if (others.length === 0) {
       result[name] = 0;
       continue;

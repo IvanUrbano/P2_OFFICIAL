@@ -50,6 +50,8 @@ export default function Topbar({ user }) {
   const displayName = storedUser?.username ?? 'System Admin';
   const displayEmail = storedUser?.email ?? 'admin@pasigcity.gov.ph';
   const displayPosition = storedUser?.position ?? 'System Administrator';
+  // Staff accounts are assigned to a health facility (login returns it as `facility`)
+  const displayFacility = storedUser?.facility?.name || storedUser?.facility_name || null;
 
   const visibleNavItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
 
@@ -285,7 +287,9 @@ export default function Topbar({ user }) {
                 </div>
                 <div className="hidden lg:block text-left">
                   <p className="text-xs font-bold leading-tight" style={{ color: '#ffffff' }}>{displayName}</p>
-                  <p className="text-[9px] leading-tight" style={{ color: '#64748B' }}>{displayEmail}</p>
+                  <p className="text-[9px] leading-tight" style={{ color: '#64748B' }}>
+                    {!isAdmin && displayFacility ? displayFacility : displayEmail}
+                  </p>
                 </div>
                 <i
                   className="ri-arrow-down-s-line text-sm shrink-0 transition-transform"
@@ -313,6 +317,11 @@ export default function Topbar({ user }) {
                       <div className="min-w-0">
                         <p className="text-xs font-bold truncate" style={{ color: '#0F2D52' }}>{displayName}</p>
                         <p className="text-[10px] truncate" style={{ color: '#94A3B8' }}>{displayEmail}</p>
+                        {!isAdmin && displayFacility && (
+                          <p className="text-[10px] font-semibold truncate flex items-center gap-1" style={{ color: '#0F2D52' }}>
+                            <i className="ri-hospital-line" /> {displayFacility}
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="mt-2 flex items-center gap-2">

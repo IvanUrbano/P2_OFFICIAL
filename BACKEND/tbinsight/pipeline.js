@@ -5,7 +5,7 @@
  *   1. Query L3 (monthly_case_summary) + L0 (barangays) for population
  *   2. Build series for Python /forecast → ARIMA predictions
  *   3. Compute RF features per barangay (rolling_12m_incidence, recent_trend,
- *      seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk, historical_bias)
+ *      seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk)
  *   4. Build classify request → Python /classify → risk classes + proba
  *   5. Compute weighted risk scores → L5 (barangay_risk_scores)
  *   6. Store forecasts + classifications → L4 (model_predictions)
@@ -15,7 +15,8 @@
  *   - Python service is stateless: all data passed in request body
  *   - Thresholds computed once, frozen, passed to /classify each run
  *   - All L4/L5/L6 writes in a single transaction (idempotent re-runs)
- *   - Historical bias = AVG(past forecast errors) → feedback loop (Approach B)
+ *   - neighbor_risk = incidence of the barangays sharing a border (barangayAdjacency.js)
+ *   - Past forecast error feeds only the weighted risk index, never the RF
  *   - Walk-forward evaluation available via POST /api/tb/evaluate (admin only)
  */
 
@@ -24,6 +25,7 @@ const { forecast, classify, thresholds: callThresholds, healthCheck, evaluate } 
 const {
   monthKey,
   computeRiskScore,
+  classifyByTertile,
   computeNeighborRisks,
   computeHistoricalBias,
   classifyTrend,
@@ -32,6 +34,7 @@ const {
 } = require('./scoring');
 const { getPopulationMap, calculateAnnualizedIncidence, GEOJSON_REFERENCE_YEAR } = require('./populationService');
 const { createNotification, evaluateAllAlerts } = require('./alertEngine');
+const { loadAdjacency, neighboursOf } = require('./barangayAdjacency');
 
 // Default thresholds — overridden by auto-calibration from real data on each run
 const DEFAULT_THRESHOLDS = {
@@ -50,9 +53,20 @@ const MODEL_VERSION = 'arima-v1.0-rf-v1.0';
 // constant directly.
 const ARIMA_MIN_HISTORY_NONSEASONAL = 10;
 
+// Every run forecasts at least this many months ahead so the Forecasting
+// page's 1-month and 3-month views both have stored data, whichever horizon
+// triggered the run (automatic sync runs used to store one month only).
+const MIN_STORED_HORIZON = 3;
+
 // Leading months whose city-wide total is below this share of the median month
 // are treated as stray records (e.g. one old case) and dropped from the calendar.
 const LEADING_TRIM_SHARE = 0.2;
+
+// Months averaged to form one RF training label, starting at the target month
+// and running forward (see buildTrainingRows). Three scored best in walk-forward
+// evaluation: one month is dominated by noise in small barangays, while six
+// discards twice as many rows for no gain.
+const LABEL_HORIZON_MONTHS = 3;
 
 /**
  * Put every barangay on ONE shared monthly calendar with zero-filled gaps.
@@ -113,12 +127,12 @@ function buildDenseSeries(monthlyRows, barangayNames) {
  * @param {string} options.period - Forecast period in YYYY-MM-DD format
  *   (defaults to next month from latest in monthly_case_summary)
  * @param {object} options.thresholds - Override frozen thresholds {low_max, med_max}
- * @param {number} options.forecastHorizon - Number of months to forecast ahead (default 1)
+ * @param {number} options.forecastHorizon - Months to forecast ahead (raised to MIN_STORED_HORIZON)
  * @param {string[]} options.barangays - Optional array of barangay names to filter (if empty, all)
  * @returns {object} Pipeline run summary
  */
 async function runPipeline({
-  period, thresholds: thresholdsOverride, forecastHorizon = 1, barangays: barangayFilter,
+  period, thresholds: thresholdsOverride, forecastHorizon: requestedHorizon = 1, barangays: barangayFilter,
   // historyCutoffMonth ('YYYY-MM-01'): when set, only monthly_case_summary
   // rows up to and including this month are used — i.e. "what would this
   // assessment have looked like using only data through this month". Used
@@ -129,6 +143,7 @@ async function runPipeline({
   // alerts about something that happened years ago.
   historyCutoffMonth, skipForecast = false, skipAlerts = false,
 } = {}) {
+  const forecastHorizon = Math.max(Number(requestedHorizon) || 1, MIN_STORED_HORIZON);
   const client = await pool.connect();
   const results = {
     status: 'started',
@@ -149,7 +164,7 @@ async function runPipeline({
     // ── Step 0a: Reconcile past forecasts with actual data ──
     // Fills model_predictions.actual_count for any past forecast whose
     // target month's real case count has since arrived — this is what
-    // makes historical_bias (RF feature #8) ever become nonzero. Previously
+    // gives the risk index's forecast-error component real values. Previously
     // this only happened if an admin manually called PUT
     // /predictions/backfill with hand-typed counts; the actual counts are
     // already sitting in monthly_case_summary, so there is nothing to type.
@@ -390,11 +405,14 @@ async function runPipeline({
       const pop = _popFor(popMapByYear, b.name, year);
       return { name: b.name, incidence_per_100k: _computeIncidence(lag1Pt.case_count, pop) };
     });
-    const neighborRisks = computeNeighborRisks(barangayIncidencesLag1);
+    const adjacency = await loadAdjacency();
+    results.neighborSource = adjacency ? 'shared_border' : 'all_barangays';
+    const neighborRisks = computeNeighborRisks(barangayIncidencesLag1, adjacency);
 
-    // 5b. Compute historical bias from past predictions. Cutoff-filtered for
-    // historical snapshots so this feature never learns from forecast
-    // errors recorded by pipeline runs AFTER the year being assessed.
+    // 5b. Past forecast error per barangay — used ONLY by the weighted risk
+    // index (forecast-error component), not as an RF feature. Cutoff-filtered
+    // for historical snapshots so it never reads errors recorded by pipeline
+    // runs AFTER the year being assessed.
     let historicalBias = {};
     try {
       const pastPreds = await pool.query(
@@ -435,7 +453,7 @@ async function runPipeline({
     const allLens = barangays.map(b => (seriesByBarangay[b.name] || []).length);
     const rfMaxLen = Math.max(0, ...allLens);
     const rfWindow = _featureWindow(rfMaxLen);
-    const rfNeighborRisks = _neighborRisksAt(seriesByBarangay, popMapByYear, rfMaxLen - 1);
+    const rfNeighborRisks = _neighborRisksAt(seriesByBarangay, popMapByYear, rfMaxLen - 1, adjacency);
     const predictRows = barangays.map(b =>
       buildFeatureRow({
         name: b.name,
@@ -444,35 +462,26 @@ async function runPipeline({
         popMapByYear,
         window: rfWindow,
         neighborRisks: rfNeighborRisks,
-        historicalBiasAvg: historicalBias,
       })
     );
 
     // ── Step 6: Auto-calibrate thresholds and call Python /classify ──
+    // Resolved BEFORE the ML-health branch because the rule-based fallback
+    // below compares against these same cut points — leaving them unset when
+    // the service is down silently handed that path DEFAULT_THRESHOLDS.
+    const { thresholds: runThresholds, source: thresholdSource } = await _resolveThresholds({
+      thresholdsOverride, barangayIncidences, predictRows,
+    });
+    results.thresholds = runThresholds;
+    results.thresholdSource = thresholdSource;
+
     let classifyResults = [];
     if (results.mlServiceHealthy && predictRows.length > 0) {
       try {
-        // Auto-calibrate thresholds from current data (tertile method)
-        let thresholds = thresholdsOverride;
-        if (!thresholds) {
-          try {
-            const allIncs = barangayIncidences.map(b => b.incidence_per_100k);
-            if (allIncs.length > 0) {
-              const thresholdResult = await callThresholds(allIncs, 'tertile');
-              thresholds = { low_max: thresholdResult.low_max, med_max: thresholdResult.med_max };
-              console.log(`📐 Auto-calibrated thresholds: Low≤${thresholds.low_max.toFixed(1)}, High≥${thresholds.med_max.toFixed(1)}`);
-            } else {
-              thresholds = DEFAULT_THRESHOLDS;
-            }
-          } catch {
-            thresholds = DEFAULT_THRESHOLDS;
-            console.log('📐 Using default thresholds (calibration failed)');
-          }
-        }
-        results.thresholds = thresholds;
+        const thresholds = runThresholds;
 
         // Build monthly snapshot training rows from historical data
-        const trainRows = await _buildTrainingRows(client, popMapByYear, thresholds, historyCutoffMonth);
+        const trainRows = await _buildTrainingRows(client, popMapByYear, thresholds, historyCutoffMonth, adjacency);
         results.trainingRows = trainRows.length;
         console.log(`📋 Training rows: ${trainRows.length} monthly snapshots`);
 
@@ -489,7 +498,7 @@ async function runPipeline({
 
     // Rule-based fallback if ML service is down or classify failed
     if (classifyResults.length === 0 && predictRows.length > 0) {
-      classifyResults = _ruleBasedClassify(predictRows, results.thresholds || DEFAULT_THRESHOLDS);
+      classifyResults = _ruleBasedClassify(predictRows, runThresholds);
       results.classifierMethod = 'rule_based';
       results.classificationsCount = classifyResults.length;
       console.log(`🏷️  Rule-based fallback: ${classifyResults.length} barangays classified`);
@@ -622,12 +631,15 @@ async function runPipeline({
       arimaStatus = results.errors.some(e => e.startsWith('Forecast failed')) ? 'failed' : 'not_run';
     } else if (arimaMethodsUsed.size === 1 && arimaMethodsUsed.has('insufficient_data')) {
       arimaStatus = 'insufficient_data';
-    } else if (arimaMethodsUsed.size === 1 && arimaMethodsUsed.has('arima')) {
+    } else if (arimaMethodsUsed.has('arima') && !arimaMethodsUsed.has('seasonal-naive-fallback')) {
+      // The ML service ran and fitted ARIMA. Barangays too sparse for ARIMA
+      // (mostly zero months) get exponential smoothing BY DESIGN — that is
+      // the documented eligibility rule, not a failure, so it doesn't make
+      // the run degraded.
       arimaStatus = 'success';
     } else {
-      // Mixed across barangays (some real ARIMA, some fallback/insufficient),
-      // or the ML service was unreachable so every barangay used the
-      // Node-side fallback — degraded, not a clean success.
+      // No ARIMA fit at all, or the ML service was unreachable so every
+      // barangay used the Node-side fallback — degraded, not a clean success.
       arimaStatus = 'degraded';
     }
     let rfStatus;
@@ -654,12 +666,19 @@ async function runPipeline({
           trainingRows: results.trainingRows ?? 0,
           classifierMethod: results.classifierMethod ?? 'rule_based',
           forecastMethods: [...arimaMethodsUsed],
+          forecastHorizon,
+          neighborSource: results.neighborSource || null,
           forecastsCount: results.forecastsCount,
           classificationsCount: results.classificationsCount,
           alertsCount: results.alertsCount,
         }),
         JSON.stringify({
           thresholds: results.thresholds,
+          // How the cut points above were arrived at: 'tertile_incidence' and
+          // 'tertile_features' are both calibrated from this run's own data;
+          // 'default' means nothing could be calibrated and the bands are not
+          // scale-matched, which makes the run's classifications unreliable.
+          thresholdSource: results.thresholdSource || null,
           period: results.period,
           historyCutoffMonth: historyCutoffMonth || null,
         }),
@@ -766,9 +785,9 @@ async function runHistoricalSnapshots() {
  * Reconcile past forecasts with reality: for every model_predictions row
  * still missing actual_count, fill it in from monthly_case_summary if that
  * barangay/period's real case count has arrived since the forecast was
- * made. This is the ONLY thing that makes historical_bias (RF feature #8,
- * AVG(|actual - forecasted|)) ever become nonzero — without it, every
- * forecast stays "unresolved" forever and the feature is permanently 0.
+ * made. This is the ONLY thing that gives the risk index's forecast-error
+ * component (AVG(|actual - forecasted|)) real values — without it, every
+ * forecast stays "unresolved" forever and that component is permanently 0.
  *
  * A single bulk UPDATE rather than the old per-barangay admin-typed
  * PUT /predictions/backfill: the actual counts already exist in
@@ -788,6 +807,71 @@ async function _backfillActualCounts() {
        AND mp.actual_count IS NULL`
   );
   return result.rowCount || 0;
+}
+
+/**
+ * Resolve this run's Low/Medium/High incidence cut points.
+ *
+ * Preference order:
+ *   1. override          — caller-supplied, used as-is.
+ *   2. tertile_incidence — Python /thresholds over the barangays' current
+ *                          incidences. The normal path.
+ *   3. tertile_features  — the same tertile split computed locally over
+ *                          rolling_12m_incidence from the prediction rows.
+ *   4. default           — DEFAULT_THRESHOLDS, last resort only.
+ *
+ * Step 3 exists because a year with no population reference of its own has a
+ * null current incidence for every barangay, leaving step 2 nothing to
+ * calibrate from — while the RF features still hold real values (built via
+ * _popForFeature's nearest-year fallback). Calibrating from the feature the
+ * classifier actually compares against keeps the cut points on the same scale
+ * as the values being classified.
+ *
+ * That scale match is the whole point. DEFAULT_THRESHOLDS are fixed constants
+ * (150/350); the annualized-monthly incidence they would be compared against
+ * runs in the hundreds to thousands, so nearly every barangay lands above
+ * med_max. Falling through to them silently is what made the 2023 snapshot
+ * classify 26 of 30 barangays High. The chosen source is returned so the run
+ * can record it and callers can flag a snapshot that had no real basis.
+ */
+async function _resolveThresholds({
+  thresholdsOverride, barangayIncidences, predictRows,
+  // Injectable so the calibration logic can be tested without the ML service.
+  callThresholds: callThresholdsFn = callThresholds,
+}) {
+  if (thresholdsOverride) return { thresholds: thresholdsOverride, source: 'override' };
+
+  const validIncidences = (barangayIncidences || [])
+    .map(b => b.incidence_per_100k)
+    .filter(v => v != null && Number.isFinite(v));
+
+  if (validIncidences.length > 0) {
+    try {
+      const t = await callThresholdsFn(validIncidences, 'tertile');
+      if (Number.isFinite(t?.low_max) && Number.isFinite(t?.med_max)) {
+        console.log(`📐 Thresholds (tertile over ${validIncidences.length} incidences): ` +
+                    `Low≤${t.low_max.toFixed(1)}, High>${t.med_max.toFixed(1)}`);
+        return { thresholds: { low_max: t.low_max, med_max: t.med_max }, source: 'tertile_incidence' };
+      }
+    } catch (err) {
+      console.warn(`📐 Threshold service unavailable (${err.message}) — calibrating locally`);
+    }
+  }
+
+  const featureIncidences = (predictRows || [])
+    .map(r => r.features?.rolling_12m_incidence)
+    .filter(v => v != null && Number.isFinite(v));
+
+  if (featureIncidences.length >= 3) {
+    const { low_max, med_max } = classifyByTertile(featureIncidences);
+    console.log(`📐 Thresholds (tertile over ${featureIncidences.length} feature incidences): ` +
+                `Low≤${low_max.toFixed(1)}, High>${med_max.toFixed(1)}`);
+    return { thresholds: { low_max, med_max }, source: 'tertile_features' };
+  }
+
+  console.warn('📐 No calibration basis — using default thresholds. Classifications from ' +
+               'this run are NOT scale-matched to the data and should be treated as unreliable.');
+  return { thresholds: DEFAULT_THRESHOLDS, source: 'default' };
 }
 
 /**
@@ -819,34 +903,74 @@ function _linearSlope(values) {
   return den === 0 ? 0 : num / den;
 }
 
+// Lag-12 autocorrelation at or above this counts as a seasonal pattern. 0.3 is
+// the conventional "weak but real" cutoff for a seasonal signal in a short
+// monthly public-health series.
+const SEASONALITY_MIN_AUTOCORRELATION = 0.3;
+
 /**
- * Detect seasonality: if there's at least 24 months,
- * check if the same month last year correlates with this month.
+ * Detect seasonality as the lag-12 autocorrelation of the DETRENDED series,
+ * over at least 24 months.
+ *
+ * The previous implementation split the series in half and counted how often
+ * consecutive month-to-month changes shared a sign. That measures whether the
+ * series moves in a consistent direction, not whether it repeats annually: a
+ * barangay with steadily rising cases has a positive change almost everywhere
+ * in both halves, matched on nearly every position, and was flagged seasonal.
+ * A trend is not a season, and seasonality_flag is one of the eight RF inputs,
+ * so the false positives landed directly in the classifier.
+ *
+ * Detrending is what makes the lag-12 comparison mean what it should. Pearson
+ * correlation measures a LINEAR relationship, and a straight line shifted by
+ * twelve months is still perfectly linearly related to itself — correlating the
+ * raw series against its own lag would score a pure trend at 1.0 and reproduce
+ * the original bug in a new form. Removing the least-squares trend line first
+ * leaves only the variation around it, so what remains correlates at lag 12
+ * when, and only when, the series genuinely repeats year over year. A series
+ * that is purely linear leaves no residual variation at all and is correctly
+ * reported as non-seasonal.
  */
 function _detectSeasonality(series) {
   if (series.length < 24) return false;
-  const sorted = series.sort((a, b) => a.month.localeCompare(b.month));
-  const counts = sorted.map(s => s.case_count);
+  const counts = [...series]
+    .sort((a, b) => a.month.localeCompare(b.month))
+    .map(s => s.case_count);
 
-  // Simple check: compare first half vs second half season patterns
-  const half = Math.floor(counts.length / 2);
-  const firstHalf = counts.slice(0, half);
-  const secondHalf = counts.slice(half);
+  // Remove the least-squares trend line; what is left is the variation around it.
+  const slope = _linearSlope(counts);
+  const meanIndex = (counts.length - 1) / 2;
+  const meanCount = counts.reduce((a, b) => a + b, 0) / counts.length;
+  const intercept = meanCount - slope * meanIndex;
+  const residuals = counts.map((value, i) => value - (intercept + slope * i));
 
-  // Check if seasonal pattern (same relative peaks) persists
-  // Simple: check if month-to-month changes have similar sign patterns
-  const changes1 = firstHalf.slice(1).map((v, i) => v - firstHalf[i]);
-  const changes2 = secondHalf.slice(1).map((v, i) => v - secondHalf[i]);
+  // A flat or perfectly linear series leaves no residual variation to analyse.
+  // Compared against the original scale so the check is unit-independent and
+  // tolerant of floating-point dust from the subtraction above.
+  const residualSpread = residuals.reduce((sum, r) => sum + r * r, 0) / residuals.length;
+  const scale = Math.max(Math.abs(meanCount), 1);
+  if (residualSpread / (scale * scale) < 1e-6) return false;
 
-  if (changes1.length < 6 || changes2.length < 6) return false;
+  // Pair each month's residual with the same month's residual a year earlier.
+  const pairs = residuals.slice(12).map((value, i) => [value, residuals[i]]);
+  if (pairs.length < 12) return false;
 
-  // Count matching sign patterns in aligned positions
-  let matches = 0;
-  const len = Math.min(changes1.length, changes2.length, 12);
-  for (let i = 0; i < len; i++) {
-    if ((changes1[i] >= 0) === (changes2[i] >= 0)) matches++;
+  const meanCurrent = pairs.reduce((sum, p) => sum + p[0], 0) / pairs.length;
+  const meanLagged = pairs.reduce((sum, p) => sum + p[1], 0) / pairs.length;
+
+  let covariance = 0;
+  let varCurrent = 0;
+  let varLagged = 0;
+  for (const [current, lagged] of pairs) {
+    const dCurrent = current - meanCurrent;
+    const dLagged = lagged - meanLagged;
+    covariance += dCurrent * dLagged;
+    varCurrent += dCurrent ** 2;
+    varLagged += dLagged ** 2;
   }
-  return matches / len > 0.6;
+  if (varCurrent === 0 || varLagged === 0) return false;
+
+  const correlation = covariance / Math.sqrt(varCurrent * varLagged);
+  return correlation >= SEASONALITY_MIN_AUTOCORRELATION;
 }
 
 /**
@@ -865,19 +989,18 @@ function _nextMonth(dateStr) {
  * Instead of 1 row per barangay (30 total), produces 1 row per barangay per month
  * using rolling 12-month windows. With 30 barangays × 24+ valid months = 720+ rows.
  *
- * Each row: { features: {6 features}, incidence: float }
- * Labels derived from incidence via tertile thresholds in Python.
+ * Each row: { features: {7 features}, incidence: float, month }
+ * Labels derived in Python by ranking barangays into thirds within each month.
  *
  * Features are computed with rolling windows to prevent data leakage:
  *   - rolling_12m_incidence: annualized cases from the 12-month lookback window
  *   - recent_trend: slope over the 12-month window
  *   - seasonality_flag: 1 if ≥24 months available and sign-pattern match > 60%
- *   - population_density: same as rolling_12m_incidence (per design spec)
- *   - neighbor_risk: average incidence of OTHER barangays at the month before
- *     the target (lag-1), min-max normalized within that month
- *   - historical_bias: AVG(|actual - forecasted|) from past predictions (0 if no history)
+ *   - lag_1m/2m/3m: actual counts 1–3 months before the target
+ *   - neighbor_risk: average incidence of the barangays sharing a border at
+ *     the month before the target (lag-1), min-max normalized within that month
  */
-async function _buildTrainingRows(_client, popMapByYear, thresholds, historyCutoffMonth) {
+async function _buildTrainingRows(_client, popMapByYear, thresholds, historyCutoffMonth, adjacency) {
   // Fetch all monthly data (use pool directly — client is released)
   const result = await pool.query(
     `SELECT barangay_name, month, case_count
@@ -898,29 +1021,10 @@ async function _buildTrainingRows(_client, popMapByYear, thresholds, historyCuto
     : result.rows;
   if (rows.length === 0) return [];
 
-  // Average absolute forecast error per barangay — same helper the prediction
-  // path (5b) uses, so train and predict see an identical historical_bias.
-  // Also cutoff-filtered: a historical snapshot must not learn from forecast
-  // errors recorded by LATER pipeline runs.
-  let historicalBiasAvg = {};
-  try {
-    const pastResult = await pool.query(
-      `SELECT barangay_name, period, actual_count, forecasted_count
-       FROM model_predictions
-       WHERE actual_count IS NOT NULL
-       ORDER BY period ASC`
-    );
-    const biasRows = historyCutoffMonth
-      ? pastResult.rows.filter(r => monthKey(r.period) <= historyCutoffMonth)
-      : pastResult.rows;
-    historicalBiasAvg = computeHistoricalBias(biasRows);
-  } catch {
-    // table might be empty on first run
-  }
-
   const barangayNames = await pool.query('SELECT name FROM barangays ORDER BY name');
   const { seriesByBarangay } = buildDenseSeries(rows, barangayNames.rows.map(r => r.name));
-  return buildTrainingRows(seriesByBarangay, popMapByYear, historicalBiasAvg);
+  const adj = adjacency === undefined ? await loadAdjacency() : adjacency;
+  return buildTrainingRows(seriesByBarangay, popMapByYear, adj);
 }
 
 /**
@@ -980,8 +1084,9 @@ function _popForFeature(popMapByYear, name, year) {
 }
 
 /**
- * neighbor_risk cross-section for ONE month: mean incidence of the OTHER
- * barangays at `monthIndex` (actuals), min-max normalized to [0, 1] across
+ * neighbor_risk cross-section for ONE month: mean incidence of the barangays
+ * sharing a border (all other barangays when `adjacency` is null) at
+ * `monthIndex` (actuals), min-max normalized to [0, 1] across
  * barangays within that month. Barangays whose incidence is unavailable
  * (missing matching-year population) are excluded from the average rather
  * than counted as 0 — an unknown incidence must never pull neighbors'
@@ -991,7 +1096,7 @@ function _popForFeature(popMapByYear, name, year) {
  * prediction rows, so neighbor_risk never reads the target month itself —
  * no target-period information, and train/predict are identical.
  */
-function _neighborRisksAt(seriesByBarangay, popMapByYear, monthIndex) {
+function _neighborRisksAt(seriesByBarangay, popMapByYear, monthIndex, adjacency = null) {
   const names = Object.keys(seriesByBarangay);
   const inc = {};
   for (const name of names) {
@@ -1001,7 +1106,7 @@ function _neighborRisksAt(seriesByBarangay, popMapByYear, monthIndex) {
     inc[name] = pt ? _computeIncidence(pt.case_count, pop) : null;
   }
   const raws = names.map(name => {
-    const others = names.filter(o => o !== name && inc[o] != null);
+    const others = neighboursOf(name, names, adjacency).filter(o => inc[o] != null);
     return others.length > 0 ? others.reduce((s, o) => s + inc[o], 0) / others.length : 0;
   });
   const min = Math.min(...raws);
@@ -1014,14 +1119,13 @@ function _neighborRisksAt(seriesByBarangay, popMapByYear, monthIndex) {
 }
 
 /**
- * Build the 8 RF features for `name` targeting month index `t`, using ONLY
+ * Build the 7 RF features for `name` targeting month index `t`, using ONLY
  * data strictly before t:
  *   - rolling_12m_incidence: annualized mean of the [t-window, t) window
  *   - recent_trend: linear slope over the same window
  *   - seasonality_flag: detection over [0, t) (target month excluded)
  *   - lag_1m/2m/3m: actual counts at t-1, t-2, t-3
- *   - neighbor_risk: precomputed lag-1 cross-section (month t-1)
- *   - historical_bias: mean absolute past forecast error per barangay
+ *   - neighbor_risk: precomputed lag-1 cross-section of bordering barangays (month t-1)
  *
  * Training rows AND prediction rows must both go through this function —
  * that is what guarantees feature parity between fit and inference.
@@ -1033,10 +1137,9 @@ function _neighborRisksAt(seriesByBarangay, popMapByYear, monthIndex) {
  * @param {Object} p.popMapByYear - {year: {name: {population, available}}}
  * @param {number} p.window - look-back window (from _featureWindow)
  * @param {Object} p.neighborRisks - lag-1 normalized neighbor risks ({name: 0..1})
- * @param {Object} [p.historicalBiasAvg] - {name: mean abs forecast error}
  * @returns {{barangay_name: string, features: Object}}
  */
-function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neighborRisks, historicalBiasAvg = {} }) {
+function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neighborRisks }) {
   const months = seriesByBarangay[name] || [];
   const windowCounts = months.slice(Math.max(0, t - window), t).map(w => w.case_count);
   const meanCount = windowCounts.length > 0
@@ -1064,7 +1167,6 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
       lag_2m: lag(2),
       lag_3m: lag(3),
       neighbor_risk: neighborRisks[name] || 0,
-      historical_bias: historicalBiasAvg[name] || 0,
     },
   };
 }
@@ -1079,10 +1181,9 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
  *   - recent_trend: slope over the window
  *   - seasonality_flag: detected on [0, target) — target month excluded
  *   - lag_1m/2m/3m: actuals at target-1/-2/-3
- *   - neighbor_risk: mean incidence of the other barangays at target-1,
+ *   - neighbor_risk: mean incidence of the bordering barangays at target-1,
  *     min-max normalized across barangays within that month (lag-1, never the
  *     target month itself)
- *   - historical_bias: mean absolute past forecast error (0 when no history)
  * The label source `incidence` is the target month's annualized incidence.
  *
  * Rows are emitted month-major: all barangays of month i, then month i+1 —
@@ -1090,9 +1191,9 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
  *
  * @param {Object} seriesByBarangay - from buildDenseSeries (all same length)
  * @param {Object} popMapByYear - {year: {name: {population, available}}}
- * @param {Object} historicalBiasAvg - {name: mean abs forecast error}
+ * @param {Object|null} [adjacency] - {name: [bordering barangays]}; null = all others
  */
-function buildTrainingRows(seriesByBarangay, popMapByYear, historicalBiasAvg = {}) {
+function buildTrainingRows(seriesByBarangay, popMapByYear, adjacency = null) {
   const names = Object.keys(seriesByBarangay);
   const maxLen = Math.max(0, ...names.map(n => seriesByBarangay[n].length));
   const window = _featureWindow(maxLen);
@@ -1101,7 +1202,7 @@ function buildTrainingRows(seriesByBarangay, popMapByYear, historicalBiasAvg = {
   const trainRows = [];
   for (let i = window; i < maxLen; i++) {
     // neighbor_risk cross-section at the month BEFORE the target (lag-1)
-    const neighborRisks = _neighborRisksAt(seriesByBarangay, popMapByYear, i - 1);
+    const neighborRisks = _neighborRisksAt(seriesByBarangay, popMapByYear, i - 1, adjacency);
     for (const name of names) {
       const months = seriesByBarangay[name];
       if (months.length <= i) continue;
@@ -1111,11 +1212,32 @@ function buildTrainingRows(seriesByBarangay, popMapByYear, historicalBiasAvg = {
       // and no row (skip), never a zero/estimated incidence.
       const targetYear = Number(months[i].month.slice(0, 4));
       const pop = _popFor(popMapByYear, name, targetYear);
-      const incidence = _computeIncidence(months[i].case_count, pop);
+
+      // The label is the mean monthly case count over the target month and the
+      // LABEL_HORIZON_MONTHS - 1 months after it, annualized. A single month was
+      // used before, which for a small barangay is mostly noise rather than
+      // signal: Bagong Katipunan averages under two cases a month against a
+      // population under a thousand, so one extra case moves its annualized rate
+      // by more than a thousand per 100k and flips its band. No model can learn
+      // that, and walk-forward evaluation showed it scoring below the trivial
+      // majority-class baseline. Averaging the window suppresses that noise
+      // while keeping the question forward-looking.
+      //
+      // The window starts AT the target month and runs forward, never backward:
+      // every feature is built strictly before the target month, so a backward
+      // label window would share months with the features and inflate accuracy
+      // without the model having learned anything. A barangay without the full
+      // forward window (the final months of the series) yields no label and no
+      // row, rather than one averaged over a short window that is not comparable
+      // to the rest.
+      const labelMonths = months.slice(i, i + LABEL_HORIZON_MONTHS);
+      if (labelMonths.length < LABEL_HORIZON_MONTHS) continue;
+      const meanCases = labelMonths.reduce((sum, m) => sum + m.case_count, 0) / labelMonths.length;
+      const incidence = _computeIncidence(meanCases, pop);
       if (incidence == null) continue;
 
       const row = buildFeatureRow({
-        name, t: i, seriesByBarangay, popMapByYear, window, neighborRisks, historicalBiasAvg,
+        name, t: i, seriesByBarangay, popMapByYear, window, neighborRisks,
       });
       row.month = months[i].month;
       row.incidence = incidence;
@@ -1126,15 +1248,25 @@ function buildTrainingRows(seriesByBarangay, popMapByYear, historicalBiasAvg = {
 }
 
 /**
- * Rule-based classification when ML service is unavailable.
- * Simple threshold-based: Low if incidence ≤ low_max, High if > med_max, else Medium.
+ * Rule-based classification when the ML service is unavailable.
+ * Low if incidence ≤ low_max, High if > med_max, else Medium.
+ *
+ * Only rolling_12m_incidence is comparable to the thresholds — both are
+ * incidence per 100k. The previous `|| row.features.lag_1m` fallback put a raw
+ * monthly case count (single digits to low hundreds) up against a per-100k cut
+ * point, which reads as "well below low_max" for any barangay and classified it
+ * Low regardless of its actual risk. When incidence is genuinely unavailable
+ * the honest answer is that this barangay cannot be placed in a band, so it
+ * defaults to Medium rather than being asserted as Low.
  */
 function _ruleBasedClassify(predictRows, thresholds) {
   const { low_max, med_max } = thresholds;
   return predictRows.map(row => {
-    const inc = row.features.rolling_12m_incidence || row.features.lag_1m || 0;
+    const inc = row.features?.rolling_12m_incidence;
+    const known = inc != null && Number.isFinite(inc);
     let riskClass;
-    if (inc <= low_max) riskClass = 'Low';
+    if (!known) riskClass = 'Medium';
+    else if (inc <= low_max) riskClass = 'Low';
     else if (inc > med_max) riskClass = 'High';
     else riskClass = 'Medium';
 
@@ -1315,6 +1447,7 @@ module.exports = {
   getPipelineRunStatus,
   DEFAULT_THRESHOLDS,
   MODEL_VERSION,
+  MIN_STORED_HORIZON,
   buildDenseSeries,
   buildTrainingRows,
   buildFeatureRow,
@@ -1326,5 +1459,7 @@ module.exports = {
   _uniformPopMapByYear,
   _resolveClassification,
   _ruleBasedClassify,
+  _resolveThresholds,
+  _detectSeasonality,
   _backfillActualCounts,
 };

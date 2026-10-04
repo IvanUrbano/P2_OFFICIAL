@@ -12,7 +12,12 @@ const {
 const { buildAnalyticsMetrics, buildForecastingMetrics, buildGisMetrics } = require('./insightDataBuilder');
 const { generateAnalyticsInsight, generateForecastingInsight, generateGisInsight } = require('./nlgEngine');
 const { computeTreatmentCascade } = require('./treatmentCascade');
+const { buildDashboardMetrics, generateDashboardInsight } = require('./dashboardInsight');
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
+const {
+  APPROVED_OUTCOMES, normalizeDisplayOutcome, normalizeRecordOutcome,
+  isApprovedOutcome, getOutcomeFilterValues, foldOutcomeCounts, SUCCESS_OUTCOMES_SQL,
+} = require('./outcomeNormalization');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
 const {
   getPopulation, getPopulationMap, calculateAnnualizedIncidence,
@@ -24,6 +29,36 @@ const {
 } = require('./populationService');
 
 const router = express.Router();
+
+// ==================== AUTHORIZATION ====================
+//
+// TBInsight holds internal TB surveillance and analytical data, so EVERY
+// /api/tb/* route requires an authenticated Staff or Admin user. Frontend
+// route protection (ProtectedRoute) guards navigation only — the API is
+// directly reachable, so authorization has to be enforced here.
+//
+// Applied once at the router level rather than per route: a per-route list is
+// exactly how the read endpoints (dashboard, analytics, GIS, forecasts,
+// alerts, reports, insights, pipeline status, data freshness, cases/export,
+// webhook-logs) came to be unauthenticated while the mutating ones were
+// protected. A router-level guard cannot be forgotten when a route is added.
+//
+// This is the BASELINE. Routes that already carry stricter guards keep them —
+// `authorizeRoles('admin')` on a route still narrows it to Admin, so no
+// Admin-only operation is downgraded to Staff by this line. The duplicated
+// `authenticateToken` on those routes is harmless (it re-verifies the same
+// token and re-sets req.user).
+//
+// It reuses the existing middleware in BACKEND/middleware/auth.js — JWT from
+// the httpOnly cookie or an Authorization: Bearer header, with CSRF nonce
+// enforcement for cookie-authenticated unsafe methods. No second auth system
+// is introduced.
+//
+// Deliberately NOT covered by this router: the Pasig TB-IS webhook receiver
+// (mounted separately at /api/webhook, authenticated by HMAC signature rather
+// than a user JWT) and the app health check GET /api/health, which must stay
+// reachable for platform health probes and exposes no surveillance data.
+router.use(authenticateToken, authorizeRoles('admin', 'staff'));
 
 // ==================== REFERENCE DATA ====================
 
@@ -74,7 +109,11 @@ router.get('/filter-options', async (req, res) => {
     res.json({
       sex: sexRes.rows.map(r => r.sex),
       bacteriological_status: bactRes.rows.map(r => r.bacteriological_status),
-      outcome_status: outcomeRes.rows.map(r => r.outcome_status),
+      outcome_status: outcomeRes.rows
+        .map(r => normalizeDisplayOutcome(r.outcome_status))
+        .filter(v => v != null)
+        .filter((v, i, arr) => arr.indexOf(v) === i)  // dedupe
+        .sort((a, b) => APPROVED_OUTCOMES.indexOf(a) - APPROVED_OUTCOMES.indexOf(b)),
       validation_status: validationRes.rows.map(r => r.validation_status),
       source_type: sourceTypeRes.rows.map(r => r.source_type),
       location_classification: locationRes.rows.map(r => r.location_classification),
@@ -164,6 +203,8 @@ router.get('/cases', async (req, res) => {
         `TRIM(c.screening_facility) ILIKE $${paramIdx}`,
         `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
         `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
+        `c.case_no ILIKE $${paramIdx}`,
+        `c.patient_no ILIKE $${paramIdx}`,
         `TRIM(c.source_type) ILIKE $${paramIdx}`,
         `TRIM(c.validation_status) ILIKE $${paramIdx}`,
         `TRIM(c.sex) ILIKE $${paramIdx}`,
@@ -210,8 +251,8 @@ router.get('/cases', async (req, res) => {
     }
 
     if (outcome) {
-      conditions.push(`UPPER(TRIM(c.outcome_status)) = UPPER($${paramIdx})`);
-      params.push(outcome.trim());
+      conditions.push(`UPPER(TRIM(c.outcome_status)) = ANY($${paramIdx})`);
+      params.push(getOutcomeFilterValues(outcome));
       paramIdx++;
     }
 
@@ -248,6 +289,16 @@ router.get('/cases', async (req, res) => {
     if (location_classification) {
       conditions.push(`TRIM(c.location_classification) = $${paramIdx}`);
       params.push(location_classification.trim());
+      paramIdx++;
+    }
+
+    // Facility-scoped access for STAFF users
+    // STAFF can only see cases where their facility is the current responsible facility,
+    // OR where current_responsible_facility_id is NULL (historical/unresolved).
+    // ADMIN sees all cases city-wide.
+    if (req.user.role === 'staff' && req.user.facility_id) {
+      conditions.push(`(c.current_responsible_facility_id = $${paramIdx} OR c.current_responsible_facility_id IS NULL)`);
+      params.push(req.user.facility_id);
       paramIdx++;
     }
 
@@ -289,7 +340,10 @@ router.get('/cases', async (req, res) => {
         c.validation_status,
         c.itis_case_id,
         c.source_type,
-        c.location_classification
+        c.location_classification,
+        c.case_no,
+        c.patient_no,
+        c.current_responsible_facility_id
       FROM tb_cases c
       ${whereClause}
       ORDER BY c.${safeSortField} ${safeSortDir}
@@ -297,8 +351,19 @@ router.get('/cases', async (req, res) => {
       [...params, safeLimit, offset]
     );
 
+    // Record rows carry the SOURCE-ALIGNED outcome label, not the raw storage
+    // form: a legacy 'TREATMENT FAILED' row is returned as 'FAILED', which is
+    // the only user-facing terminology. The raw stored value is preserved
+    // alongside it for traceability, and `outcome_status_approved` is false for
+    // any value outside the 9 Excel-verified categories (e.g. SCREENED) so the
+    // UI can mark it rather than present it as a verified source category.
     res.json({
-      cases: dataResult.rows,
+      cases: dataResult.rows.map((r) => ({
+        ...r,
+        outcome_status: normalizeRecordOutcome(r.outcome_status),
+        outcome_status_raw: r.outcome_status,
+        outcome_status_approved: isApprovedOutcome(r.outcome_status),
+      })),
       pagination: {
         page: safePage,
         limit: safeLimit,
@@ -346,6 +411,8 @@ router.get('/cases/export', async (req, res) => {
         `TRIM(c.screening_facility) ILIKE $${paramIdx}`,
         `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
         `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
+        `c.case_no ILIKE $${paramIdx}`,
+        `c.patient_no ILIKE $${paramIdx}`,
         `TRIM(c.source_type) ILIKE $${paramIdx}`,
         `TRIM(c.validation_status) ILIKE $${paramIdx}`,
         `TRIM(c.sex) ILIKE $${paramIdx}`,
@@ -376,13 +443,20 @@ router.get('/cases/export', async (req, res) => {
     if (barangay) { conditions.push(`TRIM(c.barangay_name) = $${paramIdx}`); params.push(barangay.trim()); paramIdx++; }
     if (year) { conditions.push(`EXTRACT(YEAR FROM c.date_of_diagnosis) = $${paramIdx}`); params.push(Number(year)); paramIdx++; }
     if (month) { conditions.push(`EXTRACT(MONTH FROM c.date_of_diagnosis) = $${paramIdx}`); params.push(Number(month)); paramIdx++; }
-    if (outcome) { conditions.push(`UPPER(TRIM(c.outcome_status)) = UPPER($${paramIdx})`); params.push(outcome.trim()); paramIdx++; }
+    if (outcome) { conditions.push(`UPPER(TRIM(c.outcome_status)) = ANY($${paramIdx})`); params.push(getOutcomeFilterValues(outcome)); paramIdx++; }
     if (facility) { conditions.push(`(TRIM(c.screening_facility) = $${paramIdx} OR TRIM(c.treatment_facility) = $${paramIdx})`); params.push(facility.trim()); paramIdx++; }
     if (sex) { conditions.push(`TRIM(c.sex) ILIKE $${paramIdx}`); params.push(sex.trim()); paramIdx++; }
     if (bacteriological_status) { conditions.push(`TRIM(c.bacteriological_status) ILIKE $${paramIdx}`); params.push(bacteriological_status.trim()); paramIdx++; }
     if (validation_status) { conditions.push(`TRIM(c.validation_status) = $${paramIdx}`); params.push(validation_status.trim()); paramIdx++; }
     if (source_type) { conditions.push(`TRIM(c.source_type) = $${paramIdx}`); params.push(source_type.trim()); paramIdx++; }
     if (location_classification) { conditions.push(`TRIM(c.location_classification) = $${paramIdx}`); params.push(location_classification.trim()); paramIdx++; }
+
+    // Facility-scoped access for STAFF users
+    if (req.user.role === 'staff' && req.user.facility_id) {
+      conditions.push(`(c.current_responsible_facility_id = $${paramIdx} OR c.current_responsible_facility_id IS NULL)`);
+      params.push(req.user.facility_id);
+      paramIdx++;
+    }
 
     const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
@@ -436,7 +510,7 @@ router.get('/cases/export', async (req, res) => {
         row.registration_group || '',
         row.bacteriological_status || '',
         row.date_started_treatment ? new Date(row.date_started_treatment).toISOString().split('T')[0] : '',
-        row.outcome_status || '',
+        normalizeRecordOutcome(row.outcome_status) || '',
         row.date_of_outcome ? new Date(row.date_of_outcome).toISOString().split('T')[0] : '',
         row.validation_status || '',
         row.location_classification || '',
@@ -495,8 +569,8 @@ router.get('/dashboard/summary', async (req, res) => {
       paramIdx++;
     }
     if (outcome) {
-      conditions.push(`UPPER(TRIM(outcome_status)) = UPPER($${paramIdx})`);
-      params.push(outcome.trim());
+      conditions.push(`UPPER(TRIM(outcome_status)) = ANY($${paramIdx})`);
+      params.push(getOutcomeFilterValues(outcome));
       paramIdx++;
     }
     if (facility) {
@@ -539,13 +613,13 @@ router.get('/dashboard/summary', async (req, res) => {
         COUNT(DISTINCT DATE_TRUNC('month', date_of_diagnosis))::INTEGER as months_covered,
         MIN(date_of_diagnosis) as earliest_date,
         MAX(date_of_diagnosis) as latest_date,
-        SUM(CASE WHEN UPPER(outcome_status) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER as on_treatment_count,
-        SUM(CASE WHEN UPPER(outcome_status) = 'CURED' THEN 1 ELSE 0 END)::INTEGER as cured_count,
-        SUM(CASE WHEN UPPER(outcome_status) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER as treatment_completed_count,
-        SUM(CASE WHEN UPPER(outcome_status) = 'DIED' THEN 1 ELSE 0 END)::INTEGER as died_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER as on_treatment_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'CURED' THEN 1 ELSE 0 END)::INTEGER as cured_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER as treatment_completed_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'DIED' THEN 1 ELSE 0 END)::INTEGER as died_count,
         SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN ('LOST TO FF-UP','LOST TO FOLLOW-UP') THEN 1 ELSE 0 END)::INTEGER as ltfu_count,
-        SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER as successful_count,
-        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(outcome_status) != 'NOT EVALUATED')::INTEGER as total_outcomes,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER as successful_count,
+        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(TRIM(outcome_status)) != 'NOT EVALUATED')::INTEGER as total_outcomes,
         SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as current_month_cases,
         SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
                   AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as prev_month_cases
@@ -572,10 +646,10 @@ router.get('/dashboard/metrics', async (req, res) => {
     const result = await pool.query(`
       SELECT
         COUNT(*)::INTEGER AS total_cases,
-        SUM(CASE WHEN outcome_status = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS on_treatment_count,
-        SUM(CASE WHEN outcome_status = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
-        SUM(CASE WHEN outcome_status IN ('CURED', 'TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful_count,
-        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(outcome_status) != 'NOT EVALUATED')::INTEGER AS total_outcomes,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS on_treatment_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
+        SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN ('CURED', 'TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful_count,
+        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(TRIM(outcome_status)) != 'NOT EVALUATED')::INTEGER AS total_outcomes,
         SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER AS current_month_cases,
         SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
                   AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER AS prev_month_cases
@@ -709,15 +783,20 @@ router.get('/dashboard/barangay/:name', async (req, res) => {
     let outcomesRows = [];
     try {
       const outcomes = await pool.query(
-        `SELECT COALESCE(outcome_status, 'Unknown') AS outcome_status,
+        `SELECT COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status,
                 COUNT(*)::INTEGER AS total
          FROM tb_cases
          WHERE LOWER(barangay_name) = LOWER($1)
-         GROUP BY outcome_status
+         GROUP BY COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
          ORDER BY total DESC`,
         [name]
       );
-      outcomesRows = outcomes.rows;
+      outcomesRows = outcomes.rows.map((r) => ({
+        ...r,
+        outcome_status: normalizeRecordOutcome(r.outcome_status),
+        outcome_status_raw: r.outcome_status,
+        outcome_status_approved: isApprovedOutcome(r.outcome_status),
+      }));
     } catch (e) {
       console.error('Outcomes query error:', e.message);
     }
@@ -871,7 +950,17 @@ router.get('/dashboard/outcomes', async (req, res) => {
       GROUP BY barangay_name, COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
       ORDER BY barangay_name, total DESC
     `, params);
-    res.json({ outcomes: result.rows });
+    // Emit the source-aligned label per row (legacy 'TREATMENT FAILED' becomes
+    // 'FAILED') and flag anything outside the 9 verified categories, so every
+    // consumer gets the same terminology from one place instead of each page
+    // re-implementing the alias mapping. Barangay grouping is preserved.
+    const outcomes = result.rows.map((r) => ({
+      ...r,
+      outcome_status: normalizeRecordOutcome(r.outcome_status),
+      outcome_status_raw: r.outcome_status,
+      outcome_status_approved: isApprovedOutcome(r.outcome_status),
+    }));
+    res.json({ outcomes });
   } catch (err) {
     console.error('Outcomes error:', err.message);
     res.status(500).json({ error: 'Server error fetching outcomes.' });
@@ -929,8 +1018,10 @@ router.get('/gis/geojson', async (req, res) => {
     const yearInt = year ? parseInt(year, 10) : null;
     const isValidYear = yearInt && !isNaN(yearInt) && yearInt >= 2000 && yearInt <= 2099;
 
+    // The five lookups below are independent, so they are started together and awaited
+    // once (each is a ~0.2 s round trip to the remote database).
     // Fetch barangays with geometry from PostGIS
-    const geoResult = await pool.query(`
+    const geoQ = pool.query(`
       SELECT
         id,
         name,
@@ -972,18 +1063,14 @@ router.get('/gis/geojson', async (req, res) => {
          COALESCE(norm_forecast_error, 0) as norm_forecast_error,
          model_type, model_version, classification_confidence,
          prob_low, prob_medium, prob_high, features, period`;
-    const riskResult = isValidYear
-      ? await pool.query(
+    const riskQ = isValidYear
+      ? pool.query(
           `SELECT ${riskSelect} FROM barangay_risk_scores WHERE period = $1::date`,
           [`${yearInt + 1}-01-01`]
         )
-      : await pool.query(
+      : pool.query(
           `SELECT ${riskSelect} FROM barangay_risk_scores WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)`
         );
-    const riskAssessmentPeriod = riskResult.rows[0]?.period || null;
-    // Distinguishes "All Years showing the latest snapshot" from "this
-    // specific year has no snapshot at all yet" for the frontend's label.
-    const requestedYearHasSnapshot = isValidYear ? riskResult.rows.length > 0 : null;
 
     // Effective incidence year — ONLY from an explicit ?year filter.
     // Snapshots are keyed by (assessment year + 1)-01-01 (period 2026-01-01
@@ -1001,19 +1088,18 @@ router.get('/gis/geojson', async (req, res) => {
     // always showed the latest (e.g. 2026) forecast regardless of the
     // selected year, which misattributed today's forecast to a historical
     // view.
-    const forecastResult = isValidYear
-      ? await pool.query(
-          `SELECT barangay_name, COALESCE(forecasted_count, 0) as forecasted_count,
-             COALESCE(confidence_lower, 0) as confidence_lower,
-             COALESCE(confidence_upper, 0) as confidence_upper
-           FROM model_predictions WHERE period = $1::date`,
+    // forecasted_count is NOT coalesced to 0: a historical snapshot skips ARIMA
+    // entirely, so a past year has no forecast at all, and 0 would read as "the
+    // model predicted zero cases" — a claim never made. Null renders as N/A.
+    const forecastSelect = `barangay_name, forecasted_count,
+             confidence_lower, confidence_upper`;
+    const forecastQ = isValidYear
+      ? pool.query(
+          `SELECT ${forecastSelect} FROM model_predictions WHERE period = $1::date`,
           [`${yearInt + 1}-01-01`]
         )
-      : await pool.query(
-          `SELECT barangay_name, COALESCE(forecasted_count, 0) as forecasted_count,
-             COALESCE(confidence_lower, 0) as confidence_lower,
-             COALESCE(confidence_upper, 0) as confidence_upper
-           FROM model_predictions
+      : pool.query(
+          `SELECT ${forecastSelect} FROM model_predictions
            WHERE period = (SELECT MAX(period) FROM model_predictions)`
         );
 
@@ -1033,7 +1119,7 @@ router.get('/gis/geojson', async (req, res) => {
          FROM tb_cases
          WHERE date_of_diagnosis IS NOT NULL
          GROUP BY barangay_name`;
-    const caseResult = await pool.query(
+    const caseQ = pool.query(
       caseQuery, effectiveCaseYear !== null ? [effectiveCaseYear] : []
     );
 
@@ -1045,16 +1131,27 @@ router.get('/gis/geojson', async (req, res) => {
     // incidence renders N/A. A population from a different year is never
     // substituted, because that would misrepresent incidence for the
     // selected year.
+    const popQ = incidenceYear !== null && incidenceYear !== GEOJSON_REFERENCE_YEAR
+      ? pool.query(
+          `SELECT barangay_name, population FROM barangay_population
+           WHERE reference_year = $1 AND status = 'ACTIVE'`,
+          [incidenceYear]
+        )
+      : Promise.resolve(null);
+
+    const [geoResult, riskResult, forecastResult, caseResult, popResult] =
+      await Promise.all([geoQ, riskQ, forecastQ, caseQ, popQ]);
+
+    const riskAssessmentPeriod = riskResult.rows[0]?.period || null;
+    // Distinguishes "All Years showing the latest snapshot" from "this
+    // specific year has no snapshot at all yet" for the frontend's label.
+    const requestedYearHasSnapshot = isValidYear ? riskResult.rows.length > 0 : null;
+
     let yearPopMap = {};
     if (incidenceYear !== null) {
       if (incidenceYear === GEOJSON_REFERENCE_YEAR) {
         for (const row of geoResult.rows) yearPopMap[row.name] = row.population;
       } else {
-        const popResult = await pool.query(
-          `SELECT barangay_name, population FROM barangay_population
-           WHERE reference_year = $1 AND status = 'ACTIVE'`,
-          [incidenceYear]
-        );
         for (const row of popResult.rows) yearPopMap[row.barangay_name] = row.population;
       }
     }
@@ -1101,9 +1198,10 @@ router.get('/gis/geojson', async (req, res) => {
             cases.total_cases || 0, yearPopMap[row.name]
           ),
           trend_direction: risk.trend_direction || 'Stable',
-          forecasted_count: forecast.forecasted_count || 0,
-          confidence_lower: forecast.confidence_lower || 0,
-          confidence_upper: forecast.confidence_upper || 0,
+          // Null (not 0) when this year has no forecast — see forecastSelect.
+          forecasted_count: forecast.forecasted_count ?? null,
+          confidence_lower: forecast.confidence_lower ?? null,
+          confidence_upper: forecast.confidence_upper ?? null,
           total_cases: cases.total_cases || 0,
           norm_incidence: risk.norm_incidence || 0,
           norm_trend: risk.norm_trend || 0,
@@ -1796,7 +1894,7 @@ router.post('/alerts/evaluate', authenticateToken, authorizeRoles('admin'), asyn
 
 /**
  * PUT /api/tb/predictions/backfill
- * Backfill actual_case counts for a past period to activate the historical_bias feedback loop.
+ * Backfill actual_case counts for a past period (feeds the risk index's forecast-error component).
  *
  * Body: { period: "YYYY-MM-DD", actual_counts: { "Barangay A": 45, "Barangay B": 32, ... } }
  *
@@ -2016,8 +2114,8 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
 
     // Build training rows with the SAME feature pipeline the classifier uses
     // at prediction time (pipeline.buildTrainingRows): 12-month window mean,
-    // window slope, seasonality from pre-target data only, lag-1 neighbor
-    // cross-section normalized identically, per-barangay historical bias.
+    // window slope, seasonality from pre-target data only, lag-1 cross-section
+    // of bordering barangays normalized identically.
     // Replaces an inline builder that diverged from the train/predict code
     // (un-normalized neighbor scale, target-month seasonality, bias fixed at 0).
     const { _buildTrainingRows, buildDenseSeries } = require('./pipeline');
@@ -2239,19 +2337,20 @@ router.get('/reports/summary', async (req, res) => {
       pool.query(`
         SELECT
           COUNT(*)::INTEGER AS total_cases,
-          SUM(CASE WHEN UPPER(outcome_status) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS active_cases,
-          SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful_count,
-          COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(outcome_status) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated_count
+          SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS active_cases,
+          SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER AS successful_count,
+          COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(TRIM(outcome_status)) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated_count
         FROM tb_cases c
         ${whereClause}
       `, params),
 
-      // Outcomes breakdown
+      // Outcomes breakdown — raw grouping; the rows are folded into the
+      // approved source-aligned categories after the query (see below).
       pool.query(`
-        SELECT COALESCE(outcome_status, 'Unknown') AS outcome_status, COUNT(*)::INTEGER AS count
+        SELECT COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status, COUNT(*)::INTEGER AS count
         FROM tb_cases c
         ${whereClause}
-        GROUP BY outcome_status
+        GROUP BY COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
         ORDER BY count DESC
       `, params),
 
@@ -2336,8 +2435,8 @@ router.get('/reports/summary', async (req, res) => {
         LIMIT 30
       `, [startDate]),
 
-      // Population for incidence calculation
-      pool.query(`SELECT name, population FROM barangays`),
+      // Population for incidence calculation — year-specific
+      getPopulationMap(yr),
 
       // All matching case records for the detailed table
       pool.query(`
@@ -2356,9 +2455,9 @@ router.get('/reports/summary', async (req, res) => {
         SELECT
           TRIM(screening_facility) AS facility,
           COUNT(*)::INTEGER AS total_cases,
-          SUM(CASE WHEN UPPER(outcome_status) IN ('CURED','TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful,
+          SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER AS successful,
           COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != ''
-            AND UPPER(outcome_status) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated
+            AND UPPER(TRIM(outcome_status)) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated
         FROM tb_cases c
         ${whereClause}
         AND screening_facility IS NOT NULL AND screening_facility != ''
@@ -2385,12 +2484,25 @@ router.get('/reports/summary', async (req, res) => {
     // reimplement the evaluated-outcomes denominator here.
     const { rate: fatalityRate, evaluated: fatalityEvaluated } = await computeCaseFatalityRate(pool, { year: yr, barangay });
 
-    // Compute outcomes with percentages
-    const outcomes = outcomesRes.rows.map(r => ({
-      outcome_status: r.outcome_status,
-      count: r.count,
-      percentage: totalCases > 0 ? Number(((r.count / totalCases) * 100).toFixed(1)) : 0,
+    // Outcome breakdown: the shared fold into the 9 approved source-aligned
+    // categories (see foldOutcomeCounts). This previously echoed the raw stored
+    // values straight to the report, so a legacy 'TREATMENT FAILED' row and the
+    // unverified 'SCREENED' value were both printed as though they were Excel
+    // Outcome/Status categories. Records outside the approved set are now
+    // reported in a separate reconciliation block instead of being shown as a
+    // category or silently dropped.
+    const folded = foldOutcomeCounts(outcomesRes.rows, { labelKey: 'outcome_status', countKey: 'count' });
+    const outcomes = folded.categories.map(c => ({
+      outcome_status: c.outcome_status,
+      count: c.count,
+      percentage: totalCases > 0 ? Number(((c.count / totalCases) * 100).toFixed(1)) : 0,
     }));
+    const outcomeReconciliation = {
+      totalCases,
+      approvedTotal: folded.approvedTotal,
+      unapprovedTotal: folded.unapprovedTotal,
+      unapproved: folded.unapproved,
+    };
 
     // Compute sex distribution with percentages
     const sex = sexRes.rows.map(r => ({
@@ -2432,17 +2544,28 @@ router.get('/reports/summary', async (req, res) => {
     });
 
     // Barangay distribution with incidence and risk
+    // populationRes is now from getPopulationMap(yr) — a Map of { barangayName: { population, ... } }
     const popMap = {};
-    populationRes.rows.forEach(r => { popMap[r.name] = r.population || 0; });
+    for (const [name, popObj] of Object.entries(populationRes)) {
+      popMap[name] = popObj?.population || 0;
+    }
+
+    // Annualization factor: annual/barangay-without-month = 1 (no annualization),
+    // monthly = 12, quarterly = 4, barangay-with-month = 12
+    const isFullPeriod = (type === 'annual') || (type === 'barangay' && !month);
+    const annualFactor = isFullPeriod ? 1 : (type === 'quarterly' ? 4 : 12);
+    const incidenceLabel = isFullPeriod ? 'Annual Incidence / 100k' : 'Annualized Incidence / 100k';
 
     const barangayDistribution = barangayDistRes.rows.map(r => {
       const pop = popMap[r.barangay_name] || 0;
-      const incidence = pop > 0 ? Number((((r.cases * 12) / pop) * 100000).toFixed(1)) : null;
+      const rawIncidence = pop > 0 ? (r.cases * annualFactor / pop) * 100000 : null;
+      const incidence = rawIncidence != null ? Number(rawIncidence.toFixed(1)) : null;
       return {
         barangay: r.barangay_name,
         cases: r.cases,
         population: pop,
         incidence,
+        incidenceLabel,
       };
     });
 
@@ -2494,6 +2617,7 @@ router.get('/reports/summary', async (req, res) => {
       },
       summary: { totalCases, activeCases, successRate, evaluatedCount, fatalityRate, fatalityEvaluated },
       outcomes,
+      outcomeReconciliation,
       demographics: { sex, ageGroups },
       caseProfile,
       trend,
@@ -2762,15 +2886,16 @@ router.delete('/interventions/:id', authenticateToken, authorizeRoles('admin'), 
 /**
  * GET /api/tb/insights/analytics
  * Generate NLG-based analytics insight from computed metrics.
- * Query params: year, month, barangay, outcome, sex, ageGroup, bacteriological
+ * Query params: year, month, barangay, facility, outcome, sex, ageGroup, bacteriological
  */
 router.get('/insights/analytics', async (req, res) => {
   try {
-    const { year, month, barangay, outcome, sex, ageGroup, bacteriological } = req.query;
+    const { year, month, barangay, facility, outcome, sex, ageGroup, bacteriological } = req.query;
     const filters = {};
     if (year) filters.year = year;
     if (month) filters.month = month;
     if (barangay) filters.barangay = barangay;
+    if (facility) filters.facility = facility;
     if (outcome) filters.outcome = outcome;
     if (sex) filters.sex = sex;
     if (ageGroup) filters.ageGroup = ageGroup;
@@ -2782,6 +2907,106 @@ router.get('/insights/analytics', async (req, res) => {
   } catch (err) {
     console.error('Analytics insight error:', err.message);
     res.status(500).json({ error: 'Server error generating analytics insight.' });
+  }
+});
+
+/**
+ * GET /api/tb/insights/dashboard
+ * Concise, Dashboard-specific template NLG (see dashboardInsight.js).
+ *
+ * Deliberately separate from /insights/analytics: the Dashboard is an
+ * overview page and must not render the seven-section Analytics narrative.
+ * Takes no filters — the Dashboard has no global filter controls.
+ *
+ * Returns { type, summary, sections, meta }. `summary` is the headline
+ * paragraph the Dashboard highlight panel renders.
+ */
+router.get('/insights/dashboard', async (req, res) => {
+  try {
+    const metrics = await buildDashboardMetrics(pool);
+    const insight = generateDashboardInsight(metrics);
+    res.json(insight);
+  } catch (err) {
+    console.error('Dashboard insight error:', err.message);
+    res.status(500).json({ error: 'Server error generating dashboard insight.' });
+  }
+});
+
+/**
+ * GET /api/tb/data-freshness
+ * Freshness metadata for the Dashboard header. These are THREE DISTINCT
+ * concepts and are returned separately rather than collapsed into one
+ * "last updated" timestamp:
+ *
+ *   lastSynced   — last data transfer received from PASIG TB-IS
+ *                  (webhook_logs.received_at), falling back to the newest
+ *                  tb_cases.imported_at when no webhook delivery is logged
+ *                  (e.g. records loaded by file import). `syncSource` says which.
+ *   lastModelRun — newest model_metadata row for run_type 'pipeline', i.e.
+ *                  the last full analytics/model pipeline execution.
+ *   latestCaseDate — the most recent date_of_diagnosis in the data. This is a
+ *                  CLINICAL date describing data coverage, never a system
+ *                  freshness timestamp, and is labelled as such.
+ *
+ * Read-only: this never triggers a synchronisation or a model run.
+ */
+router.get('/data-freshness', async (req, res) => {
+  try {
+    const safe = (promise, label) => promise.catch((err) => {
+      console.error(`Data freshness query failed (${label}):`, err.message);
+      return null;
+    });
+
+    const [webhookRes, importRes, modelRes, caseRes] = await Promise.all([
+      // Only a webhook that actually finished importing counts as a data
+      // sync. webhook_logs.status is constrained to ('received','processed',
+      // 'failed'): 'processed' is written after the import succeeds, 'failed'
+      // on error, and 'received' is the column default meaning "arrived but
+      // not yet processed". Filtering to 'processed' therefore excludes both
+      // failed attempts and payloads that were received but never imported.
+      // processed_at is preferred over received_at (it is the completion
+      // time); COALESCE covers historical rows written before processed_at
+      // began being set.
+      safe(pool.query(
+        `SELECT MAX(COALESCE(processed_at, received_at)) AS last_received
+         FROM webhook_logs
+         WHERE status = 'processed'`
+      ), 'webhook'),
+      safe(pool.query(`SELECT MAX(imported_at) AS last_imported FROM tb_cases`), 'import'),
+      safe(pool.query(
+        `SELECT trained_at, model_version, rf_status, arima_status, training_months
+         FROM model_metadata
+         WHERE run_type = 'pipeline'
+         ORDER BY trained_at DESC
+         LIMIT 1`
+      ), 'model'),
+      safe(pool.query(`SELECT MAX(date_of_diagnosis) AS latest_case FROM tb_cases`), 'cases'),
+    ]);
+
+    const lastWebhook = webhookRes?.rows[0]?.last_received || null;
+    const lastImport = importRes?.rows[0]?.last_imported || null;
+    const model = modelRes?.rows[0] || null;
+
+    // Prefer the webhook delivery timestamp — that is the actual transfer
+    // from PASIG TB-IS. Only fall back to imported_at when no delivery is
+    // logged, and say so, rather than presenting an import time as a sync.
+    const lastSynced = lastWebhook || lastImport;
+    const syncSource = lastWebhook ? 'webhook' : lastImport ? 'import' : null;
+
+    res.json({
+      lastSynced,
+      syncSource,
+      lastModelRun: model ? model.trained_at : null,
+      modelVersion: model ? model.model_version : null,
+      modelRfStatus: model ? model.rf_status : null,
+      modelArimaStatus: model ? model.arima_status : null,
+      modelTrainingMonths: model ? model.training_months : null,
+      latestCaseDate: caseRes?.rows[0]?.latest_case || null,
+      dataSource: 'PASIG TB-IS',
+    });
+  } catch (err) {
+    console.error('Data freshness error:', err.message);
+    res.status(500).json({ error: 'Server error fetching data freshness.' });
   }
 });
 
@@ -2839,7 +3064,7 @@ router.get('/insights/gis', async (req, res) => {
  */
 router.get('/treatment-cascade', async (req, res) => {
   try {
-    const { year, month, barangay, sex, ageGroup, bacteriological, outcome } = req.query;
+    const { year, month, barangay, sex, ageGroup, bacteriological } = req.query;
     const filters = {};
     if (year) filters.year = year;
     if (month) filters.month = month;
@@ -2847,7 +3072,6 @@ router.get('/treatment-cascade', async (req, res) => {
     if (sex) filters.sex = sex;
     if (ageGroup) filters.ageGroup = ageGroup;
     if (bacteriological) filters.bacteriological = bacteriological;
-    if (outcome) filters.outcome = outcome;
 
     const cascade = await computeTreatmentCascade(pool, filters);
     res.json(cascade);
@@ -2870,8 +3094,8 @@ router.get('/treatment-cascade', async (req, res) => {
  */
 router.get('/treatment-success-rate', async (req, res) => {
   try {
-    const { year, barangay } = req.query;
-    const result = await computeTreatmentSuccessRate(pool, { year, barangay });
+    const { year, barangay, sex, ageGroup, facility, bacteriological } = req.query;
+    const result = await computeTreatmentSuccessRate(pool, { year, barangay, sex, ageGroup, facility, bacteriological });
     res.json(result);
   } catch (err) {
     console.error('Treatment success rate error:', err.message);
@@ -2885,12 +3109,12 @@ router.get('/treatment-success-rate', async (req, res) => {
  * displays "Case Fatality Rate" should call this rather than computing its
  * own denominator independently.
  *
- * Query params: year (EXTRACT(YEAR FROM date_of_diagnosis)), barangay (optional).
+ * Query params: year, month, barangay, sex, ageGroup, facility, bacteriological.
  */
 router.get('/case-fatality-rate', async (req, res) => {
   try {
-    const { year, barangay } = req.query;
-    const result = await computeCaseFatalityRate(pool, { year, barangay });
+    const { year, month, barangay, sex, ageGroup, facility, bacteriological } = req.query;
+    const result = await computeCaseFatalityRate(pool, { year, month, barangay, sex, ageGroup, facility, bacteriological });
     res.json(result);
   } catch (err) {
     console.error('Case fatality rate error:', err.message);

@@ -30,12 +30,17 @@ ARIMA_LEADING_TRIM_SHARE = 0.2      # Drop leading months whose city-wide total 
                                     # share of the median month (stray old records)
 ARIMA_SPARSE_THRESHOLD = 0.5  # If >50% zeros in series, use fallback
 
-# Random Forest settings (tuned for ~700+ monthly snapshot training samples)
-RF_MAX_DEPTH = 8
-RF_N_ESTIMATORS = 300
+# Random Forest settings (tuned for ~700+ monthly snapshot training samples).
+# Chosen by walk-forward grid search over depth, tree count and split/leaf minima
+# against the balanced relative-tertile labels (see rf_classifier.derive_labels):
+# 55.3% accuracy on a three-way split whose majority-class baseline is 33.3%.
+# Unbounded depth with small leaves beat the previous shallower, more constrained
+# forest — once the labels were balanced, the earlier settings were underfitting.
+RF_MAX_DEPTH = None
+RF_N_ESTIMATORS = 500
 RF_RANDOM_STATE = 42
-RF_MIN_SAMPLES_SPLIT = 10
-RF_MIN_SAMPLES_LEAF = 5
+RF_MIN_SAMPLES_SPLIT = 4
+RF_MIN_SAMPLES_LEAF = 2
 
 # Smaller, shallower forest for short histories (fewer than RF_LARGE_SAMPLE rows,
 # e.g. one year x 30 barangays): deep trees would just memorize the noise.
@@ -63,7 +68,7 @@ TERTILE_THRESHOLDS = {
 
 # ==================== FEATURE CONFIG ====================
 
-# RF features (8 features — replaced duplicate population_density with lag features).
+# RF features (7 features).
 # NOTE: rf_classifier.py:FEATURES is the list actually used by the classifier
 # (_vec); these two names are kept in sync manually and must not drift.
 FEATURE_NAMES = [
@@ -73,8 +78,7 @@ FEATURE_NAMES = [
     "lag_1m",                # Case count 1 month ago (momentum)
     "lag_2m",                # Case count 2 months ago (momentum)
     "lag_3m",                # Case count 3 months ago (momentum)
-    "neighbor_risk",         # Average incidence of neighboring barangays, normalized [0,1]
-    "historical_bias",       # AVG(|actual - forecasted|) from past predictions (Approach B feedback)
+    "neighbor_risk",         # Mean incidence of barangays sharing a border (month t-1), normalized [0,1]
 ]
 
 # Feature scaling ranges (for normalization if needed)
@@ -86,7 +90,6 @@ FEATURE_RANGES = {
     "lag_2m": (0, 50),
     "lag_3m": (0, 50),
     "neighbor_risk": (0, 1),
-    "historical_bias": (-50, 50),
 }
 
 # ==================== RISK CLASSES ====================

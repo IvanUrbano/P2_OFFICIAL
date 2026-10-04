@@ -87,11 +87,11 @@ async function rebuildAllAggregations(client) {
     SELECT
       barangay_name,
       DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
-      COALESCE(outcome_status, 'Unknown') AS outcome_status,
+      COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status,
       COUNT(*) AS case_count
     FROM tb_cases
     WHERE ${COUNTED_CASES}
-    GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), COALESCE(outcome_status, 'Unknown')
+    GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
   `);
   counts.outcomes = outcomeResult.rowCount;
 

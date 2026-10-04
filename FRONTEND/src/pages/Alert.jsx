@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import timeAgo from '../utils/timeAgo';
 import { MODULE_LABELS, MODULE_ROUTES } from '../utils/alertConstants';
-import FilterSelect from '../../components/FilterSelect';
+import FilterSelect from '../components/FilterSelect';
 import SkeletonBlock from '../../components/SkeletonBlock';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
@@ -322,7 +322,7 @@ export default function Alert() {
               <option value="resolved">Resolved</option>
             </FilterSelect>
 
-            <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay}>
+            <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 160 }}>
               <option value="">All Barangays</option>
               {barangays.map(b => <option key={b} value={b}>{b}</option>)}
             </FilterSelect>

@@ -37,7 +37,7 @@ router.post('/send', sendLimiter, authenticate, authorizeRoles('admin'), async (
   }
 });
 
-router.get('/logs', authenticate, authorizeRoles('admin'), async (req, res) => {
+router.get('/logs', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
     const result = await db.getWebhookLogs();
     res.json(result.rows);

@@ -154,9 +154,11 @@ BACKEND/
 - **Date column**: `date_of_diagnosis` is the ARIMA time key
 - **Incidence formula**: (cases ÷ population) × 100,000
 - **Risk thresholds**: Tertiles on 3-year window (not absolute WHO thresholds)
-- **RF features (8)**: rolling_12m_incidence, recent_trend, seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk, historical_bias (Approach B feedback loop)
-- **Historical bias**: AVG(forecast_error) per barangay from past runs; 0 on first run
-- **Neighbor risk**: Computed as average incidence of all other barangays, normalized to 0-1
+- **RF features (7)**: rolling_12m_incidence, recent_trend, seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk (historical_bias removed: it measured ARIMA error, not TB risk, and added nothing in walk-forward evaluation)
+- **RF labels**: barangays ranked into thirds within each month (training rows carry `month` through the ML API)
+- **Neighbor risk**: average incidence (month t-1) of the barangays sharing a border — PostGIS `ST_DWithin` 50 m on `barangays_geom` (`tbinsight/barangayAdjacency.js`), normalized to 0-1
+- **Forecast horizon**: every pipeline run stores at least 3 months so the 1- and 3-month views both have data
+- **Evaluation**: `/evaluate` reports a reference next to each model (12-month average for ARIMA, ranked 12-month incidence for RF)
 - **Risk classification (authoritative)**: Random Forest's own predicted class, persisted with model_type/model_version/classification_confidence in `barangay_risk_scores` — this is what GIS displays
 - **Legacy weighted risk_score**: 45% incidence + 25% trend + 20% neighbor risk + 10% forecast error — a separate analytical index only, does NOT determine risk_class or GIS color
 - **Alert rules**: Rule-based — escalation (Medium→High), danger (High), surge (>30% increase)

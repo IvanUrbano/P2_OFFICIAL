@@ -17,8 +17,8 @@ from rf_classifier import (
 )
 
 
-def test_features_are_the_fixed_eight():
-    """FEATURES should contain the 8 fixed features (lag features replace population_density)."""
+def test_features_are_the_fixed_seven():
+    """FEATURES should contain the 7 fixed features (historical_bias removed)."""
     assert FEATURES == [
         "rolling_12m_incidence",
         "recent_trend",
@@ -27,7 +27,6 @@ def test_features_are_the_fixed_eight():
         "lag_2m",
         "lag_3m",
         "neighbor_risk",
-        "historical_bias",
     ]
 
 

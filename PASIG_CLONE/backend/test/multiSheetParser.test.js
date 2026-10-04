@@ -156,6 +156,9 @@ describe('validateRecord', () => {
   ]);
 
   const validRecord = {
+    last_name: 'Dela Cruz',
+    first_name: 'Juan',
+    date_of_birth: '1995-01-10',
     barangay_name: 'San Antonio',
     date_of_diagnosis: '2025-02-06',
     sex: 'Male',
@@ -169,16 +172,32 @@ describe('validateRecord', () => {
     assert.equal(result.errors.length, 0);
   });
 
-  it('requires barangay_name', () => {
+  it('keeps a record with no barangay (Needs Assignment) instead of rejecting it', () => {
     const result = validateRecord({ ...validRecord, barangay_name: '' }, 'DSTB', validBarangays);
-    assert.equal(result.valid, false);
-    assert.ok(result.errors.some(e => e.includes('Barangay is required')));
+    assert.equal(result.valid, true);
+    assert.ok(result.warnings.some(w => w.includes('Needs Assignment')));
   });
 
-  it('rejects unknown barangay for Pasig City records', () => {
+  it('keeps a Pasig record with an unknown barangay (Needs Assignment)', () => {
     const result = validateRecord({ ...validRecord, barangay_name: 'Unknown' }, 'DSTB', validBarangays);
+    assert.equal(result.valid, true);
+    assert.ok(result.warnings.some(w => w.includes('Unknown barangay') && w.includes('Needs Assignment')));
+  });
+
+  it('requires last name, first name and date of birth', () => {
+    const result = validateRecord(
+      { ...validRecord, last_name: '', first_name: ' ', date_of_birth: null }, 'DSTB', validBarangays
+    );
     assert.equal(result.valid, false);
-    assert.ok(result.errors.some(e => e.includes('Unknown barangay')));
+    for (const msg of ['Last name is required', 'First name is required', 'Date of birth is required']) {
+      assert.ok(result.errors.includes(msg), msg);
+    }
+  });
+
+  it('rejects a date of birth after the diagnosis date', () => {
+    const result = validateRecord({ ...validRecord, date_of_birth: '2025-03-01' }, 'DSTB', validBarangays);
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('Date of birth cannot be after')));
   });
 
   it('requires date_of_diagnosis', () => {
@@ -205,7 +224,7 @@ describe('validateRecord', () => {
     assert.ok(result.errors.some(e => e.includes('Invalid age')));
   });
 
-  it('warns about non-Pasig city', () => {
+  it('warns about non-Pasig city (still valid)', () => {
     const result = validateRecord({ ...validRecord, city: 'Manila' }, 'DSTB', validBarangays);
     assert.equal(result.valid, true);
     assert.ok(result.warnings.some(w => w.includes('Non-Pasig')));

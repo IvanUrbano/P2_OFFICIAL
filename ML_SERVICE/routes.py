@@ -187,7 +187,7 @@ async def run_classify(req: ClassifyRequest):
         med_max = req.thresholds.med_max
 
         # Convert train rows to dict format
-        train = [{"features": r.features, "incidence": r.incidence} for r in req.train]
+        train = [{"features": r.features, "incidence": r.incidence, "month": r.month} for r in req.train]
 
         # Convert predict rows to dict format
         predict = [{"barangay_name": r.barangay_name, "features": r.features} for r in req.predict]
@@ -278,6 +278,8 @@ async def evaluate_models(req: EvaluateRequest):
         if arima_results:
             all_mae = [r["mae"] for r in arima_results if r["mae"] is not None]
             all_mape = [r["mape"] for r in arima_results if r["mape"] is not None]
+            all_base_mae = [r["baseline_mae"] for r in arima_results if r.get("baseline_mae") is not None]
+            all_base_mape = [r["baseline_mape"] for r in arima_results if r.get("baseline_mape") is not None]
             # Use the first (longest) barangay's steps for detailed output
             longest = max(arima_results, key=lambda r: r["n_steps"])
             # Steps per method across ALL barangays: shows how much of the
@@ -293,13 +295,15 @@ async def evaluate_models(req: EvaluateRequest):
                 steps=[ArimaStep(**s) for s in longest["steps"]],
                 method_counts=method_counts,
                 failed_barangays=failed_barangays,
+                baseline_mae=round(float(np.mean(all_base_mae)), 4) if all_base_mae else None,
+                baseline_mape=round(float(np.mean(all_base_mape)), 2) if all_base_mape else None,
             )
         else:
             arima_eval = ArimaEvaluation(failed_barangays=failed_barangays)
 
         # ── RF walk-forward ──
         n_barangays = len(df["barangay_name"].unique())
-        train = [{"features": r.features, "incidence": r.incidence} for r in req.train]
+        train = [{"features": r.features, "incidence": r.incidence, "month": r.month} for r in req.train]
         # min_train is in MONTHS; walk_forward_rf counts rows (one per barangay per month).
         # Cap the warm-up at half the available months so short histories can be evaluated.
         n_months = len(train) // max(n_barangays, 1)
@@ -320,6 +324,8 @@ async def evaluate_models(req: EvaluateRequest):
             confusion_matrix=rf_result["confusion_matrix"],
             n_steps=rf_result["n_steps"],
             steps=[RfStep(**s) for s in rf_result["steps"]],
+            baseline_accuracy=rf_result.get("baseline_accuracy"),
+            baseline_f1_macro=rf_result.get("baseline_f1_macro"),
         )
 
         return EvaluateResponse(

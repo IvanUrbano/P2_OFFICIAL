@@ -157,6 +157,22 @@ export default function ValidationPage() {
         </div>
       </div>
 
+      {summary.possibleMatches > 0 && (
+        <div className="rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+          <div>
+            <p className="text-sm font-bold" style={{ color: '#92400E' }}>
+              {summary.possibleMatches} possible patient match{summary.possibleMatches === 1 ? '' : 'es'} to review
+            </p>
+            <p className="text-xs mt-0.5" style={{ color: '#78350F' }}>
+              These records have the same name and date of birth as an existing patient. Decide for each one before syncing.
+            </p>
+          </div>
+          <button onClick={() => navigate('/records?view=matches')} className="px-4 py-2 text-xs font-bold rounded-lg shrink-0" style={{ background: '#92400E', color: '#ffffff' }}>
+            Review Matches
+          </button>
+        </div>
+      )}
+
       {result.errors?.length > 0 && (
         <div className="rounded-xl p-5" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
           <div className="flex items-center gap-2 mb-3 pb-2.5" style={{ borderBottom: '1px solid #F1F5F9' }}>

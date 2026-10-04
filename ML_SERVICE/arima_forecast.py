@@ -428,6 +428,8 @@ def walk_forward_arima(
             "mape": float,
             "n_steps": int,
             "method_counts": {"arima": int, "<fallback_method>": int, ...},
+            "baseline_mae": float,   # same steps, forecast = mean of the last 12 months
+            "baseline_mape": float,
         }
     """
     if len(counts) <= min_train:
@@ -437,11 +439,15 @@ def walk_forward_arima(
             "mape": None,
             "n_steps": 0,
             "method_counts": {},
+            "baseline_mae": None,
+            "baseline_mape": None,
         }
 
     steps = []
     errors = []
     pct_errors = []
+    base_errors = []
+    base_pct_errors = []
 
     for i in range(min_train, len(counts)):
         train = counts[:i]
@@ -462,9 +468,16 @@ def walk_forward_arima(
         error = abs(actual - predicted)
         errors.append(error)
 
+        # Reference forecast on the same step: plain average of the last
+        # 12 months. ARIMA is only worth its complexity where it beats this.
+        baseline = float(np.mean(train[-seasonal_m:]))
+        base_error = abs(actual - baseline)
+        base_errors.append(base_error)
+
         # MAPE: avoid division by zero
         if actual > 0:
             pct_errors.append(error / actual)
+            base_pct_errors.append(base_error / actual)
 
         steps.append({
             "train_size": len(train),
@@ -477,6 +490,8 @@ def walk_forward_arima(
 
     mae = round(float(np.mean(errors)), 4) if errors else None
     mape = round(float(np.mean(pct_errors) * 100), 2) if pct_errors else None
+    baseline_mae = round(float(np.mean(base_errors)), 4) if base_errors else None
+    baseline_mape = round(float(np.mean(base_pct_errors) * 100), 2) if base_pct_errors else None
 
     method_counts: dict[str, int] = {}
     for s in steps:
@@ -492,6 +507,8 @@ def walk_forward_arima(
         "mape": mape,
         "n_steps": len(steps),
         "method_counts": method_counts,
+        "baseline_mae": baseline_mae,
+        "baseline_mape": baseline_mape,
     }
 
 

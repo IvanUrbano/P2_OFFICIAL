@@ -102,7 +102,7 @@ export default function DashboardPage() {
             </div>
             <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
             <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{(stats?.pending || 0).toLocaleString()}</p>
-            <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Awaiting review</span>
+            <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Unvalidated rows + possible matches</span>
             <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
           </div>
 
@@ -114,7 +114,7 @@ export default function DashboardPage() {
             </div>
             <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
             <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{(stats?.synced || 0).toLocaleString()}</p>
-            <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Synchronized with central DB</span>
+            <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Pasig records sent to TBInsight</span>
           </div>
         </div>
       </div>
@@ -175,7 +175,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Pending Actions */}
-      {((stats.pendingActions?.requiresValidation > 0) || (stats.pendingActions?.failedSync > 0)) && (
+      {['requiresValidation', 'failedSync', 'possibleMatches', 'needsAssignment'].some(k => stats?.pendingActions?.[k] > 0) && (
         <div className="rounded-xl p-5" style={{ background: '#FFFBEB', border: '1px solid #FCD34D', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
           <div className="flex items-center gap-2 mb-3">
             <i className="ri-alert-line text-sm" style={{ color: '#D97706' }} />
@@ -194,6 +194,20 @@ export default function DashboardPage() {
                 <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#EF4444' }} />
                 <span>{stats.pendingActions.failedSync} synchronization{stats.pendingActions.failedSync !== 1 ? 's' : ''} failed and require{stats.pendingActions.failedSync === 1 ? 's' : ''} review</span>
                 <button onClick={() => navigate('/sync-history')} className="ml-2 text-[10px] font-bold underline cursor-pointer">Review</button>
+              </div>
+            )}
+            {stats.pendingActions?.possibleMatches > 0 && (
+              <div className="flex items-center gap-2 text-xs" style={{ color: '#92400E' }}>
+                <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#F59E0B' }} />
+                <span>{stats.pendingActions.possibleMatches} possible patient match{stats.pendingActions.possibleMatches !== 1 ? 'es' : ''} to review before syncing</span>
+                <button onClick={() => navigate('/records?view=matches')} className="ml-2 text-[10px] font-bold underline cursor-pointer">Review</button>
+              </div>
+            )}
+            {stats.pendingActions?.needsAssignment > 0 && (
+              <div className="flex items-center gap-2 text-xs" style={{ color: '#92400E' }}>
+                <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#F59E0B' }} />
+                <span>{stats.pendingActions.needsAssignment} record{stats.pendingActions.needsAssignment !== 1 ? 's' : ''} need a barangay assigned</span>
+                <button onClick={() => navigate('/records?view=unassigned')} className="ml-2 text-[10px] font-bold underline cursor-pointer">Review</button>
               </div>
             )}
           </div>

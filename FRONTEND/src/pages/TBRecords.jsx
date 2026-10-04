@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
+import {
+  APPROVED_OUTCOMES, normalizeRecordOutcome, isApprovedOutcome,
+} from '../utils/outcomeStatus';
 import API from "../api/axios";
 
 /* --- Debounce hook --- */
@@ -17,19 +20,21 @@ const statusColors = {
   "TREATMENT COMPLETED": { bg: '#EFF6FF', text: '#1E40AF', dot: '#2563EB' },
   "CURED": { bg: '#ECFDF5', text: '#047857', dot: '#059669' },
   "DIED": { bg: '#FEF2F2', text: '#991B1B', dot: '#B91C1C' },
-  "LOST TO FOLLOW-UP": { bg: '#F3F4F6', text: '#374151', dot: '#6B7280' },
   "LOST TO FF-UP": { bg: '#F3F4F6', text: '#374151', dot: '#6B7280' },
-  "TREATMENT FAILED": { bg: '#FEF2F2', text: '#991B1B', dot: '#B91C1C' },
   "FAILED": { bg: '#FEF2F2', text: '#991B1B', dot: '#B91C1C' },
   "DIAGNOSED": { bg: '#F0F9FF', text: '#0369A1', dot: '#0284C7' },
-  "SCREENED": { bg: '#ECFEFF', text: '#0E7490', dot: '#0891B2' },
   "EXCLUDED": { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' },
   "NOT EVALUATED": { bg: '#F5F3FF', text: '#5B21B6', dot: '#7C3AED' },
   "PENDING": { bg: '#FFFBEB', text: '#92400E', dot: '#B45309' },
 };
 
 function StatusBadge({ status }) {
-  const value = (status || "PENDING").trim();
+  // The API returns the source-aligned label (a legacy 'TREATMENT FAILED' row
+  // arrives as 'FAILED'); normalizing again here keeps the badge correct for
+  // any value that reaches it unmapped.
+  const raw = (status || "PENDING").trim();
+  const value = raw === 'PENDING' ? raw : (normalizeRecordOutcome(raw) || raw);
+  const unverified = raw !== 'PENDING' && !isApprovedOutcome(raw);
   const colors = statusColors[value] || { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' };
   return (
     <span
@@ -38,6 +43,19 @@ function StatusBadge({ status }) {
     >
       <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: colors.dot }} />
       {value.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
+      {/* A value outside the 9 verified source categories is shown as stored
+          (traceability) but marked, so it is never read as an Excel-defined
+          Outcome/Status. It is deliberately not remapped onto another
+          category without evidence. */}
+      {unverified && (
+        <span
+          className="ml-0.5 text-[9px] font-extrabold"
+          style={{ color: '#B45309' }}
+          title="Not one of the verified source Outcome/Status categories - shown as stored, pending review"
+        >
+          ⚠
+        </span>
+      )}
     </span>
   );
 }
@@ -100,11 +118,10 @@ function FilterSelect({ label, value, onChange, options, placeholder }) {
 
 const ALL_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const ALL_YEARS = ["2026","2025","2024","2023"];
-const ALL_OUTCOME_STATUSES = [
-  "ON TREATMENT", "CURED", "TREATMENT COMPLETED",
-  "DIED", "LOST TO FOLLOW-UP", "LOST TO FF-UP", "TREATMENT FAILED",
-  "EXCLUDED", "NOT EVALUATED", "DIAGNOSED", "SCREENED",
-];
+// Shared frontend contract (src/utils/outcomeStatus.js) — the same 9
+// Excel-verified categories the API's /filter-options returns. SCREENED is not
+// among them and is therefore never offered as a filter option.
+const ALL_OUTCOME_STATUSES = APPROVED_OUTCOMES;
 const ALL_SEX_OPTIONS = ["Male", "Female"];
 const ALL_VALIDATION_STATUSES = ["Validated", "Not Validated"];
 const ALL_SOURCE_TYPES = ["DSTB", "MN"];
@@ -702,7 +719,7 @@ export default function TBRecords() {
                     <tr key={record.id} className="hover:bg-blue-50 transition-colors"
                       style={{ borderBottom: '1px solid #E2E8F0', background: idx % 2 === 0 ? '#ffffff' : '#F8FAFC' }}>
                       <td className="pl-6 pr-3 py-2" style={{ borderRight: '1px solid #E2E8F0' }}>
-                        <span className="font-bold" style={{ color: '#0F2D52' }}>{String(record.id).padStart(4, "0")}</span>
+                        <span className="font-bold" style={{ color: '#0F2D52' }}>{record.case_no || String(record.id).padStart(4, "0")}</span>
                       </td>
                       <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.barangay_name}</td>
                       <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.age}</td>
@@ -879,7 +896,7 @@ export default function TBRecords() {
                   <FilterSelect
                     label="Outcome Status"
                     value={pendingFilters.outcome || ""} onChange={(v) => updatePending('outcome', v)}
-                    options={outcomeStatuses.length > 0 ? outcomeStatuses : ALL_OUTCOME_STATUSES} placeholder="All Outcomes"
+                    options={outcomeStatuses.length > 0 ? outcomeStatuses : ALL_OUTCOME_STATUSES} placeholder="All"
                   />
                   <FilterSelect
                     label="Bacteriological Status"
@@ -954,12 +971,13 @@ export default function TBRecords() {
             <div className="px-6 py-5 space-y-6">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Case ID</p>
-                <p className="text-2xl font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{String(selectedRecord.id).padStart(4, "0")}</p>
+                <p className="text-2xl font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{selectedRecord.case_no || String(selectedRecord.id).padStart(4, "0")}</p>
                 <div className="mt-2"><StatusBadge status={selectedRecord.outcome_status} /></div>
               </div>
               <div>
                 <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Case Summary</h3>
                 <div className="space-y-2.5">
+                  <DetailRow label="Patient #" value={selectedRecord.patient_no} />
                   <DetailRow label="ITIS Case ID" value={selectedRecord.itis_case_id} />
                   <DetailRow label="Source Type" value={selectedRecord.source_type} />
                   <DetailRow label="Validation Status" value={selectedRecord.validation_status} />

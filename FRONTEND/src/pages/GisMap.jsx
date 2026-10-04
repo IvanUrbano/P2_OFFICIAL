@@ -8,6 +8,7 @@ import {
 } from 'recharts';
 import API from '../api/axios';
 import AiInsightPanel from '../components/AiInsightPanel';
+import FilterSelect from '../components/FilterSelect';
 import { getGisInsight } from '../services/insightService';
 
 const RISK_COLORS = {
@@ -34,11 +35,10 @@ const RF_FEATURE_LABELS = {
   lag_1m: '1-Month Lag Cases',
   lag_2m: '2-Month Lag Cases',
   lag_3m: '3-Month Lag Cases',
-  neighbor_risk: 'Neighbor Risk Indicator',
-  historical_bias: 'Historical Forecast Error',
+  neighbor_risk: 'Bordering Barangays Risk',
 };
 const RF_FEATURE_ORDER = [
-  'rolling_12m_incidence', 'recent_trend', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk', 'seasonality_flag', 'historical_bias',
+  'rolling_12m_incidence', 'recent_trend', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk', 'seasonality_flag',
 ];
 function formatRfFeatureValue(key, value) {
   if (value == null) return 'N/A';
@@ -47,7 +47,6 @@ function formatRfFeatureValue(key, value) {
     case 'recent_trend': return `${value > 0 ? '+' : ''}${Number(value).toFixed(2)} cases/mo`;
     case 'seasonality_flag': return value ? 'Detected' : 'Not detected';
     case 'neighbor_risk': return `${Math.round(Number(value) * 100)}%`;
-    case 'historical_bias': return Number(value).toFixed(1);
     default: return String(Math.round(Number(value)));
   }
 }
@@ -56,40 +55,18 @@ const OUTCOME_COLORS = {
   'CURED': '#047857',
   'TREATMENT COMPLETED': '#2E6FAF',
   'ON TREATMENT': '#92400E',
-  'LOST TO FF-UP': '#6B7280',
-  'LOST TO FOLLOW-UP': '#6B7280',
-  'DIED': '#991B1B',
-  'EXCLUDED': '#64748B',
-  'TREATMENT FAILED': '#991B1B',
   'FAILED': '#991B1B',
-  'DEFAULTED': '#B45309',
+  'DIED': '#991B1B',
+  'LOST TO FF-UP': '#6B7280',
+  'EXCLUDED': '#64748B',
   'NOT EVALUATED': '#94A3B8',
   'DIAGNOSED': '#0369A1',
-  'SCREENED': '#0E7490',
 };
 
 const PASIG_AREA_KM2 = 31.3;
 
 const PASIG_BOUNDS = L.latLngBounds([14.48, 121.02], [14.64, 121.13]);
 const MAX_BOUNDS = L.latLngBounds([14.3, 120.85], [14.85, 121.25]);
-
-function FilterSelect({ label, value, onChange, children, selectStyle }) {
-  return (
-    <div className="relative inline-flex items-center">
-      <span className="absolute left-3 text-[11px] pointer-events-none whitespace-nowrap" style={{ color: '#94A3B8' }}>{label}:</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label={label}
-        className="rounded-lg py-[7px] text-[11px] font-semibold outline-none transition cursor-pointer appearance-none"
-        style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52', paddingLeft: `${label.length * 6.5 + 26}px`, paddingRight: '28px', maxWidth: 160, ...selectStyle }}
-      >
-        {children}
-      </select>
-      <i className="ri-arrow-down-s-line absolute right-2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-    </div>
-  );
-}
 
 function riskStyle(feature) {
   const risk = feature.properties?.risk_class || 'No Data';
@@ -446,11 +423,20 @@ export default function GisMap() {
     const demoChartData = Object.entries(ageGroups)
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([age, counts]) => ({ name: age, Male: counts.Male, Female: counts.Female }));
-    const outcomeChartData = outcomes.map(o => ({
-      name: o.outcome_status?.length > 16 ? o.outcome_status.slice(0, 14) + '...' : o.outcome_status,
-      value: o.total,
-      color: OUTCOME_COLORS[o.outcome_status] || '#64748B',
-    }));
+    const outcomeChartData = outcomes
+      .map(o => {
+        const raw = (o.outcome_status || '').toUpperCase();
+        const display = raw === 'TREATMENT FAILED' ? 'FAILED'
+          : raw === 'LOST TO FOLLOW-UP' ? 'LOST TO FF-UP'
+          : raw;
+        return { display, value: o.total };
+      })
+      .filter(o => o.display && OUTCOME_COLORS[o.display])
+      .map(o => ({
+        name: o.display.length > 16 ? o.display.slice(0, 14) + '...' : o.display,
+        value: o.value,
+        color: OUTCOME_COLORS[o.display] || '#64748B',
+      }));
     return { merged, riskColor, totalOutcomeCases, activeCases, successRate, trendChartData, demoChartData, outcomeChartData };
   }, [selectedBarangayName, barangayDetail, barangayDetailLoading, monthlyByBarangay, data, barangayTsr]);
 
@@ -469,6 +455,20 @@ export default function GisMap() {
     const d = new Date(p);
     if (Number.isNaN(d.getTime())) return null;
     return new Date(d.getTime() + 8 * 3600 * 1000).getUTCFullYear() - 1;
+  }, [data]);
+
+  // Whether the snapshot on screen came from the rule-based fallback rather
+  // than the trained Random Forest. A year with no population reference of its
+  // own produces no usable training rows, so its snapshot degrades to the
+  // fallback — a real difference in reliability that was previously only
+  // visible after opening an individual barangay.
+  const snapshotClassifier = React.useMemo(() => {
+    const classified = (data?.features || [])
+      .map(f => f.properties?.model_type)
+      .filter(Boolean);
+    if (classified.length === 0) return null;
+    const ruleBased = classified.filter(t => t !== 'random_forest').length;
+    return { ruleBased, total: classified.length, allRuleBased: ruleBased === classified.length };
   }, [data]);
 
   // Click-to-zoom on barangay polygon
@@ -896,6 +896,26 @@ export default function GisMap() {
               ) : null;
             })()}
 
+            {/* A snapshot built by the rule-based fallback is a weaker result
+                than a Random Forest one, so say so at map level rather than
+                only inside a barangay's detail panel. */}
+            {snapshotClassifier?.ruleBased > 0 && (
+              <span
+                className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
+                style={{ background: '#FFFBEB', color: '#B45309', border: '1px solid #FDE68A' }}
+                title={
+                  'The Random Forest model could not be trained for this period — typically because the ' +
+                  'selected year has no matching population reference, leaving no usable training data. ' +
+                  'These classifications came from incidence thresholds alone and carry no confidence score.'
+                }
+              >
+                <i className="ri-error-warning-line mr-1" />
+                {snapshotClassifier.allRuleBased
+                  ? 'Rule-based fallback — not model-classified'
+                  : `${snapshotClassifier.ruleBased} of ${snapshotClassifier.total} rule-based`}
+              </span>
+            )}
+
             {hasActiveFilters && (
               <button
                 onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); setFilterYear(''); setSelectedBarangayName(null); }}
@@ -1294,8 +1314,8 @@ export default function GisMap() {
 
       {/* ── NLG GIS Insight Panel ── */}
       {!isFullscreen && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          <div className="lg:col-span-2 rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E8ECF1', boxShadow: '0 4px 24px rgba(15,45,82,0.06)' }}>
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+          <div className="lg:col-span-3 rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E8ECF1', boxShadow: '0 4px 24px rgba(15,45,82,0.06)' }}>
             <div className="px-6 py-5">
               <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: '#2563EB' }}>Map Interpretation</p>
               <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>About This Map</h3>
@@ -1316,7 +1336,7 @@ export default function GisMap() {
               </div>
             </div>
           </div>
-          <div>
+          <div className="lg:col-span-2">
             <AiInsightPanel
               type="gis"
               data={gisInsight}
@@ -1399,7 +1419,15 @@ export default function GisMap() {
                         <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Total Cases</span>
                         <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.total_cases)}</p>
                       </div>
-                      <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                      <div
+                        className="rounded-lg p-3"
+                        style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}
+                        title={
+                          "Cases diagnosed in the selected year divided by that year's population, per 100,000. " +
+                          'The model classifies risk from a 12-month rolling incidence instead, shown under ' +
+                          'Indicators Used — the two are measured differently and need not match.'
+                        }
+                      >
                         <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Incidence / 100k</span>
                         <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.incidence_per_100k)}</p>
                       </div>
@@ -1536,6 +1564,9 @@ export default function GisMap() {
                           <p className="text-[10px] font-bold uppercase mb-2" style={{ color: '#64748B' }}>Indicators Used</p>
                           <p className="text-[10px] mb-2 leading-relaxed" style={{ color: '#94A3B8' }}>
                             The values the model was given for this classification — not individually-ranked reasons.
+                            Rolling 12-Month Incidence is the model&apos;s own measure, annualised from the preceding
+                            12 months, so it will not equal the Incidence / 100k shown above, which uses the selected
+                            year&apos;s own case total and population.
                           </p>
                           <div className="space-y-1.5">
                             {RF_FEATURE_ORDER.filter(k => k in merged.rf_features).map(key => (
@@ -1693,7 +1724,13 @@ export default function GisMap() {
                       <DetailRow label="Population" value={formatNum(merged.population)} />
                       <DetailRow label="Risk Score" value={formatNum(merged.risk_score)} />
                       <DetailRow label="Trend Direction" value={merged.trend_direction || '—'} />
-                      <DetailRow label="Forecasted Cases" value={formatNum(merged.forecasted_count)} />
+                      {/* Null means ARIMA never ran for this period (historical
+                          snapshots skip forecasting) — distinct from a real
+                          forecast of 0, which this must not be read as. */}
+                      <DetailRow
+                        label="Forecasted Cases"
+                        value={merged.forecasted_count != null ? formatNum(merged.forecasted_count) : 'Not forecasted'}
+                      />
                     </div>
                   </div>
 

@@ -89,10 +89,16 @@ class TrainRow(BaseModel):
     """Training row for RF: features + observed incidence for label generation."""
     features: dict = Field(
         ..., description="Feature vector: rolling_12m_incidence, recent_trend, "
-        "seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk, historical_bias"
+        "seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk"
     )
     incidence: float = Field(
         ..., description="Observed incidence per 100k (used to derive label)"
+    )
+    # Target month ('YYYY-MM-DD'). Lets derive_labels rank barangays into
+    # thirds WITHIN each month; without it labels fall back to the absolute
+    # cut points, which are calibrated on one month and skew over years.
+    month: Optional[str] = Field(
+        default=None, description="Target month of this row (YYYY-MM-DD)"
     )
 
 
@@ -199,6 +205,10 @@ class ArimaEvaluation(BaseModel):
     # Barangays whose walk-forward raised an exception (excluded from
     # mae/mape/method_counts above, not silently dropped).
     failed_barangays: list[dict] = []
+    # Same steps scored with a plain 12-month average forecast, so the ARIMA
+    # numbers can be read against a simple reference instead of in isolation.
+    baseline_mae: Optional[float] = None
+    baseline_mape: Optional[float] = None
 
 
 class RfStep(BaseModel):
@@ -220,6 +230,10 @@ class RfEvaluation(BaseModel):
     confusion_matrix: Optional[dict[str, dict[str, int]]] = None
     n_steps: int = 0
     steps: list[RfStep] = []
+    # Same test months classified by the simple rule (rank last 12 months'
+    # incidence into thirds) — the reference the RF has to beat.
+    baseline_accuracy: Optional[float] = None
+    baseline_f1_macro: Optional[float] = None
 
 
 class EvaluateResponse(BaseModel):

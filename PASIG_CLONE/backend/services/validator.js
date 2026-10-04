@@ -1,6 +1,6 @@
 const db = require('../db/pasigSchema');
-const { classifyRecord } = require('./recordDuplicateDetector');
 const { cleanRecord, isBlankRecord, PASIG_BARANGAYS } = require('./dataCleaner');
+const { planIdentities, formatPatientNo, formatCaseNo } = require('./patientIdentity');
 
 const VALID_SEX = ['male', 'female'];
 
@@ -20,7 +20,50 @@ const INSERT_COLUMNS = [
   // MN-specific fields (previously dropped before reaching TBInsight)
   'type', 'province', 'region', 'referred_to_dots', 'referral_status',
   'microscopy_result', 'microscopy_release_date', 'rdt_result', 'rdt_release_date', 'outcome_reason',
+  // Identity (names/DOB stay in PASIG only)
+  'last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth',
+  'patient_id', 'case_no', 'match_status', 'match_candidate_case_no', 'match_suggestion',
 ];
+
+async function insertPatients(client, patientNos, batchId) {
+  const idByPatientNo = new Map();
+  const chunkSize = 500;
+  for (let i = 0; i < patientNos.length; i += chunkSize) {
+    const chunk = patientNos.slice(i, i + chunkSize);
+    const placeholders = chunk.map((_, k) => `($${k + 1}, $${chunk.length + 1})`).join(', ');
+    const res = await client.query(
+      `INSERT INTO patients (patient_no, created_by_batch_id) VALUES ${placeholders} RETURNING id, patient_no`,
+      [...chunk, batchId]
+    );
+    for (const row of res.rows) idByPatientNo.set(row.patient_no, row.id);
+  }
+  return idByPatientNo;
+}
+
+/**
+ * Re-validating replaces a batch's records and their Case IDs, so it is refused once
+ * the batch has been synced (TBInsight already holds those Case IDs) or once another
+ * record has been matched or merged against one of its cases.
+ */
+async function assertCanRevalidate(batchId) {
+  const batch = await db.pool.query('SELECT sync_status FROM import_batches WHERE id = $1', [batchId]);
+  if (batch.rows[0]?.sync_status === 'synced') {
+    throw Object.assign(new Error('This batch was already synced to TBInsight and cannot be re-validated.'), { status: 409 });
+  }
+  const refs = await db.pool.query(
+    `SELECT COUNT(*)::int AS n FROM validated_tb_cases o
+     WHERE o.batch_id <> $1
+       AND (o.match_candidate_case_no IN (SELECT case_no FROM validated_tb_cases WHERE batch_id = $1 AND case_no IS NOT NULL)
+         OR o.merged_into_case_no IN (SELECT case_no FROM validated_tb_cases WHERE batch_id = $1 AND case_no IS NOT NULL))`,
+    [batchId]
+  );
+  if (refs.rows[0].n > 0) {
+    throw Object.assign(
+      new Error(`Records in other batches were matched to this batch's cases (${refs.rows[0].n}); it cannot be re-validated.`),
+      { status: 409 }
+    );
+  }
+}
 
 function rowValues(batchId, r) {
   return [
@@ -34,6 +77,9 @@ function rowValues(batchId, r) {
     r.type ?? null, r.province ?? null, r.region ?? null, r.referred_to_dots ?? null, r.referral_status ?? null,
     r.microscopy_result ?? null, r.microscopy_release_date ?? null, r.rdt_result ?? null,
     r.rdt_release_date ?? null, r.outcome_reason ?? null,
+    r.last_name ?? null, r.first_name ?? null, r.middle_name ?? null, r.suffix ?? null, r.date_of_birth ?? null,
+    r.patient_id ?? null, r.case_no ?? null, r.match_status || 'none',
+    r.match_candidate_case_no ?? null, r.match_suggestion ?? null,
   ].map(v => (v === undefined ? null : v));
 }
 
@@ -95,20 +141,61 @@ async function validateBatch(batchId) {
   }
 
   const validRecords = results.validatedRecords.filter(r => r.is_valid);
-  const classificationCounts = { new: 0, updated: 0, duplicate: 0 };
-  for (const r of validRecords) {
-    const classification = await classifyRecord(r, r.source_type, batchId);
-    r.source_record_id = classification.sourceRecordId;
-    r.record_status = classification.status;
-    classificationCounts[classification.status] = (classificationCounts[classification.status] || 0) + 1;
-  }
+
+  await assertCanRevalidate(batchId);
+
+  // Patient # / Case ID: compare against every existing case outside this batch.
+  const existing = await db.pool.query(
+    `SELECT case_no, date_of_diagnosis::text AS date_of_diagnosis,
+            last_name, first_name, date_of_birth::text AS date_of_birth
+     FROM validated_tb_cases
+     WHERE case_no IS NOT NULL AND is_archived = false AND batch_id <> $1`,
+    [batchId]
+  );
+  const plan = planIdentities(validRecords, existing.rows);
+  const newIdx = plan.map((p, i) => (p.kind === 'new' ? i : -1)).filter(i => i >= 0);
+  let possibleMatches = 0;
 
   const client = await db.pool.connect();
   try {
     await client.query('BEGIN');
 
-    // Idempotency: re-validating a batch replaces its previous results
+    // Idempotency: re-validating a batch replaces its previous results (and the
+    // patients it created, unless another record now belongs to them)
     await client.query('DELETE FROM validated_tb_cases WHERE batch_id = $1', [batchId]);
+    await client.query(
+      `DELETE FROM patients p WHERE p.created_by_batch_id = $1
+       AND NOT EXISTS (SELECT 1 FROM validated_tb_cases v WHERE v.patient_id = p.id)`,
+      [batchId]
+    );
+
+    if (newIdx.length > 0) {
+      const patientSeqs = await client.query(
+        `SELECT nextval('patient_no_seq')::bigint AS n FROM generate_series(1, $1)`, [newIdx.length]
+      );
+      const caseSeqs = await client.query(
+        `SELECT nextval('case_no_seq')::bigint AS n FROM generate_series(1, $1)`, [newIdx.length]
+      );
+      const patientNos = patientSeqs.rows.map(r => formatPatientNo(r.n));
+      const idByPatientNo = await insertPatients(client, patientNos, batchId);
+      newIdx.forEach((rowIdx, k) => {
+        const r = validRecords[rowIdx];
+        r.patient_id = idByPatientNo.get(patientNos[k]);
+        r.case_no = formatCaseNo(caseSeqs.rows[k].n, r.date_of_diagnosis);
+        r.match_status = 'none';
+        r.record_status = 'new';
+      });
+    }
+
+    plan.forEach((p, i) => {
+      if (p.kind !== 'pending') return;
+      const r = validRecords[i];
+      r.match_status = 'pending';
+      r.match_candidate_case_no = p.candidate.case_no ?? validRecords[p.candidate.rowIndex].case_no;
+      r.match_suggestion = p.suggestion;
+      r.record_status = 'new';
+      possibleMatches++;
+    });
 
     const COLS = INSERT_COLUMNS.length;
     const chunkSize = 100;
@@ -140,11 +227,11 @@ async function validateBatch(batchId) {
     client.release();
   }
 
+  results.possibleMatches = possibleMatches;
   results.summary = {
     total: validRecords.length,
-    new: classificationCounts.new,
-    updated: classificationCounts.updated,
-    duplicate: classificationCounts.duplicate,
+    new: newIdx.length,
+    possibleMatches,
     error: results.invalid,
     cleaned: results.cleaned,
     nonPasig: results.nonPasig,
@@ -166,14 +253,24 @@ function validateRecord(csvData, sourceType, validBarangays) {
   const isPasig = normalizedCity === 'pasig city' || normalizedCity === 'pasig';
   const barangay = str(csvData.barangay_name).trim();
 
+  // A missing or unrecognized barangay no longer rejects the record: it is kept,
+  // listed under Needs Assignment for an admin to fix, and not sent to TBInsight
+  // until it has a Pasig barangay.
   if (!barangay) {
-    errors.push('Barangay is required');
+    warnings.push('No barangay — listed under Needs Assignment; not sent to TBInsight until a barangay is assigned');
   } else if (isPasig && !validBarangays.has(barangay.toLowerCase())) {
-    // Only reject unknown barangays for Pasig City records
-    errors.push(`Unknown barangay: "${csvData.barangay_name}"`);
+    warnings.push(`Unknown barangay "${csvData.barangay_name}" — listed under Needs Assignment; not sent to TBInsight until corrected`);
   } else if (!isPasig) {
     // Non-Pasig records: kept but not sent to TBInsight
     warnings.push(`Non-Pasig record: city="${csvData.city ?? ''}", barangay="${csvData.barangay_name}" — will not be sent to TBInsight`);
+  }
+
+  if (!str(csvData.last_name).trim()) errors.push('Last name is required');
+  if (!str(csvData.first_name).trim()) errors.push('First name is required');
+  if (!csvData.date_of_birth) {
+    errors.push('Date of birth is required');
+  } else if (csvData.date_of_diagnosis && csvData.date_of_birth > csvData.date_of_diagnosis) {
+    errors.push('Date of birth cannot be after the date of diagnosis');
   }
 
   if (!csvData.date_of_diagnosis) {

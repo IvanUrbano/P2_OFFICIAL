@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import timeAgo from '../utils/timeAgo';
 import { MODULE_LABELS, MODULE_ROUTES } from '../utils/alertConstants';
-import FilterSelect from '../../components/FilterSelect';
+import FilterSelect from '../components/FilterSelect';
 import SkeletonBlock from '../../components/SkeletonBlock';
 
 export default function Notifications() {

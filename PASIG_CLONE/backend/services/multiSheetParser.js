@@ -25,6 +25,13 @@ function buildColumnMap(rawHeaders, sourceType) {
 
     let field = null;
     if (n.includes('itis') && n.includes('lite')) field = 'itis_case_id';
+    // Patient identity (stays in PASIG; never sent to TBInsight)
+    else if (n.includes('birth') || n === 'dob' || n === 'birthday') field = 'date_of_birth';
+    else if (n.includes('last name') || n.includes('surname') || n.includes('family name') || n === 'lastname') field = 'last_name';
+    else if (n.includes('first name') || n.includes('given name') || n === 'firstname') field = 'first_name';
+    else if (n.includes('middle') || n === 'mi' || n === 'm.i.' || n === 'm.i') field = 'middle_name';
+    else if (n === 'suffix' || n.includes('name extension') || n === 'ext' || n === 'ext.' || n === 'extension') field = 'suffix';
+    else if (['name', 'full name', 'patient name', "patient's name", 'name of patient'].includes(n)) field = 'full_name';
     else if (n.includes('microscopy') && n.includes('date')) field = 'microscopy_release_date';
     else if (n.includes('microscopy') && n.includes('result')) field = 'microscopy_result';
     else if (n.includes('rdt') && n.includes('date')) field = 'rdt_release_date';
@@ -210,12 +217,12 @@ function parseSheetRows(rows, sheetName, sourceType) {
     }
 
     // Row must carry at least one case field (skips stray notes under the table)
-    const hasCaseData = ['barangay_name', 'date_of_diagnosis', 'age', 'sex', 'itis_case_id']
+    const hasCaseData = ['barangay_name', 'date_of_diagnosis', 'age', 'sex', 'itis_case_id', 'last_name', 'full_name']
       .some(f => mapped[f] !== undefined && mapped[f] !== null);
     if (!hasCaseData) continue;
 
     // Keep original values in raw storage as JSON-safe values; dates -> YYYY-MM-DD
-    for (const f of ['date_of_screening', 'date_of_diagnosis', 'date_of_notification',
+    for (const f of ['date_of_birth', 'date_of_screening', 'date_of_diagnosis', 'date_of_notification',
       'date_started_treatment', 'date_of_outcome', 'microscopy_release_date', 'rdt_release_date']) {
       if (mapped[f] instanceof Date) mapped[f] = parseDate(mapped[f]);
     }

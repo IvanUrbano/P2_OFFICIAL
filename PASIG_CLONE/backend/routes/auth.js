@@ -169,7 +169,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     // Generate JWT
     const token = jwt.sign(
-      { id: user.id, username: user.username, email: user.email, role: user.role },
+      { id: user.id, username: user.username, email: user.email, role: user.role, facility_id: user.facility_id || null },
       config.jwt.secret,
       { expiresIn: config.jwt.expiresIn }
     );
@@ -196,6 +196,16 @@ router.post('/login', loginLimiter, async (req, res) => {
     const recentlyChanged = user.password_changed_at &&
       (Date.now() - new Date(user.password_changed_at).getTime()) < 24 * 60 * 60 * 1000;
 
+    // Facility context for the logged-in user (staff accounts are facility-assigned)
+    let facility = null;
+    if (user.facility_id) {
+      const facResult = await db.authPool.query(
+        'SELECT id, name, barangay_name, facility_type FROM health_facilities WHERE id = $1',
+        [user.facility_id]
+      );
+      facility = facResult.rows[0] || null;
+    }
+
     res.json({
       message: 'Login successful.',
       user: {
@@ -203,6 +213,8 @@ router.post('/login', loginLimiter, async (req, res) => {
         username: user.username,
         email: user.email,
         role: user.role,
+        facility_id: user.facility_id || null,
+        facility,
       },
       passwordRecentlyChanged: recentlyChanged,
     });
@@ -224,6 +236,7 @@ router.post('/logout', (req, res) => {
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
   });
+  require('../services/pinService').clearUnlock(res); // hide patient names again
   res.json({ message: 'Logged out successfully.' });
 });
 
@@ -231,7 +244,11 @@ router.post('/logout', (req, res) => {
 router.get('/profile', authenticate, async (req, res) => {
   try {
     const result = await db.authPool.query(
-      'SELECT id, username, email, role, created_at FROM users WHERE id = $1',
+      `SELECT u.id, u.username, u.email, u.role, u.created_at, u.facility_id,
+              hf.name AS facility_name, hf.barangay_name AS facility_barangay, hf.facility_type
+       FROM users u
+       LEFT JOIN health_facilities hf ON u.facility_id = hf.id
+       WHERE u.id = $1`,
       [req.user.id]
     );
 
@@ -250,6 +267,7 @@ router.get('/profile', authenticate, async (req, res) => {
 router.put('/profile', authenticate, async (req, res) => {
   try {
     const { username, email } = req.body;
+    const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
     if (!username || !email) {
       return res.status(400).json({ error: 'Username and email are required.' });
@@ -272,6 +290,17 @@ router.put('/profile', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'User not found.' });
     }
 
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'UPDATE_PROFILE',
+      targetUserId: req.user.id,
+      targetUsername: username.toLowerCase(),
+      result: 'SUCCESS',
+      ipAddress,
+      details: { newUsername: username.toLowerCase(), newEmail: email.toLowerCase() },
+    });
+
     res.json({ message: 'Profile updated successfully.', user: result.rows[0] });
   } catch (error) {
     console.error('Update profile error:', error.message);
@@ -283,6 +312,7 @@ router.put('/profile', authenticate, async (req, res) => {
 router.put('/password', accountActionLimiter, authenticate, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
+    const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ error: 'Current password and new password are required.' });
@@ -310,6 +340,16 @@ router.put('/password', accountActionLimiter, authenticate, async (req, res) => 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
     await db.authPool.query('UPDATE users SET password_hash = $1, password_changed_at = NOW() WHERE id = $2', [hashedPassword, req.user.id]);
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'CHANGE_PASSWORD',
+      targetUserId: req.user.id,
+      targetUsername: req.user.username,
+      result: 'SUCCESS',
+      ipAddress,
+    });
 
     res.json({ message: 'Password changed successfully.' });
   } catch (error) {
@@ -418,10 +458,31 @@ router.put('/users/:id', authenticate, authorizeRoles('admin'), async (req, res)
 router.delete('/users/:id', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const { id } = req.params;
+    const ipAddress = req.ip || req.connection?.remoteAddress || null;
+
     if (parseInt(id) === req.user.id) {
       return res.status(400).json({ error: 'You cannot delete your own account.' });
     }
+
+    // Fetch user before deleting for audit
+    const userResult = await db.authPool.query('SELECT id, username FROM users WHERE id = $1', [id]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    const targetUser = userResult.rows[0];
+
     await db.authPool.query('DELETE FROM users WHERE id = $1', [id]);
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'DELETE_USER',
+      targetUserId: targetUser.id,
+      targetUsername: targetUser.username,
+      result: 'SUCCESS',
+      ipAddress,
+    });
+
     res.json({ message: 'User deleted successfully.' });
   } catch (error) {
     console.error('Delete user error:', error.message);

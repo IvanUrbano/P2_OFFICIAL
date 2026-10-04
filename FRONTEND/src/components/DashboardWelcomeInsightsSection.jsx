@@ -18,10 +18,39 @@ function ChartLineIcon({ className = "w-4 h-4" }) {
   );
 }
 
+/**
+ * Dashboard welcome header + NLG overview panel.
+ *
+ * Freshness: three DISTINCT concepts, displayed separately and never merged
+ * under an ambiguous "Last Updated" label:
+ *   MONITORING PERIOD — latest reporting period represented by the TB case
+ *     data (derived from date_of_diagnosis), e.g. "December 2025".
+ *   LAST DATA SYNC   — most recent SUCCESSFUL transfer/import of TB data into
+ *     TBInsight. Unchanged by opening or refreshing the Dashboard, by NLG
+ *     generation, or by a pipeline run that brought no new data.
+ *   LAST MODEL RUN   — latest normal analytics/model pipeline execution
+ *     (run_type = 'pipeline'). Unchanged by merely viewing or refreshing.
+ * This component previously received a single `lastUpdated` prop that was the
+ * model-run timestamp labelled "LAST UPDATED", and which fell back to the
+ * newest date_of_diagnosis — a clinical coverage date presented as a system
+ * freshness timestamp. Relative labels are always derived from the stored
+ * timestamp, never fixed strings.
+ *
+ * Insight text: the panel renders the Dashboard's own template-NLG output
+ * (GET /api/tb/insights/dashboard). It previously read `insightData.summary`
+ * from the Analytics insight response, which has no such field, so the
+ * headline always fell back to placeholder copy. This is template-based NLG;
+ * it is not an LLM and is not described as one.
+ */
 export default function DashboardWelcomeInsightsSection({
   user = null,
-  lastUpdated = null,
-  lastUpdatedRelative = '',
+  lastSynced = null,
+  lastSyncedRelative = '',
+  lastModelRun = null,
+  lastModelRunRelative = '',
+  syncSource = null,
+  dataSource = null,
+  freshnessUnavailable = false,
   refreshing = false,
   onRefresh = () => { },
   insightData = null,
@@ -33,68 +62,77 @@ export default function DashboardWelcomeInsightsSection({
 }) {
   const [activeSlide, setActiveSlide] = useState(0);
 
-  // Format last updated timestamp — 'Not yet available' until real pipeline/
-  // import data exists, never a hardcoded placeholder date.
-  const formattedLastUpdated = useMemo(() => {
-    if (!lastUpdated) return 'Not yet available';
+  // Absolute timestamp formatting — 'Not yet available' until a real stored
+  // timestamp exists, never a hardcoded placeholder date.
+  const formatStamp = (value) => {
+    if (!value) return 'Not yet available';
     try {
-      const dateStr = lastUpdated.toLocaleDateString('en-US', {
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric',
-      });
-      const timeStr = lastUpdated.toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-      });
+      const dateStr = value.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      const timeStr = value.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
       return `${dateStr} at ${timeStr}`;
     } catch {
       return 'Not yet available';
     }
-  }, [lastUpdated]);
+  };
 
-  const displayRelative = lastUpdatedRelative || '';
+  const formattedLastSynced = useMemo(() => formatStamp(lastSynced), [lastSynced]);
+  const formattedLastModelRun = useMemo(() => formatStamp(lastModelRun), [lastModelRun]);
 
   const monitoringPeriodLabel = monitoringPeriod || 'N/A';
 
-  // Forecast outlook text — reflects the real forecastSummary (growth rate +
-  // period) computed in DashboardPage.jsx from live ARIMA predictions,
-  // instead of a fixed claim that cases are increasing regardless of reality.
+  // Data Source describes the actual architecture. TBInsight receives records
+  // from the Pasig TB Information System; it does not integrate directly with
+  // DOH ITIS, and must not claim to.
+  const dataSourceLabel = dataSource || 'PASIG TB-IS';
+
+  // Forecast outlook — reflects the real forecastSummary computed from the
+  // persisted forecast rows, and names the method that actually produced it.
+  // A Baseline Forecast is never described as ARIMA, and when no valid
+  // forecast exists no predictive wording is produced at all.
   const forecastOutlookText = useMemo(() => {
-    if (!forecastSummary?.period) {
-      return 'No forecast is available yet. Run the prediction pipeline to generate an outlook for the upcoming period.';
+    if (!forecastSummary?.period || forecastSummary?.tier === 'insufficient_data') {
+      return forecastSummary?.tier === 'insufficient_data'
+        ? 'Forecasting is unavailable for this scope: the available history falls below the minimum monthly observations required (Insufficient Historical Data).'
+        : 'No forecast is available yet. Run the prediction pipeline to generate an outlook for the upcoming period.';
     }
     const rate = forecastSummary.growthRate;
     const direction = rate > 5 ? 'increase' : rate < -5 ? 'decrease' : 'remain relatively stable';
-    return `TB cases are projected to ${direction} in ${forecastSummary.period}, based on the current ARIMA forecast. Continue monitoring case activity across high-risk barangays.`;
+    const method = forecastSummary.tierLabel || 'current forecast';
+    return `TB cases are projected to ${direction} in ${forecastSummary.period}, based on the ${method}. Continue monitoring case activity across high-risk barangays.`;
   }, [forecastSummary]);
 
-  // Define 3 insight slides
-  const slides = useMemo(() => [
+  // Carousel slides come from the Dashboard NLG's own sections. Each slide
+  // falls back only when that specific section is absent, so one unavailable
+  // metric does not blank the rest.
+  const slides = useMemo(() => {
+    const sectionText = (id) => insightData?.sections?.find((sec) => sec.id === id)?.text || null;
+    return [
     {
-      id: 'analytics',
+      id: 'caseActivity',
       icon: <ChartLineIcon />,
-      title: 'ANALYTICS SUMMARY',
-      text:
-        insightData?.sections?.find((s) => s.id === 'overallSummary' || s.id === 'keyTrend')?.text ||
-        'No analytics interpretation available yet for the current monitoring period.',
+      title: 'REPORTED CASE TREND',
+      text: sectionText('caseActivity') || 'No case-trend interpretation is available for the current data.',
     },
     {
-      id: 'forecast',
+      id: 'riskSituation',
       icon: <ChartLineIcon />,
-      title: 'FORECAST OUTLOOK',
-      text: forecastOutlookText,
+      title: 'RISK SITUATION',
+      text: sectionText('riskSituation') || 'No Random Forest risk classification is available yet.',
     },
     {
-      id: 'overall',
-      icon: <span className="text-sm font-bold leading-none" style={{ color: '#2E6FAF' }}>✦</span>,
-      title: 'OVERALL TB SITUATION',
-      text:
-        insightData?.summary ||
-        'No AI-generated interpretation available yet. Review the metrics and charts below for the latest TB monitoring data.',
+      id: 'treatmentPerformance',
+      icon: <ChartLineIcon />,
+      title: 'TREATMENT PERFORMANCE',
+      text: sectionText('treatmentPerformance') || 'Treatment indicators are unavailable for the current data.',
     },
-  ], [insightData, forecastOutlookText]);
+    {
+      id: 'forecastSignal',
+      icon: <ChartLineIcon />,
+      title: 'FORECAST SIGNAL',
+      text: sectionText('forecastSignal') || forecastOutlookText,
+    },
+    ];
+  }, [insightData, forecastOutlookText]);
 
   const currentSlide = slides[activeSlide] || slides[0];
 
@@ -150,13 +188,24 @@ export default function DashboardWelcomeInsightsSection({
           </div>
 
           <p className="text-xs sm:text-[13px] leading-relaxed" style={{ color: '#E2E8F0' }}>
-            {insightData?.summary ||
-              'Review today’s TB case activity, risk classifications, and forecasts below for the latest monitoring update.'}
+            {insightData?.summary
+              ? renderFormattedText(insightData.summary)
+              : insightLoading
+                ? 'Generating interpretation…'
+                : insightError
+                  ? 'The overview interpretation could not be generated. The metrics and charts below are unaffected.'
+                  : 'Review TB case activity, risk classifications, and forecasts below for the latest monitoring update.'}
           </p>
 
           <div className="mt-2.5 flex items-center gap-1.5 text-[10px]" style={{ color: '#94A3B8' }}>
             <i className="ri-sparkling-line text-[11px]" style={{ color: '#38BDF8' }} />
-            <span>{insightData?.summary ? 'Generated from current TB monitoring results' : 'Awaiting AI-generated interpretation'}</span>
+            <span>
+              {insightData?.summary
+                ? 'NLG-generated insight from calculated TBInsight results'
+                : insightError
+                  ? 'NLG-generated insight unavailable'
+                  : 'Awaiting NLG-generated insight'}
+            </span>
           </div>
         </div>
 
@@ -165,7 +214,7 @@ export default function DashboardWelcomeInsightsSection({
           className="pt-3 flex flex-col sm:flex-row sm:items-end justify-between gap-4"
           style={{ borderTop: '1px solid rgba(255, 255, 255, 0.12)' }}
         >
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 flex-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 flex-1">
             {/* DATA SOURCE */}
             <div>
               <span
@@ -175,11 +224,11 @@ export default function DashboardWelcomeInsightsSection({
                 DATA SOURCE
               </span>
               <p className="text-xs sm:text-[13px] font-semibold mt-1" style={{ color: '#FFFFFF' }}>
-                Centralized TB Records
+                {dataSourceLabel}
               </p>
             </div>
 
-            {/* MONITORING PERIOD */}
+            {/* MONITORING PERIOD — latest month actually covered by the data */}
             <div>
               <span
                 className="text-[10px] font-bold uppercase tracking-wider block"
@@ -192,20 +241,45 @@ export default function DashboardWelcomeInsightsSection({
               </p>
             </div>
 
-            {/* LAST UPDATED */}
+            {/* LAST DATA SYNC — most recent SUCCESSFUL transfer/import of TB
+                data into TBInsight. Never the model-run timestamp, and never
+                changed by opening or refreshing the Dashboard. */}
             <div>
               <span
                 className="text-[10px] font-bold uppercase tracking-wider block"
                 style={{ color: '#94A3B8' }}
               >
-                LAST UPDATED
+                LAST DATA SYNC
               </span>
               <p className="text-xs sm:text-[13px] font-semibold mt-1" style={{ color: '#FFFFFF' }}>
-                {formattedLastUpdated}
+                {freshnessUnavailable ? 'Unavailable' : formattedLastSynced}
               </p>
-              {displayRelative && (
-                <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
-                  {displayRelative}
+              {!freshnessUnavailable && lastSyncedRelative && (
+                <span className="text-[11px] font-medium block" style={{ color: '#94A3B8' }}>
+                  {lastSyncedRelative}
+                  {/* State the provenance when the value is NOT a successful
+                      webhook sync, so an import timestamp is never read as a
+                      confirmed transfer from PASIG TB-IS. */}
+                  {syncSource === 'import' ? ' · from file import (no webhook sync logged)' : ''}
+                  {syncSource === 'webhook' ? ' · webhook sync' : ''}
+                </span>
+              )}
+            </div>
+
+            {/* LAST MODEL RUN — latest analytics/model pipeline execution */}
+            <div>
+              <span
+                className="text-[10px] font-bold uppercase tracking-wider block"
+                style={{ color: '#94A3B8' }}
+              >
+                LAST MODEL RUN
+              </span>
+              <p className="text-xs sm:text-[13px] font-semibold mt-1" style={{ color: '#FFFFFF' }}>
+                {formattedLastModelRun}
+              </p>
+              {lastModelRunRelative && (
+                <span className="text-[11px] font-medium block" style={{ color: '#94A3B8' }}>
+                  {lastModelRunRelative}
                 </span>
               )}
             </div>
@@ -258,7 +332,7 @@ export default function DashboardWelcomeInsightsSection({
               <span style={{ color: '#2E6FAF' }}>✦</span> OVERALL TB INSIGHTS
             </h3>
             <p className="text-[11px] mt-0.5 leading-tight" style={{ color: '#64748B' }}>
-              Automated interpretation of Analytics and Forecasting results
+              Template-based NLG summary of calculated TBInsight results
             </p>
           </div>
           <span
@@ -380,7 +454,7 @@ export default function DashboardWelcomeInsightsSection({
           style={{ borderTop: '1px solid #F1F5F9', color: '#94A3B8' }}
         >
           <span>Based on: {monitoringPeriodLabel} • Pasig City</span>
-          <span>Generated from calculated TBInsight model results</span>
+          <span>NLG-generated from calculated TBInsight results</span>
         </div>
       </div>
     </div>
