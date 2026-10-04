@@ -7,7 +7,10 @@
  * `…Permissions()` object to every resource they return, so the frontend only mirrors
  * these decisions (utils/permissions.js) and never re-derives them.
  *
- * Nothing here looks at facilities: access follows the barangay assignment only.
+ * Nothing here looks at facilities for CASE access: access follows the barangay
+ * assignment only. facilityPermissions() below is about the facility DIRECTORY (master
+ * data) — who may add/edit/deactivate facilities and manage aliases — and never grants
+ * or denies a single patient record.
  */
 
 const {
@@ -101,6 +104,31 @@ function validationPermissions(user) {
   return { assignLocation: isAdmin(user), mapFacility: isAdmin(user) };
 }
 
+/**
+ * Facility directory (master data) decisions — who may change the registry itself.
+ *   view / search / details — every authenticated role (staff browse the directory).
+ *   add / edit / activate / aliases / resolveMapping — admin only:
+ *     add       POST /api/facilities
+ *     edit      PUT  /api/facilities/:id
+ *     activate  the is_active field carried by the same PUT (activate/deactivate)
+ *     aliases   POST/PUT/DELETE /api/facilities/:id/alias… (and the suggestions list)
+ *     resolveMapping  POST /validation-queue/assignment/facility(+/accept-suggestions)
+ * Purely master data: none of this appears in any case-access decision.
+ */
+function facilityPermissions(user) {
+  const admin = isAdmin(user);
+  return {
+    view: true,
+    search: true,
+    details: true,
+    add: admin,
+    edit: admin,
+    activate: admin,
+    aliases: admin,
+    resolveMapping: admin,
+  };
+}
+
 const EDIT_ACTIONS = new Set([ACTIONS.CASE_EDIT, ACTIONS.CASE_REFER, ACTIONS.CASE_ARCHIVE, ACTIONS.MATCH_RESOLVE]);
 
 /**
@@ -151,5 +179,6 @@ function can(user, scope, action, resource) {
 }
 
 module.exports = {
-  ACTIONS, can, assertCaseAction, casePermissions, referralPermissions, issuePermissions, validationPermissions,
+  ACTIONS, can, assertCaseAction, casePermissions, referralPermissions, issuePermissions,
+  validationPermissions, facilityPermissions,
 };

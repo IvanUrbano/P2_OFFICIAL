@@ -1,8 +1,11 @@
 -- ==========================================
 -- Migration 002: Case Access & Transfers
 -- ==========================================
--- Adds facility-scoped access control and
--- acceptance-based transfer workflow.
+-- Adds current_responsible_facility_id to
+-- validated_tb_cases and the case_transfers
+-- workflow (referral/transfer lifecycle).
+-- Access control stays BARANGAY-based — a
+-- facility relationship never grants case access.
 -- ==========================================
 -- NOTE: health_facilities lives on AUTH_DATABASE_URL
 -- (shared with TBInsight), not on this database.

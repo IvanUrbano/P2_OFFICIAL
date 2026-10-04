@@ -55,11 +55,13 @@ export default function IssuesTab({ batch, refreshKey, onChanged }) {
   useEffect(() => { setPage(1); }, [batch]);
 
   const masked = !data.identityUnlocked;
+  // Historical rows: stored names/DOB are de-identified and read-only (server-enforced).
+  const deidentifiedField = (issue, f) => Boolean(issue?.record?.identity_deidentified && issue.record.hidden_identity_fields?.includes(f));
   const openFix = (issue) => {
     const values = {};
     SECTIONS.forEach(s => s.fields.forEach(f => {
       // Hidden names are not pre-filled: leaving them empty keeps the stored value.
-      values[f] = masked && NAME_FIELDS.has(f) ? '' : toInput(f, issue.record?.[f]);
+      values[f] = (masked || issue.record?.identity_deidentified) && NAME_FIELDS.has(f) ? '' : toInput(f, issue.record?.[f]);
     }));
     setFixing({ issue, values, touched: {}, errors: issue.errors || [], errorFields: issue.error_fields || [] });
   };
@@ -211,9 +213,10 @@ export default function IssuesTab({ batch, refreshKey, onChanged }) {
             <fieldset key={s.title}>
               <legend className="text-[10px] font-bold uppercase tracking-wide mb-2" style={{ color: '#64748B' }}>{s.title}</legend>
               <div className="grid grid-cols-2 gap-3">
-                {s.fields.map(f => {
+                {s.fields.filter(f => !(fixing.issue.record?.identity_deidentified && NAME_FIELDS.has(f))).map(f => {
                   const flagged = fixing.errorFields.includes(f);
-                  const hidden = masked && NAME_FIELDS.has(f);
+                  const deid = deidentifiedField(fixing.issue, f);
+                  const hidden = (masked || fixing.issue.record?.identity_deidentified) && NAME_FIELDS.has(f);
                   // The row's location decides which barangay owns it — an assignment
                   // decision the server also refuses for staff (admin only).
                   const locationLocked = s.title === 'Location' && !data.isAdmin;
@@ -231,9 +234,9 @@ export default function IssuesTab({ batch, refreshKey, onChanged }) {
                         <input
                           type={DATE_FIELDS.has(f) ? 'date' : f === 'age' ? 'number' : 'text'}
                           value={fixing.values[f]}
-                          placeholder={hidden ? 'Hidden — leave empty to keep' : ''}
+                          placeholder={deid ? 'De-identified' : hidden ? 'Hidden — leave empty to keep' : ''}
                           onChange={e => setValue(f, e.target.value)}
-                          disabled={locationLocked}
+                          disabled={locationLocked || deid}
                           className="w-full px-3 py-2 text-xs rounded-lg outline-none disabled:opacity-60"
                           style={{ background: flagged ? '#FFFBFB' : '#ffffff', border: `1px solid ${flagged ? '#FCA5A5' : '#E2E8F0'}`, color: '#0F2D52' }}
                         />

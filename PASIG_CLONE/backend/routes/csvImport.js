@@ -14,6 +14,7 @@ const { startBackgroundSync, SYNC_STARTED } = require('../services/backgroundSyn
 const { NEEDS_LOCATION, NEEDS_FACILITY } = require('../services/validationQueue');
 const { logReviews } = require('../services/caseFollowUp');
 const pinService = require('../services/pinService');
+const { withUserNames } = require('../services/userNames');
 const config = require('../config');
 
 // Needs Assignment: no barangay, a barangay outside the official list, or a non-Pasig
@@ -25,6 +26,13 @@ function unassignedSql() {
   OR (v.city IS NOT NULL AND lower(v.city) NOT IN ('pasig city', 'pasig')))`;
 }
 
+// TB Records "All Records" listing rule (alias v, archived rows excluded separately):
+// validated cases only — match decided, not merged away, and location resolved. A Pasig
+// record with a missing/unknown barangay stays in Validation -> Needs Assignment until
+// assigned; a confirmed Non-Pasig record (location_resolution set) is listed. Staff
+// visibility (their barangay, Pasig only) comes from getCaseListScope.
+const TB_RECORDS_LISTED = `(v.match_status <> 'pending' AND v.merged_into_case_no IS NULL AND NOT ${NEEDS_LOCATION})`;
+
 // Large-file parsing is expensive — cap how often it can be triggered per IP.
 const importLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -33,6 +41,19 @@ const importLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// What the upload form needs to know: whether patient-name display is approved
+// (PATIENT_NAMES_ENABLED). Until then every import is de-identified.
+router.get('/import-options', authenticate, authorizeRoles('admin', 'staff'), (req, res) => {
+  res.json({ namesEnabled: pinService.namesEnabled() });
+});
+
+// "Historical dataset" (form field historical, default ON): the batch is de-identified
+// for good, whatever PATIENT_NAMES_ENABLED says. Only an explicit historical=false on an
+// approved system makes it operational (names visible to authorized, unlocked users).
+const importIdentityClass = (body) => (String(body?.historical ?? 'true').toLowerCase() === 'false'
+  ? pinService.identityClassForNewBatch()
+  : 'historical');
 
 router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   const client = await db.pool.connect();
@@ -133,13 +154,14 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
       }
     }
 
+    const identityClass = importIdentityClass(req.body);
     await client.query('BEGIN');
 
     // Insert batch with file_hash and audit fields
     const batchResult = await client.query(
-      `INSERT INTO import_batches (filename, uploaded_by, file_hash, total_rows, dstb_count, mn_count, status, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING id`,
-      [file.name, req.user.id, fileHash, parsed.totalRecords, parsed.dstbCount, parsed.mnCount, 'uploaded']
+      `INSERT INTO import_batches (filename, uploaded_by, file_hash, total_rows, dstb_count, mn_count, status, created_at, identity_class)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8) RETURNING id`,
+      [file.name, req.user.id, fileHash, parsed.totalRecords, parsed.dstbCount, parsed.mnCount, 'uploaded', identityClass]
     );
 
     const batchId = batchResult.rows[0].id;
@@ -166,7 +188,7 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
       resourceType: 'import_batch',
       resourceId: batchId,
       result: 'SUCCESS',
-      details: { filename: file.name, recordCount: parsed.totalRecords, fileHash },
+      details: { filename: file.name, recordCount: parsed.totalRecords, fileHash, identityClass },
     });
 
     console.log(`✅ File imported successfully: Batch ${batchId}, ${parsed.totalRecords} records`);
@@ -179,6 +201,7 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
         totalRows: parsed.totalRecords,
         dstbCount: parsed.dstbCount,
         mnCount: parsed.mnCount,
+        identityClass,
         fileHash: fileHash.substring(0, 16) + '...', // Show truncated hash for verification
       },
       sheets: parsed.sheets.map(s => ({
@@ -227,10 +250,17 @@ router.get('/batches/:id', authenticate, authorizeRoles('admin'), async (req, re
     }
 
     const recordsResult = await db.getRawCases(id);
+    const batch = batchResult.rows[0];
 
+    // Raw uploaded rows carry names too: same identity rule as every other response.
     res.json({
-      batch: batchResult.rows[0],
-      records: recordsResult.rows,
+      batch,
+      records: recordsResult.rows.map(r => ({
+        ...r,
+        csv_data: r.csv_data
+          ? (({ identity_class, ...rest }) => rest)(pinService.protectIdentity(req, { ...r.csv_data, identity_class: batch.identity_class }))
+          : r.csv_data,
+      })),
     });
   } catch (error) {
     console.error('Error fetching batch:', error);
@@ -243,11 +273,13 @@ router.get('/import-history', authenticate, authorizeRoles('admin', 'staff'), as
   try {
     const status = req.query.status || 'active';
     const result = await db.getImportHistory(status);
+    const rows = await withUserNames(result.rows, { uploaded_by: 'imported_by_username', archived_by: 'archived_by_username' });
 
-    const batches = result.rows.map(b => ({
+    const batches = rows.map(b => ({
       id: b.id,
       filename: b.filename,
       importedBy: b.imported_by_username || 'Unknown',
+      importedByUsername: b.imported_by_username_login || null,
       records: b.total_rows,
       validated: b.valid_count,
       rejected: b.error_count,
@@ -296,7 +328,10 @@ router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req,
     // ========== KPI stats (counts only — no names) ==========
     // Role scoping mirrors the page each KPI leads to: admin = city-wide, staff =
     // their operational scope.
-    //   caseWhere       -> TB Records (patient or responsible barangay is theirs)
+    //   caseWhere       -> TB Records (patient or responsible barangay is theirs, Pasig only)
+    //                       the Validated KPI additionally applies the All Records
+    //                       listing rule so it matches that tab exactly
+    //   Total TB Records is system-wide for every role (see totalSql)
     //   validationWhere -> Validation tabs (their rows OR rows of batches they uploaded)
     //   issueWhere      -> Validation data issues (their barangay OR own uploads)
     // Batch-level items (recent imports, latest sync, batch alerts) stay shared batch
@@ -308,7 +343,6 @@ router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req,
     const staffBarangayId = !isAdmin && userScope?.barangay_id != null ? userScope.barangay_id : null;
 
     const countParams = [];
-    let totalSql = `(SELECT COUNT(*) FROM raw_tb_cases)`;
     let caseWhere = `1=1`;
     let validationWhere = `1=1`;
     let issueWhere = `i.status = 'open'`;
@@ -322,17 +356,52 @@ router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req,
       caseWhere = `${s.where}`;
       validationWhere = `(${s.where} OR ${ownCases})`;
       issueWhere = `i.status = 'open' AND (${s.params.length ? `i.barangay_id = $1 OR ` : ''}${ownIssues})`;
-      totalSql = `(SELECT COUNT(*) FROM validated_tb_cases v WHERE NOT v.is_archived AND ${caseWhere})`;
     }
+
+    // Total = every TB case record stored in PASIG TB-IS, Pasig and Non-Pasig, whatever
+    // its validation state, for every role (a count only — no identities):
+    //   live cases (not archived, not merged into another case — incl. possible matches
+    //   and records awaiting assignment)
+    //   + open data issues (rows that failed validation; a corrected one is already a case)
+    //   + rows of imports not yet validated (validation turns them into the two above)
+    // Rows of archived imports that never became cases are not counted.
+    // Validated = exactly the TB Records All Records listing for this user (same rule,
+    // same scope), so the KPI always equals that tab's badge.
+    //
+    // Needs Review counts RECORDS still blocked from being validated, so it never
+    // overlaps Validated (admin: Total = Validated + Needs Review):
+    //   possible matches (match pending)
+    //   + needs assignment = records whose LOCATION is undecided (no Pasig barangay, or a
+    //     non-Pasig city not yet confirmed) — these are kept out of TB Records
+    //   + open data issues (rows that failed validation)
+    // An unmapped facility NAME does not block a record: it is already validated, listed
+    // and synced. Facility mapping is a reference-table task (one decision per name maps
+    // every record using it), so it is reported separately as facility names to map and
+    // never added to Needs Review — adding it counted ~9,300 validated records a second time.
+    const totalSql = `(
+      (SELECT COUNT(*) FROM validated_tb_cases v WHERE NOT v.is_archived AND v.merged_into_case_no IS NULL)
+      + (SELECT COUNT(*) FROM validation_issues i JOIN import_batches b ON b.id = i.batch_id
+          WHERE i.status = 'open' AND NOT COALESCE(b.is_archived, false))
+      + (SELECT COUNT(*) FROM raw_tb_cases r JOIN import_batches b ON b.id = r.batch_id
+          WHERE b.status = 'uploaded' AND NOT COALESCE(b.is_archived, false)))`;
 
     const counts = (await db.pool.query(
       `SELECT
          ${totalSql}::int AS total,
-         (SELECT COUNT(*) FROM validated_tb_cases v WHERE v.is_valid AND NOT v.is_archived AND ${caseWhere})::int AS validated,
+         (SELECT COUNT(*) FROM validated_tb_cases v WHERE NOT v.is_archived AND ${TB_RECORDS_LISTED} AND ${caseWhere})::int AS validated,
          (SELECT COUNT(*) FROM validated_tb_cases v WHERE v.match_status = 'pending' AND NOT v.is_archived AND ${validationWhere})::int AS possible_matches,
          (SELECT COUNT(*) FROM validated_tb_cases v
             WHERE NOT v.is_archived AND v.match_status <> 'pending' AND v.merged_into_case_no IS NULL
-              AND (${NEEDS_LOCATION} OR ${NEEDS_FACILITY}) AND ${validationWhere})::int AS needs_assignment,
+              AND ${NEEDS_LOCATION} AND ${validationWhere})::int AS needs_location,
+         (SELECT COUNT(*) FROM validated_tb_cases v
+            WHERE NOT v.is_archived AND v.merged_into_case_no IS NULL
+              AND ${NEEDS_FACILITY} AND ${validationWhere})::int AS facility_records,
+         (SELECT COUNT(DISTINCT norm_facility(f.name)) FROM validated_tb_cases v
+            CROSS JOIN LATERAL (VALUES
+              (CASE WHEN v.treatment_facility_id IS NULL THEN NULLIF(trim(v.treatment_facility), '') END),
+              (CASE WHEN v.screening_facility_id IS NULL THEN NULLIF(trim(v.screening_facility), '') END)) AS f(name)
+            WHERE NOT v.is_archived AND v.merged_into_case_no IS NULL AND v.match_status <> 'pending'
+              AND f.name IS NOT NULL AND ${validationWhere})::int AS facility_names,
          (SELECT COUNT(*) FROM validation_issues i WHERE ${issueWhere})::int AS data_issues,
          (SELECT COUNT(*) FROM validated_tb_cases v JOIN import_batches b ON b.id = v.batch_id
             WHERE b.sync_status = 'synced' AND v.is_valid AND NOT v.is_archived
@@ -358,12 +427,11 @@ router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req,
     // eligible Pasig record count for that batch (same rule as the Synced KPI).
     const [recentResult, latestSyncResult, pendingResult, pendingReferralsResult] = await Promise.all([
       db.pool.query(
-        `SELECT b.id, b.filename, u.username, b.total_rows, b.status, b.sync_status, b.created_at
+        `SELECT b.id, b.filename, b.uploaded_by, b.total_rows, b.status, b.sync_status, b.created_at
          FROM import_batches b
-         LEFT JOIN users u ON b.uploaded_by = u.id
          ORDER BY b.created_at DESC
          LIMIT 5`
-      ),
+      ).then(async r => ({ rows: (await withUserNames(r.rows, { uploaded_by: 'username' })).map(({ uploaded_by, username_login, ...rest }) => rest) })),
       db.pool.query(
         `SELECT wl.status, wl.response_code, wl.error_message, wl.sent_at, b.filename,
                 (SELECT COUNT(*) FROM validated_tb_cases v
@@ -394,7 +462,12 @@ router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req,
     res.json({
       total: counts.total,
       validated: counts.validated,
-      needsReview: counts.possible_matches + counts.needs_assignment + counts.data_issues,
+      needsReview: counts.possible_matches + counts.needs_location + counts.data_issues,
+      needsReviewBreakdown: {
+        possibleMatches: counts.possible_matches,
+        needsAssignment: counts.needs_location,
+        dataIssues: counts.data_issues,
+      },
       pendingReferrals: pendingReferralsResult.rows[0]?.count || 0,
       synced: counts.synced,
       recentImports: recentResult.rows,
@@ -404,7 +477,10 @@ router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req,
         readyForSync: readyForSyncResult.rows[0]?.count || 0,
         failedSync: failedSyncResult.rows[0]?.count || 0,
         possibleMatches: counts.possible_matches,
-        needsAssignment: isAdmin ? counts.needs_assignment : 0,
+        needsAssignment: isAdmin ? counts.needs_location : 0,
+        // Reference-data task, not part of Needs Review (see above).
+        facilityNamesToMap: isAdmin ? counts.facility_names : 0,
+        facilityRecordsToMap: isAdmin ? counts.facility_records : 0,
         dataIssues: counts.data_issues,
       },
     });
@@ -517,6 +593,27 @@ router.get('/recent-activity', authenticate, authorizeRoles('admin', 'staff'), a
 });
 
 // ==================== RECORDS (TB Records page) ====================
+// Whitelisted sort columns for GET /records — the list is server-paginated, so
+// ordering must happen in SQL; anything outside this map falls back to newest-first
+// (SQL injection is impossible because neither the key nor the direction is ever
+// interpolated directly).
+const RECORD_SORT_COLUMNS = {
+  id: 'v.id',
+  patient_no: 'p.patient_no',
+  case: 'v.case_no',
+  // Names sort only operational records (historical names are never exposed, not even
+  // through ordering); everything else falls back to Patient #.
+  patient: `CASE WHEN v.identity_class = 'operational' THEN v.last_name END, CASE WHEN v.identity_class = 'operational' THEN v.first_name END, p.patient_no`,
+  barangay: 'v.barangay_name',
+  date: 'v.date_of_diagnosis',
+  sex: 'v.sex',
+  age: 'v.age',
+  outcome: 'v.outcome_status',
+  facility: 'v.screening_facility',
+  bact: 'v.bacteriological_status',
+  source: 'v.source_type',
+};
+
 router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -533,10 +630,14 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
     const params = [...scope.params];
     const base = `v.is_archived = false AND ${scope.where}`;
     const viewSql = {
-      all: `v.match_status <> 'pending' AND v.merged_into_case_no IS NULL`,
+      // Validated records only: same rule as the Dashboard's Validated KPI (TB_RECORDS_LISTED).
+      all: TB_RECORDS_LISTED,
       matches: `v.match_status = 'pending'`,
       // Same definition as the Validation page's Needs Assignment tab.
-      unassigned: `v.match_status <> 'pending' AND v.merged_into_case_no IS NULL AND (${NEEDS_LOCATION} OR ${NEEDS_FACILITY})`,
+      // Same number as Validation -> Needs Assignment and the Dashboard: records whose
+      // LOCATION is undecided. Unmapped facility names are counted per name on the
+      // Validation page, not per record here.
+      unassigned: `v.match_status <> 'pending' AND v.merged_into_case_no IS NULL AND ${NEEDS_LOCATION}`,
     };
 
     let filters = '';
@@ -563,9 +664,11 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
       const s = `$${params.length}`;
       // Searching by name is only allowed once names are unlocked with the records PIN —
       // otherwise a locked user could still find out whether a person is in the system.
-      const nameClauses = namesUnlocked
-        ? `v.last_name ILIKE ${s} OR v.first_name ILIKE ${s} OR v.middle_name ILIKE ${s}
-           OR (v.last_name || ', ' || v.first_name) ILIKE ${s} OR `
+      // Only ever matches operational records: historical names are de-identified, so a
+      // search must not reveal that a name exists among them.
+      const nameClauses = namesUnlocked && pinService.namesEnabled()
+        ? `(v.identity_class = 'operational' AND (v.last_name ILIKE ${s} OR v.first_name ILIKE ${s} OR v.middle_name ILIKE ${s}
+           OR (v.last_name || ', ' || v.first_name) ILIKE ${s})) OR `
         : '';
       filters += ` AND (${nameClauses}v.case_no ILIKE ${s} OR p.patient_no ILIKE ${s}
         OR v.barangay_name ILIKE ${s} OR v.treatment_facility ILIKE ${s} OR v.itis_case_id ILIKE ${s})`;
@@ -573,6 +676,9 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
 
     const from = 'FROM validated_tb_cases v LEFT JOIN patients p ON p.id = v.patient_id';
     const where = `${base} AND ${viewSql[view]}${filters}`;
+    const sortCols = RECORD_SORT_COLUMNS[req.query.sort] || RECORD_SORT_COLUMNS.id;
+    const sortDir = String(req.query.dir || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    const orderBy = sortCols.split(', ').map(c => `${c} ${sortDir}`).join(', ');
 
     // Tab badges use the same visibility scope, without the search filter. All five queries
     // are independent, so they run at once (each is a ~0.2 s round trip to the database).
@@ -583,7 +689,7 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
       db.pool.query(`SELECT COUNT(*)::int AS total ${from} WHERE ${where}`, params),
       db.pool.query(
         `SELECT v.*, p.patient_no ${from} WHERE ${where}
-         ORDER BY v.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+         ORDER BY ${orderBy} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, limit, offset]
       ),
       countView('all'),
@@ -607,6 +713,7 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
     res.json({
       records: pinService.maskUnlessUnlocked(req, records),
       identityUnlocked: namesUnlocked,
+      namesEnabled: pinService.namesEnabled(),
       counts,
       pagination: {
         page,
@@ -687,10 +794,15 @@ router.get('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
       ...h, actor: h.actor_id != null ? (actorNames[h.actor_id] || null) : null,
     }));
 
-    const fullRecord = { ...record, responsible_barangay_effective: responsibleBarangay(record) };
+    const sourceFile = record.batch_id
+      ? ((await db.pool.query('SELECT filename FROM import_batches WHERE id = $1', [record.batch_id])).rows[0] || {}).filename || null
+      : null;
+    const fullRecord = { ...record, responsible_barangay_effective: responsibleBarangay(record), source_file: sourceFile };
     res.json({
-      record: pinService.isUnlocked(req) ? fullRecord : pinService.maskIdentity(fullRecord),
+      record: pinService.protectIdentity(req, fullRecord),
       identityUnlocked: pinService.isUnlocked(req),
+      // Names/DOB can be corrected only on operational records, while unlocked.
+      identityEditable: pinService.isUnlocked(req) && pinService.namesAllowed(record),
       permissions,
       transfers: referrals,
       history,
@@ -740,10 +852,15 @@ router.put('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
     const changes = req.body?.changes || {};
     const unlocked = pinService.isUnlocked(req);
     const touchesIdentity = EDITABLE_IDENTITY_FIELDS.some(f => Object.prototype.hasOwnProperty.call(changes, f));
+    // Historical names/DOB are de-identified and never modified (also guarded in the
+    // database, migration 015).
+    if (touchesIdentity && !pinService.namesAllowed(record)) {
+      return res.status(403).json({ error: 'This is a de-identified historical record — patient name, date of birth and sex cannot be changed.' });
+    }
     if (touchesIdentity && !unlocked) {
       return res.status(403).json({ error: 'Unlock patient names with your Records PIN to correct name, date of birth or sex.' });
     }
-    const allowed = [...EDITABLE_CASE_FIELDS, ...(unlocked ? EDITABLE_IDENTITY_FIELDS : [])];
+    const allowed = [...EDITABLE_CASE_FIELDS, ...(unlocked && pinService.namesAllowed(record) ? EDITABLE_IDENTITY_FIELDS : [])];
     const unknown = Object.keys(changes).filter(f => !allowed.includes(f));
     if (unknown.length) return res.status(400).json({ error: `These fields cannot be edited here: ${unknown.join(', ')}.` });
 
@@ -754,7 +871,9 @@ router.put('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
     const merged = { ...current };
     for (const [f, v] of Object.entries(changes)) merged[f] = v === '' || v === undefined ? null : v;
     const { record: cleaned } = cleanRecord(merged);
-    const validation = validateRecord(cleaned, record.source_type, await getValidBarangays());
+    // Records saved before Age was required may lack it — editing them must still work.
+    const validation = validateRecord(cleaned, record.source_type, await getValidBarangays(),
+      { legacyMissingAge: record.age === null || record.age === undefined });
     if (!validation.valid) {
       return res.status(422).json({ error: 'Please fix these problems.', errors: validation.errors });
     }
@@ -850,14 +969,11 @@ router.post('/records/lookup', authenticate, authorizeRoles('admin', 'staff'), a
       });
     }
 
-    // Outside scope — return minimal info only
+    // Outside scope — existence only. No facility/barangay metadata: knowing a case
+    // exists elsewhere must not describe it (facility data never informs access).
     return res.json({
       exists: true,
-      case_id: record.id,
       access_status: 'OUTSIDE_CURRENT_SCOPE',
-      current_facility_id: record.current_responsible_facility_id,
-      barangay: record.barangay_name,
-      source_type: record.source_type,
     });
   } catch (error) {
     console.error('Error in case lookup:', error);
@@ -1212,18 +1328,22 @@ router.get('/batches/:id/details', authenticate, authorizeRoles('admin', 'staff'
     const { id } = req.params;
 
     const batchResult = await db.getBatchWithUsers(id);
+    batchResult.rows = await withUserNames(batchResult.rows, {
+      uploaded_by: 'imported_by_username', validated_by: 'validated_by_username',
+      synced_by: 'synced_by_username', archived_by: 'archived_by_username',
+    });
     if (batchResult.rows.length === 0) {
       return res.status(404).json({ error: 'Batch not found' });
     }
 
     const syncResult = await db.pool.query(
-      `SELECT ${db.WEBHOOK_LOG_COLUMNS}, u.username
+      `SELECT ${db.WEBHOOK_LOG_COLUMNS}
        FROM webhook_logs wl
-       LEFT JOIN users u ON wl.initiated_by = u.id
        WHERE wl.batch_id = $1
        ORDER BY wl.sent_at DESC`,
       [id]
     );
+    syncResult.rows = await withUserNames(syncResult.rows, { initiated_by: 'username' });
 
     res.json({
       batch: batchResult.rows[0],

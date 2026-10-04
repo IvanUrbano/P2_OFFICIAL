@@ -184,9 +184,10 @@ describe('validateRecord', () => {
     assert.ok(result.warnings.some(w => w.includes('Unknown barangay') && w.includes('Needs Assignment')));
   });
 
-  it('requires last name, first name and date of birth', () => {
+  // Imports (DSTB/MN) no longer require them — see test/historicalImportRules.test.js.
+  it('manual entry requires last name, first name and date of birth', () => {
     const result = validateRecord(
-      { ...validRecord, last_name: '', first_name: ' ', date_of_birth: null }, 'DSTB', validBarangays
+      { ...validRecord, last_name: '', first_name: ' ', date_of_birth: null }, 'MANUAL', validBarangays
     );
     assert.equal(result.valid, false);
     for (const msg of ['Last name is required', 'First name is required', 'Date of birth is required']) {

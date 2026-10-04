@@ -163,7 +163,11 @@ export default function ValidationPage() {
                     </span>
                   )}
                 </p>
-                <p className="text-[11px] mt-0.5" style={{ color: active ? '#64748B' : '#CBD5E1' }}>{t.desc}</p>
+                <p className="text-[11px] mt-0.5" style={{ color: active ? '#64748B' : '#CBD5E1' }}>
+                  {t.key === 'assignment' && counts.assignmentDetail?.facilityNames > 0
+                    ? `Location · ${counts.assignmentDetail.facilityNames} facility name${counts.assignmentDetail.facilityNames === 1 ? '' : 's'} to map`
+                    : t.desc}
+                </p>
                 {active && <div className="absolute bottom-0 left-0 right-0 h-[2px]" style={{ background: '#0F2D52' }} />}
               </button>
             );

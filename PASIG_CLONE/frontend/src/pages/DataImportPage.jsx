@@ -25,6 +25,7 @@ const HISTORY_TABS = [
   { key: 'archived', label: 'Archived', desc: 'Archived imports' },
   { key: 'all', label: 'All', desc: 'All imports' },
 ];
+const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 export default function DataImportPage() {
   const { t } = useTheme();
@@ -32,12 +33,19 @@ export default function DataImportPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const fileRef = useRef(null);
   const [file, setFile] = useState(null);
+  const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   // Real upload progress (0–100) while the file is sent; null once the server is processing it.
   const [uploadPercent, setUploadPercent] = useState(0);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [duplicateInfo, setDuplicateInfo] = useState(null);
+  // Historical dataset: de-identified for good (names never shown). Default ON.
+  const [historical, setHistorical] = useState(true);
+  const [namesEnabled, setNamesEnabled] = useState(false);
+  useEffect(() => {
+    API.get('/api/data/import-options').then(r => setNamesEnabled(Boolean(r.data.namesEnabled))).catch(() => setNamesEnabled(false));
+  }, []);
 
   const [mainTab, setMainTab] = useState(searchParams.get('tab') === 'history' ? 'history' : 'import');
   const [historyTab, setHistoryTab] = useState('active');
@@ -87,8 +95,7 @@ export default function DataImportPage() {
     }
   }, [mainTab, historyTab]);
 
-  const handleFile = (e) => {
-    const f = e.target.files?.[0];
+  const acceptFile = (f) => {
     if (!f) return;
     const ext = f.name.split('.').pop().toLowerCase();
     if (!['xlsx', 'xls', 'csv'].includes(ext)) {
@@ -96,7 +103,17 @@ export default function DataImportPage() {
       setError('Unsupported file type. Choose an .xlsx, .xls or .csv file.');
       return;
     }
+    if (f.size > MAX_FILE_SIZE) {
+      setFile(null);
+      setError('File exceeds the 20 MB limit. Choose a smaller file.');
+      return;
+    }
     setFile(f); setError(''); setResult(null); setDuplicateInfo(null);
+  };
+
+  const handleFile = (e) => {
+    acceptFile(e.target.files?.[0]);
+    e.target.value = '';
   };
 
   const handleUpload = async () => {
@@ -108,6 +125,7 @@ export default function DataImportPage() {
     try {
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('historical', String(historical || !namesEnabled));
       const res = await API.post('/api/data/import', formData, {
         onUploadProgress: (e) => {
           if (!e.total) return;
@@ -177,7 +195,8 @@ export default function DataImportPage() {
   const filteredHistory = history.filter((b) => {
     if (!historySearch) return true;
     const q = historySearch.toLowerCase();
-    return b.filename?.toLowerCase().includes(q) || b.id?.toLowerCase().includes(q) || b.importedBy?.toLowerCase().includes(q);
+    return b.filename?.toLowerCase().includes(q) || b.id?.toLowerCase().includes(q) || b.importedBy?.toLowerCase().includes(q)
+      || b.importedByUsername?.toLowerCase().includes(q);
   });
 
   return (
@@ -241,34 +260,44 @@ export default function DataImportPage() {
       {mainTab === 'import' && (
         <>
           <div className="rounded-xl p-6" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
-            <div className="flex items-center gap-2 text-sm font-bold mb-1" style={{ color: '#0F2D52' }}>
-              <i className="ri-upload-cloud-2-line text-lg" style={{ color: '#2E6FAF' }} />
-              <span>Upload Tuberculosis Records File</span>
+            <div className="mb-5">
+              <h2 className="text-sm font-bold" style={{ color: '#0F172A' }}>Upload tuberculosis records file</h2>
+              <p className="mt-1 text-xs leading-relaxed" style={{ color: '#475569' }}>
+                Upload an Excel registry file (.xlsx with DSTB and MN sheets) or a CSV export of one sheet. Rows are cleaned and validated before sync.
+              </p>
+              <ul className="mt-2 text-[11px] leading-relaxed list-disc ml-4" style={{ color: '#64748B' }}>
+                <li><span className="font-semibold" style={{ color: '#475569' }}>Required for every row:</span> Date of Diagnosis, Sex and Age. Patient name and date of birth are optional.</li>
+                <li><span className="font-semibold" style={{ color: '#475569' }}>Barangay:</span> rows with a missing or unrecognized Pasig barangay are kept under Validation → Needs Assignment and are not counted as validated until resolved.</li>
+                <li><span className="font-semibold" style={{ color: '#475569' }}>DSTB:</span> no source case number needed. Each row gets a system Case ID and keeps a link to its file row.</li>
+                <li><span className="font-semibold" style={{ color: '#475569' }}>MN:</span> the ITIS Lite Case No. is kept as the source Case ID. Rows without it are imported with a warning.</li>
+              </ul>
             </div>
-            <p className="text-xs text-gray-500 leading-relaxed mb-4">
-              Upload an Excel registry file (.xlsx with DSTB and MN sheets) or a CSV export of one sheet. Rows are cleaned and validated before sync.
-            </p>
 
             <label
-              className="flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-10 text-center cursor-pointer transition hover:opacity-80"
-              style={{ borderColor: file ? '#10B981' : 'rgba(46,111,175,0.35)', background: file ? 'rgba(16,185,129,0.04)' : 'rgba(46,111,175,0.04)' }}
+              onDragOver={e => { e.preventDefault(); setDragging(true); }}
+              onDragLeave={e => { e.preventDefault(); if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false); }}
+              onDrop={e => { e.preventDefault(); setDragging(false); acceptFile(e.dataTransfer.files?.[0]); }}
+              className="flex min-h-[110px] items-center gap-4 border border-dashed px-6 py-5 text-left cursor-pointer transition-colors"
+              style={{ borderColor: dragging ? '#64748B' : '#CBD5E1', background: dragging ? '#F8FAFC' : '#ffffff' }}
             >
               <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="sr-only" onChange={handleFile} />
-              <i className={file ? (file.name.toLowerCase().endsWith('.csv') ? 'ri-file-text-line text-3xl' : 'ri-file-excel-2-line text-3xl') : 'ri-file-upload-line text-3xl'} style={{ color: file ? '#10B981' : '#2E6FAF' }} />
+              <i className={file ? (file.name.toLowerCase().endsWith('.csv') ? 'ri-file-text-line text-3xl' : 'ri-file-excel-2-line text-3xl') : 'ri-upload-cloud-2-line text-3xl'} style={{ color: '#64748B' }} />
               {file ? (
-                <>
-                  <span className="text-sm font-bold" style={{ color: '#0F2D52' }}>{file.name}</span>
-                  <span className="text-[11px]" style={{ color: '#64748B' }}>
-                    {(file.size / 1024).toFixed(1)} KB — click to change file
-                  </span>
-                </>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-semibold" style={{ color: '#0F172A' }}>{file.name}</span>
+                  <span className="mt-0.5 block text-xs" style={{ color: '#64748B' }}>{(file.size / 1024).toFixed(1)} KB · click to change file</span>
+                </span>
               ) : (
-                <>
-                  <span className="text-sm font-bold" style={{ color: '#0F2D52' }}>Click or drag file to choose</span>
-                  <span className="text-[11px]" style={{ color: '#64748B' }}>Excel (.xlsx, .xls) or CSV (.csv)</span>
-                </>
+                <span>
+                  <span className="block text-sm font-semibold" style={{ color: '#0F172A' }}>Click or drag file to choose</span>
+                  <span className="mt-0.5 block text-xs" style={{ color: '#64748B' }}>Excel (.xlsx, .xls) or CSV (.csv) · max 20 MB</span>
+                </span>
               )}
             </label>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t pt-4 text-xs" style={{ borderColor: '#E2E8F0', color: '#64748B' }}>
+              <span>Expected sheets: <strong style={{ color: '#334155' }}>DSTB, MN</strong> · Required fields: Barangay, Diagnosis Date, Sex, and Age. Case ID is required when available/applicable.</span>
+            </div>
 
             {error && (
               <div className="mt-4 px-3.5 py-2.5 rounded-lg text-xs flex items-center gap-2" style={{ background: '#FEF2F2', color: '#991B1B', border: '1px solid #FCA5A5' }}>
@@ -300,6 +329,28 @@ export default function DataImportPage() {
             )}
 
             {file && (
+              <label className="mt-4 flex items-start gap-2.5 px-4 py-3 rounded-lg cursor-pointer" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={historical || !namesEnabled}
+                  disabled={!namesEnabled || uploading}
+                  onChange={e => setHistorical(e.target.checked)}
+                />
+                <span className="text-xs" style={{ color: '#0F2D52' }}>
+                  <span className="font-bold">Historical dataset</span>
+                  <span className="block text-[11px] mt-0.5" style={{ color: '#64748B' }}>
+                    {!namesEnabled
+                      ? 'Patient-name display is not approved yet, so every import is de-identified. Names are stored but never shown.'
+                      : historical
+                        ? 'Past records: names are stored but never shown (De-identified), and they stay that way permanently.'
+                        : 'Current operational records: names will be visible to authorized users after they unlock the Records PIN. This cannot be undone for this file.'}
+                  </span>
+                </span>
+              </label>
+            )}
+
+            {file && (
               <div className="mt-4 flex justify-end">
                 <button
                   onClick={handleUpload}
@@ -321,12 +372,13 @@ export default function DataImportPage() {
                 <i className="ri-checkbox-circle-line text-lg" style={{ color: '#10B981' }} />
                 <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Import Complete</h3>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 {[
                   { label: 'Batch ID', value: result.batch?.id?.slice(0, 8) || '—' },
                   { label: 'Total Records', value: result.batch?.totalRows || 0 },
                   { label: 'DSTB', value: result.batch?.dstbCount || 0 },
                   { label: 'MN', value: result.batch?.mnCount || 0 },
+                  { label: 'Patient names', value: result.batch?.identityClass === 'operational' ? 'Shown to authorized users' : 'De-identified' },
                 ].map((item) => (
                   <div key={item.label} className="p-3.5 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #F1F5F9' }}>
                     <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>{item.label}</p>
@@ -410,7 +462,12 @@ export default function DataImportPage() {
                     <tr key={b.id} className="hover:bg-blue-50/40 transition-colors" style={{ borderBottom: '1px solid #F1F5F9' }}>
                       <td className="px-4 py-3 text-xs font-bold font-mono" style={{ color: '#0F2D52' }}>{b.id?.slice(0, 8) || '—'}</td>
                       <td className="px-4 py-3 text-xs font-bold" style={{ color: '#0F2D52' }}>{b.filename || '—'}</td>
-                      <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{b.importedBy || '—'}</td>
+                      <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>
+                        {b.importedBy || '—'}
+                        {b.importedByUsername && b.importedByUsername !== b.importedBy && (
+                          <span className="block text-[10px]" style={{ color: '#94A3B8' }}>@{b.importedByUsername}</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-xs font-semibold" style={{ color: '#475569' }}>{b.records ?? '—'}</td>
                       <td className="px-4 py-3 text-xs font-semibold" style={{ color: '#10B981' }}>{b.validated ?? '—'}</td>
                       <td className="px-4 py-3 text-xs font-semibold" style={{ color: b.rejected > 0 ? '#EF4444' : '#475569' }}>{b.rejected ?? '—'}</td>

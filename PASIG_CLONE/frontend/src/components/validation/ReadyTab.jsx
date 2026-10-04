@@ -60,6 +60,7 @@ export default function ReadyTab({ batch, batches, refreshKey, canSync = false }
                         {b.open_items === 0 ? 'None' : [
                           b.counts.matches && `${b.counts.matches} match${b.counts.matches === 1 ? '' : 'es'}`,
                           b.counts.assignment && `${b.counts.assignment} assignment`,
+                          b.counts.facilityNames && `${b.counts.facilityNames} facility name${b.counts.facilityNames === 1 ? '' : 's'}`,
                           b.counts.issues && `${b.counts.issues} data issue${b.counts.issues === 1 ? '' : 's'}`,
                         ].filter(Boolean).join(' · ')}
                       </td>

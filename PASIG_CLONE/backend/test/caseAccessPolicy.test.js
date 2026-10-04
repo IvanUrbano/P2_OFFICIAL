@@ -20,7 +20,7 @@ require.cache[dbPath] = {
 };
 
 const {
-  ACCESS, resolveUserScope, getCaseAccess, canViewCase, canEditCase, getCaseListScope,
+  ACCESS, isNonPasig, resolveUserScope, getCaseAccess, canViewCase, canEditCase, getCaseListScope,
   isReferralReceiver, isReferralSender, responsibleBarangay,
 } = require('../policies/caseAccessPolicy');
 
@@ -84,6 +84,10 @@ describe('getCaseListScope', () => {
     assert.deepStrictEqual(s.params, [17]);
     assert.ok(s.where.includes('v.barangay_id') && s.where.includes('v.responsible_barangay_id') && s.where.includes('$4'));
     assert.ok(!s.where.includes('treatment_facility'));
+    // Facility data is not part of the scope in any form: no facility column in the
+    // fragment, no facility key in the returned scope object (see facilityAccess.test.js).
+    assert.ok(!s.where.includes('facility_id'), `facility id leaked into scope: ${s.where}`);
+    assert.deepStrictEqual(Object.keys(s).sort(), ['params', 'where']);
   });
 
   it('compares by id when the record has ids (names may differ in spelling)', () => {
@@ -113,5 +117,27 @@ describe('referral roles', () => {
   it('responsible barangay defaults to the patient barangay', () => {
     assert.strictEqual(responsibleBarangay({ barangay_name: 'Pineda' }), 'Pineda');
     assert.strictEqual(responsibleBarangay({ barangay_name: 'Pineda', responsible_barangay: 'Rosario' }), 'Rosario');
+  });
+});
+
+describe('Non-Pasig records are admin-only', () => {
+  const confirmed = { barangay_id: 17, barangay_name: 'Rosario', location_resolution: 'outside_pasig' };
+  const otherCity = { barangay_id: 17, barangay_name: 'Rosario', city: 'Quezon City' };
+  it('staff cannot view them even when the barangay name matches theirs', () => {
+    assert.strictEqual(canViewCase(maria, rosario, confirmed), false);
+    assert.strictEqual(canViewCase(maria, rosario, otherCity), false);
+    assert.ok(canViewCase(maria, rosario, { barangay_id: 17, city: 'Pasig City' }));
+  });
+  it('admin still sees them', () => {
+    assert.ok(canViewCase(admin, null, confirmed));
+    assert.ok(canViewCase(admin, null, otherCity));
+  });
+  it('isNonPasig treats a missing city as Pasig', () => {
+    assert.strictEqual(isNonPasig({}), false);
+    assert.strictEqual(isNonPasig({ city: ' pasig ' }), false);
+  });
+  it('the list scope excludes them in SQL', () => {
+    const s = getCaseListScope(maria, rosario, 'v', 1);
+    assert.ok(s.where.includes("location_resolution IS DISTINCT FROM 'outside_pasig'") && s.where.includes('v.city'));
   });
 });

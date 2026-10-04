@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import API from '../api/axios';
+import { patientName } from '../utils/patientName';
 import StatusBadge from '../components/StatusBadge';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
@@ -9,6 +10,7 @@ import RecordDetailDrawer from '../components/RecordDetailDrawer';
 import IncomingReferrals from '../components/IncomingReferrals';
 import RowMenu from '../components/RowMenu';
 import ProgressOverlay from '../components/ProgressOverlay';
+import TablePagination from '../components/TablePagination';
 import { can, accessBasis } from '../utils/permissions';
 
 const EMPTY_FORM = {
@@ -39,9 +41,17 @@ const RESOLUTION_LABELS = {
 const inputStyle = { background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52', borderRadius: 4 };
 const labelStyle = { color: '#0F2D52' };
 
-function fullName(r) {
-  if (!r || (!r.last_name && !r.first_name)) return '—';
-  return `${r.last_name || ''}, ${r.first_name || ''}${r.middle_name ? ` ${r.middle_name}` : ''}${r.suffix ? ` ${r.suffix}` : ''}`;
+const fullName = (r) => patientName(r);
+
+function FormSelect({ children, className, style, ...props }) {
+  return (
+    <div className="relative">
+      <select {...props} className={`${className} appearance-none`} style={{ ...style, paddingRight: '2.5rem' }}>
+        {children}
+      </select>
+      <i aria-hidden="true" className="ri-arrow-down-s-line absolute right-3 top-1/2 -translate-y-1/2 text-sm pointer-events-none" style={{ color: '#64748B' }} />
+    </div>
+  );
 }
 
 function fmtDate(v) {
@@ -57,6 +67,30 @@ function computeAge(dob, dx) {
   if (m < bm || (m === bm && d < bd)) age -= 1;
   return age < 0 ? null : age;
 }
+
+/* Table columns — same table UI as Health Facilities: navy header, click-to-sort.
+   `field` maps to the whitelisted sort keys on GET /records (null = not sortable). */
+const RECORD_COLUMNS = [
+  { label: 'Patient #', field: 'patient_no' },
+  { label: 'Case ID', field: 'case' },
+  { label: 'Name', field: 'patient' },
+  { label: 'Barangay', field: 'barangay' },
+  { label: 'Diagnosis', field: 'date' },
+  { label: 'Sex', field: 'sex' },
+  { label: 'Age', field: 'age' },
+  { label: 'Facility (Screening)', field: 'facility' },
+  { label: 'Bacteriologic Status', field: 'bact' },
+  { label: 'Outcome', field: 'outcome' },
+  { label: 'Source', field: 'source' },
+  { label: 'Access', field: null },
+  { label: 'Action', field: null },
+];
+
+const SOURCE_STYLES = {
+  DSTB: { background: '#EAF1F8', color: '#526B85' },
+  MN: { background: '#F0EDF3', color: '#695C74' },
+  MANUAL: { background: '#F1F3F5', color: '#475569' },
+};
 
 
 export default function TBRecordsPage() {
@@ -77,12 +111,16 @@ export default function TBRecordsPage() {
   const [counts, setCounts] = useState({ all: 0, matches: 0, unassigned: null });
   const [pagination, setPagination] = useState({ page: 1, totalPages: 0, total: 0 });
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [sort, setSort] = useState({ field: 'id', dir: 'desc' });
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(null);
-  const [archivingRecord, setArchivingRecord] = useState(null);
+  const [archiveTarget, setArchiveTarget] = useState(null);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState('');
   const [detailId, setDetailId] = useState(null);
   const [detailMode, setDetailMode] = useState('view'); // 'view' | 'edit' | 'refer'
   const [rowMenu, setRowMenu] = useState(null); // { record, anchor }
@@ -120,12 +158,17 @@ export default function TBRecordsPage() {
     setLoading(true);
     setError('');
     try {
-      const params = new URLSearchParams({ page, limit: view === 'matches' ? 200 : 50, view });
+      const params = new URLSearchParams({ page, limit: pageSize, view });
       if (search) params.set('search', search);
+      params.set('sort', sort.field);
+      params.set('dir', sort.dir);
       const res = await API.get(`/api/data/records?${params}`);
       setRecords(res.data.records || []);
       setCounts(res.data.counts || {});
       setPagination(res.data.pagination || { page: 1, totalPages: 0, total: 0 });
+      if (res.data.pagination?.total > 0 && page > res.data.pagination.totalPages) {
+        setPage(res.data.pagination.totalPages);
+      }
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to load records.');
     } finally {
@@ -144,7 +187,7 @@ export default function TBRecordsPage() {
     API.get('/api/data/manual-options').then(r => setOptions(r.data || {})).catch(() => {});
   }, []);
 
-  useEffect(() => { fetchRecords(); }, [view, page, search]);
+  useEffect(() => { fetchRecords(); }, [view, page, pageSize, search, sort]);
 
   const loadPinStatus = () => API.get('/api/auth/pin/status').then(r => setPinStatus(r.data)).catch(() => {});
   useEffect(() => { loadPinStatus(); }, []);
@@ -197,17 +240,19 @@ export default function TBRecordsPage() {
   const viewOnlyReason = (r) => (accessBasis(r) === 'referred_out'
     ? `Referred to ${r.responsible_barangay} — they handle this case`
     : 'View only for your account');
-  const archiveRecord = async (r) => {
-    if (!window.confirm(`Archive ${r.case_no || 'this record'}? It is hidden from lists and analysis but kept for the record.`)) return;
-    setArchivingRecord(r);
+  const archiveRecord = async () => {
+    if (!archiveTarget || archiving) return;
+    const record = archiveTarget;
+    setArchiving(true);
     try {
-      await API.patch(`/api/data/records/${r.id}/archive`);
-      setNotice({ type: 'success', text: `${r.case_no || 'Record'} archived.` });
+      await API.patch(`/api/data/records/${record.id}/archive`);
+      setArchiveTarget(null);
+      setNotice({ type: 'success', text: `${record.case_no || 'Record'} archived.` });
       fetchRecords();
     } catch (err) {
-      setNotice({ type: 'error', text: err.response?.data?.error || 'Failed to archive the record.' });
+      setArchiveError(err.response?.data?.error || 'Failed to archive the record.');
     } finally {
-      setArchivingRecord(null);
+      setArchiving(false);
     }
   };
   const rowMenuItems = (r) => [
@@ -215,10 +260,17 @@ export default function TBRecordsPage() {
     { label: 'Edit details', icon: 'ri-edit-line', disabled: !can(r, 'edit'), reason: viewOnlyReason(r), onClick: () => openDetail(r.id, 'edit') },
     { label: 'Refer case', icon: 'ri-share-forward-line', disabled: !can(r, 'refer'), reason: can(r, 'edit') ? 'Not available for this case' : viewOnlyReason(r), onClick: () => openDetail(r.id, 'refer') },
     { divider: true },
-    { label: 'Archive', icon: 'ri-archive-line', danger: true, disabled: !can(r, 'archive'), reason: viewOnlyReason(r), onClick: () => archiveRecord(r) },
+    { label: 'Archive', icon: 'ri-archive-line', danger: true, disabled: !can(r, 'archive'), reason: viewOnlyReason(r), onClick: () => { setArchiveError(''); setArchiveTarget(r); } },
   ];
 
   const switchView = (v) => { setView(v); setPage(1); setNotice(null); };
+
+  // Server-side sort (the list is paginated, so ordering happens in SQL). A newly
+  // clicked column starts ascending; clicking the active one toggles it.
+  const handleSort = (field) => {
+    setSort(s => ({ field, dir: s.field === field ? (s.dir === 'asc' ? 'desc' : 'asc') : 'asc' }));
+    setPage(1);
+  };
 
 
   // ── Add record ──
@@ -309,8 +361,8 @@ export default function TBRecordsPage() {
   return (
     <div className="space-y-5">
       <ProgressOverlay
-        open={Boolean(archivingRecord)}
-        title={`Archiving ${archivingRecord?.case_no || 'record'}`}
+        open={archiving}
+        title={`Archiving ${archiveTarget?.case_no || 'record'}`}
         detail="Hiding the record from lists and analysis. It is kept for the record."
         icon="ri-archive-line"
         tone="#D97706"
@@ -325,7 +377,7 @@ export default function TBRecordsPage() {
           </div>
           <div className="flex gap-2 shrink-0">
             {canAdd && (
-              <button onClick={openForm} className="px-4 py-2 text-xs font-semibold" style={{ background: '#16A34A', color: '#ffffff', borderRadius: 4 }}>
+              <button onClick={openForm} className="px-4 py-2 text-xs font-semibold" style={{ background: '#047857', color: '#ffffff', borderRadius: 4 }}>
                 + Add TB Record
               </button>
             )}
@@ -424,21 +476,46 @@ export default function TBRecordsPage() {
             description="There are no records matching your search." />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full text-left" style={{ borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ background: '#FAFCFF', borderBottom: '1px solid #E2E8F0' }}>
-                  {['Patient #', 'Case ID', 'Name', 'Barangay', 'Diagnosis', 'Sex', 'Age', 'Outcome', 'Source', 'Access', ''].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#0F2D52' }}>{h}</th>
-                  ))}
+                <tr style={{ background: '#0F2D52' }}>
+                  {RECORD_COLUMNS.map(({ label, field }, idx) => {
+                    const isActive = field && sort.field === field;
+                    return (
+                      <th
+                        key={label}
+                        className={`${idx === 0 ? 'pl-6' : 'px-3'} pr-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${field ? 'cursor-pointer select-none' : ''}`}
+                        style={{
+                          color: isActive ? '#93C5FD' : '#ffffff',
+                          borderBottom: '1px solid #1E40AF',
+                          borderRight: idx < RECORD_COLUMNS.length - 1 ? '1px solid #1E40AF' : 'none',
+                          transition: 'color 0.15s',
+                        }}
+                        onClick={field ? () => handleSort(field) : undefined}
+                        onMouseEnter={(e) => { if (field && !isActive) e.currentTarget.style.color = '#CBD5E1'; }}
+                        onMouseLeave={(e) => { if (field && !isActive) e.currentTarget.style.color = '#ffffff'; }}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          {label}
+                          {field && (
+                            <span className="inline-flex flex-col leading-none" style={{ gap: '1px' }}>
+                              <i className="ri-arrow-up-s-line" style={{ fontSize: '8px', lineHeight: '8px', color: isActive && sort.dir === 'asc' ? '#93C5FD' : 'rgba(255,255,255,0.25)' }} />
+                              <i className="ri-arrow-down-s-line" style={{ fontSize: '8px', lineHeight: '8px', color: isActive && sort.dir === 'desc' ? '#93C5FD' : 'rgba(255,255,255,0.25)' }} />
+                            </span>
+                          )}
+                        </span>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {records.map(r => (
-                  <tr key={r.id} className="hover:bg-blue-50/40" style={{ borderBottom: '1px solid #F1F5F9' }}>
-                    <td className="px-4 py-3 text-xs font-mono font-bold whitespace-nowrap" style={{ color: '#0F2D52' }}>{r.patient_no || '—'}</td>
-                    <td className="px-4 py-3 text-xs font-mono whitespace-nowrap" style={{ color: '#0F2D52' }}>{r.case_no || '—'}</td>
-                    <td className="px-4 py-3 text-xs font-semibold" style={{ color: '#0F2D52' }}>{fullName(r)}</td>
-                    <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>
+                {records.map((r, i) => (
+                  <tr key={r.id} className={`hover:bg-blue-50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]'}`} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                    <td className="pl-6 pr-3 py-2.5 text-xs font-mono font-bold whitespace-nowrap" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }}>{r.patient_no || '—'}</td>
+                    <td className="px-3 py-2.5 text-xs font-mono whitespace-nowrap" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }}>{r.case_no || '—'}</td>
+                    <td className="px-3 py-2.5 text-xs font-semibold whitespace-nowrap" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }}>{fullName(r)}</td>
+                    <td className="px-3 py-2.5 text-xs" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>
                       {r.barangay_name || '—'}
                       {/* Responsibility moved by an accepted referral (patient barangay itself never changes) */}
                       {r.responsible_barangay && r.responsible_barangay !== r.barangay_name && (
@@ -449,22 +526,29 @@ export default function TBRecordsPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-xs whitespace-nowrap" style={{ color: '#475569' }}>{fmtDate(r.date_of_diagnosis)}</td>
-                    <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{r.sex || '—'}</td>
-                    <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{r.age ?? '—'}</td>
-                    <td className="px-4 py-3"><StatusBadge status={r.outcome_status || '—'} /></td>
-                    <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{r.source_type}</td>
-                    <td className="px-4 py-3 whitespace-nowrap">
+                    <td className="px-3 py-2.5 text-xs whitespace-nowrap" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{fmtDate(r.date_of_diagnosis)}</td>
+                    <td className="px-3 py-2.5 text-xs" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{r.sex || '—'}</td>
+                    <td className="px-3 py-2.5 text-xs" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{r.age ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-xs max-w-[170px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }} title={r.screening_facility || undefined}>{r.screening_facility || '—'}</td>
+                    <td className="px-3 py-2.5 text-xs max-w-[170px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }} title={r.bacteriological_status || undefined}>{r.bacteriological_status || '—'}</td>
+                    <td className="px-3 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}><StatusBadge status={r.outcome_status || '—'} /></td>
+                    <td className="px-3 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}>
+                      <span className="inline-flex px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide rounded-full whitespace-nowrap"
+                        style={SOURCE_STYLES[r.source_type] || SOURCE_STYLES.MANUAL}>
+                        {r.source_type || '—'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap" style={{ borderRight: '1px solid #E2E8F0' }}>
                       {/* From the server's permission decision — the API also refuses edits on view-only cases. */}
                       {can(r, 'edit') ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
-                          style={{ background: '#ECFDF5', color: '#047857', border: '1px solid #A7F3D0' }}
+                          style={{ background: '#EAF1EA', color: '#526A56' }}
                           title={accessBasis(r) === 'referred_in' ? 'Referred to your barangay — you handle this case' : 'Your barangay handles this case'}>
                           <i className="ri-edit-line" />Editable
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
-                          style={{ background: '#F8FAFC', color: '#64748B', border: '1px solid #E2E8F0' }}
+                          style={{ background: '#F1F3F5', color: '#647080' }}
                           title={accessBasis(r) === 'referred_out'
                             ? `Your resident, referred to ${r.responsible_barangay}. ${r.responsible_barangay} handles this case.`
                             : 'You can view this case but not change it.'}>
@@ -472,19 +556,17 @@ export default function TBRecordsPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-3 py-3 whitespace-nowrap text-right">
+                    <td className="px-3 py-2.5">
                       <div className="inline-flex items-center gap-1">
-                        <button onClick={() => openDetail(r.id)} className="px-2.5 py-1 text-[11px] font-semibold"
-                          style={{ background: '#F3F4F6', color: '#0F2D52', border: '1px solid #D1D5DB', borderRadius: 4 }}>View</button>
                         <button
                           type="button"
                           aria-label={`More actions for ${r.case_no || 'record'}`}
                           aria-haspopup="menu"
                           onClick={(e) => setRowMenu(rowMenu?.record.id === r.id ? null : { record: r, anchor: e.currentTarget })}
-                          className="w-7 h-7 inline-flex items-center justify-center rounded"
-                          style={{ color: rowMenu?.record.id === r.id ? '#0F2D52' : '#64748B', background: rowMenu?.record.id === r.id ? '#EEF2F7' : 'transparent' }}
+                          className="inline-flex items-center justify-center h-6 w-6 rounded"
+                          style={{ color: rowMenu?.record.id === r.id ? '#0F2D52' : '#64748B', background: rowMenu?.record.id === r.id ? '#EEF2F7' : 'transparent', transition: 'color 0.15s' }}
                         >
-                          <i className="ri-more-2-fill text-base" />
+                          <i className="ri-more-2-fill text-sm" />
                         </button>
                       </div>
                     </td>
@@ -494,18 +576,38 @@ export default function TBRecordsPage() {
             </table>
           </div>
         )}
-        {pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3" style={{ borderTop: '1px solid #E2E8F0', background: '#FAFCFF' }}>
-            <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Page {pagination.page} of {pagination.totalPages} ({pagination.total} records)</span>
-            <div className="flex gap-1.5">
-              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1.5 text-[11px] font-bold rounded-md disabled:opacity-40" style={{ border: '1px solid #CBD5E1', background: '#ffffff', color: '#0F2D52' }}>Prev</button>
-              <button onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))} disabled={page >= pagination.totalPages} className="px-3 py-1.5 text-[11px] font-bold rounded-md disabled:opacity-40" style={{ border: '1px solid #CBD5E1', background: '#ffffff', color: '#0F2D52' }}>Next</button>
-            </div>
-          </div>
+        {view === 'all' && !loading && !error && (
+          <TablePagination
+            page={pagination.page}
+            pageSize={pageSize}
+            total={pagination.total}
+            itemName="records"
+            onPageChange={setPage}
+            onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+          />
         )}
       </div>
 
       {rowMenu && <RowMenu anchor={rowMenu.anchor} items={rowMenuItems(rowMenu.record)} onClose={() => setRowMenu(null)} />}
+      {archiveTarget && (
+        <div className="fixed inset-0 z-[1400] flex items-center justify-center px-4" style={{ background: 'rgba(0,0,0,0.4)' }} onClick={() => { if (!archiving) setArchiveTarget(null); }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="archive-dialog-title" className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl" onClick={e => e.stopPropagation()}>
+            <h2 id="archive-dialog-title" className="text-sm font-bold" style={{ color: '#0F2D52' }}>Archive record?</h2>
+            <p className="mt-2 text-xs leading-relaxed" style={{ color: '#475569' }}>
+              {archiveTarget.case_no || 'This record'} will be removed from active lists and analysis. Its history will be kept.
+            </p>
+            {archiveError && <p role="alert" className="mt-3 rounded px-3 py-2 text-xs" style={{ background: '#FEF2F2', color: '#991B1B' }}>{archiveError}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" disabled={archiving} onClick={() => setArchiveTarget(null)} className="px-4 py-2 text-xs font-medium disabled:opacity-50" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}>
+                Cancel
+              </button>
+              <button type="button" disabled={archiving} onClick={archiveRecord} className="px-4 py-2 text-xs font-semibold disabled:opacity-50" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 }}>
+                {archiving ? 'Archiving…' : 'Archive record'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {detailId && (
         <RecordDetailDrawer key={`${detailId}-${detailMode}`} recordId={detailId} initialMode={detailMode} facilities={facilities} barangays={barangayRefs} onClose={() => setDetailId(null)} onChanged={fetchRecords} />
       )}
@@ -513,15 +615,19 @@ export default function TBRecordsPage() {
       {/* ── Slide-over: Add TB Record ── */}
       {showForm && (
         <div className="fixed inset-0 z-[1200] flex justify-end" style={{ background: 'rgba(15,23,42,0.3)' }} onClick={closeForm}>
-          <div className="w-full max-w-lg h-full overflow-y-auto" style={{ background: '#ffffff' }} onClick={e => e.stopPropagation()}>
-            <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4" style={{ background: '#0F2D52', color: '#ffffff' }}>
+          <div className="w-full max-w-lg h-full flex flex-col overflow-hidden" style={{ background: '#ffffff' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ background: '#0F2D52', color: '#ffffff' }}>
               <div>
                 <h2 className="text-sm font-extrabold">Add TB Record</h2>
                 <p className="text-[11px] mt-0.5 opacity-70">Patient # and Case ID are assigned automatically.</p>
               </div>
-              <button onClick={closeForm} className="text-white/70 hover:text-white text-lg">✕</button>
+              <button type="button" onClick={closeForm} aria-label="Close" className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
+                <i className="ri-close-line text-base" />
+              </button>
             </div>
 
+            <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 overflow-y-auto">
             {result && (
               <div className="mx-6 mt-4 px-4 py-3 rounded-lg text-xs font-semibold" style={{ background: result.sync?.status === 'failed' ? '#FEF9C3' : '#DCFCE7', color: result.sync?.status === 'failed' ? '#854D0E' : '#166534' }}>
                 {result.message}
@@ -561,7 +667,7 @@ export default function TBRecordsPage() {
               </div>
             )}
 
-            <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="px-6 py-5 space-y-4">
+            <div className="px-6 py-5 space-y-4">
               {/* Patient */}
               <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Patient</p>
               <div className="grid grid-cols-2 gap-3">
@@ -591,11 +697,11 @@ export default function TBRecordsPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold mb-1" style={labelStyle}>Sex *</label>
-                  <select value={form.sex} onChange={e => setField('sex', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                  <FormSelect value={form.sex} onChange={e => setField('sex', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                     <option value="">Select…</option>
                     <option value="Male">Male</option>
                     <option value="Female">Female</option>
-                  </select>
+                  </FormSelect>
                 </div>
                 <div>
                   <label className="block text-xs font-bold mb-1" style={labelStyle}>Age</label>
@@ -608,10 +714,10 @@ export default function TBRecordsPage() {
 
               <div>
                 <label className="block text-xs font-bold mb-1" style={labelStyle}>Barangay *</label>
-                <select value={form.barangay_name} onChange={e => setField('barangay_name', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                <FormSelect value={form.barangay_name} onChange={e => setField('barangay_name', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                   <option value="">Select barangay…</option>
                   {PASIG_BARANGAYS.map(b => <option key={b} value={b}>{b}</option>)}
-                </select>
+                </FormSelect>
               </div>
 
               {/* Case */}
@@ -639,11 +745,11 @@ export default function TBRecordsPage() {
 
               <div>
                 <label className="block text-xs font-bold mb-1" style={labelStyle}>Screening Facility</label>
-                <select value={form.screening_facility} onChange={e => setField('screening_facility', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                <FormSelect value={form.screening_facility} onChange={e => setField('screening_facility', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                   <option value="">Select facility…</option>
                   {facilityList.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
                   <option value="__other__">Other (type below)</option>
-                </select>
+                </FormSelect>
                 {form.screening_facility === '__other__' && (
                   <input type="text" value={form.screening_facility_other} onChange={e => setField('screening_facility_other', e.target.value)} placeholder="Enter facility name" className="w-full px-3 py-2 text-xs outline-none mt-1" style={inputStyle} />
                 )}
@@ -651,11 +757,11 @@ export default function TBRecordsPage() {
 
               <div>
                 <label className="block text-xs font-bold mb-1" style={labelStyle}>Treatment Facility</label>
-                <select value={form.treatment_facility} onChange={e => setField('treatment_facility', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                <FormSelect value={form.treatment_facility} onChange={e => setField('treatment_facility', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                   <option value="">Select facility…</option>
                   {facilityList.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
                   <option value="__other__">Other (type below)</option>
-                </select>
+                </FormSelect>
                 {form.treatment_facility === '__other__' && (
                   <input type="text" value={form.treatment_facility_other} onChange={e => setField('treatment_facility_other', e.target.value)} placeholder="Enter facility name" className="w-full px-3 py-2 text-xs outline-none mt-1" style={inputStyle} />
                 )}
@@ -663,44 +769,44 @@ export default function TBRecordsPage() {
 
               <div>
                 <label className="block text-xs font-bold mb-1" style={labelStyle}>Source of Patient</label>
-                <select value={form.source_of_patient} onChange={e => setField('source_of_patient', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                <FormSelect value={form.source_of_patient} onChange={e => setField('source_of_patient', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                   <option value="">Select…</option>
                   {srcOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
+                </FormSelect>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold mb-1" style={labelStyle}>Registration Group</label>
-                  <select value={form.registration_group} onChange={e => setField('registration_group', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                  <FormSelect value={form.registration_group} onChange={e => setField('registration_group', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                     <option value="">Select…</option>
                     {regOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                  </select>
+                  </FormSelect>
                 </div>
                 <div>
                   <label className="block text-xs font-bold mb-1" style={labelStyle}>Anatomical Site</label>
-                  <select value={form.anatomical_site} onChange={e => setField('anatomical_site', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                  <FormSelect value={form.anatomical_site} onChange={e => setField('anatomical_site', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                     <option value="">Select…</option>
                     {anatOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                  </select>
+                  </FormSelect>
                 </div>
               </div>
 
               <div>
                 <label className="block text-xs font-bold mb-1" style={labelStyle}>Bacteriological Status</label>
-                <select value={form.bacteriological_status} onChange={e => setField('bacteriological_status', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                <FormSelect value={form.bacteriological_status} onChange={e => setField('bacteriological_status', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                   <option value="">Select…</option>
                   {bactOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
+                </FormSelect>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold mb-1" style={labelStyle}>Outcome Status</label>
-                  <select value={form.outcome_status} onChange={e => setField('outcome_status', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                  <FormSelect value={form.outcome_status} onChange={e => setField('outcome_status', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                     <option value="">Select…</option>
                     {OUTCOME_OPTIONS.map(v => <option key={v} value={v}>{v}</option>)}
-                  </select>
+                  </FormSelect>
                 </div>
                 <div>
                   <label className="block text-xs font-bold mb-1" style={labelStyle}>Date of Outcome</label>
@@ -713,12 +819,14 @@ export default function TBRecordsPage() {
                 <input type="text" value={form.itis_case_id} onChange={e => setField('itis_case_id', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} placeholder="For MN records" />
               </div>
 
-              <div className="flex gap-3 pt-2">
-                <button type="submit" disabled={saving || !!possibleMatch} className="flex-1 px-4 py-2.5 text-xs font-bold rounded-md disabled:opacity-50" style={{ background: '#16A34A', color: '#ffffff' }}>
-                  {saving ? <><i className="ri-loader-4-line animate-spin mr-1" />Saving…</> : possibleMatch ? 'Choose an option above' : 'Save Record'}
-                </button>
-                <button type="button" onClick={closeForm} className="px-4 py-2.5 text-xs font-bold rounded-md" style={{ border: '1px solid #CBD5E1', background: '#ffffff', color: '#0F2D52' }}>
+            </div>
+              </div>
+              <div className="shrink-0 px-6 pt-4 pb-6 flex items-center justify-end gap-2" style={{ background: '#ffffff', borderTop: '1px solid rgba(15,45,82,0.08)' }}>
+                <button type="button" onClick={closeForm} className="px-4 py-2.5 text-xs font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}>
                   Cancel
+                </button>
+                <button type="submit" disabled={saving || !!possibleMatch} className="px-4 py-2.5 text-xs font-bold disabled:opacity-50" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 }}>
+                  {saving ? <><i className="ri-loader-4-line animate-spin mr-1" />Saving…</> : possibleMatch ? 'Choose an option above' : 'Save Record'}
                 </button>
               </div>
             </form>

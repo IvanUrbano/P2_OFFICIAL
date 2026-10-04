@@ -119,9 +119,48 @@ function maskIdentity(row) {
   return out;
 }
 
-const maskUnlessUnlocked = (req, rows) => (isUnlocked(req) ? rows : rows.map(maskIdentity));
+// ---------- Patient-name privacy (migration 015: identity_class) ----------
+// historical  — names/DOB stay stored but are NEVER returned: the API sends nulls plus
+//               identity_deidentified: true and the UI shows "De-identified".
+// operational — created after approval (PATIENT_NAMES_ENABLED=true when its batch was
+//               created). Names are returned only while the approval flag is on AND the
+//               user has unlocked the Records PIN; otherwise masked to initials.
+// A row without identity_class is treated as historical (fail closed). Names are never
+// identifiers — Patient # and Case ID are.
+const IDENTITY_FIELDS = ['last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth'];
+
+const namesEnabled = () => Boolean(config.patientNames && config.patientNames.enabled);
+
+/** May this record's stored names ever be shown (to an authorized, unlocked user)? */
+const namesAllowed = (row) => namesEnabled() && row?.identity_class === 'operational';
+
+/** Class given to a batch created now. */
+const identityClassForNewBatch = () => (namesEnabled() ? 'operational' : 'historical');
+
+/** Remove names and DOB entirely. */
+function deidentify(row) {
+  if (!row) return row;
+  const out = { ...row, identity_deidentified: true, identity_masked: true };
+  for (const f of IDENTITY_FIELDS) out[f] = null;
+  if (row.candidate) out.candidate = deidentify(row.candidate);
+  return out;
+}
+
+/** The single rule for every API response that carries patient identity. */
+function protectIdentity(req, row) {
+  if (!row) return row;
+  let out;
+  if (!namesAllowed(row)) out = deidentify(row);
+  else if (!isUnlocked(req)) out = maskIdentity(row);
+  else out = { ...row };
+  if (row.candidate) out.candidate = protectIdentity(req, row.candidate);
+  return out;
+}
+
+const maskUnlessUnlocked = (req, rows) => rows.map(r => protectIdentity(req, r));
 
 module.exports = {
   isValidPin, getPinRow, setPin, verifyPin, issueUnlock, clearUnlock, unlockedUntil, isUnlocked,
   maskIdentity, maskUnlessUnlocked, UNLOCK_MINUTES, MAX_FAILED,
+  IDENTITY_FIELDS, namesEnabled, namesAllowed, identityClassForNewBatch, deidentify, protectIdentity,
 };

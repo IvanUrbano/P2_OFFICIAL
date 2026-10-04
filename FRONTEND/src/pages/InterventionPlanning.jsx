@@ -70,6 +70,7 @@ export default function InterventionPlanning() {
   const [interventions, setInterventions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [actionError, setActionError] = useState(null);
   const [summary, setSummary] = useState({ total: 0, pending: 0, in_progress: 0, completed: 0, overdue: 0 });
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ total: 0, totalPages: 1 });
@@ -190,6 +191,7 @@ export default function InterventionPlanning() {
 
   const handleCreate = async () => {
     if (!form.title || !form.intervention_type || !form.barangay_name) return;
+    setActionError(null);
     setSaving(true);
     try {
       const storedUser = localStorage.getItem('user');
@@ -205,7 +207,7 @@ export default function InterventionPlanning() {
     } catch (err) {
       if (import.meta.env.DEV) console.error('Create error:', err);
       const msg = err.response?.data?.error || 'Failed to create intervention. Please try again.';
-      alert(msg);
+      setActionError(msg);
     } finally {
       setSaving(false);
     }
@@ -213,6 +215,7 @@ export default function InterventionPlanning() {
 
   const handleUpdate = async () => {
     if (!selectedIntervention) return;
+    setActionError(null);
     setSaving(true);
     try {
       await API.put(`/api/tb/interventions/${selectedIntervention.id}`, form);
@@ -223,13 +226,14 @@ export default function InterventionPlanning() {
     } catch (err) {
       if (import.meta.env.DEV) console.error('Update error:', err);
       const msg = err.response?.data?.error || 'Failed to update intervention. Please try again.';
-      alert(msg);
+      setActionError(msg);
     } finally {
       setSaving(false);
     }
   };
 
   const handleStatusUpdate = async (id, newStatus) => {
+    setActionError(null);
     try {
       await API.put(`/api/tb/interventions/${id}`, { status: newStatus });
       setInterventions(prev => prev.map(i => i.id === id ? { ...i, status: newStatus, completed_at: newStatus === 'completed' ? new Date().toISOString() : i.completed_at } : i));
@@ -239,12 +243,13 @@ export default function InterventionPlanning() {
       setSummary(countsRes.data || { total: 0, pending: 0, in_progress: 0, completed: 0, overdue: 0 });
     } catch (err) {
       if (import.meta.env.DEV) console.error('Status update error:', err);
-      alert('Failed to update status. Please try again.');
+      setActionError('Failed to update status. Please try again.');
     }
   };
 
   const handleDelete = async (id) => {
     setDeleting(true);
+    setActionError(null);
     try {
       await API.delete(`/api/tb/interventions/${id}`);
       setInterventions(prev => prev.filter(i => i.id !== id));
@@ -254,7 +259,7 @@ export default function InterventionPlanning() {
       setSummary(countsRes.data || { total: 0, pending: 0, in_progress: 0, completed: 0, overdue: 0 });
     } catch (err) {
       if (import.meta.env.DEV) console.error('Delete error:', err);
-      alert('Failed to delete intervention. Please try again.');
+      setActionError('Failed to delete intervention. Please try again.');
     } finally {
       setDeleting(false);
     }
@@ -286,6 +291,12 @@ export default function InterventionPlanning() {
 
   return (
     <div className="space-y-6">
+      {actionError && (
+        <div role="alert" className="flex items-start justify-between gap-3 px-4 py-3 rounded-lg text-xs" style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B' }}>
+          <span>{actionError}</span>
+          <button type="button" onClick={() => setActionError(null)} aria-label="Dismiss error" className="shrink-0"><i className="ri-close-line" /></button>
+        </div>
+      )}
 
       {/* ─── Page Header + Tabs + Filters ─── */}
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>

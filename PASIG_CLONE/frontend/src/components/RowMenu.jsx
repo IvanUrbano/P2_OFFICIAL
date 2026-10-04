@@ -12,9 +12,14 @@ export default function RowMenu({ anchor, items, onClose }) {
     const menu = ref.current;
     const h = menu ? menu.offsetHeight : 240;
     const w = menu ? menu.offsetWidth : 208;
-    const below = r.bottom + 4;
-    const top = below + h > window.innerHeight - 8 ? Math.max(8, r.top - h - 4) : below;
-    setPos({ top, left: Math.max(8, r.right - w) });
+    const spaceBelow = Math.max(0, window.innerHeight - r.bottom - 8);
+    const spaceAbove = Math.max(0, r.top - 8);
+    const placeAbove = h > spaceBelow && spaceAbove > spaceBelow;
+    const availableHeight = placeAbove ? spaceAbove : spaceBelow;
+    const menuHeight = Math.min(h, availableHeight);
+    const top = placeAbove ? r.top - menuHeight - 4 : r.bottom + 4;
+    const left = Math.min(window.innerWidth - w - 8, Math.max(8, r.right - w));
+    setPos({ top, left, maxHeight: availableHeight });
   }, [anchor]);
 
   useEffect(() => {
@@ -39,8 +44,8 @@ export default function RowMenu({ anchor, items, onClose }) {
     <div
       ref={ref}
       role="menu"
-      className="fixed z-[1250] w-52 py-1"
-      style={{ top: pos.top, left: pos.left, background: '#ffffff', border: '1px solid #E2E8F0', borderRadius: 6, boxShadow: '0 6px 20px rgba(15,23,42,0.10)' }}
+      className="fixed z-[1250] w-52 max-w-[calc(100vw-16px)] overflow-y-auto py-1"
+      style={{ top: pos.top, left: pos.left, maxHeight: pos.maxHeight, background: '#ffffff', border: '1px solid #E2E8F0', borderRadius: 6, boxShadow: '0 6px 20px rgba(15,23,42,0.10)' }}
     >
       {items.map((item, i) => item.divider ? (
         <div key={`d${i}`} className="my-1" style={{ borderTop: '1px solid #F1F5F9' }} />

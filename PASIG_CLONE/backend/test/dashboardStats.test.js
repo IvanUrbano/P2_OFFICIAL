@@ -1,7 +1,12 @@
 /**
  * Dashboard KPI stats (GET /stats):
- *   - needsReview      = possible matches + needs assignment + data issues (the three
- *                        unresolved categories — NOT the old unvalidated-rows count)
+ *   - total           = the TB Records "All Records" listing rule (live, matches decided,
+ *                       not merged away) so the KPI and the tab badge always agree
+ *   - validated       = the same rule + is_valid (never exceeds total)
+ *   - needsReview      = possible matches + needs assignment (undecided LOCATION) + data
+ *                        issues — records still blocked from validation, so it never
+ *                        overlaps validated. Unmapped facility names are reported
+ *                        separately (pendingActions.facilityNamesToMap), never added.
  *   - pendingReferrals = role-aware: admin sees every pending transfer city-wide, staff
  *                        only the ones awaiting THEIR barangay, staff w/o barangay see 0
  *   - synced           = eligible Pasig records TBInsight accepted: mirrors sendWebhook
@@ -31,7 +36,8 @@ const captured = {
 let staffScope = { rows: [{ barangay_id: 17, barangay_name: 'Rosario' }] };
 
 const COUNTS = {
-  total: 100, validated: 80, possible_matches: 4, needs_assignment: 3, data_issues: 2, synced: 50,
+  total: 100, validated: 80, possible_matches: 4, needs_location: 3, data_issues: 2, synced: 50,
+  facility_records: 75, facility_names: 6,
 };
 
 const DEFAULT_SYNC_ROW = {
@@ -59,9 +65,10 @@ stub('../db/pasigSchema', {
       if (q.includes('FILTER (WHERE status')) {
         return { rows: [{ requires_validation: 1, ready_for_sync: 2, failed_sync: 3 }] };
       }
-      if (q.includes('b.uploaded_by = u.id')) {
+      if (q.includes('b.uploaded_by, b.total_rows')) {
         captured.recentSql = q;
-        return { rows: recentRows };
+        // Rows carry the uploader id; the name comes from the auth database.
+        return { rows: recentRows.map(({ username, ...r }) => ({ ...r, uploaded_by: 3 })) };
       }
       if (q.includes('FROM webhook_logs')) {
         captured.latestSyncSql = q;
@@ -79,6 +86,7 @@ stub('../db/pasigSchema', {
   authPool: {
     query: async (sql) => {
       if (String(sql).includes('JOIN barangays b')) return staffScope;
+      if (String(sql).includes('FROM users WHERE id = ANY')) return { rows: [{ id: 3, username: 'admin1', full_name: '' }] };
       throw new Error(`Unexpected authPool query: ${String(sql).slice(0, 100)}`);
     },
   },
@@ -124,6 +132,22 @@ describe('dashboard stats', () => {
     assert.ok(!('pending' in r.body), 'the old pending field must be removed');
     assert.strictEqual(r.body.synced, 50);
     assert.strictEqual(r.body.pendingActions.needsAssignment, 3, 'admin keeps assignment in the alerts box');
+    assert.deepStrictEqual(r.body.needsReviewBreakdown, { possibleMatches: 4, needsAssignment: 3, dataIssues: 2 });
+  });
+
+  it('unmapped facilities are reported separately and never inflate Needs Review', async () => {
+    const r = await call('admin');
+    assert.strictEqual(r.body.needsReview, 9, 'facility_records (75) must not be added');
+    assert.strictEqual(r.body.pendingActions.facilityNamesToMap, 6);
+    assert.strictEqual(r.body.pendingActions.facilityRecordsToMap, 75);
+    const q = captured.countsSql;
+    const loc = q.slice(q.indexOf('needs_location') - 400, q.indexOf('needs_location'));
+    assert.ok(!loc.includes('treatment_facility'), 'needs_location must not include the facility predicate');
+  });
+
+  it('staff: no facility-mapping counts (admin task)', async () => {
+    const r = await call('staff');
+    assert.strictEqual(r.body.pendingActions.facilityNamesToMap, 0);
   });
 
   it('admin: pendingReferrals counts every pending referral city-wide (no barangay filter)', async () => {
@@ -162,16 +186,26 @@ describe('dashboard stats', () => {
     assert.ok(q.includes('v.merged_into_case_no IS NULL'), 'own cases only');
     assert.ok(q.includes("v.match_status <> 'pending'"), 'no unresolved matches');
     assert.ok(q.includes('lower(v.barangay_name)'), 'Pasig name/city eligibility (unassignedSql)');
-    assert.ok(!q.includes(`b.status = 'uploaded'`), 'unvalidated rows are no longer part of any KPI');
+    assert.ok(q.includes(`b.status = 'uploaded'`), 'Total includes rows of not-yet-validated imports (synced itself never does)');
   });
 
   it('admin: all case KPIs are city-wide with no scope params', async () => {
     await call('admin');
     const q = captured.countsSql;
-    assert.ok(q.includes('COUNT(*) FROM raw_tb_cases'), 'admin total counts every imported row');
+    assert.ok(q.includes('COUNT(*) FROM raw_tb_cases'), 'total counts rows of imports not yet validated');
     assert.ok(!q.includes('uploaded_by'), 'no own-upload scope for admin');
     assert.ok(!q.includes('barangay_id = $'), 'no barangay params for admin');
     assert.deepStrictEqual(captured.countsParams, []);
+  });
+
+  it('total counts every stored record; validated mirrors the TB Records listing', async () => {
+    await call('admin');
+    const q = captured.countsSql;
+    assert.ok(q.includes(`SELECT COUNT(*) FROM validated_tb_cases v WHERE NOT v.is_archived AND v.merged_into_case_no IS NULL)`),
+      'total: all live cases, Pasig + Non-Pasig, any match/assignment state');
+    assert.ok(q.includes(`FROM validation_issues i`), 'total includes open data issues');
+    assert.ok(q.includes(`validated_tb_cases v WHERE NOT v.is_archived AND (v.match_status <> 'pending'`) && q.includes(`)::int AS validated`),
+      'validated = the All Records listing rule');
   });
 
   it('staff: case KPIs follow the TB Records scope, validation KPIs the Validation visibility', async () => {
@@ -181,8 +215,8 @@ describe('dashboard stats', () => {
     assert.ok(q.includes('v.responsible_barangay_id'), 'records scope: responsible barangay');
     assert.ok(q.includes('uploaded_by = $2'), 'validation scope: own uploads join in');
     assert.ok(q.includes('i.barangay_id = $1'), 'data issues scoped by barangay');
-    assert.ok(q.includes('validated_tb_cases v WHERE NOT v.is_archived AND'), 'staff total = live cases in scope');
-    assert.ok(!q.includes('COUNT(*) FROM raw_tb_cases'), 'staff never sees the city-wide raw-row total');
+    assert.ok(q.includes(`validated_tb_cases v WHERE NOT v.is_archived AND (v.match_status <> 'pending'`), 'staff validated = the All Records listing rule, scoped');
+    assert.ok(q.includes('COUNT(*) FROM raw_tb_cases'), 'total is system-wide for staff too (count only)');
     assert.deepStrictEqual(captured.countsParams, [17, 1], '$1 = barangay, $2 = staff user');
   });
 
@@ -237,7 +271,8 @@ describe('dashboard stats', () => {
     assert.deepStrictEqual(r.body.recentImports, DEFAULT_RECENT_ROWS);
     assert.ok(captured.recentSql.includes('ORDER BY b.created_at DESC'), 'newest first');
     assert.ok(captured.recentSql.includes('LIMIT 5'), 'capped at 5 batches');
-    assert.ok(captured.recentSql.includes('u.username'), 'importer name for the row');
+    assert.ok(captured.recentSql.includes('b.uploaded_by'), 'importer id for the row');
+    assert.ok(!/JOIN users/i.test(captured.recentSql), 'importer named from the auth database, not a local users join');
     assert.ok(captured.recentSql.includes('b.sync_status'), 'SYNCED badge source');
   });
 });

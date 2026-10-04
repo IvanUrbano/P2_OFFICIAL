@@ -10,7 +10,8 @@
  *   GET  /assignment/location/records      one location group's records, to review (admin)
  *   POST /assignment/location/records/:id  assign ONE record's barangay / mark it outside Pasig (admin)
  *   POST /assignment/location     classify a non-Pasig-city group as outside Pasig (admin)
- *   POST /assignment/facility     map a facility name / register a new facility   (admin)
+ *   POST /assignment/facility     resolve an unknown facility name: map it to a registry
+ *                                  facility (alias optional) or register a new one   (admin)
  *   POST /assignment/facility/accept-suggestions   map every confidently-suggested name (admin)
  *   GET  /issues                  open data issues
  *   PUT  /issues/:id              correct a data issue (becomes a validated case when clean)
@@ -35,7 +36,7 @@ const {
 } = require('../policies/permissions');
 const {
   LIVE, NEEDS_LOCATION, NEEDS_FACILITY, MATCH_PENDING, READY, SENDS_TO_TBINSIGHT,
-  categorizeMatch, issueType, issueField, suggestFacility, ymd,
+  categorizeMatch, issueType, issueField, suggestFacility, ymd, normFacility,
 } = require('../services/validationQueue');
 const { cleanRecord, PASIG_BARANGAYS } = require('../services/dataCleaner');
 const { validateRecord, getValidBarangays, INSERT_COLUMNS, rowValues } = require('../services/validator');
@@ -107,10 +108,21 @@ function issueScope(req, userScope) {
 }
 
 const NAME_FIELDS = ['last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth'];
-function maskIssueRecord(req, record) {
-  if (pinService.isUnlocked(req) || !record) return record;
-  const masked = pinService.maskIdentity(record);
-  return { ...record, ...Object.fromEntries(NAME_FIELDS.map(f => [f, masked[f]])), identity_masked: true };
+// Data-issue rows keep the uploaded values in a JSON record; the issue's identity_class
+// (migration 015) decides what may be shown — same rule as cases (pinService.protectIdentity).
+// hidden_identity_fields lists de-identified fields that hold a stored value: those are
+// shown as "De-identified" and cannot be changed.
+function maskIssueRecord(req, record, identityClass) {
+  if (!record) return record;
+  const protectedRow = pinService.protectIdentity(req, { ...record, identity_class: identityClass });
+  const out = { ...record, ...Object.fromEntries(NAME_FIELDS.map(f => [f, protectedRow[f]])) };
+  delete out.identity_class;
+  if (protectedRow.identity_masked) out.identity_masked = true;
+  if (protectedRow.identity_deidentified) {
+    out.identity_deidentified = true;
+    out.hidden_identity_fields = NAME_FIELDS.filter(f => record[f] !== null && record[f] !== undefined && String(record[f]).trim() !== '');
+  }
+  return out;
 }
 
 // ==================== SUMMARY ====================
@@ -118,18 +130,30 @@ router.get('/summary', authenticate, authorizeRoles('admin', 'staff'), async (re
   try {
     const { where, params, userScope } = await caseScope(req);
     const iss = issueScope(req, userScope);
+    // Needs Assignment badge = RECORDS whose location is undecided (same number as the
+    // Dashboard's Needs Review -> assignment). Unmapped facility names are counted as
+    // NAMES, not records: one mapping fixes every record using the name, and those
+    // records are already validated — counting them per record inflated the badge
+    // (~9,300 vs 1,555 real location decisions).
     const counts = `
       COUNT(*) FILTER (WHERE ${READY})::int AS ready,
       COUNT(*) FILTER (WHERE ${MATCH_PENDING})::int AS matches,
       COUNT(*) FILTER (WHERE ${NEEDS_LOCATION})::int AS location,
-      COUNT(*) FILTER (WHERE ${NEEDS_FACILITY})::int AS facility,
-      COUNT(*) FILTER (WHERE ${NEEDS_LOCATION} OR ${NEEDS_FACILITY})::int AS assignment`;
+      COUNT(*) FILTER (WHERE ${NEEDS_FACILITY})::int AS facility`;
+    const facilityNames = (scopeWhere, groupBy) => `
+      SELECT ${groupBy ? 'v.batch_id, ' : ''}COUNT(DISTINCT norm_facility(f.name))::int AS names
+      FROM validated_tb_cases v
+      CROSS JOIN LATERAL (VALUES
+        (CASE WHEN v.treatment_facility_id IS NULL THEN NULLIF(trim(v.treatment_facility), '') END),
+        (CASE WHEN v.screening_facility_id IS NULL THEN NULLIF(trim(v.screening_facility), '') END)) AS f(name)
+      WHERE ${scopeWhere} AND v.match_status <> 'pending' AND f.name IS NOT NULL
+      ${groupBy ? 'GROUP BY v.batch_id' : ''}`;
 
     // Per-batch breakdown ignores the batch filter so the selector can show every batch.
     const allScope = await caseScope({ ...req, query: {} });
     const allIss = issueScope({ ...req, query: {} }, userScope);
 
-    const [totals, issues, perBatch, perBatchIssues, batches] = await Promise.all([
+    const [totals, issues, perBatch, perBatchIssues, batches, facTotal, facPerBatch] = await Promise.all([
       db.pool.query(`SELECT ${counts} FROM validated_tb_cases v WHERE ${where}`, params),
       db.pool.query(`SELECT COUNT(*)::int AS n FROM validation_issues i WHERE ${iss.where}`, iss.params),
       db.pool.query(`SELECT v.batch_id, ${counts} FROM validated_tb_cases v WHERE ${allScope.where} GROUP BY v.batch_id`, allScope.params),
@@ -139,18 +163,23 @@ router.get('/summary', authenticate, authorizeRoles('admin', 'staff'), async (re
          FROM import_batches WHERE COALESCE(is_archived, false) = false
          ORDER BY created_at DESC LIMIT 100`
       ),
+      db.pool.query(facilityNames(where, false), params),
+      db.pool.query(facilityNames(allScope.where, true), allScope.params),
     ]);
+    const facNamesByBatch = new Map(facPerBatch.rows.map(r => [r.batch_id, r.names]));
 
     const byBatch = new Map(perBatch.rows.map(r => [r.batch_id, r]));
     const issuesByBatch = new Map(perBatchIssues.rows.map(r => [r.batch_id, r.n]));
     const batchRows = batches.rows
       .map(b => {
-        const c = byBatch.get(b.id) || { ready: 0, matches: 0, location: 0, facility: 0, assignment: 0 };
+        const c = byBatch.get(b.id) || { ready: 0, matches: 0, location: 0, facility: 0 };
         const openIssues = issuesByBatch.get(b.id) || 0;
+        const facNames = facNamesByBatch.get(b.id) || 0;
         return {
           ...b,
-          counts: { ready: c.ready, matches: c.matches, assignment: c.assignment, issues: openIssues },
-          open_items: c.matches + c.assignment + openIssues,
+          counts: { ready: c.ready, matches: c.matches, assignment: c.location, facilityNames: facNames, issues: openIssues },
+          // Open decisions: matches + location records + data issues + facility NAMES.
+          open_items: c.matches + c.location + openIssues + facNames,
           // Who may press "Validate" (writes batch metadata): the uploader or an admin.
           can_validate: req.user.role === 'admin' || (b.uploaded_by != null && Number(b.uploaded_by) === Number(req.user.id)),
         };
@@ -162,8 +191,8 @@ router.get('/summary', authenticate, authorizeRoles('admin', 'staff'), async (re
       counts: {
         ready: t.ready,
         matches: t.matches,
-        assignment: t.assignment,
-        assignmentDetail: { location: t.location, facility: t.facility },
+        assignment: t.location,
+        assignmentDetail: { location: t.location, facilityNames: facTotal.rows[0]?.names || 0, facilityRecords: t.facility },
         issues: issues.rows[0].n,
       },
       batches: batchRows,
@@ -185,7 +214,7 @@ router.get('/ready', authenticate, authorizeRoles('admin', 'staff'), async (req,
     const [count, rows] = await Promise.all([
       db.pool.query(`SELECT COUNT(*)::int AS n FROM validated_tb_cases v WHERE ${where} AND ${READY}`, params),
       db.pool.query(
-        `SELECT v.id, v.batch_id, v.case_no, p.patient_no, v.last_name, v.first_name, v.middle_name, v.suffix,
+        `SELECT v.id, v.batch_id, v.case_no, p.patient_no, v.last_name, v.first_name, v.middle_name, v.suffix, v.identity_class,
                 v.barangay_name, v.date_of_diagnosis, v.outcome_status, v.source_type,
                 v.treatment_facility, fr.name AS treatment_facility_registry, v.location_resolution,
                 ${SENDS_TO_TBINSIGHT} AS sends_to_tbinsight
@@ -269,8 +298,8 @@ router.get('/assignment', authenticate, authorizeRoles('admin', 'staff'), async 
         params
       ),
       db.pool.query(
-        `SELECT id, name, barangay_name, ownership, facility_category, is_external, is_reference
-         FROM facility_ref ORDER BY is_external, name`
+        `SELECT id, name, barangay_name, ownership, facility_category, is_external, is_reference, is_active
+         FROM facility_ref WHERE COALESCE(is_active, TRUE) ORDER BY is_external, name`
       ),
     ]);
     res.json({
@@ -315,7 +344,7 @@ router.get('/assignment/location/records', authenticate, authorizeRoles('admin')
     const [count, rows] = await Promise.all([
       db.pool.query(`SELECT COUNT(*)::int AS n FROM validated_tb_cases v WHERE ${where}`, params),
       db.pool.query(
-        `SELECT v.id, v.case_no, p.patient_no, v.last_name, v.first_name, v.middle_name, v.suffix,
+        `SELECT v.id, v.case_no, p.patient_no, v.last_name, v.first_name, v.middle_name, v.suffix, v.identity_class,
                 v.sex, v.age, v.date_of_diagnosis, v.barangay_name, v.city, v.source_type,
                 v.treatment_facility, v.screening_facility, b.filename
          FROM validated_tb_cases v
@@ -455,37 +484,74 @@ router.post('/assignment/location', authenticate, authorizeRoles('admin'), async
 });
 
 const FACILITY_CATEGORIES = ['health_center', 'hospital', 'clinic', 'laboratory', 'treatment_center', 'other'];
+const FACILITY_TYPES = ['HC', 'PC', 'ITC', 'Floodway'];
+// The queue's register dialog asks for facility_type; category is redundant with it, so
+// when the caller does not send one it is derived instead of stored as 'other'.
+const CATEGORY_BY_TYPE = { HC: 'health_center', PC: 'clinic', ITC: 'treatment_center', Floodway: 'health_center' };
 
 // Map a source facility name to a registry facility (or register a new one first). The
-// mapping applies to every record with that name, now and in future imports.
+// mapping applies to every record with that name, now and in future imports — and the
+// spelling is ALWAYS recorded as an alias: refreshFacilityIds recomputes every case's
+// facility id from the raw text + facility_aliases, so ids written without an alias
+// would silently revert on the next refresh. An alias another facility already owns is
+// never stolen — the admin gets a 409 and unmaps the other one first.
 router.post('/assignment/facility', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const text = String(req.body?.facility_text || '').trim();
     const action = req.body?.action;
     if (!text) return res.status(400).json({ error: 'Facility name is required.' });
     if (!['map', 'register'].includes(action)) return res.status(400).json({ error: 'Action must be "map" or "register".' });
+    const textNorm = normFacility(text);
 
     let facility;
     if (action === 'map') {
       const id = Number(req.body.facility_id);
-      facility = (await db.pool.query('SELECT id, name FROM facility_ref WHERE id = $1', [id])).rows[0];
+      facility = (await db.pool.query('SELECT id, name, is_active FROM facility_ref WHERE id = $1', [id])).rows[0];
       if (!facility) return res.status(400).json({ error: 'Choose a registered facility.' });
+      if (facility.is_active === false) {
+        return res.status(409).json({ error: `${facility.name} is inactive — reactivate it before mapping records to it.` });
+      }
+      // The source text may not already be another facility's canonical name: records
+      // carrying it would land on the wrong facility forever.
+      const clash = (await db.pool.query('SELECT id, name FROM facility_ref')).rows
+        .find(o => Number(o.id) !== Number(facility.id) && normFacility(o.name) === textNorm);
+      if (clash) {
+        return res.status(409).json({ error: `"${text}" is already the name of ${clash.name} — map to it instead.` });
+      }
     } else {
       const f = req.body.facility || {};
       const name = String(f.name || '').trim();
       const isExternal = Boolean(f.is_external);
+      const isActive = f.is_active !== false;
       const ownership = f.ownership === 'private' ? 'private' : f.ownership === 'public' ? 'public' : null;
-      const category = FACILITY_CATEGORIES.includes(f.facility_category) ? f.facility_category : 'other';
+      const rawType = String(f.facility_type ?? '').trim();
+      if (rawType && !FACILITY_TYPES.includes(rawType)) {
+        return res.status(400).json({ error: 'Please select a valid facility type.' });
+      }
+      const facilityType = rawType || 'HC';
+      const category = FACILITY_CATEGORIES.includes(f.facility_category)
+        ? f.facility_category : (CATEGORY_BY_TYPE[facilityType] || 'other');
       const brgy = isExternal ? null : canonicalBarangay(f.barangay_name);
+      const city = isExternal ? String(f.city || '').trim() || null : 'Pasig City';
       if (!name) return res.status(400).json({ error: 'Facility name is required.' });
       if (!isExternal && !brgy) return res.status(400).json({ error: 'Choose the Pasig barangay of the facility, or mark it as outside Pasig.' });
+      // An external facility gets NO Pasig barangay — only the city/municipality it is really in.
+      if (isExternal && !city) return res.status(400).json({ error: 'Add the city or municipality of the facility (e.g. Taytay, Rizal).' });
+      // Same duplicate rule as the directory — case / tag variants count (the DB index
+      // compares exact strings, so a pre-check on norm_facility catches them first).
+      const dupScope = isExternal
+        ? await db.authPool.query('SELECT id, name FROM health_facilities WHERE barangay_name IS NULL')
+        : await db.authPool.query('SELECT id, name FROM health_facilities WHERE lower(barangay_name) = lower($1)', [brgy]);
+      if (dupScope.rows.some(r => normFacility(r.name) === normFacility(name))) {
+        return res.status(409).json({ error: `A facility named "${name}" is already registered. Map to it instead.` });
+      }
       try {
         const ins = await db.authPool.query(
           `INSERT INTO health_facilities
-             (name, barangay_name, barangay_id, ownership, facility_category, is_external, is_reference, city)
-           VALUES ($1, $2, (SELECT id FROM barangays WHERE name = $2), $3, $4, $5, $6, $7)
-           RETURNING id, name, barangay_name, ownership, facility_category, is_external, is_reference`,
-          [name, brgy, ownership, category, isExternal, Boolean(f.is_reference), isExternal ? (String(f.city || '').trim() || null) : 'Pasig City']
+             (name, barangay_name, barangay_id, ownership, facility_category, is_external, is_reference, city, is_active, facility_type)
+           VALUES ($1, $2, (SELECT id FROM barangays WHERE name = $2), $3, $4, $5, $6, $7, $8, $9)
+           RETURNING id, name, facility_type, barangay_name, ownership, facility_category, is_external, is_reference, is_active`,
+          [name, brgy, ownership, category, isExternal, Boolean(f.is_reference), city, isActive, facilityType]
         );
         facility = ins.rows[0];
       } catch (err) {
@@ -493,37 +559,81 @@ router.post('/assignment/facility', authenticate, authorizeRoles('admin'), async
         throw err;
       }
       await db.pool.query(
-        `INSERT INTO facility_ref (id, name, norm_name, barangay_name, ownership, facility_category, is_external, is_reference)
-         VALUES ($1, $2, norm_facility($2), $3, $4, $5, $6, $7)
-         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, norm_name = EXCLUDED.norm_name`,
+        `INSERT INTO facility_ref (id, name, norm_name, barangay_name, ownership, facility_category, is_external, is_reference, is_active)
+         VALUES ($1, $2, norm_facility($2), $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, norm_name = EXCLUDED.norm_name,
+           is_active = EXCLUDED.is_active`,
         [facility.id, facility.name, facility.barangay_name, facility.ownership, facility.facility_category,
-          facility.is_external, facility.is_reference]
+          facility.is_external, facility.is_reference, facility.is_active]
       );
     }
 
-    await db.pool.query(
-      `INSERT INTO facility_aliases (alias_norm, alias_text, facility_id, created_by_user_id)
-       VALUES (norm_facility($1), $1, $2, $3)
-       ON CONFLICT (alias_norm) DO UPDATE SET facility_id = EXCLUDED.facility_id, alias_text = EXCLUDED.alias_text,
-         created_by_user_id = EXCLUDED.created_by_user_id, created_at = NOW()`,
-      [text, facility.id, req.user.id]
-    );
+    // The alias makes the mapping durable. Never steal one another facility owns:
+    // ON CONFLICT DO UPDATE here would silently re-point that alias (and every record
+    // resolving through it) at this facility — the directory's 409 rule, enforced too.
+    let aliasSaved = false;
+    try {
+      await db.pool.query(
+        `INSERT INTO facility_aliases (alias_norm, alias_text, facility_id, created_by_user_id)
+         VALUES (norm_facility($1), $1, $2, $3)`,
+        [text, facility.id, req.user.id]
+      );
+      aliasSaved = true;
+    } catch (err) {
+      if (err.code !== '23505') throw err;
+      const existing = (await db.pool.query(
+        'SELECT facility_id FROM facility_aliases WHERE alias_norm = norm_facility($1)',
+        [text],
+      )).rows[0];
+      if (!existing || Number(existing.facility_id) !== Number(facility.id)) {
+        const owner = existing
+          ? (await db.pool.query('SELECT id, name FROM facility_ref WHERE id = $1', [existing.facility_id])).rows[0]
+          : null;
+        return res.status(409).json({
+          error: owner
+            ? `"${text}" is already mapped to ${owner.name} — remove that alias from ${owner.name} first.`
+            : `"${text}" is already mapped to another facility.`,
+        });
+      }
+      aliasSaved = true; // already points at this facility — idempotent
+    }
+
     const [t, s] = await Promise.all(['treatment', 'screening'].map(f => db.pool.query(
       `UPDATE validated_tb_cases SET ${f}_facility_id = $2
-       WHERE norm_facility(${f}_facility) = norm_facility($1) AND ${f}_facility_id IS DISTINCT FROM $2`,
+       WHERE norm_facility(${f}_facility) = norm_facility($1) AND ${f}_facility_id IS DISTINCT FROM $2
+       RETURNING id, case_no`,
       [text, facility.id]
     )));
+    const touched = [...t.rows, ...s.rows];
+    const records = t.rowCount + s.rowCount;
+
+    // Review history + TBInsight resync, exactly like the location path: a mapping is a
+    // data decision on those records, and already-synced batches must be corrected now.
+    await logReviews(db.pool, req.user.id, touched.map(r => ({
+      validated_case_id: r.id, case_no: r.case_no, review_type: 'assignment',
+      decision: action === 'map' ? 'facility_mapped' : 'facility_registered',
+      previous_status: text, new_status: facility.name, notes: null,
+    })));
+    const sync = await resyncSyncedCases(touched.map(r => r.case_no), req.user, 'Facility mapping');
 
     await logAuditEvent({
       userId: req.user.id, username: req.user.username,
       action: action === 'map' ? 'MAP_FACILITY' : 'REGISTER_FACILITY',
       resourceType: 'health_facilities', resourceId: String(facility.id), result: 'SUCCESS', ipAddress: ipOf(req),
-      details: { facility_text: text, facility: facility.name, records: t.rowCount + s.rowCount },
+      details: {
+        facility_text: text, facility: facility.name, records, alias_saved: aliasSaved,
+        is_active: facility.is_active, sync: sync.status,
+      },
     });
 
     res.json({
-      message: `"${text}" now maps to ${facility.name}${action === 'register' ? ' (newly registered)' : ''} — ${t.rowCount + s.rowCount} record field(s) updated.`,
+      message: action === 'map'
+        ? `"${text}" now maps to ${facility.name} — ${records} record field(s) updated. Saved as an alias, so future imports resolve automatically.`
+        : `"${text}" now maps to ${facility.name} (newly registered) — ${records} record field(s) updated. Saved as an alias, so future imports resolve automatically.`,
       facility,
+      records,
+      alias_saved: aliasSaved,
+      sync,
     });
   } catch (error) {
     console.error('Facility assignment error:', error);
@@ -532,7 +642,9 @@ router.post('/assignment/facility', authenticate, authorizeRoles('admin'), async
 });
 
 // Accept every suggested mapping at once (only names the matcher is confident about;
-// the rest stay in the queue for a manual decision).
+// the rest stay in the queue for a manual decision). The fill below is scoped to THIS
+// plan's normalized names — an unscoped fill would rewrite records whose text matches
+// some unrelated alias, changing data nobody reviewed.
 router.post('/assignment/facility/accept-suggestions', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const [names, options] = await Promise.all([
@@ -548,29 +660,42 @@ router.post('/assignment/facility/accept-suggestions', authenticate, authorizeRo
       db.pool.query('SELECT id, name FROM facility_ref'),
     ]);
     const plan = names.rows
-      .map(n => ({ text: n.facility_text, suggestion: suggestFacility(n.facility_text, options.rows) }))
+      .map(n => ({ text: n.facility_text, norm: n.alias_norm, suggestion: suggestFacility(n.facility_text, options.rows) }))
       .filter(p => p.suggestion);
     if (plan.length === 0) return res.json({ message: 'No suggestions to accept.', mapped: 0 });
 
     await db.pool.query(
       `INSERT INTO facility_aliases (alias_norm, alias_text, facility_id, created_by_user_id)
-       SELECT norm_facility(x.t), x.t, x.f, $2 FROM jsonb_to_recordset($1::jsonb) AS x(t text, f int)
+       SELECT x.norm, x.t, x.f, $2 FROM jsonb_to_recordset($1::jsonb) AS x(norm text, t text, f int)
        ON CONFLICT (alias_norm) DO NOTHING`,
-      [JSON.stringify(plan.map(p => ({ t: p.text, f: p.suggestion.id }))), req.user.id]
+      [JSON.stringify(plan.map(p => ({ norm: p.norm, t: p.text, f: p.suggestion.id }))), req.user.id]
     );
+    const norms = plan.map(p => p.norm);
     const filled = await Promise.all(['treatment', 'screening'].map(f => db.pool.query(
       `UPDATE validated_tb_cases v SET ${f}_facility_id = a.facility_id
        FROM facility_aliases a
-       WHERE a.alias_norm = norm_facility(v.${f}_facility) AND v.${f}_facility_id IS DISTINCT FROM a.facility_id`
+       WHERE a.alias_norm = ANY($1::text[]) AND a.alias_norm = norm_facility(v.${f}_facility)
+         AND v.${f}_facility_id IS DISTINCT FROM a.facility_id
+       RETURNING v.id, v.case_no, v.${f}_facility AS facility_text`,
+      [norms]
     )));
+    const touched = filled.flatMap(r => r.rows);
     const fields = filled.reduce((n, r) => n + r.rowCount, 0);
+
+    const byNorm = new Map(plan.map(p => [p.norm, p.suggestion.name]));
+    await logReviews(db.pool, req.user.id, touched.map(r => ({
+      validated_case_id: r.id, case_no: r.case_no, review_type: 'assignment',
+      decision: 'facility_mapped', previous_status: r.facility_text,
+      new_status: byNorm.get(normFacility(r.facility_text)) || null, notes: '(accepted suggestions)',
+    })));
+    const sync = await resyncSyncedCases(touched.map(r => r.case_no), req.user, 'Facility mapping');
 
     await logAuditEvent({
       userId: req.user.id, username: req.user.username, action: 'MAP_FACILITY_BULK',
       resourceType: 'health_facilities', resourceId: null, result: 'SUCCESS', ipAddress: ipOf(req),
-      details: { mapped: plan.length, fields, mappings: plan.map(p => `${p.text} -> ${p.suggestion.name}`) },
+      details: { mapped: plan.length, fields, sync: sync.status, mappings: plan.map(p => `${p.text} -> ${p.suggestion.name}`) },
     });
-    res.json({ message: `Accepted ${plan.length} suggested mapping(s); ${fields} record field(s) updated.`, mapped: plan.length });
+    res.json({ message: `Accepted ${plan.length} suggested mapping(s); ${fields} record field(s) updated.`, mapped: plan.length, sync });
   } catch (error) {
     console.error('Accept facility suggestions error:', error);
     res.status(500).json({ error: 'Failed to accept suggestions.' });
@@ -588,7 +713,7 @@ router.get('/issues', authenticate, authorizeRoles('admin', 'staff'), async (req
       db.pool.query(`SELECT COUNT(*)::int AS n FROM validation_issues i WHERE ${where}`, params),
       db.pool.query(
         `SELECT i.id, i.batch_id, i.row_number, i.source_type, i.record, i.errors, i.warnings,
-                i.barangay_id, i.barangay_name,
+                i.barangay_id, i.barangay_name, i.identity_class,
                 i.created_at, i.updated_at, b.filename
          FROM validation_issues i LEFT JOIN import_batches b ON b.id = i.batch_id
          WHERE ${where}
@@ -603,7 +728,7 @@ router.get('/issues', authenticate, authorizeRoles('admin', 'staff'), async (req
       types.forEach(t => { typeCounts[t] = (typeCounts[t] || 0) + 1; });
       return {
         ...r,
-        record: maskIssueRecord(req, r.record),
+        record: maskIssueRecord(req, r.record, r.identity_class),
         issue_types: types,
         error_fields: [...new Set(errors.map(issueField).filter(Boolean))],
         permissions: issuePermissions(req.user, issueScopeUser, { ...r, status: 'open' }),
@@ -661,6 +786,19 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
     if (error) return res.status(error[0]).json({ error: error[1] });
 
     const changes = req.body?.changes || {};
+    // Historical rows: stored names/DOB are de-identified and never modified. A blank
+    // required value may still be filled in.
+    if (!pinService.namesAllowed(issue)) {
+      const locked = NAME_FIELDS.filter(f => Object.prototype.hasOwnProperty.call(changes, f)
+        && issue.record?.[f] !== null && issue.record?.[f] !== undefined && String(issue.record[f]).trim() !== ''
+        && String(changes[f] ?? '') !== String(issue.record[f]));
+      if (locked.length) {
+        return res.status(403).json({ error: 'This is a de-identified historical record — its stored patient name and date of birth cannot be changed.' });
+      }
+      for (const f of NAME_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(changes, f) && issue.record?.[f] != null && String(issue.record[f]).trim() !== '') delete changes[f];
+      }
+    }
     const merged = { ...issue.record };
     const editable = req.user.role === 'admin'
       ? EDITABLE_FIELDS
@@ -672,6 +810,10 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
       }
     }
     const { record: cleaned, notes } = cleanRecord(merged);
+    // Source traceability: keep the file row; the MN source Case ID follows the ITIS no.
+    cleaned.source_record_id = issue.record?.source_record_id ?? null;
+    cleaned.source_case_id = issue.source_type === 'MN' && cleaned.itis_case_id
+      ? String(cleaned.itis_case_id).trim() : null;
     const validation = validateRecord(cleaned, issue.source_type, await getValidBarangays());
     const warnings = [...notes, ...validation.warnings];
 
@@ -688,14 +830,29 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
       });
     }
 
-    // Possible returning patient (same name + DOB as an existing case) -> pending match.
-    const cand = (await client.query(
-      `SELECT v.case_no, v.date_of_diagnosis::text AS date_of_diagnosis FROM validated_tb_cases v
-       WHERE v.case_no IS NOT NULL AND v.is_archived = false
-         AND lower(v.last_name) = lower($1) AND lower(v.first_name) = lower($2) AND v.date_of_birth = $3
-       ORDER BY v.date_of_diagnosis DESC NULLS LAST LIMIT 1`,
-      [cleaned.last_name, cleaned.first_name, cleaned.date_of_birth]
-    )).rows[0] || null;
+    // Possible returning patient -> pending match (a person decides; never merged):
+    // same name + DOB as an existing case (when both are given), or for MN the same
+    // ITIS Lite Case No. DSTB rows are never matched on barangay + date + sex + age.
+    let cand = null;
+    if (cleaned.last_name && cleaned.first_name && cleaned.date_of_birth) {
+      cand = (await client.query(
+        `SELECT v.case_no, v.date_of_diagnosis::text AS date_of_diagnosis FROM validated_tb_cases v
+         WHERE v.case_no IS NOT NULL AND v.is_archived = false
+           AND lower(v.last_name) = lower($1) AND lower(v.first_name) = lower($2) AND v.date_of_birth = $3
+         ORDER BY v.date_of_diagnosis DESC NULLS LAST LIMIT 1`,
+        [cleaned.last_name, cleaned.first_name, cleaned.date_of_birth]
+      )).rows[0] || null;
+    }
+    if (!cand && cleaned.source_case_id) {
+      cand = (await client.query(
+        `SELECT v.case_no, v.date_of_diagnosis::text AS date_of_diagnosis FROM validated_tb_cases v
+         WHERE v.case_no IS NOT NULL AND v.is_archived = false AND v.source_type = 'MN'
+           AND lower(regexp_replace(COALESCE(v.source_case_id, v.itis_case_id), '[[:space:]]', '', 'g'))
+               = lower(regexp_replace($1, '[[:space:]]', '', 'g'))
+         ORDER BY v.date_of_diagnosis DESC NULLS LAST LIMIT 1`,
+        [cleaned.source_case_id]
+      )).rows[0] || null;
+    }
 
     await client.query('BEGIN');
     const row = {

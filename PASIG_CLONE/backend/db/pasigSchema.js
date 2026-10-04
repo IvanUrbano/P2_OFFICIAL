@@ -160,6 +160,26 @@ async function initSchema() {
       console.error('[pasig-clone] Migration 012 failed (continuing):', err.message);
     }
   }
+
+  const mig013Path = path.join(__dirname, 'migrations', '013_facility_match_order.sql');
+  if (fs.existsSync(mig013Path)) {
+    try {
+      await execSql(fs.readFileSync(mig013Path, 'utf8'));
+      console.log('[pasig-clone] Migration 013 (facility match order) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 013 failed (continuing):', err.message);
+    }
+  }
+
+  const mig015Path = path.join(__dirname, 'migrations', '015_identity_class.sql');
+  if (fs.existsSync(mig015Path)) {
+    try {
+      await execSql(fs.readFileSync(mig015Path, 'utf8'));
+      console.log('[pasig-clone] Migration 015 (patient-name privacy class) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 015 failed (continuing):', err.message);
+    }
+  }
 }
 
 // --- CRUD Helpers ---
@@ -316,10 +336,11 @@ const WEBHOOK_LOG_COLUMNS = `wl.id, wl.batch_id, wl.status, wl.response_code, wl
 
 function getWebhookLogs() {
   return pool.query(
-    `SELECT ${WEBHOOK_LOG_COLUMNS}, ib.filename, u.username
+    // Who started the sync is named by routes (services/userNames.js — users live in the
+    // auth database).
+    `SELECT ${WEBHOOK_LOG_COLUMNS}, ib.filename
      FROM webhook_logs wl
      LEFT JOIN import_batches ib ON wl.batch_id = ib.id
-     LEFT JOIN users u ON wl.initiated_by = u.id
      ORDER BY wl.sent_at DESC
      LIMIT 50`
   );
@@ -342,7 +363,6 @@ function getImportHistory(status = 'active') {
       b.id,
       b.filename,
       b.uploaded_by,
-      u.username as imported_by_username,
       b.total_rows,
       b.valid_count,
       b.error_count,
@@ -354,11 +374,8 @@ function getImportHistory(status = 'active') {
       b.is_archived,
       b.archived_by,
       b.archived_at,
-      b.archive_reason,
-      au.username as archived_by_username
+      b.archive_reason
      FROM import_batches b
-     LEFT JOIN users u ON b.uploaded_by = u.id
-     LEFT JOIN users au ON b.archived_by = au.id
      ${whereClause}
      ORDER BY b.created_at DESC
      LIMIT 100`
@@ -367,18 +384,8 @@ function getImportHistory(status = 'active') {
 
 function getBatchWithUsers(batchId) {
   return pool.query(
-    `SELECT 
-      b.*,
-      u.username as imported_by_username,
-      v.username as validated_by_username,
-      s.username as synced_by_username,
-      a.username as archived_by_username
-     FROM import_batches b
-     LEFT JOIN users u ON b.uploaded_by = u.id
-     LEFT JOIN users v ON b.validated_by = v.id
-     LEFT JOIN users s ON b.synced_by = s.id
-     LEFT JOIN users a ON b.archived_by = a.id
-     WHERE b.id = $1`,
+    // User names are added by the route (services/userNames.js).
+    `SELECT b.* FROM import_batches b WHERE b.id = $1`,
     [batchId]
   );
 }

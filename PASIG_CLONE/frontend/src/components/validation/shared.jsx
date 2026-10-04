@@ -1,3 +1,4 @@
+import { patientName } from '../../utils/patientName';
 /* Small pieces shared by the Validation tabs. */
 
 export const fmtDate = (v) => {
@@ -6,10 +7,7 @@ export const fmtDate = (v) => {
   return isNaN(d.getTime()) ? String(v) : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
-export const fullName = (r) => {
-  if (!r || (!r.last_name && !r.first_name)) return '—';
-  return `${r.last_name || ''}, ${r.first_name || ''}${r.middle_name ? ` ${r.middle_name}` : ''}${r.suffix ? ` ${r.suffix}` : ''}`;
-};
+export const fullName = (r) => patientName(r);
 
 export const FIELD_LABELS = {
   last_name: 'Last name', first_name: 'First name', middle_name: 'Middle name', suffix: 'Suffix',

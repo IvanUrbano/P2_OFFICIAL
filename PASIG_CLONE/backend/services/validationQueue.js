@@ -18,6 +18,16 @@
 
 const { UPDATE_FIELDS } = require('./matchResolution');
 
+/**
+ * JS mirror of SQL norm_facility(): drop a trailing program tag (the "- IDOTS" /
+ * "- MTBN" suffix imported files append), lowercase, strip everything but [a-z0-9].
+ * Shared by the facility routes so alias keys written on one path match lookups on
+ * any other — both sides must agree or a key written here would not match SQL.
+ */
+const normFacility = (s) => String(s || '').toLowerCase()
+  .replace(/\s*-\s*(idots|mtbn)\s*$/, '')
+  .replace(/[^a-z0-9]/g, '');
+
 const LIVE = `v.is_archived = false AND v.merged_into_case_no IS NULL`;
 const PASIG_CITY = `(v.city IS NULL OR lower(trim(v.city)) IN ('pasig city', 'pasig'))`;
 
@@ -120,5 +130,5 @@ function suggestFacility(text, facilities) {
 
 module.exports = {
   LIVE, NEEDS_LOCATION, NEEDS_FACILITY, MATCH_PENDING, READY, SENDS_TO_TBINSIGHT, PASIG_CITY,
-  categorizeMatch, issueType, issueField, suggestFacility, ymd,
+  categorizeMatch, issueType, issueField, suggestFacility, ymd, normFacility,
 };

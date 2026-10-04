@@ -54,6 +54,16 @@ function identityKey(r) {
 }
 
 /**
+ * MN matching key: the ITIS Lite Case No. (source Case ID). DSTB rows have none — they are
+ * NEVER matched on barangay + date + sex + age (too many different people share those).
+ */
+function sourceCaseKey(r) {
+  if (r.source_type !== 'MN') return null;
+  const v = String(r.source_case_id ?? r.itis_case_id ?? '').replace(/\s+/g, '').toLowerCase();
+  return v ? `mn-itis|${v}` : null;
+}
+
+/**
  * Split a single "Name" column. Only the registry style "LAST, FIRST MIDDLE"
  * is split; anything without a comma is left alone (and will fail the
  * required-name check rather than being guessed at).
@@ -95,13 +105,15 @@ function planIdentities(rows, existingCases) {
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key).push(entry);
   };
+  // Keys: name + date of birth (when given), and for MN the ITIS Lite Case No.
+  const keysOf = (r) => [identityKey(r), sourceCaseKey(r)].filter(Boolean);
   for (const c of existingCases) {
-    const key = identityKey(c);
-    if (key) add(key, { ref: { case_no: c.case_no }, dx: c.date_of_diagnosis });
+    for (const key of keysOf(c)) add(key, { ref: { case_no: c.case_no }, dx: c.date_of_diagnosis });
   }
 
   return rows.map((row, rowIndex) => {
-    const key = identityKey(row);
+    const keys = keysOf(row);
+    const key = keys.find(k => byKey.has(k));
     const matches = key ? byKey.get(key) : null;
     if (matches && matches.length > 0) {
       const latest = matches.reduce((a, b) => (String(b.dx || '') > String(a.dx || '') ? b : a));
@@ -111,7 +123,7 @@ function planIdentities(rows, existingCases) {
         suggestion: suggestionFor(row.date_of_diagnosis, latest.dx),
       };
     }
-    if (key) add(key, { ref: { rowIndex }, dx: row.date_of_diagnosis });
+    for (const k of keys) add(k, { ref: { rowIndex }, dx: row.date_of_diagnosis });
     return { kind: 'new' };
   });
 }
@@ -121,6 +133,7 @@ module.exports = {
   formatCaseNo,
   computeAge,
   identityKey,
+  sourceCaseKey,
   splitFullName,
   planIdentities,
 };

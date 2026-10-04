@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import API from '../api/axios';
-import EmptyState from './EmptyState';
 import { can } from '../utils/permissions';
 import { primaryBtn, secondaryBtn } from './SidePanel';
+import { patientName } from '../utils/patientName';
+import { useConfirmDialog } from './ConfirmDialog';
 
 const fmtDate = (v) => (v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
-const fullName = (r) => (r?.last_name || r?.first_name ? `${r.last_name || ''}, ${r.first_name || ''}` : '—');
+const fullName = (r) => patientName(r, { short: true });
 
 const STATUS_STYLE = {
   pending: { bg: '#FEF3C7', color: '#92400E', label: 'Pending' },
@@ -29,6 +30,7 @@ export default function IncomingReferrals({ user, onOpenRecord, onCountChange })
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null);
   const [notice, setNotice] = useState(null);
+  const { confirm, confirmDialog } = useConfirmDialog();
   const isAdmin = user?.role === 'admin';
 
   const load = useCallback(async () => {
@@ -49,8 +51,18 @@ export default function IncomingReferrals({ user, onOpenRecord, onCountChange })
   useEffect(() => { load(); }, [load]);
 
   const act = async (t, action) => {
-    if (action === 'reject' && !window.confirm(`Reject this referral? ${t.from_barangay || 'The sending barangay'} stays responsible for the case.`)) return;
-    if (action === 'cancel' && !window.confirm('Cancel this referral?')) return;
+    if (action === 'reject' && !(await confirm({
+      title: 'Reject referral?',
+      message: `${t.from_barangay || 'The sending barangay'} will remain responsible for the case.`,
+      confirmLabel: 'Reject referral',
+      variant: 'danger',
+    }))) return;
+    if (action === 'cancel' && !(await confirm({
+      title: 'Cancel referral?',
+      message: 'The receiving barangay will no longer be asked to review this referral.',
+      confirmLabel: 'Cancel referral',
+      variant: 'danger',
+    }))) return;
     setBusy(t.id);
     setNotice(null);
     try {
@@ -72,43 +84,50 @@ export default function IncomingReferrals({ user, onOpenRecord, onCountChange })
 
   return (
     <div>
-      <div className="px-5 pt-4 space-y-3">
-        <p className="text-[11px]" style={{ color: '#64748B' }}>
+      {confirmDialog}
+      <div className="px-5 pt-4">
+        <p className="text-xs" style={{ color: '#475569' }}>
           {isAdmin
             ? 'Referrals between all barangays. Accepting moves the case to the receiving barangay.'
             : myBarangay
               ? <>Cases referred to <b style={{ color: '#0F2D52' }}>{myBarangay}</b>. Accepting makes {myBarangay} responsible for the case; the patient&apos;s home barangay keeps view-only access.</>
               : 'Your account has no assigned barangay, so no referrals can be sent to you.'}
         </p>
-        <div className="flex flex-wrap gap-1.5">
+        <div className="mt-2 flex flex-wrap gap-x-6 border-b" style={{ borderColor: '#E2E8F0' }}>
           {FILTERS.map(([key, label]) => {
             const active = status === key;
             const n = key ? counts[key] || 0 : referrals.length;
             return (
-              <button key={key || 'all'} onClick={() => setStatus(key)} className="px-2.5 py-1 rounded-full text-[11px] font-semibold"
-                style={active ? { background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52' } : { background: '#ffffff', color: '#475569', border: '1px solid #E2E8F0' }}>
-                {label}<span className="ml-1 opacity-70">{n}</span>
+              <button key={key || 'all'} onClick={() => setStatus(key)} className="relative flex items-center gap-1.5 py-2.5 text-xs whitespace-nowrap"
+                style={{ color: active ? '#0F172A' : '#475569', fontWeight: active ? 700 : 400 }}>
+                <span>{label}</span><span className="text-[10px]" style={{ color: active ? '#64748B' : '#94A3B8' }}>{n}</span>
+                {active && <span className="absolute bottom-0 left-0 right-0 h-0.5" style={{ background: '#0F2D52' }} />}
               </button>
             );
           })}
         </div>
         {notice && (
-          <div className="px-3 py-2 rounded-lg text-xs" style={{ background: notice.type === 'error' ? 'rgba(239,68,68,0.05)' : 'rgba(16,185,129,0.06)', color: notice.type === 'error' ? '#991B1B' : '#047857' }}>
+          <div className="mt-3 px-3 py-2 rounded-lg text-xs" style={{ background: notice.type === 'error' ? 'rgba(239,68,68,0.05)' : 'rgba(16,185,129,0.06)', color: notice.type === 'error' ? '#991B1B' : '#047857' }}>
             {notice.text}
           </div>
         )}
       </div>
 
       {visible.length === 0 ? (
-        <EmptyState icon="ri-inbox-line" title={status === 'pending' ? 'No Referrals Waiting' : 'No Referrals'}
-          description={status === 'pending' ? 'Nothing has been referred to your barangay that needs a decision.' : 'No referrals match this filter.'} />
+        <div className="mx-5 mt-6 border-t px-0 py-5" style={{ borderColor: '#E2E8F0' }}>
+          <h2 className="text-sm font-bold" style={{ color: '#0F172A' }}>{status === 'pending' ? 'No referrals waiting' : 'No referrals'}</h2>
+          <p className="mt-1 text-xs" style={{ color: '#64748B' }}>
+            {status === 'pending' ? 'Nothing has been referred to your barangay that needs a decision.' : 'No referrals match this filter.'}
+          </p>
+        </div>
       ) : (
         <div className="overflow-x-auto mt-3">
-          <table className="w-full">
+          <table className="w-full" style={{ borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ background: '#FAFCFF', borderBottom: '1px solid #E2E8F0' }}>
+              {/* Same navy header as the All Records table (not sortable — this list is client-side). */}
+              <tr style={{ background: '#0F2D52' }}>
                 {['Case', 'Patient', 'From', isAdmin ? 'To' : null, 'Reason', 'Status', 'Sent', ''].filter(Boolean).map(h => (
-                  <th key={h} className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#0F2D52' }}>{h}</th>
+                  <th key={h} className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#ffffff', borderBottom: '1px solid #1E40AF' }}>{h}</th>
                 ))}
               </tr>
             </thead>
