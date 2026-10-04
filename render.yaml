@@ -90,6 +90,9 @@ services:
     envVars:
       - key: ENV
         value: production
+      - key: PYTHON_VERSION
+        value: 3.12.10
+        # Same Python the pinned requirements.txt versions were verified with
       - key: ML_API_KEY
         sync: false
         # Set manually — must match TBInsight backend's ML_API_KEY
