@@ -1,7 +1,7 @@
 services:
   # ==================== TBInsight Backend ====================
   - type: web
-    name: tb-system-backend
+    name: p2-official
     env: node
     plan: free
     rootDir: BACKEND
@@ -15,7 +15,8 @@ services:
         # Set manually in Render Dashboard → Environment:
         # postgresql://neondb_owner:...@ep-xxx.neon.tech/neondb?sslmode=require
       - key: JWT_SECRET
-        generateValue: true
+        sync: false
+        # Set manually — must match Pasig Clone's JWT_SECRET (one login works in both apps)
       - key: JWT_EXPIRES_IN
         value: 7d
       - key: LOGIN_LIMIT_WINDOW_MINS
@@ -52,16 +53,17 @@ services:
         # postgresql://neondb_owner:...@ep-xxx.neon.tech/pasig_clone_db?sslmode=require
       - key: AUTH_DATABASE_URL
         sync: false
-        # Set manually — same value as tb-system-backend's DATABASE_URL (shared users table)
+        # Set manually — same value as p2-official's DATABASE_URL (shared users table)
       - key: JWT_SECRET
-        generateValue: true
+        sync: false
+        # Set manually — must match p2-official's JWT_SECRET (one login works in both apps)
       - key: JWT_EXPIRES_IN
         value: 7d
       - key: WEBHOOK_SECRET
         sync: false
         # Set manually — must match TBInsight's WEBHOOK_SECRET
       - key: TBINSIGHT_WEBHOOK_URL
-        value: https://tb-system-backend.onrender.com/api/webhook/pasig-clone
+        value: https://p2-official.onrender.com/api/webhook/pasig-clone
       - key: FRONTEND_URL
         value: https://pasig-clone-frontend.onrender.com
         sync: false

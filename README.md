@@ -815,7 +815,7 @@ npm run lint
 
 ```
 TBInsight Frontend (Vercel)        TBInsight Backend (Render)         ML Service (Render)
-p2-official.vercel.app          →  tb-system-backend.onrender.com  →  tb-system-ml.onrender.com
+p2-official.vercel.app          →  p2-official.onrender.com        →  tb-system-ml.onrender.com
      │                                 │                                 │
      │   React 19 SPA                  │   Express 5 API                 │   FastAPI
      │   Vite 8 Build                  │   PostgreSQL                     │   ARIMA + RF
@@ -838,15 +838,15 @@ pasig-clone-frontend.onrender.com →  pasig-clone-backend.onrender.com
 
 ### Render (TBInsight Backend)
 
-- **Config**: `BACKEND/render.yaml`
-- **Service**: `tb-system-backend` (Node.js, free tier)
+- **Config**: root `render.yaml`
+- **Service**: `p2-official` (Node.js, free tier)
 - **Build**: `npm install`
 - **Start**: `npm start`
 - **Auto-migrations**: Run on startup via `db.js`
 
 ### Render (ML Service)
 
-- **Config**: `ML_SERVICE/render.yaml`
+- **Config**: root `render.yaml`
 - **Service**: `tb-system-ml` (Python, free tier)
 - **Build**: `pip install -r requirements.txt`
 - **Start**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
@@ -857,7 +857,7 @@ pasig-clone-frontend.onrender.com →  pasig-clone-backend.onrender.com
 - **Build**: `cd PASIG_CLONE/backend && npm install`
 - **Start**: `cd PASIG_CLONE/backend && node server.js`
 - **PORT**: Respects Render's `$PORT` env var (falls back to 5001 in development)
-- **Env vars**: `DATABASE_URL` (points to `pasig_clone_db` — separate database), `JWT_SECRET`, `WEBHOOK_SECRET` (must match TBInsight's value — set manually, not generated), `TBINSIGHT_WEBHOOK_URL=https://tb-system-backend.onrender.com/api/webhook/pasig-clone`
+- **Env vars**: `DATABASE_URL` (points to `pasig_clone_db` — separate database), `AUTH_DATABASE_URL` (TBInsight's `neondb`, shared users table), `JWT_SECRET` (must match TBInsight's value — shared login), `WEBHOOK_SECRET` (must match TBInsight's value — set manually, not generated), `TBINSIGHT_WEBHOOK_URL=https://p2-official.onrender.com/api/webhook/pasig-clone`
 
 ### Render (Pasig Clone Frontend)
 
