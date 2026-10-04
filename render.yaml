@@ -50,6 +50,9 @@ services:
         sync: false
         # Set manually in Render Dashboard → Environment:
         # postgresql://neondb_owner:...@ep-xxx.neon.tech/pasig_clone_db?sslmode=require
+      - key: AUTH_DATABASE_URL
+        sync: false
+        # Set manually — same value as tb-system-backend's DATABASE_URL (shared users table)
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_EXPIRES_IN
