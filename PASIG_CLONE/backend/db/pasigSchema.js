@@ -424,7 +424,7 @@ function deleteValidatedCases(batchId) {
 
 /**
  * Permanently delete a batch and everything it brought in (raw rows, validated cases,
- * webhook send logs, then the batch row itself) in one transaction. Children are deleted
+ * data issues, webhook send logs, then the batch row itself) in one transaction. Children are deleted
  * before the parent because import_batches has no ON DELETE CASCADE. Frees up the batch's
  * file_hash so the same file can be re-uploaded.
  *
@@ -440,6 +440,9 @@ async function deleteBatch(batchId) {
     );
     const raw = await client.query('DELETE FROM raw_tb_cases WHERE batch_id = $1', [batchId]);
     const validated = await client.query('DELETE FROM validated_tb_cases WHERE batch_id = $1', [batchId]);
+    // Data issues are the batch's rows that failed validation; left behind they stay
+    // listed on the Validation page with no batch to fix them into.
+    const issues = await client.query('DELETE FROM validation_issues WHERE batch_id = $1', [batchId]);
     // Patients this batch created, unless a record from another batch now belongs to them
     await client.query(
       `DELETE FROM patients p WHERE p.created_by_batch_id = $1
@@ -457,7 +460,10 @@ async function deleteBatch(batchId) {
     await client.query('COMMIT');
     return {
       batch: batch.rows[0],
-      deleted: { rawRows: raw.rowCount, validatedCases: validated.rowCount, webhookLogs: logs.rowCount },
+      deleted: {
+        rawRows: raw.rowCount, validatedCases: validated.rowCount,
+        dataIssues: issues.rowCount, webhookLogs: logs.rowCount,
+      },
     };
   } catch (err) {
     await client.query('ROLLBACK');
