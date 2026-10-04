@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const pool = require('../db');
 const { normalizeOutcome } = require('./outcomeNormalization');
+const { lockCaseData } = require('./caseDataLock');
 
 /**
  * Import parsed case data into the database
@@ -17,6 +18,7 @@ async function importCases(rows, sourceFile) {
 
   try {
     await client.query('BEGIN');
+    await lockCaseData(client); // see caseDataLock.js
 
     let importedCount = 0;
     let errorCount = 0;
@@ -24,12 +26,20 @@ async function importCases(rows, sourceFile) {
     for (const row of rows) {
       // Derive location_classification from barangays table
       let locationClassification = null;
+      let barangayId = null;
+      let barangayName = row.barangay_name ? row.barangay_name.trim() : null;
       if (row.barangay_name) {
         const bgyCheck = await client.query(
-          `SELECT name FROM barangays WHERE LOWER(name) = LOWER($1)`,
+          `SELECT id, name FROM barangays WHERE LOWER(name) = LOWER($1)`,
           [row.barangay_name.trim()]
         );
-        locationClassification = bgyCheck.rows.length > 0 ? 'Pasig City' : 'Non-Pasig';
+        if (bgyCheck.rows.length > 0) {
+          barangayId = bgyCheck.rows[0].id;
+          barangayName = bgyCheck.rows[0].name;
+          locationClassification = 'Pasig City';
+        } else {
+          locationClassification = 'Non-Pasig';
+        }
       }
 
       // Insert raw row (all rows, including errors)
@@ -88,7 +98,7 @@ async function importCases(rows, sourceFile) {
         `INSERT INTO tb_cases (
           batch_id,
           date_of_diagnosis, date_of_screening, date_of_notification,
-          age, sex, barangay_name,
+          age, sex, barangay_id, barangay_name,
           screening_facility, treatment_facility,
           source_of_patient, anatomical_site,
           registration_group, bacteriological_status,
@@ -97,12 +107,12 @@ async function importCases(rows, sourceFile) {
         ) VALUES (
           $1,
           $2, $3, $4,
-          $5, $6, $7,
-          $8, $9,
-          $10, $11,
-          $12, $13,
-          $14, $15, $16,
-          $17, $18, $19, $20
+          $5, $6, $7, $8,
+          $9, $10,
+          $11, $12,
+          $13, $14,
+          $15, $16, $17,
+          $18, $19, $20, $21
         )`,
         [
           batchId,
@@ -111,7 +121,8 @@ async function importCases(rows, sourceFile) {
           row.date_of_notification,
           row.age,
           row.sex ? row.sex.trim() : null,
-          row.barangay_name ? row.barangay_name.trim() : null,
+          barangayId,
+          barangayName,
           row.screening_facility ? row.screening_facility.trim() : null,
           row.treatment_facility ? row.treatment_facility.trim() : null,
           row.source_of_patient ? row.source_of_patient.trim() : null,

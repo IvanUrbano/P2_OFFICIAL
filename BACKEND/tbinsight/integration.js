@@ -5,6 +5,7 @@ const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { rebuildAllAggregations } = require('./aggregateMonthly');
 const { flagPossibleDuplicates } = require('./duplicateFlags');
 const { schedulePipelineRun } = require('./pipeline');
+const { lockCaseData } = require('./caseDataLock');
 
 // ==================== INTEGRATION STATUS ====================
 router.get('/status', authenticateToken, async (req, res) => {
@@ -202,6 +203,9 @@ router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), a
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Serialize with the pipeline's result store (caseDataLock.js): a run that read
+    // these cases cannot save its results after they are deleted.
+    await lockCaseData(client);
 
     // Cases in OTHER batches may be flagged as possible duplicates of a case in this
     // batch (duplicate_of_case_id always points at the earliest match). Release those

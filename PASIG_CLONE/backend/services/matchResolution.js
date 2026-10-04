@@ -38,9 +38,12 @@ function ymd(v) {
 /**
  * @param client  pg client inside an open transaction
  * @param row     the pending validated_tb_cases row
+ * @param options.authorizeExistingCase  called with the existing case before "same case"
+ *        writes onto it; must throw (with .status) if the user may not edit that case.
+ *        Required: "same case" changes a DIFFERENT case than the one being resolved.
  * @returns { resolution, caseNo }  caseNo = the case this record now belongs to
  */
-async function resolveMatch(client, row, resolution, userId) {
+async function resolveMatch(client, row, resolution, userId, { authorizeExistingCase } = {}) {
   if (!RESOLUTIONS.includes(resolution)) {
     throw Object.assign(new Error('Choose: same case, new episode, or different person.'), { status: 400 });
   }
@@ -61,6 +64,10 @@ async function resolveMatch(client, row, resolution, userId) {
   const resolvedCols = `match_status = 'resolved', match_resolution = $2, match_resolved_by = $3, match_resolved_at = NOW()`;
 
   if (resolution === 'same_case') {
+    if (typeof authorizeExistingCase !== 'function') {
+      throw new Error('resolveMatch: authorizeExistingCase is required for "same case".');
+    }
+    authorizeExistingCase(cand);
     const sets = UPDATE_FIELDS.map((f, i) => `${f} = COALESCE($${i + 2}, ${f})`).join(', ');
     await client.query(
       `UPDATE validated_tb_cases SET ${sets}, updated_by = $${UPDATE_FIELDS.length + 2}, updated_at = NOW() WHERE id = $1`,

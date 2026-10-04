@@ -10,6 +10,8 @@ const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { validatePassword } = require('../utils/passwordValidator');
 const { generateTempPassword } = require('../utils/tempPasswordGenerator');
 const { logAuditEvent } = require('../utils/auditLogger');
+const { notify } = require('../services/notifications');
+const { invalidateAccount } = require('../middleware/accountState');
 const {
   logLoginAttempt,
   isAccountLocked,
@@ -35,18 +37,74 @@ const accountActionLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// ==================== ASSIGNMENT HELPERS ====================
+// Staff accounts are assigned to a BARANGAY (required); admins are city-wide (no
+// barangay). The legacy facility_id is no longer set from the Users page but is kept
+// on existing accounts (transfers still use it).
+
+const USER_SELECT = `
+  SELECT u.id, u.username, u.full_name, u.email, u.role, u.status, u.last_login_at,
+         u.must_change_password, u.created_at, u.updated_at, u.facility_id, u.barangay_id,
+         u.failed_attempts, u.locked_until, u.manually_locked, u.locked_at,
+         (u.manually_locked OR (u.locked_until IS NOT NULL AND u.locked_until > NOW())) AS is_locked,
+         b.name AS barangay_name,
+         hf.name AS facility_name, hf.barangay_name AS facility_barangay, hf.facility_type,
+         u.created_by_user_id,
+         COALESCE(NULLIF(cb.full_name, ''), cb.username) AS created_by_name,
+         cb.username AS created_by_username
+  FROM users u
+  LEFT JOIN barangays b ON b.id = u.barangay_id
+  LEFT JOIN health_facilities hf ON u.facility_id = hf.id
+  LEFT JOIN users cb ON cb.id = u.created_by_user_id`;
+
+const isBlank = (v) => v === undefined || v === null || v === '';
+const USER_STATUSES = ['active', 'inactive'];
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Optional email: '' / null -> null; otherwise lowercased and format-checked. */
+function cleanOptionalEmail(email) {
+  if (isBlank(email) || String(email).trim() === '') return { email: null };
+  const e = String(email).trim().toLowerCase();
+  if (!EMAIL_RE.test(e)) return { error: 'Enter a valid email address or leave it blank.' };
+  return { email: e };
+}
+
+/** Resolves barangay ids to names for audit details: { 17: 'Rosario', ... }. */
+async function barangayNamesFor(ids) {
+  const wanted = [...new Set(ids.filter((v) => v !== null && v !== undefined))];
+  if (wanted.length === 0) return {};
+  const found = await db.authPool.query('SELECT id, name FROM barangays WHERE id = ANY($1::int[])', [wanted]);
+  const names = {};
+  for (const row of found.rows) names[row.id] = row.name;
+  return names;
+}
+
+/** Validates an optional id against a reference table; returns { id } or { error }. */
+async function checkReference(table, value, label) {
+  if (isBlank(value)) return { id: null };
+  const id = Number(value);
+  if (!Number.isInteger(id)) return { error: `Invalid ${label}.` };
+  const found = await db.authPool.query(`SELECT 1 FROM ${table} WHERE id = $1`, [id]);
+  if (found.rows.length === 0) return { error: `Unknown ${label}. Select a registered ${label}.` };
+  return { id };
+}
+
 // ==================== REGISTER (Admin Only) ====================
 router.post('/register', accountActionLimiter, authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
-    const { username, email, role, facility_id } = req.body;
+    const { full_name, username, email, role, barangay_id } = req.body;
     const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
+    const fullName = String(full_name ?? '').trim().replace(/\s+/g, ' ');
     const cleanUsername = username?.trim().toLowerCase();
-    const cleanEmail = email?.trim().toLowerCase();
-
-    if (!cleanUsername || !cleanEmail) {
-      return res.status(400).json({ error: 'Username and email are required.' });
+    if (!fullName || !cleanUsername) {
+      return res.status(400).json({ error: 'Full name and username are required.' });
     }
+    if (!/^[a-z0-9._-]{3,50}$/.test(cleanUsername)) {
+      return res.status(400).json({ error: 'Username must be 3-50 characters: letters, numbers, dot, dash or underscore.' });
+    }
+    const { email: cleanEmail, error: emailError } = cleanOptionalEmail(email);
+    if (emailError) return res.status(400).json({ error: emailError });
 
     const userRole = role || 'staff';
     if (!['admin', 'staff'].includes(userRole)) {
@@ -54,51 +112,56 @@ router.post('/register', accountActionLimiter, authenticate, authorizeRoles('adm
     }
 
     const existing = await db.authPool.query(
-      'SELECT id FROM users WHERE LOWER(username) = $1 OR LOWER(email) = $2',
+      'SELECT id FROM users WHERE LOWER(username) = $1 OR ($2::text IS NOT NULL AND LOWER(email) = $2)',
       [cleanUsername, cleanEmail]
     );
     if (existing.rows.length > 0) {
       return res.status(409).json({ error: 'Username or email already exists.' });
     }
 
-    // Facility assignment: required for staff, optional (NULL) for admin.
-    let facilityId = null;
-    if (facility_id !== undefined && facility_id !== null && facility_id !== '') {
-      const facResult = await db.authPool.query(
-        'SELECT id FROM health_facilities WHERE id = $1',
-        [Number(facility_id)]
-      );
-      if (facResult.rows.length === 0) {
-        return res.status(400).json({ error: 'Unknown health facility. Select a registered facility.' });
+    // Staff: assigned barangay required. Admin: city-wide, barangay always NULL.
+    let barangayId = null;
+    if (userRole === 'staff') {
+      const brgy = await checkReference('barangays', barangay_id, 'barangay');
+      if (brgy.error) return res.status(400).json({ error: brgy.error });
+      if (brgy.id === null) {
+        return res.status(400).json({ error: 'An assigned barangay is required for staff accounts.' });
       }
-      facilityId = Number(facility_id);
-    } else if (userRole === 'staff') {
-      return res.status(400).json({ error: 'A registered health facility is required for staff accounts.' });
+      barangayId = brgy.id;
     }
 
-    // Generate secure temporary password
+    // System-generated temporary password; the user must replace it at first login.
     const tempPassword = generateTempPassword();
 
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
     const result = await db.authPool.query(
-      `INSERT INTO users (username, email, password_hash, role, facility_id, password_changed_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       RETURNING id, username, email, role, facility_id, created_at`,
-      [cleanUsername, cleanEmail, hashedPassword, userRole, facilityId]
+      `INSERT INTO users (full_name, username, email, password_hash, role, barangay_id,
+                          status, must_change_password, password_changed_at, created_by_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'active', TRUE, NOW(), $7)
+       RETURNING id, full_name, username, email, role, barangay_id, status,
+                 must_change_password, created_at, created_by_user_id`,
+      [fullName, cleanUsername, cleanEmail, hashedPassword, userRole, barangayId, req.user.id]
     );
 
     const newUser = result.rows[0];
 
     // Log audit event (never log the password itself)
+    const createdBarangayNames = await barangayNamesFor([barangayId]);
     await logAuditEvent({
       userId: req.user.id,
       username: req.user.username,
-      action: 'CREATE_USER',
+      action: 'USER_CREATED',
       targetUserId: newUser.id,
       targetUsername: newUser.username,
       result: 'SUCCESS',
       ipAddress,
-      details: { role: userRole, facilityId },
+      actorRole: req.user.role,
+      details: {
+        role: userRole,
+        barangayId,
+        barangayName: barangayId ? (createdBarangayNames[barangayId] || null) : null,
+        access: barangayId ? 'barangay' : 'city-wide',
+      },
     });
 
     res.status(201).json({
@@ -163,9 +226,22 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
+    // Deactivated accounts cannot sign in (checked after the password so the response
+    // does not reveal which usernames exist).
+    if (user.status && user.status !== 'active') {
+      await logLoginAttempt(cleanUsername, ipAddress, false);
+      return res.status(403).json({ error: 'This account is inactive. Contact your administrator.' });
+    }
+    // Locked by an administrator (separate from the automatic failed-login lockout above).
+    if (user.manually_locked) {
+      await logLoginAttempt(cleanUsername, ipAddress, false);
+      return res.status(423).json({ error: 'This account is locked by an administrator. Contact your administrator.' });
+    }
+
     // Success — reset lockout and log
     await resetFailedAttempts(cleanUsername);
     await logLoginAttempt(cleanUsername, ipAddress, true);
+    await db.authPool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
 
     // Generate JWT
     const token = jwt.sign(
@@ -196,14 +272,23 @@ router.post('/login', loginLimiter, async (req, res) => {
     const recentlyChanged = user.password_changed_at &&
       (Date.now() - new Date(user.password_changed_at).getTime()) < 24 * 60 * 60 * 1000;
 
-    // Facility context for the logged-in user (staff accounts are facility-assigned)
+    // Assignment context for the logged-in user: barangay (staff) + optional facility.
     let facility = null;
-    if (user.facility_id) {
-      const facResult = await db.authPool.query(
-        'SELECT id, name, barangay_name, facility_type FROM health_facilities WHERE id = $1',
-        [user.facility_id]
-      );
-      facility = facResult.rows[0] || null;
+    let barangay = null;
+    const ctx = await db.authPool.query(
+      `SELECT u.barangay_id, b.name AS barangay_name,
+              hf.id AS facility_id, hf.name AS facility_name,
+              hf.barangay_name AS facility_barangay, hf.facility_type
+       FROM users u
+       LEFT JOIN barangays b ON b.id = u.barangay_id
+       LEFT JOIN health_facilities hf ON hf.id = u.facility_id
+       WHERE u.id = $1`,
+      [user.id]
+    );
+    const c = ctx.rows[0];
+    if (c?.barangay_id) barangay = { id: c.barangay_id, name: c.barangay_name };
+    if (c?.facility_id) {
+      facility = { id: c.facility_id, name: c.facility_name, barangay_name: c.facility_barangay, facility_type: c.facility_type };
     }
 
     res.json({
@@ -215,7 +300,14 @@ router.post('/login', loginLimiter, async (req, res) => {
         role: user.role,
         facility_id: user.facility_id || null,
         facility,
+        barangay_id: barangay?.id ?? null,
+        barangay,
+        full_name: user.full_name || null,
+        must_change_password: Boolean(user.must_change_password),
       },
+      // Temporary (system-generated) password still in use: the client sends the user
+      // to Settings > Security to set their own before continuing.
+      mustChangePassword: Boolean(user.must_change_password),
       passwordRecentlyChanged: recentlyChanged,
     });
   } catch (error) {
@@ -243,14 +335,7 @@ router.post('/logout', (req, res) => {
 // ==================== GET PROFILE (Protected) ====================
 router.get('/profile', authenticate, async (req, res) => {
   try {
-    const result = await db.authPool.query(
-      `SELECT u.id, u.username, u.email, u.role, u.created_at, u.facility_id,
-              hf.name AS facility_name, hf.barangay_name AS facility_barangay, hf.facility_type
-       FROM users u
-       LEFT JOIN health_facilities hf ON u.facility_id = hf.id
-       WHERE u.id = $1`,
-      [req.user.id]
-    );
+    const result = await db.authPool.query(`${USER_SELECT} WHERE u.id = $1`, [req.user.id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
@@ -269,13 +354,16 @@ router.put('/profile', authenticate, async (req, res) => {
     const { username, email } = req.body;
     const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
-    if (!username || !email) {
-      return res.status(400).json({ error: 'Username and email are required.' });
+    if (!username) {
+      return res.status(400).json({ error: 'Username is required.' });
     }
+    // Email is optional: blank clears it.
+    const { email: cleanEmail, error: emailError } = cleanOptionalEmail(email);
+    if (emailError) return res.status(400).json({ error: emailError });
 
     const conflict = await db.authPool.query(
-      'SELECT id FROM users WHERE (LOWER(email) = $1 OR LOWER(username) = $2) AND id <> $3',
-      [email.toLowerCase(), username.toLowerCase(), req.user.id]
+      'SELECT id FROM users WHERE (($1::text IS NOT NULL AND LOWER(email) = $1) OR LOWER(username) = $2) AND id <> $3',
+      [cleanEmail, username.toLowerCase(), req.user.id]
     );
     if (conflict.rows.length > 0) {
       return res.status(409).json({ error: 'Username or email is already in use by another account.' });
@@ -283,7 +371,7 @@ router.put('/profile', authenticate, async (req, res) => {
 
     const result = await db.authPool.query(
       'UPDATE users SET username = $1, email = $2 WHERE id = $3 RETURNING id, username, email, role, created_at',
-      [username.toLowerCase(), email.toLowerCase(), req.user.id]
+      [username.toLowerCase(), cleanEmail, req.user.id]
     );
 
     if (result.rows.length === 0) {
@@ -298,7 +386,7 @@ router.put('/profile', authenticate, async (req, res) => {
       targetUsername: username.toLowerCase(),
       result: 'SUCCESS',
       ipAddress,
-      details: { newUsername: username.toLowerCase(), newEmail: email.toLowerCase() },
+      details: { newUsername: username.toLowerCase(), newEmail: cleanEmail },
     });
 
     res.json({ message: 'Profile updated successfully.', user: result.rows[0] });
@@ -339,7 +427,10 @@ router.put('/password', accountActionLimiter, authenticate, async (req, res) => 
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
-    await db.authPool.query('UPDATE users SET password_hash = $1, password_changed_at = NOW() WHERE id = $2', [hashedPassword, req.user.id]);
+    await db.authPool.query(
+      'UPDATE users SET password_hash = $1, password_changed_at = NOW(), must_change_password = FALSE WHERE id = $2',
+      [hashedPassword, req.user.id]
+    );
 
     await logAuditEvent({
       userId: req.user.id,
@@ -361,13 +452,7 @@ router.put('/password', accountActionLimiter, authenticate, async (req, res) => 
 // ==================== GET ALL USERS (Admin Only) ====================
 router.get('/users', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
-    const result = await db.authPool.query(
-      `SELECT u.id, u.username, u.email, u.role, u.created_at, u.facility_id,
-              hf.name AS facility_name, hf.barangay_name AS facility_barangay, hf.facility_type
-       FROM users u
-       LEFT JOIN health_facilities hf ON u.facility_id = hf.id
-       ORDER BY u.created_at DESC`
-    );
+    const result = await db.authPool.query(`${USER_SELECT} ORDER BY u.created_at DESC`);
     res.json({ users: result.rows });
   } catch (error) {
     console.error('Fetch users error:', error.message);
@@ -375,77 +460,143 @@ router.get('/users', authenticate, authorizeRoles('admin'), async (req, res) => 
   }
 });
 
-// ==================== UPDATE USER ROLE / FACILITY (Admin Only) ====================
+// ==================== UPDATE USER (Admin Only) ====================
+// Editable: full_name, email (optional), role, barangay_id (staff only), status.
+// Fields left out of the request keep their current value. Admins are city-wide, so
+// their barangay is always stored as NULL. facility_id is not touched (legacy field).
 router.put('/users/:id', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { role, facility_id } = req.body;
+    const { full_name, email, role, barangay_id, status } = req.body;
     const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
     const existingResult = await db.authPool.query(
-      'SELECT id, username, role, facility_id FROM users WHERE id = $1',
+      'SELECT id, username, full_name, email, role, barangay_id, status FROM users WHERE id = $1',
       [id]
     );
     if (existingResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
     }
     const existing = existingResult.rows[0];
+    const isSelf = Number(id) === Number(req.user.id);
 
-    const targetRole = role !== undefined && role !== null && role !== '' ? role : existing.role;
+    const targetRole = isBlank(role) ? existing.role : role;
     if (!['admin', 'staff'].includes(targetRole)) {
       return res.status(400).json({ error: 'Invalid role. Must be admin or staff.' });
     }
-    const roleChanged = targetRole !== existing.role;
-
-    // Resolve the facility for the updated account:
-    // - facility_id supplied explicitly (including null) wins;
-    // - staff accounts keep their facility (and must have one — Admin→Staff without one fails);
-    // - role change to admin without a supplied facility clears the facility to NULL.
-    let nextFacilityId;
-    if (facility_id !== undefined) {
-      nextFacilityId = facility_id === null || facility_id === '' ? null : Number(facility_id);
-    } else if (targetRole === 'staff') {
-      nextFacilityId = existing.facility_id ?? null;
-      if (nextFacilityId === null) {
-        return res.status(400).json({ error: 'A registered health facility is required for staff accounts.' });
-      }
-    } else {
-      // targetRole === 'admin', no facility supplied in this update
-      nextFacilityId = roleChanged ? null : (existing.facility_id ?? null);
+    const targetStatus = isBlank(status) ? (existing.status || 'active') : status;
+    if (!USER_STATUSES.includes(targetStatus)) {
+      return res.status(400).json({ error: 'Invalid status. Must be active or inactive.' });
+    }
+    if (isSelf && targetStatus !== 'active') {
+      return res.status(400).json({ error: 'You cannot deactivate your own account.' });
+    }
+    if (isSelf && targetRole !== 'admin') {
+      return res.status(400).json({ error: 'You cannot remove your own admin role.' });
     }
 
-    if (nextFacilityId !== null) {
-      const facResult = await db.authPool.query(
-        'SELECT id FROM health_facilities WHERE id = $1',
-        [nextFacilityId]
-      );
-      if (facResult.rows.length === 0) {
-        return res.status(400).json({ error: 'Unknown health facility. Select a registered facility.' });
+    let nextFullName = existing.full_name;
+    if (full_name !== undefined) {
+      nextFullName = String(full_name ?? '').trim().replace(/\s+/g, ' ');
+      if (!nextFullName) return res.status(400).json({ error: 'Full name is required.' });
+    }
+
+    let nextEmail = existing.email;
+    if (email !== undefined) {
+      const cleaned = cleanOptionalEmail(email);
+      if (cleaned.error) return res.status(400).json({ error: cleaned.error });
+      nextEmail = cleaned.email;
+      if (nextEmail) {
+        const taken = await db.authPool.query(
+          'SELECT 1 FROM users WHERE LOWER(email) = $1 AND id <> $2', [nextEmail, id]
+        );
+        if (taken.rows.length > 0) return res.status(409).json({ error: 'Email is already in use by another account.' });
       }
+    }
+
+    let nextBarangayId = null;
+    if (targetRole === 'staff') {
+      const brgy = await checkReference('barangays', barangay_id !== undefined ? barangay_id : existing.barangay_id, 'barangay');
+      if (brgy.error) return res.status(400).json({ error: brgy.error });
+      if (brgy.id === null) {
+        return res.status(400).json({ error: 'An assigned barangay is required for staff accounts.' });
+      }
+      nextBarangayId = brgy.id;
     }
 
     const result = await db.authPool.query(
-      `UPDATE users SET role = $1, facility_id = $2, updated_at = NOW()
-       WHERE id = $3
-       RETURNING id, username, email, role, facility_id, created_at`,
-      [targetRole, nextFacilityId, id]
+      `UPDATE users
+       SET full_name = $1, email = $2, role = $3, barangay_id = $4, status = $5, updated_at = NOW()
+       WHERE id = $6
+       RETURNING id, full_name, username, email, role, barangay_id, status, created_at`,
+      [nextFullName, nextEmail, targetRole, nextBarangayId, targetStatus, id]
     );
+    invalidateAccount(id);
 
-    await logAuditEvent({
+    // One audit event per concern that actually changed — no duplicate/parent rows.
+    const auditBase = {
       userId: req.user.id,
       username: req.user.username,
-      action: 'UPDATE_USER',
       targetUserId: result.rows[0].id,
       targetUsername: result.rows[0].username,
       result: 'SUCCESS',
       ipAddress,
-      details: {
-        fromRole: existing.role,
-        toRole: targetRole,
-        fromFacilityId: existing.facility_id ?? null,
-        toFacilityId: nextFacilityId,
-      },
-    });
+      actorRole: req.user.role,
+    };
+    const nameChanged = (existing.full_name || null) !== (nextFullName || null);
+    const emailChanged = (existing.email || null) !== (nextEmail || null);
+    const roleChanged = existing.role !== targetRole;
+    const barangayChanged = (existing.barangay_id ?? null) !== nextBarangayId;
+    const statusChanged = (existing.status ?? null) !== targetStatus;
+
+    if (nameChanged || emailChanged) {
+      await logAuditEvent({
+        ...auditBase,
+        action: 'USER_UPDATED',
+        details: {
+          old: { full_name: existing.full_name || null, email: existing.email || null },
+          new: { full_name: nextFullName || null, email: nextEmail || null },
+        },
+      });
+    }
+    if (roleChanged) {
+      await logAuditEvent({
+        ...auditBase,
+        action: 'ROLE_CHANGED',
+        details: { old: existing.role, new: targetRole },
+      });
+    }
+    if (barangayChanged) {
+      const names = await barangayNamesFor([existing.barangay_id, nextBarangayId]);
+      await logAuditEvent({
+        ...auditBase,
+        action: 'BARANGAY_ASSIGNMENT_CHANGED',
+        details: {
+          old: existing.barangay_id != null ? (names[existing.barangay_id] || null) : null,
+          new: nextBarangayId != null ? (names[nextBarangayId] || null) : null,
+          oldId: existing.barangay_id ?? null,
+          newId: nextBarangayId,
+        },
+      });
+    }
+    if (statusChanged) {
+      await logAuditEvent({
+        ...auditBase,
+        action: targetStatus === 'active' ? 'ACCOUNT_ACTIVATED' : 'ACCOUNT_DEACTIVATED',
+        details: { old: existing.status ?? null, new: targetStatus },
+      });
+    }
+    if (roleChanged || barangayChanged) {
+      const names = nextBarangayId != null ? await barangayNamesFor([nextBarangayId]) : {};
+      await notify([result.rows[0].id], {
+        type: 'account_updated', severity: 'info', actorId: req.user.id,
+        title: 'Your access was updated',
+        message: targetRole === 'admin'
+          ? 'You are now an administrator with city-wide access.'
+          : `You are now assigned to Barangay ${names[nextBarangayId] || ''}. You see and manage TB cases assigned to that barangay.`,
+        link: '/records', entityType: 'user', entityId: result.rows[0].id,
+      });
+    }
 
     res.json({ message: 'User updated successfully.', user: result.rows[0] });
   } catch (error) {
@@ -454,40 +605,138 @@ router.put('/users/:id', authenticate, authorizeRoles('admin'), async (req, res)
   }
 });
 
-// ==================== DELETE USER (Admin Only) ====================
-router.delete('/users/:id', authenticate, authorizeRoles('admin'), async (req, res) => {
+// ==================== ACTIVATE / DEACTIVATE (Admin Only) ====================
+// Only the account's status changes; nothing the user entered or reviewed is touched.
+router.patch('/users/:id/status', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const ipAddress = req.ip || req.connection?.remoteAddress || null;
+
+    if (!USER_STATUSES.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status. Must be active or inactive.' });
+    }
+    if (Number(id) === Number(req.user.id) && status !== 'active') {
+      return res.status(400).json({ error: 'You cannot deactivate your own account.' });
+    }
+
+    const existing = await db.authPool.query('SELECT status FROM users WHERE id = $1', [id]);
+    if (existing.rows.length === 0) return res.status(404).json({ error: 'User not found.' });
+    const previousStatus = existing.rows[0].status ?? null;
+
+    const result = await db.authPool.query(
+      `UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2
+       RETURNING id, username, status`,
+      [status, id]
+    );
+    invalidateAccount(id);
+
+    if (previousStatus !== status) {
+      await logAuditEvent({
+        userId: req.user.id,
+        username: req.user.username,
+        action: status === 'active' ? 'ACCOUNT_ACTIVATED' : 'ACCOUNT_DEACTIVATED',
+        targetUserId: result.rows[0].id,
+        targetUsername: result.rows[0].username,
+        result: 'SUCCESS',
+        ipAddress,
+        actorRole: req.user.role,
+        details: { old: previousStatus, new: status },
+      });
+    }
+
+    res.json({
+      message: status === 'active' ? 'Account activated.' : 'Account deactivated.',
+      user: result.rows[0],
+    });
+  } catch (error) {
+    console.error('Update user status error:', error.message);
+    res.status(500).json({ error: 'Failed to update account status.' });
+  }
+});
+
+// ==================== LOCK ACCOUNT (Admin Only) ====================
+// Holds the account until an administrator unlocks it. Unlike deactivation this is a
+// temporary security measure; neither removes the user or their audit history.
+router.post('/users/:id/lock', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
-    if (parseInt(id) === req.user.id) {
-      return res.status(400).json({ error: 'You cannot delete your own account.' });
+    if (Number(id) === Number(req.user.id)) {
+      return res.status(400).json({ error: 'You cannot lock your own account.' });
     }
 
-    // Fetch user before deleting for audit
-    const userResult = await db.authPool.query('SELECT id, username FROM users WHERE id = $1', [id]);
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found.' });
-    }
-    const targetUser = userResult.rows[0];
-
-    await db.authPool.query('DELETE FROM users WHERE id = $1', [id]);
+    const result = await db.authPool.query(
+      `UPDATE users SET manually_locked = TRUE, locked_at = NOW(), locked_by_user_id = $2, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, username`,
+      [id, req.user.id]
+    );
+    invalidateAccount(id);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found.' });
 
     await logAuditEvent({
       userId: req.user.id,
       username: req.user.username,
-      action: 'DELETE_USER',
-      targetUserId: targetUser.id,
-      targetUsername: targetUser.username,
+      action: 'ACCOUNT_LOCKED',
+      targetUserId: result.rows[0].id,
+      targetUsername: result.rows[0].username,
       result: 'SUCCESS',
       ipAddress,
+      actorRole: req.user.role,
     });
 
-    res.json({ message: 'User deleted successfully.' });
+    res.json({ message: 'Account locked.', user: result.rows[0] });
   } catch (error) {
-    console.error('Delete user error:', error.message);
-    res.status(500).json({ error: 'Failed to delete user.' });
+    console.error('Lock user error:', error.message);
+    res.status(500).json({ error: 'Failed to lock account.' });
   }
+});
+
+// ==================== UNLOCK ACCOUNT (Admin Only) ====================
+// Clears both an administrator lock and the automatic lockout from repeated wrong
+// passwords (5 attempts -> 15 minutes).
+router.post('/users/:id/unlock', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const ipAddress = req.ip || req.connection?.remoteAddress || null;
+
+    const result = await db.authPool.query(
+      `UPDATE users
+       SET failed_attempts = 0, locked_until = NULL,
+           manually_locked = FALSE, locked_at = NULL, locked_by_user_id = NULL,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, username`,
+      [id]
+    );
+    invalidateAccount(id);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found.' });
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'ACCOUNT_UNLOCKED',
+      targetUserId: result.rows[0].id,
+      targetUsername: result.rows[0].username,
+      result: 'SUCCESS',
+      ipAddress,
+      actorRole: req.user.role,
+    });
+
+    res.json({ message: 'Account unlocked.', user: result.rows[0] });
+  } catch (error) {
+    console.error('Unlock user error:', error.message);
+    res.status(500).json({ error: 'Failed to unlock account.' });
+  }
+});
+
+// ==================== DELETE USER — DISABLED ====================
+// Accounts are never deleted: audit logs, imports, reviews and records reference the
+// user who made them. Use PATCH /users/:id/status (deactivate) instead.
+router.delete('/users/:id', authenticate, authorizeRoles('admin'), (req, res) => {
+  res.status(405).json({ error: 'User accounts cannot be deleted. Deactivate the account instead.' });
 });
 
 // ==================== ADMIN RESET PASSWORD (Admin Only) ====================
@@ -510,9 +759,16 @@ router.put('/users/:id/password', accountActionLimiter, authenticate, authorizeR
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(tempPassword, salt);
     await db.authPool.query(
-      'UPDATE users SET password_hash = $1, failed_attempts = 0, locked_until = NULL, password_changed_at = NOW() WHERE id = $2',
+      'UPDATE users SET password_hash = $1, failed_attempts = 0, locked_until = NULL, password_changed_at = NOW(), must_change_password = TRUE WHERE id = $2',
       [hashedPassword, id]
     );
+
+    await notify([targetUser.id], {
+      type: 'account_updated', severity: 'warning', actorId: req.user.id,
+      title: 'Your password was reset',
+      message: `An administrator (${req.user.username}) reset your password. If you did not ask for this, tell your administrator.`,
+      link: '/settings', entityType: 'user', entityId: targetUser.id,
+    });
 
     // Log audit event (never log the password itself)
     await logAuditEvent({
@@ -523,6 +779,7 @@ router.put('/users/:id/password', accountActionLimiter, authenticate, authorizeR
       targetUsername: targetUser.username,
       result: 'SUCCESS',
       ipAddress,
+      actorRole: req.user.role,
     });
 
     res.json({
@@ -536,25 +793,22 @@ router.put('/users/:id/password', accountActionLimiter, authenticate, authorizeR
 });
 
 // ==================== AUDIT LOGS (Admin Only) ====================
+// Schema is owned by utils/auditLogger.js (CREATE + ALTERs on every write); this
+// endpoint only reads. Actor/target display names and the actor's role come from
+// users joins so entries read like "Juan Reyes (Admin)" instead of raw usernames.
 router.get('/audit-logs', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
-    // Ensure audit_logs table exists
-    await db.authPool.query(`
-      CREATE TABLE IF NOT EXISTS audit_logs (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER,
-        username TEXT NOT NULL,
-        action TEXT NOT NULL,
-        target_user_id INTEGER,
-        target_username TEXT,
-        result TEXT NOT NULL DEFAULT 'SUCCESS',
-        ip_address TEXT,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-
     const result = await db.authPool.query(
-      'SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 200'
+      `SELECT a.*,
+              COALESCE(NULLIF(au.full_name, ''), au.username) AS actor_full_name,
+              au.role AS actor_role,
+              COALESCE(NULLIF(tu.full_name, ''), tu.username) AS target_full_name,
+              tu.role AS target_role
+       FROM audit_logs a
+       LEFT JOIN users au ON au.id = a.user_id
+       LEFT JOIN users tu ON tu.id = a.target_user_id
+       ORDER BY a.created_at DESC
+       LIMIT 200`
     );
     res.json({ logs: result.rows });
   } catch (error) {
@@ -563,18 +817,9 @@ router.get('/audit-logs', authenticate, authorizeRoles('admin'), async (req, res
   }
 });
 
-// ==================== NOTIFICATIONS (not yet populated) ====================
-// Layout.jsx polls these every 30s to drive the bell icon. No backend flow
-// creates notifications yet, so these return an explicitly empty set — the
-// bell stays visible but shows nothing instead of 404-spamming the console.
-// Shapes: unread-count -> {count}, list -> {notifications}.
-
-router.get('/notifications/unread-count', authenticate, (req, res) => {
-  res.json({ count: 0 });
-});
-
-router.get('/notifications', authenticate, (req, res) => {
-  res.json({ notifications: [] });
-});
+// ==================== NOTIFICATIONS ====================
+// The header bell (Layout.jsx) and the Notifications page. See routes/notifications.js;
+// notifications are created by services/notifications.js.
+router.use('/notifications', require('./notifications'));
 
 module.exports = router;

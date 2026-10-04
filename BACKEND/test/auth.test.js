@@ -157,6 +157,24 @@ describe('POST /api/auth/login', () => {
     assert.ok(!res.body.user.password_hash, 'password_hash must not be returned');
   });
 
+  it('refuses an account locked by an administrator, even with the right password', async () => {
+    mockQueryFn = async () => ({ rows: [{ ...STAFF_USER, manually_locked: true }] });
+    const res = await request(buildApp())
+      .post('/api/auth/login')
+      .send({ email: 'staff@test.com', password: 'Staffpass1' });
+    assert.strictEqual(res.status, 423);
+    assert.ok(res.body.error.includes('locked by an administrator'));
+  });
+
+  it('refuses an inactive account, even with the right password', async () => {
+    mockQueryFn = async () => ({ rows: [{ ...STAFF_USER, status: 'inactive' }] });
+    const res = await request(buildApp())
+      .post('/api/auth/login')
+      .send({ email: 'staff@test.com', password: 'Staffpass1' });
+    assert.strictEqual(res.status, 403);
+    assert.ok(res.body.error.includes('inactive'));
+  });
+
   it('sets httpOnly cookie with token', async () => {
     mockQueryFn = async () => ({ rows: [STAFF_USER] });
     const res = await request(buildApp())
@@ -252,29 +270,39 @@ describe('POST /api/auth/register', () => {
     assert.ok(res.body.error.includes('already exists'));
   });
 
+  // Reference lookups made by checkReference(): 'SELECT 1 FROM barangays|health_facilities'
+  const refRows = (s, { barangay = true, facility = true } = {}) => {
+    if (s.includes('FROM barangays')) return { rows: barangay ? [{ '?column?': 1 }] : [] };
+    if (s.includes('FROM health_facilities')) return { rows: facility ? [{ '?column?': 1 }] : [] };
+    return null;
+  };
+  // INSERT params: [username, email, password_hash, role, barangay_id, full_name]
+  const insertedUser = (params) => ({
+    rows: [{
+      id: 10, username: params[0], email: params[1], role: params[3],
+      barangay_id: params[4], full_name: params[5], status: 'active',
+      must_change_password: true, created_at: new Date().toISOString(),
+    }],
+  });
+
   it('returns 201 with temp password on successful registration', async () => {
     mockQueryFn = async (sql, params) => {
       const s = String(sql);
       if (s.includes('SELECT id FROM users')) return { rows: [] };
-      if (s.includes('SELECT id FROM health_facilities')) return { rows: [{ id: 1 }] };
-      if (s.includes('INSERT INTO users')) {
-        return {
-          rows: [{
-            id: 10, username: params[0], email: params[1],
-            role: params[3], facility_id: params[4], created_at: new Date().toISOString(),
-          }],
-        };
-      }
+      const ref = refRows(s); if (ref) return ref;
+      if (s.includes('INSERT INTO users')) return insertedUser(params);
       return { rows: [] };
     };
     const res = await request(buildApp())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ username: 'newstaff', email: 'new@test.com', facility_id: 1 });
+      .send({ full_name: 'New Staff', username: 'newstaff', email: 'new@test.com', barangay_id: 3 });
     assert.strictEqual(res.status, 201);
     assert.strictEqual(res.body.user.username, 'newstaff');
     assert.strictEqual(res.body.user.email, 'new@test.com');
-    assert.strictEqual(res.body.user.facility_id, 1);
+    assert.strictEqual(res.body.user.barangay_id, 3);
+    assert.strictEqual(res.body.user.full_name, 'New Staff');
+    assert.strictEqual(res.body.user.must_change_password, true);
     assert.ok(!res.body.user.password_hash, 'password_hash must not be returned');
     assert.ok(res.body.tempPassword, 'should return tempPassword');
     assert.ok(typeof res.body.tempPassword === 'string');
@@ -282,63 +310,103 @@ describe('POST /api/auth/register', () => {
   });
 
   it('defaults role to staff when not specified', async () => {
-    let capturedRole;
-    let capturedFacility;
+    let captured;
     mockQueryFn = async (sql, params) => {
       const s = String(sql);
       if (s.includes('SELECT id FROM users')) return { rows: [] };
-      if (s.includes('SELECT id FROM health_facilities')) return { rows: [{ id: 1 }] };
-      if (s.includes('INSERT INTO users')) {
-        capturedRole = params[3];
-        capturedFacility = params[4];
-        return { rows: [{ id: 10, username: params[0], email: params[1], role: params[3], facility_id: params[4], created_at: new Date() }] };
-      }
+      const ref = refRows(s); if (ref) return ref;
+      if (s.includes('INSERT INTO users')) { captured = params; return insertedUser(params); }
       return { rows: [] };
     };
     await request(buildApp())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ username: 'newstaff', email: 'new@test.com', facility_id: 1 });
-    assert.strictEqual(capturedRole, 'staff');
-    assert.strictEqual(capturedFacility, 1);
+      .send({ username: 'newstaff', email: 'new@test.com', barangay_id: 3 });
+    assert.strictEqual(captured[3], 'staff');
+    assert.strictEqual(captured[4], 3);
+    assert.strictEqual(captured[6], ADMIN_USER.id, 'records which admin created the account');
   });
 
-  it('rejects staff registration without a facility', async () => {
-    mockQueryFn = async (sql) => {
-      const s = String(sql);
-      if (s.includes('SELECT id FROM users')) return { rows: [] };
-      return { rows: [] };
-    };
-    const res = await request(buildApp())
-      .post('/api/auth/register')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ username: 'nofac', email: 'nofac@test.com', role: 'staff' });
-    assert.strictEqual(res.status, 400);
-    assert.ok(res.body.error.includes('facility'));
-  });
-
-  it('rejects registration with an unknown facility', async () => {
-    mockQueryFn = async (sql) => {
-      const s = String(sql);
-      if (s.includes('SELECT id FROM users')) return { rows: [] };
-      if (s.includes('SELECT id FROM health_facilities')) return { rows: [] };
-      return { rows: [] };
-    };
-    const res = await request(buildApp())
-      .post('/api/auth/register')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ username: 'badfac', email: 'badfac@test.com', role: 'staff', facility_id: 9999 });
-    assert.strictEqual(res.status, 400);
-    assert.ok(res.body.error.includes('Unknown health facility'));
-  });
-
-  it('allows admin registration without a facility', async () => {
+  it('accepts a staff account with no email (email is optional)', async () => {
+    let captured;
     mockQueryFn = async (sql, params) => {
       const s = String(sql);
       if (s.includes('SELECT id FROM users')) return { rows: [] };
-      if (s.includes('INSERT INTO users')) {
-        return { rows: [{ id: 11, username: params[0], email: params[1], role: params[3], facility_id: params[4], created_at: new Date() }] };
-      }
+      const ref = refRows(s); if (ref) return ref;
+      if (s.includes('INSERT INTO users')) { captured = params; return insertedUser(params); }
+      return { rows: [] };
+    };
+    const res = await request(buildApp())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ full_name: 'No Email', username: 'noemail', email: '', role: 'staff', barangay_id: 3 });
+    assert.strictEqual(res.status, 201);
+    assert.strictEqual(captured[1], null);
+    assert.strictEqual(captured[4], 3);
+  });
+
+  it('rejects staff registration without a barangay', async () => {
+    mockQueryFn = async (sql) => {
+      const s = String(sql);
+      if (s.includes('SELECT id FROM users')) return { rows: [] };
+      const ref = refRows(s); if (ref) return ref;
+      return { rows: [] };
+    };
+    const res = await request(buildApp())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: 'nobrgy', email: 'nobrgy@test.com', role: 'staff' });
+    assert.strictEqual(res.status, 400);
+    assert.ok(res.body.error.includes('barangay'));
+  });
+
+  it('rejects registration with an unknown barangay', async () => {
+    mockQueryFn = async (sql) => {
+      const s = String(sql);
+      if (s.includes('SELECT id FROM users')) return { rows: [] };
+      const ref = refRows(s, { barangay: false }); if (ref) return ref;
+      return { rows: [] };
+    };
+    const res = await request(buildApp())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: 'badbrgy', email: 'badbrgy@test.com', role: 'staff', barangay_id: 9999 });
+    assert.strictEqual(res.status, 400);
+    assert.ok(res.body.error.includes('Unknown barangay'));
+  });
+
+  it('stores barangay_id = NULL for admins even if one is sent (city-wide)', async () => {
+    let captured;
+    mockQueryFn = async (sql, params) => {
+      const s = String(sql);
+      if (s.includes('SELECT id FROM users')) return { rows: [] };
+      const ref = refRows(s); if (ref) return ref;
+      if (s.includes('INSERT INTO users')) { captured = params; return insertedUser(params); }
+      return { rows: [] };
+    };
+    const res = await request(buildApp())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ full_name: 'City Admin', username: 'cityadmin', role: 'admin', barangay_id: 3 });
+    assert.strictEqual(res.status, 201);
+    assert.strictEqual(captured[4], null);
+  });
+
+  it('rejects an invalid email format', async () => {
+    mockQueryFn = async () => ({ rows: [] });
+    const res = await request(buildApp())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: 'bademail', email: 'not-an-email', role: 'admin' });
+    assert.strictEqual(res.status, 400);
+    assert.ok(res.body.error.includes('valid email'));
+  });
+
+  it('allows admin registration without a barangay or facility', async () => {
+    mockQueryFn = async (sql, params) => {
+      const s = String(sql);
+      if (s.includes('SELECT id FROM users')) return { rows: [] };
+      if (s.includes('INSERT INTO users')) return insertedUser(params);
       return { rows: [] };
     };
     const res = await request(buildApp())
@@ -347,7 +415,7 @@ describe('POST /api/auth/register', () => {
       .send({ username: 'newadmin', email: 'newadmin@test.com', role: 'admin' });
     assert.strictEqual(res.status, 201);
     assert.strictEqual(res.body.user.role, 'admin');
-    assert.strictEqual(res.body.user.facility_id, null);
+    assert.strictEqual(res.body.user.barangay_id, null);
   });
 });
 
@@ -467,32 +535,16 @@ describe('DELETE /api/auth/users/:id', () => {
     assert.strictEqual(res.status, 403);
   });
 
-  it('returns 400 when admin tries to delete self', async () => {
-    const token = makeToken(ADMIN_USER);
-    const res = await request(buildApp())
-      .delete(`/api/auth/users/${ADMIN_USER.id}`)
-      .set('Authorization', `Bearer ${token}`);
-    assert.strictEqual(res.status, 400);
-    assert.ok(res.body.error.includes('cannot delete your own'));
-  });
-
-  it('deletes user successfully as admin', async () => {
-    mockQueryFn = async () => ({});
+  it('refuses permanent deletion with 405 and never touches the database', async () => {
+    let queried = false;
+    mockQueryFn = async () => { queried = true; return { rows: [] }; };
     const token = makeToken(ADMIN_USER);
     const res = await request(buildApp())
       .delete('/api/auth/users/1')
       .set('Authorization', `Bearer ${token}`);
-    assert.strictEqual(res.status, 200);
-    assert.ok(res.body.message.includes('deleted'));
-  });
-
-  it('returns 500 on database error', async () => {
-    mockQueryFn = async () => { throw new Error('DB fail'); };
-    const token = makeToken(ADMIN_USER);
-    const res = await request(buildApp())
-      .delete('/api/auth/users/1')
-      .set('Authorization', `Bearer ${token}`);
-    assert.strictEqual(res.status, 500);
+    assert.strictEqual(res.status, 405);
+    assert.ok(res.body.error.includes('Deactivate'));
+    assert.strictEqual(queried, false);
   });
 });
 

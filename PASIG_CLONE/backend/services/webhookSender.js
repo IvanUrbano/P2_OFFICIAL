@@ -29,6 +29,7 @@ function toYmd(v) {
 
 function formatRecord(record) {
   return {
+    barangay_id: record.barangay_id ?? null,
     barangay_name: record.barangay_name,
     date_of_diagnosis: toYmd(record.date_of_diagnosis),
     date_of_notification: toYmd(record.date_of_notification),
@@ -106,7 +107,7 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [] } = {}) {
     if (pendingMatches > 0) {
       throw new Error(
         `This batch has ${pendingMatches} possible patient match${pendingMatches === 1 ? '' : 'es'} to review first. ` +
-        'Open TB Records → Possible Matches.'
+        'Open Validation → Possible Matches.'
       );
     }
 

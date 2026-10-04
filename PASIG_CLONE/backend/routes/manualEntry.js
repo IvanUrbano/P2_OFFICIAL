@@ -7,7 +7,8 @@ const { cleanRecord, isPasigBarangay } = require('../services/dataCleaner');
 const { logAuditEvent } = require('../utils/auditLogger');
 const { sendWebhook } = require('../services/webhookSender');
 const { resolveMatch, createPatient, nextCaseNo, RESOLUTIONS } = require('../services/matchResolution');
-const { canViewCase, resolveUserFacility } = require('../policies/caseAccessPolicy');
+const { resolveUserScope } = require('../policies/caseAccessPolicy');
+const { ACTIONS, can, assertCaseAction } = require('../policies/permissions');
 
 
 function ymd(v) {
@@ -70,11 +71,21 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
     )).rows[0] || null;
 
     const resolution = candidate ? b.match_resolution : null;
+    // "Same case" updates the existing case — refuse up front if it is view-only for (or not
+    // assigned to) this user, instead of only hiding the option in the UI.
+    const scopeForMatch = candidate ? await resolveUserScope(req.user) : null;
+    if (candidate && resolution === 'same_case') {
+      try {
+        assertCaseAction(req.user, scopeForMatch, ACTIONS.CASE_EDIT, candidate);
+      } catch (err) {
+        return res.status(err.status || 403).json({ error: `${err.message} Choose "New episode" or "Different person", or ask that barangay to update it.`, code: err.code });
+      }
+    }
     if (candidate && !RESOLUTIONS.includes(resolution)) {
       // Ask the user to decide. Details beyond the IDs are only shown when the
-      // existing case is within this user's barangay/facility.
+      // existing case is within this user's barangay access.
       // Name shown only if the existing case is in this user's scope AND names are unlocked
-      const visible = canViewCase(req.user, await resolveUserFacility(req.user), candidate)
+      const visible = can(req.user, await resolveUserScope(req.user), ACTIONS.CASE_VIEW, candidate)
         && require('../services/pinService').isUnlocked(req);
       const sameDx = String(candidate.date_of_diagnosis ? ymd(candidate.date_of_diagnosis) : '') === cleaned.date_of_diagnosis;
       return res.status(409).json({
@@ -83,6 +94,8 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
           patient_no: candidate.patient_no,
           date_of_diagnosis: candidate.date_of_diagnosis ? ymd(candidate.date_of_diagnosis) : null,
           suggestion: sameDx ? 'same_case' : 'new_episode',
+          // "Same case" would update the existing case — offered only if it is editable here.
+          canUpdateExisting: can(req.user, scopeForMatch, ACTIONS.CASE_EDIT, candidate),
           ...(visible ? {
             name: [candidate.last_name, candidate.first_name, candidate.middle_name].filter(Boolean).join(', '),
             barangay_name: candidate.barangay_name,
@@ -170,7 +183,9 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
 
       // A returning patient: apply the user's decision in the same transaction
       identity = candidate
-        ? await resolveMatch(client, recRes.rows[0], resolution, req.user.id)
+        ? await resolveMatch(client, recRes.rows[0], resolution, req.user.id, {
+          authorizeExistingCase: (existing) => assertCaseAction(req.user, scopeForMatch, ACTIONS.CASE_EDIT, existing),
+        })
         : { resolution: null, caseNo: newIdentity.caseNo };
 
       await client.query('COMMIT');

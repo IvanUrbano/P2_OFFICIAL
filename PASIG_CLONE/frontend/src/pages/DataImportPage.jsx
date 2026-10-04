@@ -104,6 +104,7 @@ export default function DataImportPage() {
       formData.append('file', file);
       const res = await API.post('/api/data/import', formData);
       setResult(res.data);
+      window.dispatchEvent(new Event('IMPORT_COMPLETED'));
     } catch (err) {
       if (err.response?.status === 409 && err.response?.data?.isDuplicate) {
         setDuplicateInfo(err.response.data);
@@ -123,6 +124,7 @@ export default function DataImportPage() {
       setShowArchive(null);
       setArchiveReason('');
       fetchHistory(historyTab);
+      window.dispatchEvent(new Event('IMPORT_COMPLETED'));
     } catch (err) {
       console.error(err);
     } finally {
@@ -138,6 +140,7 @@ export default function DataImportPage() {
       await API.delete(`/api/data/batches/${showDelete.id}`);
       setShowDelete(null);
       fetchHistory(historyTab);
+      window.dispatchEvent(new Event('IMPORT_COMPLETED'));
     } catch (err) {
       setDeleteError(err.response?.data?.error || 'Failed to delete batch.');
     } finally {
@@ -379,10 +382,10 @@ export default function DataImportPage() {
                       <td className="px-4 py-3">
                         <div className="flex gap-1">
                           <button onClick={() => openDetails(b.id)} className="px-2 py-1 text-[10px] font-semibold rounded cursor-pointer" style={{ color: '#2E6FAF' }}>View</button>
-                          {!b.isArchived && b.status === 'validated' && b.syncStatus !== 'synced' && (
+                          {!b.isArchived && b.status === 'validated' && b.syncStatus !== 'synced' && isAdmin && (
                             <button onClick={() => navigate(`/sync?batchId=${b.id}`)} className="px-2 py-1 text-[10px] font-semibold rounded cursor-pointer" style={{ color: '#10B981' }}>Sync</button>
                           )}
-                          {!b.isArchived && (b.status === 'validated' || b.syncStatus === 'synced') && (
+                          {!b.isArchived && (b.status === 'validated' || b.syncStatus === 'synced') && isAdmin && (
                             <button onClick={() => setShowArchive(b)} className="px-2 py-1 text-[10px] font-semibold rounded cursor-pointer" style={{ color: '#D97706' }}>Archive</button>
                           )}
                           {isAdmin && (
@@ -400,7 +403,7 @@ export default function DataImportPage() {
       )}
 
       {showArchive && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => { setShowArchive(null); setArchiveReason(''); }}>
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => { setShowArchive(null); setArchiveReason(''); }}>
           <div className="bg-white border border-gray-200 shadow-xl w-full max-w-[420px] mx-4 overflow-hidden" style={{ borderRadius: '5px' }} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100" style={{ background: '#FAFCFF' }}>
               <div className="flex items-center gap-2">
@@ -440,7 +443,7 @@ export default function DataImportPage() {
       )}
 
       {showDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => { if (!deleting) { setShowDelete(null); setDeleteError(''); } }}>
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => { if (!deleting) { setShowDelete(null); setDeleteError(''); } }}>
           <div className="bg-white border border-gray-200 shadow-xl w-full max-w-[420px] mx-4 overflow-hidden" style={{ borderRadius: '5px' }} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100" style={{ background: '#FEF2F2' }}>
               <div className="flex items-center gap-2">
@@ -472,7 +475,7 @@ export default function DataImportPage() {
       )}
 
       {showDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => setShowDetails(false)}>
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => setShowDetails(false)}>
           <div className="bg-white border border-gray-200 shadow-xl w-full max-w-[560px] mx-4 overflow-hidden max-h-[80vh] flex flex-col" style={{ borderRadius: '5px' }} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 shrink-0" style={{ background: '#FAFCFF' }}>
               <div className="flex items-center gap-2">

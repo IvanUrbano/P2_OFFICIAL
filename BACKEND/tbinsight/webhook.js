@@ -8,6 +8,7 @@ const { rebuildAggregations } = require('./aggregateMonthly');
 const { schedulePipelineRun } = require('./pipeline');
 const { verifyWebhookSignature } = require('../middleware/webhookAuth');
 const { flagPossibleDuplicates } = require('./duplicateFlags');
+const { lockCaseData } = require('./caseDataLock');
 
 /**
  * Duplicate detection (record level) has two independent signals, both
@@ -124,12 +125,14 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       await pool.query('DELETE FROM webhook_logs WHERE batch_id = $1', [batch_id]);
     }
 
-    const barangaysResult = await pool.query('SELECT name FROM barangays');
+    const barangaysResult = await pool.query('SELECT id, name FROM barangays');
     const validBarangays = new Set(barangaysResult.rows.map(r => r.name.toLowerCase()));
-    // Canonical name map: lowercase → title case (for FK constraint)
     const barangayNameMap = new Map();
+    const barangayIdMap = new Map();
     for (const row of barangaysResult.rows) {
-      barangayNameMap.set(row.name.toLowerCase(), row.name);
+      const barangay = { id: row.id, name: row.name };
+      barangayNameMap.set(row.name.toLowerCase(), barangay);
+      barangayIdMap.set(Number(row.id), barangay);
     }
 
     let totalRecords = 0;
@@ -139,6 +142,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
     const allValidRows = [];
 
     await client.query('BEGIN');
+    await lockCaseData(client); // see caseDataLock.js
 
     for (const sheet of sheets) {
       const { source_type, records } = sheet;
@@ -167,15 +171,19 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
         totalRecords++;
         record.source_type = source_type;
 
-        // Normalize barangay_name to canonical title-case (required for FK constraint)
+        // Resolve by ID when supplied; the name lookup is retained for old webhook clients.
         const bgyLower = String(record.barangay_name || '').trim().toLowerCase();
-        const canonicalBgy = barangayNameMap.get(bgyLower);
-        if (canonicalBgy) {
-          record.barangay_name = canonicalBgy;
+        const requestedBarangayId = record.barangay_id == null ? null : Number(record.barangay_id);
+        const matchedBarangay = requestedBarangayId == null
+          ? barangayNameMap.get(bgyLower)
+          : barangayIdMap.get(requestedBarangayId);
+        if (matchedBarangay) {
+          record.barangay_id = matchedBarangay.id;
+          record.barangay_name = matchedBarangay.name;
         } else {
           // Barangay not in Pasig — skip this record (already counted in totalRecords above)
           errorCount++;
-          errors.push({ row: record.row_number || totalRecords, source_type, errors: ['Unknown barangay: not a Pasig City barangay'] });
+          errors.push({ row: record.row_number || totalRecords, source_type, errors: ['Unknown barangay ID or name: not a Pasig City barangay'] });
           continue;
         }
 
@@ -209,6 +217,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
 
           allValidRows.push([
             rowBatchId,
+            record.barangay_id,
             record.date_of_diagnosis, record.date_of_screening, record.date_of_notification,
             record.age, record.sex, record.barangay_name, record.screening_facility,
             record.treatment_facility, record.source_of_patient, record.anatomical_site,
@@ -234,7 +243,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       }
     }
 
-    const COLS = 34;
+    const COLS = 35;
     const chunkSize = 100;
     let insertedCount = 0;
     let updatedCount = 0;
@@ -254,7 +263,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       // duplicate detection runs as a separate, non-blocking flagging pass below.
       const result = await client.query(
         `INSERT INTO tb_cases (
-          batch_id, date_of_diagnosis, date_of_screening, date_of_notification,
+          batch_id, barangay_id, date_of_diagnosis, date_of_screening, date_of_notification,
           age, sex, barangay_name, screening_facility, treatment_facility,
           source_of_patient, anatomical_site, registration_group, bacteriological_status,
           date_started_treatment, outcome_status, date_of_outcome,
@@ -267,6 +276,8 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
           case_no, patient_no
         ) VALUES ${placeholders}
         ON CONFLICT (case_no) WHERE case_no IS NOT NULL DO UPDATE SET
+          barangay_id = EXCLUDED.barangay_id,
+          barangay_name = EXCLUDED.barangay_name,
           outcome_status = EXCLUDED.outcome_status,
           date_of_outcome = EXCLUDED.date_of_outcome,
           date_started_treatment = EXCLUDED.date_started_treatment,

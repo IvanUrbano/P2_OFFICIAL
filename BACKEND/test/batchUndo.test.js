@@ -148,6 +148,7 @@ describe('DELETE /api/tb/integration/batches/:batchId', () => {
     assert.strictEqual(res.body.aggregatesRebuilt, true);
     assert.deepStrictEqual(calls, [
       'BEGIN',
+      'SELECT pg_advisory_xact_lock($1)', // serialized with the pipeline's result store
       'UPDATE tb_cases SET duplicate_status',
       'DELETE FROM tb_cases WHERE',
       'DELETE FROM tb_cases_raw WHERE',

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import API from '../api/axios';
+import { SEVERITY_COLOR, TYPE_ICON, timeAgo, markRead, markAllRead, NOTIFICATIONS_CHANGED, announceChange } from '../utils/notifications';
 
 const NAV_ITEMS = [
   { icon: 'ri-dashboard-line', label: 'Dashboard', path: '/dashboard' },
@@ -39,12 +40,38 @@ export default function Layout() {
   const bellRef = useRef(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [recentNotifs, setRecentNotifs] = useState([]);
+  const [lastImport, setLastImport] = useState(null);
+
+  // Last Import in the brand bar — refreshes on load and whenever a page announces
+  // an import/archive/delete so the header never shows a stale timestamp.
+  const fetchLastImport = useCallback(async () => {
+    try {
+      const res = await API.get('/api/data/last-import');
+      setLastImport(res.data.lastImport || null);
+    } catch {
+      // header timestamp is non-critical
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchLastImport();
+    window.addEventListener('IMPORT_COMPLETED', fetchLastImport);
+    return () => window.removeEventListener('IMPORT_COMPLETED', fetchLastImport);
+  }, [fetchLastImport]);
 
   useEffect(() => {
     API.get('/api/auth/profile')
       .then(res => setUser(res.data.user))
       .catch(() => {});
   }, []);
+
+  // Accounts still on a system-generated temporary password must set their own
+  // before using the system: keep them on Settings > Security until they do.
+  useEffect(() => {
+    if (user?.must_change_password && location.pathname !== '/settings') {
+      navigate('/settings?tab=security&firstLogin=1', { replace: true });
+    }
+  }, [user, location.pathname, navigate]);
 
   const logout = useCallback(async () => {
     try { await API.post('/api/auth/logout'); } catch {}
@@ -77,24 +104,51 @@ export default function Layout() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Poll unread count + recent notifications
+  // Poll unread count + latest notifications (every 30s, on opening the bell, and when
+  // another page announces a change).
+  const fetchBellData = useCallback(async () => {
+    try {
+      const [countRes, notifRes] = await Promise.all([
+        API.get('/api/auth/notifications/unread-count'),
+        API.get('/api/auth/notifications', { params: { limit: 8 } }),
+      ]);
+      setUnreadCount(countRes.data.count || 0);
+      setRecentNotifs(notifRes.data.notifications || []);
+    } catch {
+      // silent fail — bell is non-critical
+    }
+  }, []);
+
   useEffect(() => {
-    const fetchBellData = async () => {
-      try {
-        const [countRes, notifRes] = await Promise.all([
-          API.get('/api/auth/notifications/unread-count'),
-          API.get('/api/auth/notifications', { params: { limit: 5, status: 'unread' } }),
-        ]);
-        setUnreadCount(countRes.data.count || 0);
-        setRecentNotifs(notifRes.data.notifications || []);
-      } catch {
-        // silent fail — bell is non-critical
-      }
-    };
     fetchBellData();
     const interval = setInterval(fetchBellData, 30000);
-    return () => clearInterval(interval);
-  }, []);
+    window.addEventListener(NOTIFICATIONS_CHANGED, fetchBellData);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener(NOTIFICATIONS_CHANGED, fetchBellData);
+    };
+  }, [fetchBellData]);
+
+  const toggleBell = () => {
+    if (!bellOpen) fetchBellData();
+    setBellOpen(!bellOpen);
+  };
+
+  const openNotification = async (n) => {
+    setBellOpen(false);
+    if (!n.is_read) {
+      setRecentNotifs(list => list.map(x => (x.id === n.id ? { ...x, is_read: true } : x)));
+      setUnreadCount(c => Math.max(0, c - 1));
+      try { await markRead(n.id); announceChange(); } catch { /* next poll corrects it */ }
+    }
+    if (n.link) navigate(n.link);
+  };
+
+  const readAll = async () => {
+    setRecentNotifs(list => list.map(x => ({ ...x, is_read: true })));
+    setUnreadCount(0);
+    try { await markAllRead(); announceChange(); } catch { fetchBellData(); }
+  };
 
   if (!user) return null;
 
@@ -102,15 +156,16 @@ export default function Layout() {
   const initials = user.username ? user.username.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2) : 'U';
   const visibleNav = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
 
-  const formatSyncTime = () => {
-    const now = new Date();
+  const formatImportTime = (iso) => {
+    if (!iso) return 'Never';
+    const d = new Date(iso);
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${days[now.getDay()]}, ${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()} | ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+    return `${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()} | ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
   };
 
   return (
-    <div className="h-screen relative flex flex-col">
+    <div className="h-screen relative flex flex-col overflow-hidden">
       {/* ── Tier 1: Brand Bar ── */}
       <header className="sticky top-0 z-[1100] w-full shrink-0">
         <div className="flex items-center justify-between px-6 lg:px-8" style={{ background: '#0B1D35', minHeight: '52px' }}>
@@ -120,10 +175,10 @@ export default function Layout() {
             </div>
             <div className="flex items-center gap-2.5">
               <span className="text-lg font-extrabold tracking-tight" style={{ color: '#ffffff' }}>PASIG TB-IS</span>
-              {!isAdmin && user.facility_name && (
+              {!isAdmin && (user.barangay_name || user.facility_name) && (
                 <span className="text-[11px] font-semibold hidden md:inline px-2 py-0.5 rounded-full" style={{ background: 'rgba(16,185,129,0.15)', color: '#10B981' }}>
-                  <i className="ri-hospital-line mr-1" style={{ fontSize: '10px' }} />
-                  {user.facility_name}
+                  <i className="ri-map-pin-line mr-1" style={{ fontSize: '10px' }} />
+                  {(user.barangay_name ? `Brgy. ${user.barangay_name}` : user.facility_name)}
                 </span>
               )}
               {isAdmin && (
@@ -133,13 +188,13 @@ export default function Layout() {
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Last Synced */}
+            {/* Last Import */}
             <div className="hidden md:flex items-center gap-2">
               <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: 'rgba(59,130,246,0.2)' }}>
-                <i className="ri-refresh-line text-[11px]" style={{ color: '#60A5FA' }} />
+                <i className="ri-upload-2-line text-[11px]" style={{ color: '#60A5FA' }} />
               </div>
               <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
-                Last Synced: <span style={{ color: '#CBD5E1' }}>{formatSyncTime()}</span>
+                Last Import: <span style={{ color: '#CBD5E1' }}>{formatImportTime(lastImport)}</span>
               </span>
             </div>
 
@@ -149,7 +204,7 @@ export default function Layout() {
             {/* Notification Bell */}
             <div className="relative" ref={bellRef}>
               <button
-                onClick={() => setBellOpen(!bellOpen)}
+                onClick={toggleBell}
                 title="Notifications"
                 className="relative w-9 h-9 flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
                 style={{ background: bellOpen ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
@@ -173,7 +228,7 @@ export default function Layout() {
               {/* Bell Dropdown */}
               {bellOpen && (
                 <div
-                  className="absolute right-0 top-full mt-2 w-80 rounded-xl overflow-hidden z-[1200]"
+                  className="absolute right-0 top-full mt-2 w-[340px] max-w-[calc(100vw-24px)] rounded-xl overflow-hidden z-[1200]"
                   style={{
                     background: '#ffffff',
                     border: '1px solid #E2E8F0',
@@ -183,56 +238,42 @@ export default function Layout() {
                   <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid #E2E8F0' }}>
                     <div>
                       <p className="text-xs font-bold" style={{ color: '#0F2D52' }}>Notifications</p>
-                      {unreadCount > 0 && (
-                        <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>{unreadCount} unread</p>
-                      )}
+                      <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>
+                        {unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}
+                      </p>
                     </div>
-                    <button
-                      onClick={() => setBellOpen(false)}
-                      className="text-[10px] font-semibold"
-                      style={{ color: '#0F2D52' }}
-                    >
-                      Dismiss
-                    </button>
+                    {unreadCount > 0 && (
+                      <button onClick={readAll} className="text-[10px] font-semibold hover:underline" style={{ color: '#2E6FAF' }}>
+                        Mark all as read
+                      </button>
+                    )}
                   </div>
 
                   {recentNotifs.length === 0 ? (
                     <div className="px-4 py-8 text-center">
                       <i className="ri-notification-off-line text-xl" style={{ color: '#CBD5E1' }} />
-                      <p className="text-[11px] mt-2" style={{ color: '#94A3B8' }}>No new notifications</p>
+                      <p className="text-[11px] mt-2" style={{ color: '#94A3B8' }}>No notifications yet</p>
                     </div>
                   ) : (
-                    <div className="max-h-72 overflow-y-auto">
-                      {recentNotifs.map((n, idx) => {
-                        const severityColors = {
-                          critical: '#DC2626', high: '#EF4444', warning: '#D97706',
-                          medium: '#D97706', low: '#2E6FAF', info: '#6B7280', danger: '#DC2626',
-                        };
-                        const dotColor = severityColors[n.severity] || '#6B7280';
+                    <div className="max-h-80 overflow-y-auto">
+                      {recentNotifs.map((n) => {
+                        const color = SEVERITY_COLOR[n.severity] || SEVERITY_COLOR.info;
                         return (
-                          <div
-                            key={n.id || idx}
-                            className="px-4 py-3 flex items-start gap-3 cursor-pointer transition-colors hover:bg-blue-50"
-                            style={{ borderBottom: '1px solid #F1F5F9' }}
-                            onClick={() => setBellOpen(false)}
+                          <button
+                            type="button"
+                            key={n.id}
+                            className="w-full text-left px-4 py-3 flex items-start gap-3 transition-colors hover:bg-slate-50"
+                            style={{ borderBottom: '1px solid #F1F5F9', background: n.is_read ? '#ffffff' : '#F5F9FF' }}
+                            onClick={() => openNotification(n)}
                           >
-                            <span className="w-2 h-2 rounded-full mt-1.5 shrink-0" style={{ background: dotColor }} />
+                            <i className={`${TYPE_ICON[n.type] || 'ri-notification-3-line'} text-sm mt-0.5 shrink-0`} style={{ color }} />
                             <div className="min-w-0 flex-1">
-                              <p className="text-[11px] font-bold truncate" style={{ color: '#0F2D52' }}>{n.title || 'Notification'}</p>
-                              <p className="text-[10px] mt-0.5 line-clamp-2" style={{ color: '#64748B' }}>{n.message}</p>
-                              <p className="text-[9px] mt-1" style={{ color: '#94A3B8' }}>
-                                {n.created_at ? (() => {
-                                  const d = new Date(n.created_at);
-                                  const mins = Math.floor((new Date() - d) / 60000);
-                                  if (mins < 1) return 'Just now';
-                                  if (mins < 60) return `${mins}m ago`;
-                                  const hrs = Math.floor(mins / 60);
-                                  if (hrs < 24) return `${hrs}h ago`;
-                                  return `${Math.floor(hrs / 24)}d ago`;
-                                })() : ''}
-                              </p>
+                              <p className={`text-[11px] truncate ${n.is_read ? 'font-medium' : 'font-bold'}`} style={{ color: '#0F2D52' }}>{n.title}</p>
+                              {n.message && <p className="text-[10px] mt-0.5 line-clamp-2" style={{ color: '#64748B' }}>{n.message}</p>}
+                              <p className="text-[9px] mt-1" style={{ color: '#94A3B8' }}>{timeAgo(n.created_at)}</p>
                             </div>
-                          </div>
+                            {!n.is_read && <span className="w-2 h-2 rounded-full mt-1.5 shrink-0" style={{ background: '#2E6FAF' }} aria-label="Unread" />}
+                          </button>
                         );
                       })}
                     </div>
@@ -240,11 +281,11 @@ export default function Layout() {
 
                   <div className="px-4 py-2.5 text-center" style={{ borderTop: '1px solid #E2E8F0' }}>
                     <button
-                      onClick={() => setBellOpen(false)}
-                      className="text-[11px] font-semibold"
+                      onClick={() => { setBellOpen(false); navigate('/notifications'); }}
+                      className="text-[11px] font-semibold hover:underline"
                       style={{ color: '#0F2D52' }}
                     >
-                      Dismiss All
+                      View all notifications
                     </button>
                   </div>
                 </div>
@@ -295,8 +336,8 @@ export default function Layout() {
                         <span className="w-1.5 h-1.5 rounded-full" style={{ background: isAdmin ? '#2563EB' : '#00A9D8' }} />
                         {user.role}
                       </span>
-                      {!isAdmin && user.facility_name && (
-                        <span className="text-[9px] font-medium truncate" style={{ color: '#94A3B8' }}>{user.facility_name}</span>
+                      {!isAdmin && (user.barangay_name || user.facility_name) && (
+                        <span className="text-[9px] font-medium truncate" style={{ color: '#94A3B8' }}>{(user.barangay_name ? `Brgy. ${user.barangay_name}` : user.facility_name)}</span>
                       )}
                       {isAdmin && (
                         <span className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>{user.position || 'System Administrator'}</span>

@@ -34,6 +34,7 @@ const {
 } = require('./scoring');
 const { getPopulationMap, calculateAnnualizedIncidence, GEOJSON_REFERENCE_YEAR } = require('./populationService');
 const { createNotification, evaluateAllAlerts } = require('./alertEngine');
+const { lockCaseData, caseDataFingerprint } = require('./caseDataLock');
 const { loadAdjacency, neighboursOf } = require('./barangayAdjacency');
 
 // Default thresholds — overridden by auto-calibration from real data on each run
@@ -203,6 +204,9 @@ async function runPipeline({
     }
 
     // ── Step 2: Query L3 monthly case summary ──
+    // Fingerprint of the case set this run is based on; checked again before storing
+    // (Step 9) so results computed from since-deleted/changed data are never saved.
+    const startFingerprint = await caseDataFingerprint(client);
     const monthlyResult = await client.query(
       'SELECT barangay_name, month, case_count FROM monthly_case_summary ORDER BY month'
     );
@@ -605,6 +609,18 @@ async function runPipeline({
     const txClient = await pool.connect();
     try {
     await txClient.query('BEGIN');
+
+    // Same lock as every writer of case data (batch undo, sync, import): nothing can
+    // change the cases between this check and COMMIT. If they changed while the models
+    // ran, these results describe data that no longer exists — discard them.
+    await lockCaseData(txClient);
+    if ((await caseDataFingerprint(txClient)) !== startFingerprint) {
+      await txClient.query('ROLLBACK');
+      results.status = 'stale';
+      results.errors.push('Case data changed while the analysis was running; results were discarded and a new run was requested.');
+      console.warn('⚠️ Pipeline results discarded: case data changed during the run');
+      return results;
+    }
 
     // Clean up old rows with non-1st-of-month dates (legacy data)
     await txClient.query(
@@ -1333,6 +1349,8 @@ const _runState = {
   lastAlertsCount: null,
 };
 let _pendingTimer = null;
+// A run requested while one is in progress is queued (not dropped) and starts after it.
+let _rerunRequested = false;
 
 function getPipelineRunStatus() {
   return {
@@ -1364,7 +1382,8 @@ function getPipelineRunStatus() {
  */
 async function runPipelineTracked(options = {}, trigger = 'manual') {
   if (_runState.running) {
-    console.log(`ℹ️  Pipeline already running — skipping trigger "${trigger}"`);
+    _rerunRequested = true;
+    console.log(`ℹ️  Pipeline already running — "${trigger}" will run when it finishes`);
     return null;
   }
   _runState.running = true;
@@ -1376,6 +1395,7 @@ async function runPipelineTracked(options = {}, trigger = 'manual') {
   const t0 = Date.now();
   try {
     const results = await runPipeline(options);
+    if (results.status === 'stale') _rerunRequested = true;
     _runState.runsCompleted += 1;
     _runState.lastTrigger = trigger;
     _runState.lastRunStatus = results.status;
@@ -1412,6 +1432,10 @@ async function runPipelineTracked(options = {}, trigger = 'manual') {
     _runState.finishedAt = new Date().toISOString();
     _runState.trigger = null;
     _runState.runsFinished += 1;
+    if (_rerunRequested) {
+      _rerunRequested = false;
+      schedulePipelineRun(`${trigger}:rerun`, 2000);
+    }
   }
 }
 

@@ -16,9 +16,11 @@ const db = require('../db/pasigSchema');
  * @param {string}  [params.resourceId]    - Resource/batch ID
  * @param {string}  [params.result]     - 'SUCCESS' or 'FAILURE'
  * @param {string}  [params.ipAddress]  - IP address of the request
+ * @param {string}  [params.actorRole]  - Role of the actor at write time (snapshot; later
+ *                                        role changes do not rewrite historical entries)
  * @param {Object}  [params.details]    - Additional context (serialized as JSON)
  */
-async function logAuditEvent({ userId, username, action, targetUserId, targetUsername, resourceType, resourceId, result, ipAddress, details }) {
+async function logAuditEvent({ userId, username, action, targetUserId, targetUsername, resourceType, resourceId, result, ipAddress, actorRole, details }) {
   try {
     // Ensure audit_logs table exists on the auth database
     await db.authPool.query(`
@@ -45,6 +47,12 @@ async function logAuditEvent({ userId, username, action, targetUserId, targetUse
     // without resource columns — CREATE IF NOT EXISTS above is a no-op there.
     await db.authPool.query('ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS resource_type TEXT');
     await db.authPool.query('ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS resource_id TEXT');
+    // Migration 010 adds `details`, but a fresh DB whose table was first created by
+    // routes/auth.js GET /audit-logs (older CREATE without details) would lack it.
+    await db.authPool.query('ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS details JSONB');
+
+    const payload = { ...(details || {}) };
+    if (actorRole) payload.actorRole = actorRole;
 
     await db.authPool.query(
       `INSERT INTO audit_logs (user_id, username, action, target_user_id, target_username, resource_type, resource_id, result, ip_address, details)
@@ -59,7 +67,7 @@ async function logAuditEvent({ userId, username, action, targetUserId, targetUse
         resourceId || null,
         result || 'SUCCESS',
         ipAddress || null,
-        details ? JSON.stringify(details) : null,
+        Object.keys(payload).length > 0 ? JSON.stringify(payload) : null,
       ]
     );
   } catch (err) {

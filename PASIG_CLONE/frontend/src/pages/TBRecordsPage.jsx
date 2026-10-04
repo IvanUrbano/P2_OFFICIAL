@@ -6,7 +6,9 @@ import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import SkeletonBlock from '../components/SkeletonBlock';
 import RecordDetailDrawer from '../components/RecordDetailDrawer';
-import TransfersPanel from '../components/TransfersPanel';
+import IncomingReferrals from '../components/IncomingReferrals';
+import RowMenu from '../components/RowMenu';
+import { can, accessBasis } from '../utils/permissions';
 
 const EMPTY_FORM = {
   last_name: '', first_name: '', middle_name: '', suffix: '', date_of_birth: '',
@@ -55,11 +57,6 @@ function computeAge(dob, dx) {
   return age < 0 ? null : age;
 }
 
-function unassignedReason(r, barangays) {
-  if (!r.barangay_name) return 'No barangay';
-  if (!barangays.some(b => b.toLowerCase() === String(r.barangay_name).toLowerCase())) return 'Unknown barangay';
-  return `Non-Pasig city (${r.city})`;
-}
 
 export default function TBRecordsPage() {
   const navigate = useNavigate();
@@ -67,7 +64,14 @@ export default function TBRecordsPage() {
   const [user, setUser] = useState(null);
   const isAdmin = user?.role === 'admin';
 
-  const [view, setView] = useState(['matches', 'unassigned'].includes(searchParams.get('view')) ? searchParams.get('view') : 'all');
+  // Possible Matches and Needs Assignment moved to the Validation page.
+  // Two views: All Records and Incoming Referrals (old ?view=transfers links land on referrals).
+  const [view, setView] = useState(['referrals', 'transfers'].includes(searchParams.get('view')) ? 'referrals' : 'all');
+  useEffect(() => {
+    const old = searchParams.get('view');
+    if (old === 'matches') navigate('/validation?tab=matches', { replace: true });
+    if (old === 'unassigned') navigate('/validation?tab=assignment', { replace: true });
+  }, [searchParams, navigate]);
   const [records, setRecords] = useState([]);
   const [counts, setCounts] = useState({ all: 0, matches: 0, unassigned: null });
   const [pagination, setPagination] = useState({ page: 1, totalPages: 0, total: 0 });
@@ -77,17 +81,25 @@ export default function TBRecordsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(null);
-  const [rowBusy, setRowBusy] = useState(null);
-  const [assignChoice, setAssignChoice] = useState({});
-  const [selected, setSelected] = useState([]);
   const [detailId, setDetailId] = useState(null);
-  const [transferCount, setTransferCount] = useState(0);
+  const [detailMode, setDetailMode] = useState('view'); // 'view' | 'edit' | 'refer'
+  const [rowMenu, setRowMenu] = useState(null); // { record, anchor }
+  const openDetail = (id, mode = 'view') => { setDetailMode(mode); setDetailId(id); };
+  // Notification links: ?view=referrals opens Incoming Referrals, ?record=<id> opens that case.
+  useEffect(() => {
+    if (['referrals', 'transfers'].includes(searchParams.get('view'))) setView('referrals');
+    const recordId = Number(searchParams.get('record'));
+    if (Number.isInteger(recordId) && recordId > 0) {
+      setView('all');
+      openDetail(recordId, 'view');
+    }
+  }, [searchParams]);
+  const [referralCount, setReferralCount] = useState(0);
   // Records PIN: patient names/DOB are hidden by the server until unlocked
   const [pinStatus, setPinStatus] = useState({ hasPin: false, unlocked: false, unlockedUntil: null });
   const [pinInput, setPinInput] = useState('');
   const [pinBusy, setPinBusy] = useState(false);
   const [pinMsg, setPinMsg] = useState('');
-  const [bulkBusy, setBulkBusy] = useState(false);
 
   // Add-record form
   const [showForm, setShowForm] = useState(false);
@@ -98,10 +110,11 @@ export default function TBRecordsPage() {
   const [possibleMatch, setPossibleMatch] = useState(null);
   const [facilities, setFacilities] = useState([]);
   const [PASIG_BARANGAYS, setPasigBarangays] = useState([]);
+  const [barangayRefs, setBarangayRefs] = useState([]);
   const [options, setOptions] = useState({ registration_group: [], source_of_patient: [], anatomical_site: [], bacteriological_status: [] });
 
   const fetchRecords = async () => {
-    if (view === 'transfers') { setLoading(false); return; } // TransfersPanel loads its own data
+    if (view === 'referrals') { setLoading(false); return; } // IncomingReferrals loads its own data
     setLoading(true);
     setError('');
     try {
@@ -109,7 +122,6 @@ export default function TBRecordsPage() {
       if (search) params.set('search', search);
       const res = await API.get(`/api/data/records?${params}`);
       setRecords(res.data.records || []);
-      setSelected([]);
       setCounts(res.data.counts || {});
       setPagination(res.data.pagination || { page: 1, totalPages: 0, total: 0 });
     } catch (err) {
@@ -125,6 +137,7 @@ export default function TBRecordsPage() {
     API.get('/api/facilities').then(r => {
       setFacilities(r.data?.facilities || []);
       setPasigBarangays((r.data?.barangays || []).map(b => b.name));
+      setBarangayRefs(r.data?.barangays || []);
     }).catch(() => {});
     API.get('/api/data/manual-options').then(r => setOptions(r.data || {})).catch(() => {});
   }, []);
@@ -164,12 +177,11 @@ export default function TBRecordsPage() {
     fetchRecords();
   };
 
-  // Transfers tab badge: referrals/transfers waiting for this user's facility to accept
+  // Incoming Referrals badge: referrals this user may accept (server-decided permission)
   useEffect(() => {
     if (!user) return;
-    API.get('/api/data/transfers?status=pending')
-      .then(res => setTransferCount((res.data.transfers || [])
-        .filter(t => user.role === 'admin' || t.to_facility_id === user.facility_id).length))
+    API.get('/api/data/transfers?direction=incoming&status=pending')
+      .then(res => setReferralCount((res.data.transfers || []).filter(t => can(t, 'accept')).length))
       .catch(() => {});
   }, [user]);
 
@@ -178,74 +190,31 @@ export default function TBRecordsPage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
+  // Row ⋮ menu — every item mirrors a server permission (utils/permissions.js); the API
+  // refuses the same actions on view-only cases.
+  const viewOnlyReason = (r) => (accessBasis(r) === 'referred_out'
+    ? `Referred to ${r.responsible_barangay} — they handle this case`
+    : 'View only for your account');
+  const archiveRecord = async (r) => {
+    if (!window.confirm(`Archive ${r.case_no || 'this record'}? It is hidden from lists and analysis but kept for the record.`)) return;
+    try {
+      await API.patch(`/api/data/records/${r.id}/archive`);
+      setNotice({ type: 'success', text: `${r.case_no || 'Record'} archived.` });
+      fetchRecords();
+    } catch (err) {
+      setNotice({ type: 'error', text: err.response?.data?.error || 'Failed to archive the record.' });
+    }
+  };
+  const rowMenuItems = (r) => [
+    { label: 'View details', icon: 'ri-eye-line', onClick: () => openDetail(r.id) },
+    { label: 'Edit details', icon: 'ri-edit-line', disabled: !can(r, 'edit'), reason: viewOnlyReason(r), onClick: () => openDetail(r.id, 'edit') },
+    { label: 'Refer case', icon: 'ri-share-forward-line', disabled: !can(r, 'refer'), reason: can(r, 'edit') ? 'Not available for this case' : viewOnlyReason(r), onClick: () => openDetail(r.id, 'refer') },
+    { divider: true },
+    { label: 'Archive', icon: 'ri-archive-line', danger: true, disabled: !can(r, 'archive'), reason: viewOnlyReason(r), onClick: () => archiveRecord(r) },
+  ];
+
   const switchView = (v) => { setView(v); setPage(1); setNotice(null); };
 
-  const resolve = async (record, resolution) => {
-    setRowBusy(record.id);
-    setNotice(null);
-    try {
-      const res = await API.post(`/api/data/records/${record.id}/resolve-match`, { resolution });
-      setNotice({ type: 'success', text: `${RESOLUTION_LABELS[resolution].title}: record linked to ${res.data.caseNo}.` });
-      fetchRecords();
-    } catch (err) {
-      setNotice({ type: 'error', text: err.response?.data?.error || 'Failed to resolve match.' });
-    } finally {
-      setRowBusy(null);
-    }
-  };
-
-  const toggleSelected = (id) => setSelected(s => (s.includes(id) ? s.filter(x => x !== id) : [...s, id]));
-  const allOnPageSelected = records.length > 0 && records.every(r => selected.includes(r.id));
-  const toggleAllOnPage = () => setSelected(allOnPageSelected ? [] : records.map(r => r.id));
-
-  const bulkResolve = async (resolution) => {
-    if (selected.length === 0) return;
-    const label = resolution === 'suggested' ? 'their suggested option' : `"${RESOLUTION_LABELS[resolution].title}"`;
-    if (!window.confirm(`Apply ${label} to ${selected.length} selected match${selected.length === 1 ? '' : 'es'}?`)) return;
-    setBulkBusy(true);
-    setNotice(null);
-    try {
-      const res = await API.post('/api/data/records/resolve-matches', { ids: selected, resolution });
-      const { resolved, counts, failed } = res.data;
-      const parts = Object.entries(counts).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${RESOLUTION_LABELS[k].title.toLowerCase()}`);
-      setNotice({
-        type: failed.length ? 'error' : 'success',
-        text: `Resolved ${resolved} match${resolved === 1 ? '' : 'es'}${parts.length ? ` (${parts.join(', ')})` : ''}.`
-          + (failed.length ? ` ${failed.length} could not be resolved: ${[...new Set(failed.map(f => f.error))].join(' ')}` : ''),
-      });
-      fetchRecords();
-    } catch (err) {
-      setNotice({
-        type: 'error',
-        text: err.response?.data?.error
-          || (err.response?.status === 404
-            ? 'The server does not have this feature yet — restart the PASIG backend (npm run dev) and try again.'
-            : `Failed to resolve the selected matches${err.response?.status ? ` (HTTP ${err.response.status})` : ' (server not reachable)'}.`),
-      });
-    } finally {
-      setBulkBusy(false);
-    }
-  };
-
-  const assign = async (record) => {
-    const barangay = assignChoice[record.id];
-    if (!barangay) return;
-    setRowBusy(record.id);
-    setNotice(null);
-    try {
-      const res = await API.patch(`/api/data/records/${record.id}/assign`, { barangay_name: barangay });
-      const s = res.data.sync?.status;
-      setNotice({
-        type: s === 'failed' ? 'error' : 'success',
-        text: `${res.data.message}${s === 'synced' ? ' Sent to TBInsight.' : s === 'failed' ? ` Sync failed: ${res.data.sync.message}` : ' It will be sent with its batch.'}`,
-      });
-      fetchRecords();
-    } catch (err) {
-      setNotice({ type: 'error', text: err.response?.data?.error || 'Failed to assign barangay.' });
-    } finally {
-      setRowBusy(null);
-    }
-  };
 
   // ── Add record ──
   const canAdd = user && (user.role === 'admin' || user.role === 'staff');
@@ -329,9 +298,7 @@ export default function TBRecordsPage() {
 
   const tabs = [
     { key: 'all', title: 'All Records', desc: 'Cases with Patient # and Case ID', count: counts.all },
-    { key: 'matches', title: 'Possible Matches', desc: 'May be an existing patient — review', count: counts.matches },
-    ...(isAdmin ? [{ key: 'unassigned', title: 'Needs Assignment', desc: 'Missing or non-Pasig barangay', count: counts.unassigned }] : []),
-    { key: 'transfers', title: 'Transfers', desc: 'Referrals & transfers between facilities', count: transferCount },
+    { key: 'referrals', title: 'Incoming Referrals', desc: isAdmin ? 'Referrals between barangays' : 'Cases referred to your barangay', count: referralCount },
   ];
 
   return (
@@ -341,7 +308,7 @@ export default function TBRecordsPage() {
           <div>
             <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>TB Records</h1>
             <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
-              {isAdmin ? 'All patients city-wide.' : 'Patients living in your barangay or treated at your facility.'}
+              {isAdmin ? 'View and manage TB cases city-wide.' : 'View and manage TB cases assigned to your barangay.'}
             </p>
           </div>
           <div className="flex gap-2 shrink-0">
@@ -422,89 +389,33 @@ export default function TBRecordsPage() {
       )}
 
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
-        {view === 'transfers' ? (
-          <TransfersPanel user={user} onOpenRecord={setDetailId} onCountChange={setTransferCount} />
+        {view === 'all' && (counts.matches > 0 || counts.unassigned > 0) && (
+          <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-2.5 text-[11px]" style={{ background: '#FFFBEB', borderBottom: '1px solid #FDE68A', color: '#92400E' }}>
+            <span>
+              {[counts.matches > 0 && `${counts.matches} possible match${counts.matches === 1 ? '' : 'es'}`,
+                counts.unassigned > 0 && `${counts.unassigned} record${counts.unassigned === 1 ? '' : 's'} needing assignment`].filter(Boolean).join(' and ')}
+              {' '}{counts.matches + (counts.unassigned || 0) === 1 ? 'is' : 'are'} waiting to be resolved in Validation.{counts.matches > 0 ? ' Possible matches are not listed here until decided.' : ''}
+            </span>
+            <button onClick={() => navigate(counts.matches > 0 ? '/validation?tab=matches' : '/validation?tab=assignment')}
+              className="px-2.5 py-1 font-semibold" style={{ background: '#92400E', color: '#ffffff', borderRadius: 4 }}>Open Validation</button>
+          </div>
+        )}
+        {view === 'referrals' ? (
+          <IncomingReferrals user={user} onOpenRecord={(id) => openDetail(id)} onCountChange={setReferralCount} />
         ) : loading ? (
           <div className="p-4 space-y-3"><SkeletonBlock className="h-10" /><SkeletonBlock className="h-64" /></div>
         ) : error ? (
           <ErrorState message={error} onRetry={fetchRecords} />
         ) : records.length === 0 ? (
           <EmptyState icon="ri-file-list-line"
-            title={view === 'matches' ? 'No Possible Matches' : view === 'unassigned' ? 'Nothing Needs Assignment' : 'No Records Found'}
-            description={view === 'matches' ? 'Every record has a confirmed Patient # and Case ID.' : view === 'unassigned' ? 'All records have a Pasig barangay.' : 'There are no records matching your search.'} />
-        ) : view === 'matches' ? (
-          <div className="divide-y" style={{ borderColor: '#F1F5F9' }}>
-            <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 px-5 py-3" style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
-              <label className="flex items-center gap-2 text-[11px] font-bold cursor-pointer mr-2" style={{ color: '#0F2D52' }}>
-                <input type="checkbox" checked={allOnPageSelected} onChange={toggleAllOnPage} className="w-4 h-4 cursor-pointer" />
-                Select all on this page ({records.length})
-              </label>
-              <span className="text-[11px]" style={{ color: '#64748B' }}>{selected.length} selected</span>
-              <div className="flex flex-wrap gap-1.5 ml-auto">
-                <button disabled={!selected.length || bulkBusy} onClick={() => bulkResolve('suggested')}
-                  className="px-3 py-1.5 text-[11px] font-bold rounded-md disabled:opacity-40" style={{ background: '#0F2D52', color: '#ffffff' }}>
-                  {bulkBusy ? 'Applying…' : 'Apply suggested'}
-                </button>
-                {Object.entries(RESOLUTION_LABELS).map(([key, l]) => (
-                  <button key={key} disabled={!selected.length || bulkBusy} onClick={() => bulkResolve(key)} title={l.desc}
-                    className="px-3 py-1.5 text-[11px] font-bold rounded-md disabled:opacity-40"
-                    style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #CBD5E1' }}>
-                    {l.title}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {records.map(r => (
-              <div key={r.id} className="p-5 flex gap-3" style={selected.includes(r.id) ? { background: '#F0F7FF' } : undefined}>
-                <input type="checkbox" checked={selected.includes(r.id)} onChange={() => toggleSelected(r.id)}
-                  className="w-4 h-4 mt-1 shrink-0 cursor-pointer" aria-label={`Select ${fullName(r)}`} />
-                <div className="flex-1 min-w-0">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="p-3 rounded-lg" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
-                    <p className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: '#92400E' }}>New record</p>
-                    <p className="text-sm font-bold" style={{ color: '#0F2D52' }}>{fullName(r)}</p>
-                    <p className="text-[11px] mt-1" style={{ color: '#475569' }}>
-                      Born {fmtDate(r.date_of_birth)} · Diagnosed {fmtDate(r.date_of_diagnosis)} · {r.barangay_name || 'No barangay'} · {r.outcome_status || 'No outcome'}
-                    </p>
-                  </div>
-                  <div className="p-3 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                    <p className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: '#64748B' }}>
-                      Existing case {r.candidate ? `${r.candidate.case_no} · ${r.candidate.patient_no || ''}` : r.match_candidate_case_no}
-                    </p>
-                    {r.candidate ? (
-                      <>
-                        <p className="text-sm font-bold" style={{ color: '#0F2D52' }}>{fullName(r.candidate)}</p>
-                        <p className="text-[11px] mt-1" style={{ color: '#475569' }}>
-                          Born {fmtDate(r.candidate.date_of_birth)} · Diagnosed {fmtDate(r.candidate.date_of_diagnosis)} · {r.candidate.barangay_name || '—'} · {r.candidate.outcome_status || 'No outcome'}
-                        </p>
-                      </>
-                    ) : (
-                      <p className="text-[11px]" style={{ color: '#991B1B' }}>The matched case no longer exists — choose Different person.</p>
-                    )}
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 mt-3">
-                  {Object.entries(RESOLUTION_LABELS).map(([key, l]) => (
-                    <button key={key} disabled={rowBusy === r.id} onClick={() => resolve(r, key)} title={l.desc}
-                      className="px-3 py-1.5 text-[11px] font-bold rounded-md disabled:opacity-50"
-                      style={r.match_suggestion === key
-                        ? { background: '#0F2D52', color: '#ffffff' }
-                        : { background: '#ffffff', color: '#0F2D52', border: '1px solid #CBD5E1' }}>
-                      {l.title}{r.match_suggestion === key ? ' (suggested)' : ''}
-                    </button>
-                  ))}
-                  <span className="text-[10px]" style={{ color: '#94A3B8' }}>Matched on last name + first name + date of birth</span>
-                </div>
-                </div>
-              </div>
-            ))}
-          </div>
+            title="No Records Found"
+            description="There are no records matching your search." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr style={{ background: '#FAFCFF', borderBottom: '1px solid #E2E8F0' }}>
-                  {['Patient #', 'Case ID', 'Name', 'Barangay', 'Diagnosis', 'Sex', 'Age', view === 'unassigned' ? 'Reason' : 'Outcome', view === 'unassigned' ? 'Assign Barangay' : 'Source', ''].map(h => (
+                  {['Patient #', 'Case ID', 'Name', 'Barangay', 'Diagnosis', 'Sex', 'Age', 'Outcome', 'Source', 'Access', ''].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#0F2D52' }}>{h}</th>
                   ))}
                 </tr>
@@ -515,35 +426,55 @@ export default function TBRecordsPage() {
                     <td className="px-4 py-3 text-xs font-mono font-bold whitespace-nowrap" style={{ color: '#0F2D52' }}>{r.patient_no || '—'}</td>
                     <td className="px-4 py-3 text-xs font-mono whitespace-nowrap" style={{ color: '#0F2D52' }}>{r.case_no || '—'}</td>
                     <td className="px-4 py-3 text-xs font-semibold" style={{ color: '#0F2D52' }}>{fullName(r)}</td>
-                    <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{r.barangay_name || '—'}</td>
+                    <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>
+                      {r.barangay_name || '—'}
+                      {/* Responsibility moved by an accepted referral (patient barangay itself never changes) */}
+                      {r.responsible_barangay && r.responsible_barangay !== r.barangay_name && (
+                        <span className="block text-[10px] mt-0.5" style={{ color: accessBasis(r) === 'referred_out' ? '#B45309' : '#2E6FAF' }}>
+                          {accessBasis(r) === 'referred_in'
+                            ? 'Referred to your barangay'
+                            : `Referred to ${r.responsible_barangay}${!can(r, 'edit') ? ' · view only' : ''}`}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-xs whitespace-nowrap" style={{ color: '#475569' }}>{fmtDate(r.date_of_diagnosis)}</td>
                     <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{r.sex || '—'}</td>
                     <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{r.age ?? '—'}</td>
-                    {view === 'unassigned' ? (
-                      <>
-                        <td className="px-4 py-3 text-xs" style={{ color: '#92400E' }}>{unassignedReason(r, PASIG_BARANGAYS)}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex gap-1">
-                            <select value={assignChoice[r.id] || ''} onChange={e => setAssignChoice(c => ({ ...c, [r.id]: e.target.value }))}
-                              className="px-2 py-1 text-[11px] outline-none" style={inputStyle}>
-                              <option value="">Select…</option>
-                              {PASIG_BARANGAYS.map(b => <option key={b} value={b}>{b}</option>)}
-                            </select>
-                            <button disabled={!assignChoice[r.id] || rowBusy === r.id} onClick={() => assign(r)}
-                              className="px-2 py-1 text-[11px] font-bold rounded disabled:opacity-40" style={{ background: '#0F2D52', color: '#ffffff' }}>
-                              Save
-                            </button>
-                          </div>
-                        </td>
-                      </>
-                    ) : (
-                      <>
-                        <td className="px-4 py-3"><StatusBadge status={r.outcome_status || '—'} /></td>
-                        <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{r.source_type}</td>
-                      </>
-                    )}
-                    <td className="px-4 py-3">
-                      <button onClick={() => setDetailId(r.id)} className="px-2 py-1 text-[11px] font-bold rounded" style={{ color: '#2E6FAF' }}>View</button>
+                    <td className="px-4 py-3"><StatusBadge status={r.outcome_status || '—'} /></td>
+                    <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{r.source_type}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {/* From the server's permission decision — the API also refuses edits on view-only cases. */}
+                      {can(r, 'edit') ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                          style={{ background: '#ECFDF5', color: '#047857', border: '1px solid #A7F3D0' }}
+                          title={accessBasis(r) === 'referred_in' ? 'Referred to your barangay — you handle this case' : 'Your barangay handles this case'}>
+                          <i className="ri-edit-line" />Editable
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                          style={{ background: '#F8FAFC', color: '#64748B', border: '1px solid #E2E8F0' }}
+                          title={accessBasis(r) === 'referred_out'
+                            ? `Your resident, referred to ${r.responsible_barangay}. ${r.responsible_barangay} handles this case.`
+                            : 'You can view this case but not change it.'}>
+                          <i className="ri-eye-line" />View only
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3 whitespace-nowrap text-right">
+                      <div className="inline-flex items-center gap-1">
+                        <button onClick={() => openDetail(r.id)} className="px-2.5 py-1 text-[11px] font-semibold"
+                          style={{ background: '#F3F4F6', color: '#0F2D52', border: '1px solid #D1D5DB', borderRadius: 4 }}>View</button>
+                        <button
+                          type="button"
+                          aria-label={`More actions for ${r.case_no || 'record'}`}
+                          aria-haspopup="menu"
+                          onClick={(e) => setRowMenu(rowMenu?.record.id === r.id ? null : { record: r, anchor: e.currentTarget })}
+                          className="w-7 h-7 inline-flex items-center justify-center rounded"
+                          style={{ color: rowMenu?.record.id === r.id ? '#0F2D52' : '#64748B', background: rowMenu?.record.id === r.id ? '#EEF2F7' : 'transparent' }}
+                        >
+                          <i className="ri-more-2-fill text-base" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -562,13 +493,14 @@ export default function TBRecordsPage() {
         )}
       </div>
 
+      {rowMenu && <RowMenu anchor={rowMenu.anchor} items={rowMenuItems(rowMenu.record)} onClose={() => setRowMenu(null)} />}
       {detailId && (
-        <RecordDetailDrawer recordId={detailId} facilities={facilities} onClose={() => setDetailId(null)} />
+        <RecordDetailDrawer key={`${detailId}-${detailMode}`} recordId={detailId} initialMode={detailMode} facilities={facilities} barangays={barangayRefs} onClose={() => setDetailId(null)} onChanged={fetchRecords} />
       )}
 
       {/* ── Slide-over: Add TB Record ── */}
       {showForm && (
-        <div className="fixed inset-0 z-50 flex justify-end" style={{ background: 'rgba(15,23,42,0.3)' }} onClick={closeForm}>
+        <div className="fixed inset-0 z-[1200] flex justify-end" style={{ background: 'rgba(15,23,42,0.3)' }} onClick={closeForm}>
           <div className="w-full max-w-lg h-full overflow-y-auto" style={{ background: '#ffffff' }} onClick={e => e.stopPropagation()}>
             <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4" style={{ background: '#0F2D52', color: '#ffffff' }}>
               <div>
@@ -594,7 +526,8 @@ export default function TBRecordsPage() {
                 </p>
                 <div className="flex flex-col gap-1.5 mt-3">
                   {Object.entries(RESOLUTION_LABELS).map(([key, l]) => (
-                    <button key={key} type="button" disabled={saving} onClick={() => submit(key)}
+                    <button key={key} type="button" disabled={saving || (key === 'same_case' && possibleMatch.canUpdateExisting === false)} onClick={() => submit(key)}
+                      title={key === 'same_case' && possibleMatch.canUpdateExisting === false ? 'The existing case is view-only for you' : ''}
                       className="px-3 py-2 text-left rounded-md disabled:opacity-50"
                       style={possibleMatch.suggestion === key ? { background: '#0F2D52', color: '#ffffff' } : { background: '#ffffff', color: '#0F2D52', border: '1px solid #CBD5E1' }}>
                       <span className="font-bold text-[11px]">{l.title}{possibleMatch.suggestion === key ? ' (suggested)' : ''}</span>

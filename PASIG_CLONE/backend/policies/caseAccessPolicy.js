@@ -1,121 +1,157 @@
 /**
- * Centralized Case Access Policy
- * 
- * Viewing: role + the patient's barangay / treatment facility (see below).
- * Editing / transfers: role + the case's current responsible facility.
+ * Centralized Case Access Policy — hybrid, barangay-based.
+ *
+ *   ADMIN  — city-wide: every record, view + edit.
+ *   STAFF  — assigned to ONE barangay (users.barangay_id). For each case:
+ *
+ *     responsible barangay = case.responsible_barangay_id, or the patient's barangay
+ *                            (barangay_id) when no referral has moved it (NULL)
+ *
+ *     PRIMARY      patient lives in my barangay and it is still responsible  → view + edit
+ *     REFERRED_IN  an ACCEPTED referral made my barangay responsible          → view + edit
+ *     REFERRED_OUT patient lives in my barangay, responsibility moved away     → view only
+ *     otherwise                                                                → no access
+ *
+ *   A pending referral grants nothing yet: the receiving barangay sees it only in its
+ *   referral inbox, without patient identity, until it accepts.
+ *
+ * Deliberately NOT used for access: the staff member's legacy facility_id and the
+ * free-text diagnosing/treatment facility on the record. Patient residence, staff
+ * assignment, treating facility and referral are separate concepts; only residence
+ * and accepted referrals decide access.
+ *
+ * Barangays are compared by id (users.barangay_id vs the case's barangay_id /
+ * responsible_barangay_id, kept in step with the names by triggers — migration 006).
+ * Records without ids (e.g. a barangay not yet mirrored) fail closed for staff.
+ *
+ * Analytics in TBInsight are aggregate and stay city-wide — this policy only governs
+ * patient-level records in PASIG TB-IS.
  */
 
 const db = require('../db/pasigSchema');
 
-// VISIBILITY (who can see a record, names included):
-//   ADMIN — every record.
-//   STAFF — a record is visible when ANY of these is true:
-//     1. the patient lives in the barangay of the staff's assigned facility,
-//     2. the patient is treated at the staff's assigned facility, or
-//     3. the case was transferred to the staff's facility (it is the case's current
-//        responsible facility after a completed transfer).
-//   Staff with no assigned facility see no records.
-// The treatment facility on a record is free text from the source file, so it is
-// compared by name with case/punctuation ignored; an unmatched name simply falls
-// back to rule 1. Edit/transfer permissions below are separate and unchanged.
+const ACCESS = Object.freeze({
+  ADMIN: 'admin',
+  PRIMARY: 'primary',
+  REFERRED_IN: 'referred_in',
+  REFERRED_OUT: 'referred_out',
+});
 
-function normFacility(name) {
-  const n = String(name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  return n || null;
+const NO_ACCESS = Object.freeze({ canView: false, canEdit: false, basis: null });
+
+/**
+ * The staff user's access scope: { barangay_id, barangay_name } (their assigned
+ * barangay), read from the database so a reassignment applies immediately. null for
+ * admins and for staff with no assigned barangay (who therefore see no records).
+ */
+async function resolveUserScope(user) {
+  if (!user || user.role === 'admin' || !user.id) return null;
+  const res = await db.authPool.query(
+    `SELECT b.id AS barangay_id, b.name AS barangay_name
+     FROM users u JOIN barangays b ON b.id = u.barangay_id
+     WHERE u.id = $1`,
+    [user.id]
+  );
+  const row = res.rows[0];
+  return row?.barangay_name ? { barangay_id: row.barangay_id ?? null, barangay_name: row.barangay_name } : null;
 }
 
-/** The staff user's assigned facility ({ id, name, barangay_name }), or null. */
-async function resolveUserFacility(user) {
-  if (!user || user.role === 'admin' || !user.facility_id) return null;
-  const res = await db.authPool.query(
-    'SELECT id, name, barangay_name FROM health_facilities WHERE id = $1',
-    [user.facility_id]
-  );
-  return res.rows[0] || null;
+/** The barangay (name) currently responsible for a case. */
+function responsibleBarangay(record) {
+  return record?.responsible_barangay || record?.barangay_name || null;
+}
+
+/** Same barangay? Compared by id only — a side without an id never matches. */
+function sameBarangay(aId, bId) {
+  return aId != null && bId != null && Number(aId) === Number(bId);
 }
 
 /**
- * SQL WHERE fragment for record listing.
+ * Access to one case: { canView, canEdit, basis } where basis is one of ACCESS.*.
+ * `record` needs barangay_id and responsible_barangay_id.
+ */
+function getCaseAccess(user, scope, record) {
+  if (!user || !record) return NO_ACCESS;
+  if (user.role === 'admin') return { canView: true, canEdit: true, basis: ACCESS.ADMIN };
+  if (!scope || scope.barangay_id == null) return NO_ACCESS;
+
+  const referred = record.responsible_barangay_id != null;
+  const respId = referred ? record.responsible_barangay_id ?? null : record.barangay_id ?? null;
+  const livesHere = sameBarangay(scope.barangay_id, record.barangay_id);
+  const responsibleHere = sameBarangay(scope.barangay_id, respId);
+
+  if (responsibleHere) {
+    return { canView: true, canEdit: true, basis: livesHere ? ACCESS.PRIMARY : ACCESS.REFERRED_IN };
+  }
+  if (livesHere) {
+    return { canView: true, canEdit: false, basis: ACCESS.REFERRED_OUT };
+  }
+  return NO_ACCESS;
+}
+
+function canViewCase(user, scope, record) {
+  return getCaseAccess(user, scope, record).canView;
+}
+
+function canEditCase(user, scope, record) {
+  return getCaseAccess(user, scope, record).canEdit;
+}
+
+/**
+ * SQL WHERE fragment matching exactly the cases getCaseAccess() lets the user view.
  * @param {Object} user      req.user
- * @param {Object|null} facility  from resolveUserFacility(user)
+ * @param {Object|null} scope from resolveUserScope(user)
  * @param {string} alias     table alias for validated_tb_cases
  * @param {number} startIdx  first $n placeholder number to use
  */
-function getCaseListScope(user, facility, alias = '', startIdx = 1) {
+function getCaseListScope(user, scope, alias = '', startIdx = 1) {
   const p = alias ? `${alias}.` : '';
   if (user.role === 'admin') return { where: '1=1', params: [] };
-  if (!facility) return { where: '1=0', params: [] };
+  if (!scope || scope.barangay_id == null) return { where: '1=0', params: [] };
+  const id = `$${startIdx}`;
+  // Exactly the rule getCaseAccess() applies (barangays compared by id), so the list
+  // never shows a case the user cannot open, or hides one they can:
+  //   lives here       = patient barangay_id is mine
+  //   responsible here = responsible_barangay_id is mine, or it is NULL (no accepted
+  //                      referral) and the patient lives here
+  //   visible          = lives here OR responsible here
+  // Patient Rosario / responsible NULL or Rosario -> shown (view + edit)
+  // Patient Rosario / responsible Maybunga        -> shown (view only)
+  // Patient Maybunga / responsible Rosario        -> shown (view + edit)
+  // Patient Maybunga or Ugong, not referred here  -> hidden
+  // Cases with no barangay_id (unknown / outside Pasig) match no staff barangay; they
+  // are handled under Validation -> Needs Assignment.
   return {
-    where: `(lower(${p}barangay_name) = lower($${startIdx})
-             OR regexp_replace(lower(coalesce(${p}treatment_facility, '')), '[^a-z0-9]', '', 'g') = $${startIdx + 1}
-             OR ${p}current_responsible_facility_id = $${startIdx + 2})`,
-    params: [facility.barangay_name || null, normFacility(facility.name), facility.id],
+    where: `(${p}barangay_id = ${id} OR COALESCE(${p}responsible_barangay_id, ${p}barangay_id) = ${id})`,
+    params: [scope.barangay_id],
   };
 }
 
-function canViewCase(user, facility, caseRecord) {
-  if (user.role === 'admin') return true;
-  if (!facility) return false;
-  const livesHere = facility.barangay_name && caseRecord.barangay_name &&
-    String(caseRecord.barangay_name).toLowerCase() === String(facility.barangay_name).toLowerCase();
-  const fac = normFacility(facility.name);
-  const treatedHere = fac !== null && normFacility(caseRecord.treatment_facility) === fac;
-  const transferredHere = caseRecord.current_responsible_facility_id != null
-    && Number(caseRecord.current_responsible_facility_id) === Number(facility.id);
-  return Boolean(livesHere || treatedHere || transferredHere);
+/** Can the user act as the RECEIVING side of a referral to `toBarangay`? */
+function isReferralReceiver(user, scope, _toBarangay, toBarangayId = null) {
+  if (user?.role === 'admin') return true;
+  if (!scope) return false;
+  return sameBarangay(scope.barangay_id, toBarangayId);
 }
 
-/**
- * Check if a user can edit a specific case.
- * @param {Object} user
- * @param {Object} caseRecord
- * @returns {boolean}
- */
-function canEditCase(user, caseRecord) {
-  if (user.role === 'admin') return true;
-  if (!user.facility_id) return false;
-
-  // Only current responsible facility can edit
-  return caseRecord.current_responsible_facility_id === user.facility_id;
-}
-
-/**
- * Check if a user can initiate a transfer for a case.
- * @param {Object} user
- * @param {Object} caseRecord
- * @returns {boolean}
- */
-function canTransferCase(user, caseRecord) {
-  if (user.role === 'admin') return true;
-  if (!user.facility_id) return false;
-
-  // Only current responsible facility can initiate transfer
-  return caseRecord.current_responsible_facility_id === user.facility_id;
-}
-
-/**
- * Determine if a case is read-only for the given user.
- * Returns true for staff viewing historical/transferred cases.
- * @param {Object} user
- * @param {Object} caseRecord
- * @returns {boolean}
- */
-function isReadOnlyForUser(user, caseRecord) {
-  if (user.role === 'admin') return false;
-  if (!user.facility_id) return true;
-
-  // Current responsible facility can edit
-  if (caseRecord.current_responsible_facility_id === user.facility_id) return false;
-
-  // Everyone else sees read-only
-  return true;
+/** Can the user act as the SENDING side of a referral from `fromBarangay`? */
+function isReferralSender(user, scope, _fromBarangay, fromBarangayId = null) {
+  if (user?.role === 'admin') return true;
+  if (!scope) return false;
+  return sameBarangay(scope.barangay_id, fromBarangayId);
 }
 
 module.exports = {
-  resolveUserFacility,
-  getCaseListScope,
+  ACCESS,
+  resolveUserScope,
+  // Kept for existing callers: the scope is barangay-based now, not a facility.
+  resolveUserFacility: resolveUserScope,
+  responsibleBarangay,
+  sameBarangay,
+  getCaseAccess,
   canViewCase,
   canEditCase,
-  canTransferCase,
-  isReadOnlyForUser,
+  getCaseListScope,
+  isReferralReceiver,
+  isReferralSender,
 };

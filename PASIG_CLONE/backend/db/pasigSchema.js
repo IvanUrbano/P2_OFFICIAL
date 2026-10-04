@@ -1,3 +1,4 @@
+require('./pgTimezone'); // must run before any query: naive timestamps are UTC
 const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
@@ -12,24 +13,10 @@ pool.on('error', (err) => {
   console.error('[pasig-clone] Unexpected pool error:', err.message);
 });
 
-// Execute multi-statement SQL by splitting on statement boundaries
 const execSql = async (sqlContent) => {
   const client = await pool.connect();
   try {
-    // Remove SQL comments, then split on semicolons
-    const cleaned = sqlContent
-      .split('\n')
-      .filter(line => !line.trim().startsWith('--'))
-      .join('\n');
-
-    const statements = cleaned
-      .split(/;\s*\n/)
-      .map(s => s.trim())
-      .filter(s => s.length > 0);
-
-    for (const stmt of statements) {
-      await client.query(stmt);
-    }
+    await client.query(sqlContent);
   } finally {
     client.release();
   }
@@ -76,6 +63,96 @@ async function initSchema() {
       console.log('[pasig-clone] Migration 003 (patient # / case ID) completed.');
     } catch (err) {
       console.error('[pasig-clone] Migration 003 failed (continuing):', err.message);
+    }
+  }
+
+  const mig004Path = path.join(__dirname, 'migrations', '004_case_tracking.sql');
+  if (fs.existsSync(mig004Path)) {
+    try {
+      await execSql(fs.readFileSync(mig004Path, 'utf8'));
+      console.log('[pasig-clone] Migration 004 (case tracking fields) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 004 failed (continuing):', err.message);
+    }
+  }
+
+  const mig005Path = path.join(__dirname, 'migrations', '005_barangay_referrals.sql');
+  if (fs.existsSync(mig005Path)) {
+    try {
+      await execSql(fs.readFileSync(mig005Path, 'utf8'));
+      console.log('[pasig-clone] Migration 005 (barangay referrals) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 005 failed (continuing):', err.message);
+    }
+  }
+
+  const mig006Path = path.join(__dirname, 'migrations', '006_barangay_ids_referral_review.sql');
+  if (fs.existsSync(mig006Path)) {
+    try {
+      await execSql(fs.readFileSync(mig006Path, 'utf8'));
+      console.log('[pasig-clone] Migration 006 (barangay ids, referral review) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 006 failed (continuing):', err.message);
+    }
+  }
+
+  const mig007Path = path.join(__dirname, 'migrations', '007_validation_queue.sql');
+  if (fs.existsSync(mig007Path)) {
+    try {
+      await execSql(fs.readFileSync(mig007Path, 'utf8'));
+      console.log('[pasig-clone] Migration 007 (validation queue) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 007 failed (continuing):', err.message);
+    }
+  }
+
+  const mig008Path = path.join(__dirname, 'migrations', '008_barangay_ids_authoritative.sql');
+  if (fs.existsSync(mig008Path)) {
+    try {
+      await execSql(fs.readFileSync(mig008Path, 'utf8'));
+      console.log('[pasig-clone] Migration 008 (authoritative barangay ids) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 008 failed (continuing):', err.message);
+    }
+  }
+
+  const mig009Path = path.join(__dirname, 'migrations', '009_referral_final_structure.sql');
+  if (fs.existsSync(mig009Path)) {
+    try {
+      await execSql(fs.readFileSync(mig009Path, 'utf8'));
+      console.log('[pasig-clone] Migration 009 (final referral structure) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 009 failed (continuing):', err.message);
+    }
+  }
+
+  const mig010Path = path.join(__dirname, 'migrations', '010_validation_issue_barangay_id.sql');
+  if (fs.existsSync(mig010Path)) {
+    try {
+      await execSql(fs.readFileSync(mig010Path, 'utf8'));
+      console.log('[pasig-clone] Migration 010 (data-issue barangay id) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 010 failed (continuing):', err.message);
+    }
+  }
+
+  const mig011Path = path.join(__dirname, 'migrations', '011_case_history_events.sql');
+  if (fs.existsSync(mig011Path)) {
+    try {
+      await execSql(fs.readFileSync(mig011Path, 'utf8'));
+      console.log('[pasig-clone] Migration 011 (case_history outcome events) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 011 failed (continuing):', err.message);
+    }
+  }
+
+  const mig012Path = path.join(__dirname, 'migrations', '012_notifications.sql');
+  if (fs.existsSync(mig012Path)) {
+    try {
+      await execSql(fs.readFileSync(mig012Path, 'utf8'));
+      console.log('[pasig-clone] Migration 012 (notifications) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 012 failed (continuing):', err.message);
     }
   }
 }
@@ -310,31 +387,6 @@ function archiveRecord(recordId) {
   );
 }
 
-function getPopulation() {
-  return pool.query(
-    `SELECT * FROM barangay_population ORDER BY barangay_name, reference_year DESC`
-  );
-}
-
-function addPopulation(barangayName, population, referenceYear, source) {
-  return pool.query(
-    `INSERT INTO barangay_population (barangay_name, population, reference_year, source)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (barangay_name, reference_year) 
-     DO UPDATE SET population = $2, source = $4, updated_at = NOW()
-     RETURNING *`,
-    [barangayName, population, referenceYear, source]
-  );
-}
-
-function updatePopulation(id, population, source) {
-  return pool.query(
-    `UPDATE barangay_population SET population = $2, source = $3, updated_at = NOW()
-     WHERE id = $1 RETURNING *`,
-    [id, population, source]
-  );
-}
-
 function deleteValidatedCases(batchId) {
   return pool.query(
     `DELETE FROM validated_tb_cases WHERE batch_id = $1`,
@@ -415,7 +467,4 @@ module.exports = {
   archiveBatch,
   unarchiveBatch,
   archiveRecord,
-  getPopulation,
-  addPopulation,
-  updatePopulation,
 };

@@ -50,7 +50,10 @@ export default function LoginPage() {
         localStorage.removeItem('pasig_remember_me');
       }
       localStorage.setItem('user', JSON.stringify(res.data.user));
-      if (res.data.passwordRecentlyChanged) {
+      if (res.data.mustChangePassword) {
+        // Temporary password: the user sets their own before anything else.
+        navigate('/settings?tab=security&firstLogin=1');
+      } else if (res.data.passwordRecentlyChanged) {
         setShowPasswordResetNotice(true);
       } else {
         navigate('/dashboard');
