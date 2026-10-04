@@ -103,6 +103,10 @@ function rowValues(batchId, r) {
  */
 async function validateBatch(batchId) {
   const records = await db.getRawCases(batchId);
+  // Name / date-of-birth rules follow the batch's identity class (historical by default).
+  const batchClass = (await db.pool.query('SELECT identity_class FROM import_batches WHERE id = $1', [batchId])
+    .catch(() => ({ rows: [] }))).rows[0]?.identity_class || 'historical';
+  const identityRule = identityRuleFor(batchClass);
   const validBarangays = await getValidBarangays();
 
   const results = {
@@ -129,7 +133,7 @@ async function validateBatch(batchId) {
       rowNumber: record.row_number, itisCaseId: cleaned.itis_case_id,
     }));
 
-    const validation = validateRecord(cleaned, record.source_type, validBarangays);
+    const validation = validateRecord(cleaned, record.source_type, validBarangays, identityRule);
     const warnings = [...notes, ...validation.warnings];
     if (notes.some(n => n.includes('standardized'))) results.cleaned++;
     if (!isPasig) results.nonPasig++;
@@ -289,11 +293,14 @@ async function validateBatch(batchId) {
 // non-Pasig location never rejects the row — it is listed under Validation -> Needs
 // Assignment and is not counted as validated or synced until resolved.
 //
-// Patient name and date of birth:
-//   DSTB / MN imports — NOT required (historical registry files are de-identified; the
-//     client-approved identity workflow is not finalized). When given, they are used to
-//     find returning patients; a partial name only produces a warning.
-//   Manual entry      — required (unchanged).
+// Patient name and date of birth (decided by the record's identity_class, migration 015):
+//   historical DSTB / MN  — NOT required (de-identified registry files). When the file
+//     does carry them they are kept and validated normally: the date of birth is only
+//     checked when one is given; a partial name only produces a warning.
+//   operational DSTB / MN — required (identifiable records, after client approval).
+//   Manual entry          — always required.
+// Callers pass identityRuleFor(identity_class); a missing class counts as historical,
+// the same fail-closed default the privacy rules use.
 
 const NAME_DOB_FIELDS = ['last_name', 'first_name', 'date_of_birth'];
 const present = (v) => v !== null && v !== undefined && String(v).trim() !== '';
@@ -364,9 +371,14 @@ function validateMN(rec, validBarangays, opts = {}) {
   return r;
 }
 
-/** Manual entry: name and date of birth stay required. */
+/** Manual entry: name and date of birth are always required (cannot be switched off). */
 function validateManual(rec, validBarangays, opts = {}) {
-  return validateCore(rec, validBarangays, { requireIdentity: true, ...opts });
+  return validateCore(rec, validBarangays, { ...opts, requireIdentity: true });
+}
+
+/** Validation options for a record's identity class (historical | operational). */
+function identityRuleFor(identityClass) {
+  return { requireIdentity: identityClass === 'operational' };
 }
 
 /**
@@ -393,12 +405,49 @@ function sourceRefs({ batchId, sheetName, sourceType, rowNumber, itisCaseId }) {
   };
 }
 
+// ==================== Stored data-issue errors ====================
+// validation_issues.errors is written when a batch is validated. When the rules change
+// (e.g. historical rows no longer need a name / date of birth) the stored text goes
+// stale, so it is re-checked against the current rules — when issues are listed and
+// once at startup — instead of showing errors that no longer apply.
+
+/** Errors an open issue has under the CURRENT rules. */
+function currentIssueErrors(issue, validBarangays) {
+  return validateRecord(issue.record || {}, issue.source_type, validBarangays, identityRuleFor(issue.identity_class)).errors;
+}
+
+/**
+ * Rewrite stored errors of open issues that no longer match the current rules.
+ * Only the errors column changes; issues whose batch was deleted are left alone
+ * (they are hidden from every list). Returns { checked, updated }.
+ */
+async function refreshOpenIssueErrors() {
+  const validBarangays = await getValidBarangays();
+  const { rows } = await db.pool.query(
+    `SELECT i.id, i.source_type, i.record, i.errors, i.identity_class
+     FROM validation_issues i
+     WHERE i.status = 'open' AND EXISTS (SELECT 1 FROM import_batches b WHERE b.id = i.batch_id)`
+  );
+  let updated = 0;
+  for (const issue of rows) {
+    const current = currentIssueErrors(issue, validBarangays);
+    if (JSON.stringify(current) !== JSON.stringify(issue.errors || [])) {
+      await db.pool.query('UPDATE validation_issues SET errors = $2 WHERE id = $1', [issue.id, JSON.stringify(current)]);
+      updated++;
+    }
+  }
+  return { checked: rows.length, updated };
+}
+
 module.exports = {
   validateBatch,
   validateRecord,
   validateDSTB,
   validateMN,
   validateManual,
+  identityRuleFor,
+  currentIssueErrors,
+  refreshOpenIssueErrors,
   sourceRefs,
   getValidBarangays,
   INSERT_COLUMNS,

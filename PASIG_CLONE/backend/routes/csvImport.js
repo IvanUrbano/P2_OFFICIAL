@@ -345,7 +345,8 @@ router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req,
     const countParams = [];
     let caseWhere = `1=1`;
     let validationWhere = `1=1`;
-    let issueWhere = `i.status = 'open'`;
+    // Issues whose batch was deleted are leftovers, not work to do (never counted).
+    let issueWhere = `i.status = 'open' AND EXISTS (SELECT 1 FROM import_batches ib WHERE ib.id = i.batch_id)`;
     if (!isAdmin) {
       const s = getCaseListScope(req.user, userScope, 'v', 1);
       countParams.push(...s.params); // $1 = barangay when the staff member has one
@@ -355,7 +356,8 @@ router.get('/stats', authenticate, authorizeRoles('admin', 'staff'), async (req,
       const ownIssues = `i.batch_id IN (SELECT id FROM import_batches WHERE uploaded_by = $${meIdx})`;
       caseWhere = `${s.where}`;
       validationWhere = `(${s.where} OR ${ownCases})`;
-      issueWhere = `i.status = 'open' AND (${s.params.length ? `i.barangay_id = $1 OR ` : ''}${ownIssues})`;
+      issueWhere = `i.status = 'open' AND EXISTS (SELECT 1 FROM import_batches ib WHERE ib.id = i.batch_id)
+        AND (${s.params.length ? `i.barangay_id = $1 OR ` : ''}${ownIssues})`;
     }
 
     // Total = every TB case record stored in PASIG TB-IS, Pasig and Non-Pasig, whatever
@@ -872,8 +874,9 @@ router.put('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
     for (const [f, v] of Object.entries(changes)) merged[f] = v === '' || v === undefined ? null : v;
     const { record: cleaned } = cleanRecord(merged);
     // Records saved before Age was required may lack it — editing them must still work.
+    const { identityRuleFor } = require('../services/validator');
     const validation = validateRecord(cleaned, record.source_type, await getValidBarangays(),
-      { legacyMissingAge: record.age === null || record.age === undefined });
+      { ...identityRuleFor(record.identity_class), legacyMissingAge: record.age === null || record.age === undefined });
     if (!validation.valid) {
       return res.status(422).json({ error: 'Please fix these problems.', errors: validation.errors });
     }

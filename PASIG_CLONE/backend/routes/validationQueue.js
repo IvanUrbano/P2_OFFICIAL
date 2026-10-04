@@ -39,7 +39,7 @@ const {
   categorizeMatch, issueType, issueField, suggestFacility, ymd, normFacility,
 } = require('../services/validationQueue');
 const { cleanRecord, PASIG_BARANGAYS } = require('../services/dataCleaner');
-const { validateRecord, getValidBarangays, INSERT_COLUMNS, rowValues } = require('../services/validator');
+const { validateRecord, getValidBarangays, INSERT_COLUMNS, rowValues, identityRuleFor, currentIssueErrors } = require('../services/validator');
 const { createPatient, nextCaseNo } = require('../services/matchResolution');
 const { resyncSyncedCases, logReviews } = require('../services/caseFollowUp');
 
@@ -88,7 +88,9 @@ async function caseScope(req) {
  */
 function issueScope(req, userScope) {
   const params = [];
-  let where = `i.status = 'open'`;
+  // Issues whose batch was deleted are leftovers (older deletes did not remove them):
+  // never listed or counted.
+  let where = `i.status = 'open' AND EXISTS (SELECT 1 FROM import_batches ib WHERE ib.id = i.batch_id)`;
   if (req.user.role !== 'admin') {
     const clauses = [];
     if (userScope?.barangay_id != null) {
@@ -722,12 +724,18 @@ router.get('/issues', authenticate, authorizeRoles('admin', 'staff'), async (req
       ),
     ]);
     const typeCounts = {};
+    const validBarangays = await getValidBarangays();
     const issues = rows.rows.map(r => {
-      const errors = Array.isArray(r.errors) ? r.errors : [];
+      // Errors under the CURRENT rules (checked on the unmasked record) — stored text
+      // from older rules is never shown.
+      const errors = currentIssueErrors(r, validBarangays);
       const types = [...new Set(errors.map(issueType))];
       types.forEach(t => { typeCounts[t] = (typeCounts[t] || 0) + 1; });
       return {
         ...r,
+        errors,
+        // Nothing left to fix under the current rules: saving it adds it as a case.
+        no_remaining_errors: errors.length === 0,
         record: maskIssueRecord(req, r.record, r.identity_class),
         issue_types: types,
         error_fields: [...new Set(errors.map(issueField).filter(Boolean))],
@@ -814,7 +822,7 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
     cleaned.source_record_id = issue.record?.source_record_id ?? null;
     cleaned.source_case_id = issue.source_type === 'MN' && cleaned.itis_case_id
       ? String(cleaned.itis_case_id).trim() : null;
-    const validation = validateRecord(cleaned, issue.source_type, await getValidBarangays());
+    const validation = validateRecord(cleaned, issue.source_type, await getValidBarangays(), identityRuleFor(issue.identity_class));
     const warnings = [...notes, ...validation.warnings];
 
     if (!validation.valid) {
