@@ -378,7 +378,7 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
 
     const result = await db.pool.query(
       `SELECT ct.*,
-              vtc.case_no, p.patient_no, vtc.last_name, vtc.first_name, vtc.middle_name, vtc.suffix,
+              vtc.case_no, p.patient_no, vtc.last_name, vtc.first_name, vtc.middle_name, vtc.suffix, vtc.identity_class,
               vtc.barangay_name, vtc.barangay_id, vtc.responsible_barangay, vtc.responsible_barangay_id,
               vtc.date_of_diagnosis, vtc.source_type, vtc.outcome_status
        FROM case_transfers ct
@@ -401,7 +401,7 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
           identity_hidden: true,
         };
       }
-      return unlocked ? row : pinService.maskIdentity(row);
+      return pinService.protectIdentity(req, row);
     });
 
     res.json({ transfers: rows, barangay: scope?.barangay_name || null });

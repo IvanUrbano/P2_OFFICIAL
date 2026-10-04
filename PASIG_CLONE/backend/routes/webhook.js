@@ -4,6 +4,7 @@ const rateLimit = require('express-rate-limit');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { startBackgroundSync, claimBatchForSync } = require('../services/backgroundSync');
+const { withUserNames } = require('../services/userNames');
 
 const sendLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -84,7 +85,7 @@ router.get('/rejections', authenticate, authorizeRoles('admin'), async (req, res
 router.get('/logs', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
     const result = await db.getWebhookLogs();
-    res.json(result.rows);
+    res.json(await withUserNames(result.rows, { initiated_by: 'username' }));
   } catch (error) {
     console.error('Error fetching webhook logs:', error);
     res.status(500).json({ error: 'Failed to fetch logs' });

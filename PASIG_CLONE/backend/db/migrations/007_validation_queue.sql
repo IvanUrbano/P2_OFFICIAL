@@ -70,16 +70,24 @@ CREATE TABLE IF NOT EXISTS facility_aliases (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Matching order is exact registry name -> alias -> Needs Assignment (spec order), and
+-- a trailing program tag ("- IDOTS" / "- MTBN") is dropped: it says nothing about the
+-- facility, so one clean alias resolves every tagged variant. Kept identical to
+-- 013_facility_match_order.sql so re-running this file (initSchema on a startup that
+-- does not skip migrations) can never put an older definition back.
 CREATE OR REPLACE FUNCTION norm_facility(p TEXT) RETURNS TEXT
 LANGUAGE sql IMMUTABLE AS $$
-  SELECT regexp_replace(lower(coalesce(p, '')), '[^a-z0-9]', '', 'g')
+  SELECT regexp_replace(
+    regexp_replace(lower(coalesce(p, '')), '\s*-\s*(idots|mtbn)\s*$', '', 'g'),
+    '[^a-z0-9]', '', 'g'
+  )
 $$;
 
 CREATE OR REPLACE FUNCTION facility_ref_id(p TEXT) RETURNS INTEGER
 LANGUAGE sql STABLE AS $$
   SELECT CASE WHEN norm_facility(p) = '' THEN NULL ELSE COALESCE(
-    (SELECT facility_id FROM facility_aliases WHERE alias_norm = norm_facility(p)),
-    (SELECT id FROM facility_ref WHERE norm_name = norm_facility(p) ORDER BY id LIMIT 1)
+    (SELECT id FROM facility_ref WHERE norm_name = norm_facility(p) ORDER BY id LIMIT 1),
+    (SELECT facility_id FROM facility_aliases WHERE alias_norm = norm_facility(p))
   ) END
 $$;
 

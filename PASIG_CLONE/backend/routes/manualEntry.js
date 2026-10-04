@@ -85,8 +85,10 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
       // Ask the user to decide. Details beyond the IDs are only shown when the
       // existing case is within this user's barangay access.
       // Name shown only if the existing case is in this user's scope AND names are unlocked
+      // Historical (de-identified) cases never show their name.
       const visible = can(req.user, await resolveUserScope(req.user), ACTIONS.CASE_VIEW, candidate)
-        && require('../services/pinService').isUnlocked(req);
+        && require('../services/pinService').isUnlocked(req)
+        && require('../services/pinService').namesAllowed(candidate);
       const sameDx = String(candidate.date_of_diagnosis ? ymd(candidate.date_of_diagnosis) : '') === cleaned.date_of_diagnosis;
       return res.status(409).json({
         possibleMatch: {
@@ -120,10 +122,10 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
       const batchRes = await client.query(
         `INSERT INTO import_batches
            (filename, uploaded_by, total_rows, dstb_count, mn_count, valid_count, error_count,
-            status, validated_by, validated_at, created_at)
-         VALUES ($1, $2, 1, 0, 0, 1, 0, 'validated', $2, NOW(), NOW())
+            status, validated_by, validated_at, created_at, identity_class)
+         VALUES ($1, $2, 1, 0, 0, 1, 0, 'validated', $2, NOW(), NOW(), $3)
          RETURNING id`,
-        [`Manual Entry — ${req.user.username}`, req.user.id]
+        [`Manual Entry — ${req.user.username}`, req.user.id, require('../services/pinService').identityClassForNewBatch()]
       );
       batchId = batchRes.rows[0].id;
 

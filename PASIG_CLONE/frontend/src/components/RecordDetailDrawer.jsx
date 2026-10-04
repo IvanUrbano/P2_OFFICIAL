@@ -3,12 +3,12 @@ import API from '../api/axios';
 import StatusBadge from './StatusBadge';
 import { can, accessBasis } from '../utils/permissions';
 import CaseEditForm from './CaseEditForm';
+import { patientName } from '../utils/patientName';
+import { useConfirmDialog } from './ConfirmDialog';
 
 const fmtDate = (v) => (v ? new Date(v).toLocaleDateString() : '—');
 const fmtDateTime = (v) => (v ? new Date(v).toLocaleString() : '—');
-const fullName = (r) => (r?.last_name || r?.first_name
-  ? `${r.last_name || ''}, ${r.first_name || ''}${r.middle_name ? ` ${r.middle_name}` : ''}${r.suffix ? ` ${r.suffix}` : ''}`
-  : '—');
+const fullName = (r) => patientName(r);
 
 const TRANSFER_STATUS_STYLE = {
   pending: { bg: '#FEF3C7', color: '#92400E' },
@@ -22,6 +22,17 @@ function Field({ label, value }) {
     <div>
       <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#94A3B8' }}>{label}</p>
       <p className="text-xs font-medium mt-0.5" style={{ color: '#0F2D52' }}>{value ?? '—'}</p>
+    </div>
+  );
+}
+
+function FormSelect({ children, className, style, ...props }) {
+  return (
+    <div className="relative">
+      <select {...props} className={`${className} appearance-none`} style={{ ...style, paddingRight: '2.5rem' }}>
+        {children}
+      </select>
+      <i aria-hidden="true" className="ri-arrow-down-s-line absolute right-3 top-1/2 -translate-y-1/2 text-sm pointer-events-none" style={{ color: '#64748B' }} />
     </div>
   );
 }
@@ -72,6 +83,7 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
   const [form, setForm] = useState({ to_barangay_id: '', to_facility_id: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
+  const { confirm, confirmDialog } = useConfirmDialog();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -128,7 +140,14 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
   };
 
   const referralAction = async (t, action) => {
-    if (action !== 'accept' && !window.confirm(action === 'reject' ? 'Reject this referral?' : 'Cancel this referral?')) return;
+    if (action !== 'accept' && !(await confirm({
+      title: action === 'reject' ? 'Reject referral?' : 'Cancel referral?',
+      message: action === 'reject'
+        ? 'The sending barangay will remain responsible for the case.'
+        : 'The receiving barangay will no longer be asked to review this referral.',
+      confirmLabel: action === 'reject' ? 'Reject referral' : 'Cancel referral',
+      variant: 'danger',
+    }))) return;
     setSaving(true);
     setMsg(null);
     try {
@@ -147,16 +166,21 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
   const inputStyle = { background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52', borderRadius: 4 };
 
   return (
+    <>
+    {confirmDialog}
     <div className="fixed inset-0 z-[1200] flex justify-end" style={{ background: 'rgba(15,23,42,0.3)' }} onClick={onClose}>
-      <div className="w-full max-w-lg h-full overflow-y-auto" style={{ background: '#ffffff' }} onClick={e => e.stopPropagation()}>
-        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4" style={{ background: '#0F2D52', color: '#ffffff' }}>
+      <div className="w-full max-w-lg h-full flex flex-col overflow-hidden" style={{ background: '#ffffff' }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ background: '#0F2D52', color: '#ffffff' }}>
           <div>
             <h2 className="text-sm font-extrabold">{r ? fullName(r) : 'TB Record'}</h2>
             <p className="text-[11px] mt-0.5 opacity-70">{r ? `${r.patient_no || '—'} · ${r.case_no || '—'}` : 'Loading…'}</p>
           </div>
-          <button onClick={onClose} className="text-white/70 hover:text-white text-lg">✕</button>
+          <button type="button" onClick={onClose} aria-label="Close" className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
+            <i className="ri-close-line text-base" />
+          </button>
         </div>
 
+        <div className="min-h-0 flex-1 overflow-y-auto">
         {loading ? (
           <p className="text-xs text-center py-10" style={{ color: '#94A3B8' }}>Loading…</p>
         ) : error ? (
@@ -188,20 +212,12 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
             {tab === 'overview' && editing && (
               <CaseEditForm
                 record={r}
-                identityUnlocked={Boolean(data?.identityUnlocked)}
+                identityUnlocked={Boolean(data?.identityEditable)}
+                deidentified={Boolean(r?.identity_deidentified)}
                 facilities={facilities}
                 onCancel={() => setEditing(false)}
                 onSaved={(text) => { setEditing(false); setMsg({ type: 'success', text }); load(); onChanged?.(); }}
               />
-            )}
-
-            {tab === 'overview' && !editing && can(data, 'edit') && (
-              <div className="flex justify-end -mb-3">
-                <button onClick={() => { setEditing(true); setMsg(null); }} className="px-3 py-1.5 text-[11px] font-semibold inline-flex items-center gap-1"
-                  style={{ background: '#0F2D52', color: '#ffffff', borderRadius: 4 }}>
-                  <i className="ri-edit-line" />Edit details
-                </button>
-              </div>
             )}
 
             {tab === 'overview' && !editing && (
@@ -219,7 +235,7 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
             </section>
 
             <section>
-              <p className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: '#64748B' }}>TB Case</p>
+              <p className="text-[11px] font-bold uppercase tracking-wider mt-1 mb-3 pt-3 border-t" style={{ color: '#64748B', borderColor: '#E2E8F0' }}>TB Case</p>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Date of diagnosis" value={fmtDate(r.date_of_diagnosis)} />
                 <Field label="Treatment started" value={fmtDate(r.date_started_treatment)} />
@@ -231,6 +247,11 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
                 <Field label="Treatment facility" value={r.treatment_facility} />
                 <Field label="Responsible barangay" value={r.responsible_barangay_effective || '—'} />
                 <Field label="Source / ITIS ref." value={`${r.source_type || '—'}${r.itis_case_id ? ` · ${r.itis_case_id}` : ''}`} />
+                {r.source_case_id && <Field label="Source Case ID" value={r.source_case_id} />}
+                {r.source_record_id && (() => {
+                  const [, sheet, row] = String(r.source_record_id).split(':');
+                  return <Field label="Source file row" value={`${r.source_file || 'Import'} · ${sheet || r.source_type} sheet, row ${String(row || '').replace(/^R/, '')}`} />;
+                })()}
               </div>
             </section>
               </>
@@ -279,17 +300,17 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
                     <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#94A3B8' }}>From Barangay</p>
                     <p className="text-xs font-medium mt-0.5" style={{ color: '#0F2D52' }}>{r.responsible_barangay_effective || '—'}</p>
                   </div>
-                  <select value={form.to_barangay_id} onChange={e => setForm(f => ({ ...f, to_barangay_id: e.target.value, to_facility_id: '' }))}
+                  <FormSelect value={form.to_barangay_id} onChange={e => setForm(f => ({ ...f, to_barangay_id: e.target.value, to_facility_id: '' }))}
                     className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} aria-label="Receiving barangay">
                     <option value="">Receiving barangay…</option>
                     {barangayOptions.filter(b => Number(b.id) !== Number(responsibleId)).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                  </select>
+                  </FormSelect>
                   {form.to_barangay_id && facilitiesInTarget.length > 0 && (
-                    <select value={form.to_facility_id} onChange={e => setForm(f => ({ ...f, to_facility_id: e.target.value }))}
+                    <FormSelect value={form.to_facility_id} onChange={e => setForm(f => ({ ...f, to_facility_id: e.target.value }))}
                       className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} aria-label="Receiving facility (optional)">
                       <option value="">Facility in {selectedBarangay?.name || 'receiving barangay'} (optional)</option>
                       {facilitiesInTarget.map(fac => <option key={fac.id} value={fac.id}>{fac.name}</option>)}
-                    </select>
+                    </FormSelect>
                   )}
                   <p className="text-[10px] leading-relaxed" style={{ color: '#64748B' }}>
                     When {selectedBarangay?.name || 'the receiving barangay'} accepts, it becomes responsible for this case.
@@ -298,7 +319,7 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
                   <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2}
                     placeholder="Reason for referral…" aria-label="Reason" className="w-full px-3 py-2 text-xs outline-none resize-none" style={inputStyle} />
                   <div className="flex gap-2">
-                    <button type="submit" disabled={saving} className="px-4 py-2 text-xs font-bold rounded-md disabled:opacity-50" style={{ background: '#16A34A', color: '#ffffff' }}>
+                    <button type="submit" disabled={saving} className="px-4 py-2 text-xs font-bold rounded-md disabled:opacity-50" style={{ background: '#047857', color: '#ffffff' }}>
                       {saving ? 'Sending…' : 'Send Referral'}
                     </button>
                     <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-xs font-bold rounded-md" style={{ border: '1px solid #CBD5E1', color: '#0F2D52', background: '#ffffff' }}>
@@ -345,7 +366,17 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
             )}
           </div>
         )}
+        </div>
+        {tab === 'overview' && !editing && !loading && !error && can(data, 'edit') && (
+          <div className="shrink-0 px-6 pt-4 pb-6 flex justify-end" style={{ background: '#ffffff', borderTop: '1px solid rgba(15,45,82,0.08)' }}>
+            <button type="button" onClick={() => { setEditing(true); setMsg(null); }} className="px-4 py-2 text-xs font-semibold inline-flex items-center gap-1.5"
+              style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 }}>
+              <i className="ri-edit-line" />Edit details
+            </button>
+          </div>
+        )}
       </div>
     </div>
+    </>
   );
 }

@@ -79,6 +79,7 @@ function dispatch(sql, params) {
   if (q.includes('FROM validation_issues i LEFT JOIN import_batches')) {
     return { rows: ISSUES.map(r => ({ ...r })) };
   }
+  if (q.includes('COUNT(DISTINCT norm_facility(f.name))') && !q.includes('GROUP BY v.batch_id')) return { rows: [{ names: 4 }] };
   if (q.includes('COUNT(*) FILTER') && !q.includes('GROUP BY v.batch_id')) {
     return { rows: [{ ready: 3, matches: 1, location: 2, facility: 1, assignment: 3 }] };
   }
@@ -207,6 +208,13 @@ describe('validation visibility (results of your imports)', () => {
 
     const asAdmin = await call('admin', 'GET', '/validation-queue/summary');
     assert.strictEqual(asAdmin.body.batches.find(b => b.id === 'b-own').can_validate, true);
+  });
+
+  it('Needs Assignment badge counts location records; facility mapping is counted in names', async () => {
+    const r = await call('admin', 'GET', '/validation-queue/summary');
+    assert.strictEqual(r.body.counts.assignment, 2, 'location records only — not location OR facility');
+    assert.strictEqual(r.body.counts.assignmentDetail.facilityNames, 4);
+    assert.strictEqual(r.body.counts.assignmentDetail.facilityRecords, 1);
   });
 });
 

@@ -23,6 +23,8 @@ const INSERT_COLUMNS = [
   // Identity (names/DOB stay in PASIG only)
   'last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth',
   'patient_id', 'case_no', 'match_status', 'match_candidate_case_no', 'match_suggestion',
+  // Source traceability (file row; MN ITIS Lite Case No.)
+  'source_case_id',
 ];
 
 async function insertPatients(client, patientNos, batchId) {
@@ -91,6 +93,7 @@ function rowValues(batchId, r) {
     r.last_name ?? null, r.first_name ?? null, r.middle_name ?? null, r.suffix ?? null, r.date_of_birth ?? null,
     r.patient_id ?? null, r.case_no ?? null, r.match_status || 'none',
     r.match_candidate_case_no ?? null, r.match_suggestion ?? null,
+    r.source_case_id ?? null,
   ].map(v => (v === undefined ? null : v));
 }
 
@@ -121,6 +124,10 @@ async function validateBatch(batchId) {
       results.skippedBlank++;
       continue;
     }
+    Object.assign(cleaned, sourceRefs({
+      batchId, sheetName: record.sheet_name, sourceType: record.source_type,
+      rowNumber: record.row_number, itisCaseId: cleaned.itis_case_id,
+    }));
 
     const validation = validateRecord(cleaned, record.source_type, validBarangays);
     const warnings = [...notes, ...validation.warnings];
@@ -159,7 +166,8 @@ async function validateBatch(batchId) {
   // Patient # / Case ID: compare against every existing case outside this batch.
   const existing = await db.pool.query(
     `SELECT case_no, date_of_diagnosis::text AS date_of_diagnosis,
-            last_name, first_name, date_of_birth::text AS date_of_birth
+            last_name, first_name, date_of_birth::text AS date_of_birth,
+            source_type, itis_case_id, source_case_id
      FROM validated_tb_cases
      WHERE case_no IS NOT NULL AND is_archived = false AND batch_id <> $1`,
     [batchId]
@@ -272,77 +280,126 @@ async function validateBatch(batchId) {
   return results;
 }
 
-/**
- * Validate one (already cleaned) record. Pure function — no database access.
- */
-function validateRecord(csvData, sourceType, validBarangays) {
+// ==================== Record validation ====================
+// Separate rules per source (DSTB sheet, MN sheet, manual entry) on a shared core.
+// Pure functions — no database access.
+//
+// Required case data for every record: Diagnosis Date, Sex and Age (from the file, or
+// calculated from the date of birth when one is given). Barangay: a missing / unknown /
+// non-Pasig location never rejects the row — it is listed under Validation -> Needs
+// Assignment and is not counted as validated or synced until resolved.
+//
+// Patient name and date of birth:
+//   DSTB / MN imports — NOT required (historical registry files are de-identified; the
+//     client-approved identity workflow is not finalized). When given, they are used to
+//     find returning patients; a partial name only produces a warning.
+//   Manual entry      — required (unchanged).
+
+const NAME_DOB_FIELDS = ['last_name', 'first_name', 'date_of_birth'];
+const present = (v) => v !== null && v !== undefined && String(v).trim() !== '';
+const text = (v) => (v === null || v === undefined ? '' : String(v));
+
+function validateCore(rec, validBarangays, { requireIdentity = false, legacyMissingAge = false } = {}) {
   const errors = [];
   const warnings = [];
 
-  const str = v => (v === null || v === undefined ? '' : String(v));
-  const normalizedCity = str(csvData.city).trim().toLowerCase();
+  const normalizedCity = text(rec.city).trim().toLowerCase();
   const isPasig = normalizedCity === 'pasig city' || normalizedCity === 'pasig';
-  const barangay = str(csvData.barangay_name).trim();
-
-  // A missing or unrecognized barangay no longer rejects the record: it is kept,
-  // listed under Needs Assignment for an admin to fix, and not sent to TBInsight
-  // until it has a Pasig barangay.
+  const barangay = text(rec.barangay_name).trim();
   if (!barangay) {
     warnings.push('No barangay — listed under Needs Assignment; not sent to TBInsight until a barangay is assigned');
   } else if (isPasig && !validBarangays.has(barangay.toLowerCase())) {
-    warnings.push(`Unknown barangay "${csvData.barangay_name}" — listed under Needs Assignment; not sent to TBInsight until corrected`);
+    warnings.push(`Unknown barangay "${rec.barangay_name}" — listed under Needs Assignment; not sent to TBInsight until corrected`);
   } else if (!isPasig) {
-    // Non-Pasig records: kept but not sent to TBInsight
-    warnings.push(`Non-Pasig record: city="${csvData.city ?? ''}", barangay="${csvData.barangay_name}" — will not be sent to TBInsight`);
+    warnings.push(`Non-Pasig record: city="${rec.city ?? ''}", barangay="${rec.barangay_name}" — will not be sent to TBInsight`);
   }
 
-  if (!str(csvData.last_name).trim()) errors.push('Last name is required');
-  if (!str(csvData.first_name).trim()) errors.push('First name is required');
-  if (!csvData.date_of_birth) {
-    errors.push('Date of birth is required');
-  } else if (csvData.date_of_diagnosis && csvData.date_of_birth > csvData.date_of_diagnosis) {
+  if (requireIdentity) {
+    if (!present(rec.last_name)) errors.push('Last name is required');
+    if (!present(rec.first_name)) errors.push('First name is required');
+    if (!rec.date_of_birth) errors.push('Date of birth is required');
+  } else {
+    const given = NAME_DOB_FIELDS.filter(f => present(rec[f]));
+    if (given.length > 0 && given.length < NAME_DOB_FIELDS.length) {
+      warnings.push('Incomplete patient name / date of birth — not used to find returning patients');
+    }
+  }
+  if (rec.date_of_birth && rec.date_of_diagnosis && rec.date_of_birth > rec.date_of_diagnosis) {
     errors.push('Date of birth cannot be after the date of diagnosis');
   }
 
-  if (!csvData.date_of_diagnosis) {
-    errors.push('Date of Diagnosis is required');
+  if (!rec.date_of_diagnosis) errors.push('Date of Diagnosis is required');
+
+  const sex = text(rec.sex).trim();
+  if (!sex) errors.push('Sex is required');
+  else if (!VALID_SEX.includes(sex.toLowerCase())) errors.push(`Invalid sex: "${rec.sex}"`);
+
+  if (!present(rec.age)) {
+    // Records saved before Age was required may lack it: editing them must still work.
+    if (legacyMissingAge) warnings.push('Age is missing');
+    else errors.push('Age is required');
+  } else {
+    const age = Number(rec.age);
+    if (!Number.isInteger(age) || age < 0 || age > 120) errors.push(`Invalid age: "${rec.age}"`);
   }
 
-  const sex = str(csvData.sex).trim();
-  if (!sex) {
-    errors.push('Sex is required');
-  } else if (!VALID_SEX.includes(sex.toLowerCase())) {
-    errors.push(`Invalid sex: "${csvData.sex}"`);
-  }
+  return { errors, warnings };
+}
 
-  if (csvData.age !== null && csvData.age !== undefined && csvData.age !== '') {
-    const age = Number(csvData.age);
-    if (!Number.isInteger(age) || age < 0 || age > 120) {
-      errors.push(`Invalid age: "${csvData.age}"`);
-    }
+/** DSTB sheet: no patient name or source Case ID required (the system Case ID is generated). */
+function validateDSTB(rec, validBarangays, opts = {}) {
+  const r = validateCore(rec, validBarangays, opts);
+  if (rec.validation_status && !text(rec.validation_status).toLowerCase().includes('validated')) {
+    r.warnings.push(`Unknown validation status: "${rec.validation_status}"`);
   }
+  return r;
+}
 
-  if (sourceType === 'DSTB' && csvData.validation_status) {
-    const status = str(csvData.validation_status).toLowerCase();
-    if (!status.includes('validated')) {
-      warnings.push(`Unknown validation status: "${csvData.validation_status}"`);
-    }
+/** MN sheet: no patient name required; ITIS Lite Case No. is kept as the source Case ID. */
+function validateMN(rec, validBarangays, opts = {}) {
+  const r = validateCore(rec, validBarangays, opts);
+  if (!present(rec.itis_case_id)) {
+    r.warnings.push('MN record missing ITIS Case ID (ITIS Lite Case No.) — kept without a source Case ID');
   }
+  return r;
+}
 
-  if (sourceType === 'MN' && !str(csvData.itis_case_id).trim()) {
-    warnings.push('MN record missing ITIS Case ID');
-  }
+/** Manual entry: name and date of birth stay required. */
+function validateManual(rec, validBarangays, opts = {}) {
+  return validateCore(rec, validBarangays, { requireIdentity: true, ...opts });
+}
 
+/**
+ * Validate one (already cleaned) record with the rules of its source.
+ * @param opts { requireIdentity?, legacyMissingAge? }
+ */
+function validateRecord(csvData, sourceType, validBarangays, opts = {}) {
+  const fn = sourceType === 'DSTB' ? validateDSTB : sourceType === 'MN' ? validateMN : validateManual;
+  const { errors, warnings } = fn(csvData, validBarangays, opts);
+  return { valid: errors.length === 0, errors, warnings };
+}
+
+/**
+ * Source traceability for an imported row (never changes existing records):
+ *   source_record_id — the file row it came from: "<batch id>:<sheet>:R<row>"
+ *                      (the batch names the file; DSTB keeps its generated Case ID)
+ *   source_case_id   — MN only: the ITIS Lite Case No., when the file has one
+ */
+function sourceRefs({ batchId, sheetName, sourceType, rowNumber, itisCaseId }) {
+  const itis = present(itisCaseId) ? String(itisCaseId).trim() : null;
   return {
-    valid: errors.length === 0,
-    errors,
-    warnings,
+    source_record_id: batchId && rowNumber != null ? `${batchId}:${sheetName || sourceType}:R${rowNumber}` : null,
+    source_case_id: sourceType === 'MN' ? itis : null,
   };
 }
 
 module.exports = {
   validateBatch,
   validateRecord,
+  validateDSTB,
+  validateMN,
+  validateManual,
+  sourceRefs,
   getValidBarangays,
   INSERT_COLUMNS,
   rowValues,

@@ -5,6 +5,7 @@ import { fmtDate, fullName, Notice, ChipFilter, th, thStyle, td, FIELD_LABELS, P
 import { primaryBtn, secondaryBtn } from '../SidePanel';
 import { can } from '../../utils/permissions';
 import ProgressOverlay from '../ProgressOverlay';
+import { useConfirmDialog } from '../ConfirmDialog';
 
 const CATEGORY = {
   duplicate: { label: 'Duplicate', color: '#475569', bg: '#F1F5F9', hint: 'Same patient, same diagnosis date, nothing new.' },
@@ -44,6 +45,7 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
   const [busy, setBusy] = useState(false);
   const [bulkCount, setBulkCount] = useState(0); // records in a running bulk resolve
   const [notice, setNotice] = useState(null);
+  const { confirm, confirmDialog } = useConfirmDialog();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -85,7 +87,11 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
   const resolveSelected = async (resolution) => {
     if (selected.length === 0) return;
     const label = resolution === 'suggested' ? 'the suggested decision' : `"${resolution.replace('_', ' ')}"`;
-    if (!window.confirm(`Apply ${label} to ${selected.length} selected record(s)?`)) return;
+    if (!(await confirm({
+      title: 'Apply match decision?',
+      message: `Apply ${label} to ${selected.length} selected record(s)?`,
+      confirmLabel: 'Apply decision',
+    }))) return;
     setBusy(true);
     setBulkCount(selected.length);
     setNotice(null);
@@ -119,6 +125,7 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
         detail="Applying the decision to each selected record."
         icon="ri-git-merge-line"
       />
+      {confirmDialog}
       <Notice notice={notice} onClose={() => setNotice(null)} />
       <div className="px-5 pt-4 space-y-3">
         <ChipFilter options={chips} value={category} onChange={(k) => { setCategory(k); setSelected([]); }} />

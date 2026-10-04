@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import API from '../../api/axios';
 import SidePanel, { primaryBtn, secondaryBtn } from '../SidePanel';
 import { fmtDate, fullName, Pager, PinHint } from './shared';
+import { useConfirmDialog } from '../ConfirmDialog';
 
 const isPasigCity = (c) => ['pasig city', 'pasig', ''].includes(String(c ?? '').trim().toLowerCase());
 
@@ -18,6 +19,7 @@ export default function LocationReviewPanel({ group, batch, onClose, onChanged }
   const [busy, setBusy] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState(null);
+  const { confirm, confirmDialog } = useConfirmDialog();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,7 +39,12 @@ export default function LocationReviewPanel({ group, batch, onClose, onChanged }
 
   const resolve = async (r, action) => {
     if (action === 'assign' && !choice[r.id]) { setNotice({ type: 'error', text: 'Choose the barangay where this patient lives.' }); return; }
-    if (action === 'outside_pasig' && !window.confirm('Classify this patient as living outside Pasig? The record stays in PASIG TB-IS and is not sent to TBInsight.')) return;
+    if (action === 'outside_pasig' && !(await confirm({
+      title: 'Classify patient outside Pasig?',
+      message: 'The record will stay in PASIG TB-IS and will not be sent to TBInsight.',
+      confirmLabel: 'Classify outside Pasig',
+      variant: 'danger',
+    }))) return;
     setBusy(r.id);
     setNotice(null);
     try {
@@ -56,7 +63,12 @@ export default function LocationReviewPanel({ group, batch, onClose, onChanged }
 
   const bulkOutside = async () => {
     const n = data.pagination?.total ?? 0;
-    if (!window.confirm(`Classify all ${n} record(s) with City = ${group.city_text} as outside Pasig?`)) return;
+    if (!(await confirm({
+      title: 'Classify records outside Pasig?',
+      message: `Classify all ${n} record(s) with City = ${group.city_text} as outside Pasig?`,
+      confirmLabel: 'Classify records',
+      variant: 'danger',
+    }))) return;
     setBusy('bulk');
     try {
       const res = await API.post('/api/data/validation-queue/assignment/location', {
@@ -76,6 +88,8 @@ export default function LocationReviewPanel({ group, batch, onClose, onChanged }
   const pasigGroup = isPasigCity(group.city_text);
 
   return (
+    <>
+    {confirmDialog}
     <SidePanel
       width="max-w-3xl"
       title="Review records"
@@ -138,5 +152,6 @@ export default function LocationReviewPanel({ group, batch, onClose, onChanged }
         </div>
       )}
     </SidePanel>
+    </>
   );
 }

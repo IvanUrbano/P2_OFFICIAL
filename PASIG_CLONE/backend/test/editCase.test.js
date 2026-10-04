@@ -32,7 +32,8 @@ function poolQuery(sql, params = []) {
   if (q.startsWith('UPDATE validated_tb_cases SET') || q.startsWith('INSERT INTO case_history')) { writes.push({ q, params }); return { rows: [] }; }
   return { rows: [] };
 }
-stub('../config', { jwt: { secret: SECRET, expiresIn: '1h' }, webhook: {} });
+const CONFIG = { jwt: { secret: SECRET, expiresIn: '1h' }, webhook: {}, patientNames: { enabled: false } };
+stub('../config', CONFIG);
 stub('../db/pasigSchema', {
   pool: { query: async (s, p) => poolQuery(s, p), connect: async () => ({ query: async (s, p) => poolQuery(s, p), release() {} }) },
   authPool: {
@@ -99,11 +100,24 @@ describe('PUT /records/:id', () => {
     assert.strictEqual(r.body.code, 'NOT_ASSIGNED');
   });
 
-  it('refuses identity changes while the Records PIN is locked', async () => {
+  it('refuses identity changes on a historical (de-identified) record', async () => {
     const r = await put(1, { last_name: 'Santos' });
     assert.strictEqual(r.status, 403);
-    assert.match(r.body.error, /Records PIN/);
+    assert.match(r.body.error, /de-identified historical record/);
     assert.strictEqual(writes.length, 0);
+  });
+
+  it('operational record: refuses identity changes while the Records PIN is locked', async () => {
+    CONFIG.patientNames.enabled = true;
+    cases[0].identity_class = 'operational';
+    try {
+      const r = await put(1, { last_name: 'Santos' });
+      assert.strictEqual(r.status, 403);
+      assert.match(r.body.error, /Records PIN/);
+      assert.strictEqual(writes.length, 0);
+    } finally {
+      CONFIG.patientNames.enabled = false;
+    }
   });
 
   it('refuses fields that are not editable here (barangay, diagnosis date)', async () => {

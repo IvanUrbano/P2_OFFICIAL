@@ -160,6 +160,7 @@ export default function TBRecords() {
   const [sortField, setSortField] = useState("date_of_diagnosis");
   const [sortDirection, setSortDirection] = useState("desc");
   const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
 
   /* --- Advanced Filters Modal helpers --- */
   const openAdvancedFilters = () => {
@@ -328,6 +329,7 @@ export default function TBRecords() {
   /* --- CSV Export handler --- */
   const handleExport = async () => {
     setExporting(true);
+    setExportError(null);
     try {
       const params = buildFilterParams();
       const qs = params.toString();
@@ -344,7 +346,7 @@ export default function TBRecords() {
       setTimeout(() => URL.revokeObjectURL(objectUrl), 100);
     } catch (err) {
       if (import.meta.env.DEV) console.error("Export failed:", err);
-      alert("Export failed. Please try again.");
+      setExportError("Export failed. Please try again.");
     } finally {
       setExporting(false);
     }
@@ -440,6 +442,12 @@ export default function TBRecords() {
 
   return (
     <div className="flex flex-col gap-5">
+      {exportError && (
+        <div role="alert" className="flex items-start justify-between gap-3 px-4 py-3 rounded-lg text-xs" style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B' }}>
+          <span>{exportError}</span>
+          <button type="button" onClick={() => setExportError(null)} aria-label="Dismiss export error" className="shrink-0"><i className="ri-close-line" /></button>
+        </div>
+      )}
 
       {/* -- Metric Cards -- */}
       <div>

@@ -61,6 +61,18 @@ const FILL_FACILITY_IDS_SQL = ['treatment', 'screening'].map(f => `
   UPDATE validated_tb_cases v SET ${f}_facility_id = m.fid
   FROM m WHERE v.${f}_facility = m.t AND v.${f}_facility_id IS DISTINCT FROM m.fid`);
 
+/**
+ * Recompute case facility ids from the raw facility names + facility_aliases.
+ * Each statement only touches rows whose id differs from what its name now resolves
+ * to, so after the first run these are cheap no-ops. Called by syncFacilityRef on
+ * the 10-minute refresh and directly after an alias is added, edited or removed —
+ * an alias change must resolve records now, not up to 10 minutes later.
+ */
+async function refreshFacilityIds(pool) {
+  if (!pool) return;
+  for (const sql of FILL_FACILITY_IDS_SQL) await pool.query(sql);
+}
+
 /** Mirror health facilities into facility_ref and refresh case facility ids. */
 async function syncFacilityRef(authPool, pool) {
   if (!pool) return;
@@ -70,24 +82,25 @@ async function syncFacilityRef(authPool, pool) {
               to_jsonb(h)->>'ownership' AS ownership,
               to_jsonb(h)->>'facility_category' AS facility_category,
               COALESCE((to_jsonb(h)->>'is_external')::boolean, FALSE) AS is_external,
-              COALESCE((to_jsonb(h)->>'is_reference')::boolean, FALSE) AS is_reference
+              COALESCE((to_jsonb(h)->>'is_reference')::boolean, FALSE) AS is_reference,
+              COALESCE((to_jsonb(h)->>'is_active')::boolean, TRUE) AS is_active
        FROM health_facilities h`
     );
     if (rows.length > 0) {
       await pool.query(
-        `INSERT INTO facility_ref (id, name, norm_name, barangay_name, ownership, facility_category, is_external, is_reference, synced_at)
+        `INSERT INTO facility_ref (id, name, norm_name, barangay_name, ownership, facility_category, is_external, is_reference, is_active, synced_at)
          SELECT f.id, f.name, norm_facility(f.name), f.barangay_name, f.ownership, f.facility_category,
-                f.is_external, f.is_reference, NOW()
+                f.is_external, f.is_reference, f.is_active, NOW()
          FROM jsonb_to_recordset($1::jsonb) AS f(id int, name text, barangay_name text, ownership text,
-              facility_category text, is_external boolean, is_reference boolean)
+              facility_category text, is_external boolean, is_reference boolean, is_active boolean)
          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, norm_name = EXCLUDED.norm_name,
            barangay_name = EXCLUDED.barangay_name, ownership = EXCLUDED.ownership,
            facility_category = EXCLUDED.facility_category, is_external = EXCLUDED.is_external,
-           is_reference = EXCLUDED.is_reference, synced_at = EXCLUDED.synced_at`,
+           is_reference = EXCLUDED.is_reference, is_active = EXCLUDED.is_active, synced_at = EXCLUDED.synced_at`,
         [JSON.stringify(rows)]
       );
     }
-    for (const sql of FILL_FACILITY_IDS_SQL) await pool.query(sql);
+    await refreshFacilityIds(pool);
   } catch (err) {
     // Before migration 007 has run the tables won't exist.
     console.error('[facilities] Could not sync facility ids:', err.message);
@@ -121,4 +134,4 @@ function startBarangayRefresh(authPool, pool) {
   if (typeof timer.unref === 'function') timer.unref();
 }
 
-module.exports = { loadBarangays, startBarangayRefresh, syncBarangayRef, syncFacilityRef };
+module.exports = { loadBarangays, startBarangayRefresh, syncBarangayRef, syncFacilityRef, refreshFacilityIds };

@@ -39,8 +39,9 @@ const accountActionLimiter = rateLimit({
 
 // ==================== ASSIGNMENT HELPERS ====================
 // Staff accounts are assigned to a BARANGAY (required); admins are city-wide (no
-// barangay). The legacy facility_id is no longer set from the Users page but is kept
-// on existing accounts (transfers still use it).
+// barangay). The legacy facility_id is no longer set from the Users page and is kept
+// on existing accounts for display only — it decides nothing (not access, not
+// transfers).
 
 const USER_SELECT = `
   SELECT u.id, u.username, u.full_name, u.email, u.role, u.status, u.last_login_at,

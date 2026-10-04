@@ -11,6 +11,7 @@
  *     REFERRED_IN  an ACCEPTED referral made my barangay responsible          → view + edit
  *     REFERRED_OUT patient lives in my barangay, responsibility moved away     → view only
  *     otherwise                                                                → no access
+ *     Non-Pasig record (confirmed outside Pasig / non-Pasig city)              → no access
  *
  *   A pending referral grants nothing yet: the receiving barangay sees it only in its
  *   referral inbox, without patient identity, until it accepts.
@@ -67,6 +68,19 @@ function sameBarangay(aId, bId) {
 }
 
 /**
+ * Non-Pasig record: an admin confirmed it as outside Pasig, or its city is not Pasig.
+ * Such records are admin-only even when their barangay NAME matches a Pasig barangay
+ * (the barangay_id trigger resolves the name regardless of city). A record without
+ * these fields (e.g. a referral row) is treated as Pasig.
+ */
+function isNonPasig(record) {
+  if (record?.location_resolution === 'outside_pasig') return true;
+  if (record?.city == null) return false;
+  const city = String(record.city).trim().toLowerCase();
+  return city !== 'pasig' && city !== 'pasig city';
+}
+
+/**
  * Access to one case: { canView, canEdit, basis } where basis is one of ACCESS.*.
  * `record` needs barangay_id and responsible_barangay_id.
  */
@@ -74,6 +88,7 @@ function getCaseAccess(user, scope, record) {
   if (!user || !record) return NO_ACCESS;
   if (user.role === 'admin') return { canView: true, canEdit: true, basis: ACCESS.ADMIN };
   if (!scope || scope.barangay_id == null) return NO_ACCESS;
+  if (isNonPasig(record)) return NO_ACCESS;
 
   const referred = record.responsible_barangay_id != null;
   const respId = referred ? record.responsible_barangay_id ?? null : record.barangay_id ?? null;
@@ -120,9 +135,13 @@ function getCaseListScope(user, scope, alias = '', startIdx = 1) {
   // Patient Maybunga / responsible Rosario        -> shown (view + edit)
   // Patient Maybunga or Ugong, not referred here  -> hidden
   // Cases with no barangay_id (unknown / outside Pasig) match no staff barangay; they
-  // are handled under Validation -> Needs Assignment.
+  // are handled under Validation -> Needs Assignment. Non-Pasig cases (confirmed outside
+  // Pasig, or a non-Pasig city) are admin-only even when the barangay name matches —
+  // same rule as isNonPasig().
   return {
-    where: `(${p}barangay_id = ${id} OR COALESCE(${p}responsible_barangay_id, ${p}barangay_id) = ${id})`,
+    where: `((${p}barangay_id = ${id} OR COALESCE(${p}responsible_barangay_id, ${p}barangay_id) = ${id})
+      AND ${p}location_resolution IS DISTINCT FROM 'outside_pasig'
+      AND (${p}city IS NULL OR lower(trim(${p}city)) IN ('pasig city', 'pasig')))`,
     params: [scope.barangay_id],
   };
 }
@@ -143,9 +162,8 @@ function isReferralSender(user, scope, _fromBarangay, fromBarangayId = null) {
 
 module.exports = {
   ACCESS,
+  isNonPasig,
   resolveUserScope,
-  // Kept for existing callers: the scope is barangay-based now, not a facility.
-  resolveUserFacility: resolveUserScope,
   responsibleBarangay,
   sameBarangay,
   getCaseAccess,

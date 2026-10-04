@@ -33,12 +33,17 @@ stub('../db/pasigSchema', {
     },
     connect: async () => ({ query: async () => ({ rows: [] }), release() {} }),
   },
-  authPool: { query: async () => ({ rows: [] }) },
+  // Uploader names come from the auth database (services/userNames.js).
+  authPool: {
+    query: async (sql) => (String(sql).includes('FROM users WHERE id = ANY')
+      ? { rows: [{ id: 1, username: 'admin', full_name: 'City Admin' }] }
+      : { rows: [] }),
+  },
   WEBHOOK_LOG_COLUMNS: 'wl.id, wl.batch_id, wl.status, wl.sent_at',
   getImportHistory: async () => ({
     rows: [{
       id: 'batch-1', filename: 'Citywide_October.xlsx', uploaded_by: 1,
-      imported_by_username: 'admin', total_rows: 500, valid_count: 480, error_count: 20,
+      total_rows: 500, valid_count: 480, error_count: 20,
       status: 'validated', sync_status: 'pending', created_at: '2026-10-01T00:00:00Z',
       validated_at: null, synced_at: null, is_archived: false,
       archived_by: null, archived_at: null, archive_reason: null, archived_by_username: null,
@@ -86,7 +91,8 @@ describe('import history permissions', () => {
     assert.strictEqual(r.status, 200);
     const b = r.body.batches[0];
     assert.strictEqual(b.filename, 'Citywide_October.xlsx');
-    assert.strictEqual(b.importedBy, 'admin');
+    assert.strictEqual(b.importedBy, 'City Admin');
+    assert.strictEqual(b.importedByUsername, 'admin');
     assert.strictEqual(b.records, 500);
     assert.strictEqual(b.status, 'validated');
     // Batch metadata only — no patient fields ever cross this endpoint.

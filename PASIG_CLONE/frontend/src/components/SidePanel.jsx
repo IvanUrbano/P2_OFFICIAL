@@ -3,7 +3,7 @@
 export const primaryBtn = { background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 };
 export const secondaryBtn = { background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 };
 
-export default function SidePanel({ title, subtitle, onClose, onSubmit, footer, children, width = 'max-w-lg' }) {
+export default function SidePanel({ title, subtitle, badge, onClose, onSubmit, footer, children, width = 'max-w-lg', footerDivider = false }) {
   const Shell = onSubmit ? 'form' : 'div';
   return (
     <div className="fixed inset-0 z-[1200] flex justify-end" onClick={onClose}>
@@ -16,15 +16,28 @@ export default function SidePanel({ title, subtitle, onClose, onSubmit, footer, 
       >
         <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ background: '#0F2D52' }}>
           <div className="min-w-0">
-            <p className="text-sm font-bold truncate" style={{ color: '#ffffff' }}>{title}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-bold truncate" style={{ color: '#ffffff' }}>{title}</p>
+              {badge}
+            </div>
             {subtitle && <p className="text-[11px] mt-0.5 truncate" style={{ color: 'rgba(255,255,255,0.6)' }}>{subtitle}</p>}
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8 }}>
             <i className="ri-close-line text-base" />
           </button>
         </div>
-        <div className="min-h-0 overflow-y-auto p-6 pb-0 space-y-4">{children}</div>
-        {footer && <div className="shrink-0 px-6 pt-5 pb-6 flex items-center gap-2" style={{ background: '#ffffff' }}>{footer}</div>}
+        {/* With footerDivider the content stretches (flex-1) so the footer sits pinned
+            at the panel bottom — and pb-6 keeps clear air between the last detail and
+            the divider instead of the default pb-0 (which touched it). */}
+        <div className={`min-h-0 overflow-y-auto space-y-4 p-6 ${footerDivider ? 'flex-1 pb-6' : 'pb-0'}`}>{children}</div>
+        {footer && (
+          <div
+            className={`shrink-0 px-6 pt-5 pb-6 flex items-center gap-2${footerDivider ? ' border-t justify-end' : ''}`}
+            style={{ background: '#ffffff', ...(footerDivider ? { borderColor: '#E2E8F0' } : {}) }}
+          >
+            {footer}
+          </div>
+        )}
       </Shell>
     </div>
   );

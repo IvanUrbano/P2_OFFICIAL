@@ -260,7 +260,9 @@ describe('barangay referral flow', () => {
     assert.strictEqual((await call(ROSARIO, 'PUT', '/1/complete')).status, 404);
     const t = (await call(ROSARIO, 'GET', '/')).body.transfers[0];
     assert.strictEqual(t.permissions.viewCase, true);
-    assert.notStrictEqual(t.last_name, null);
+    // The case is viewable, but it is a historical record: names stay de-identified.
+    assert.strictEqual(t.last_name, null);
+    assert.strictEqual(t.identity_deidentified, true);
     assert.strictEqual(t.permissions.accept, false);
   });
 
