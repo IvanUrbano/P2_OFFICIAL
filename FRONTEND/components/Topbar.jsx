@@ -50,8 +50,12 @@ export default function Topbar({ user }) {
   const displayName = storedUser?.username ?? 'System Admin';
   const displayEmail = storedUser?.email ?? 'admin@pasigcity.gov.ph';
   const displayPosition = storedUser?.position ?? 'System Administrator';
-  // Staff accounts are assigned to a health facility (login returns it as `facility`)
-  const displayFacility = storedUser?.facility?.name || storedUser?.facility_name || null;
+  // Staff accounts are assigned to a barangay (login returns it as `barangay`); older
+  // accounts may only have a facility.
+  const staffBarangay = storedUser?.barangay?.name || storedUser?.barangay_name || null;
+  const displayFacility = staffBarangay
+    ? `Brgy. ${staffBarangay}`
+    : storedUser?.facility?.name || storedUser?.facility_name || null;
 
   const visibleNavItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
 
@@ -319,7 +323,7 @@ export default function Topbar({ user }) {
                         <p className="text-[10px] truncate" style={{ color: '#94A3B8' }}>{displayEmail}</p>
                         {!isAdmin && displayFacility && (
                           <p className="text-[10px] font-semibold truncate flex items-center gap-1" style={{ color: '#0F2D52' }}>
-                            <i className="ri-hospital-line" /> {displayFacility}
+                            <i className={staffBarangay ? 'ri-map-pin-line' : 'ri-hospital-line'} /> {displayFacility}
                           </p>
                         )}
                       </div>

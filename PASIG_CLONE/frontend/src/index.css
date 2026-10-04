@@ -133,3 +133,15 @@ body {
   -webkit-box-shadow: 0 0 0px 1000px transparent inset !important;
   transition: background-color 5000s ease-in-out 0s;
 }
+
+/* Side panel entrance — same as TBInsight's slide-in-right */
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}

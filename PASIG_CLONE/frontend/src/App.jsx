@@ -18,6 +18,7 @@ const UsersPage = lazy(() => import('./pages/UsersPage'));
 const AuditLogsPage = lazy(() => import('./pages/AuditLogsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
 
 function PageFallback() {
   return (
@@ -49,6 +50,7 @@ export default function App() {
                 </Route>
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
+                <Route path="/notifications" element={<NotificationsPage />} />
                 <Route path="*" element={<Navigate to="/facilities" replace />} />
               </Route>
             </Route>

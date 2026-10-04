@@ -31,20 +31,10 @@ const poolConfig = process.env.DATABASE_URL
   };
 const pool = new Pool(poolConfig);
 
-// Execute multi-statement SQL by splitting on semicolons and running each individually.
-// pg's extended query protocol doesn't support multiple statements in one call.
 const execSql = async (sqlContent) => {
   const client = await pool.connect();
   try {
-    // Split on ";\n" or ";" at end of line — avoids splitting on semicolons inside strings/comments
-    const statements = sqlContent
-      .split(/;\s*\n/)
-      .map(s => s.split('\n').filter(line => !line.trim().startsWith('--')).join('\n').trim())
-      .filter(s => s.length > 0);
-
-    for (const stmt of statements) {
-      await client.query(stmt);
-    }
+    await client.query(sqlContent);
   } finally {
     client.release();
   }
@@ -238,6 +228,72 @@ const initDb = async () => {
       }
     } catch (pop2026Err) {
       console.error('❌ 2026 population projection migration failed (continuing with remaining migrations):', pop2026Err.message);
+    }
+
+    // Barangay-based staff (users.barangay_id), expanded health_facilities, case tracking
+    // fields + case/review history tables. Additive only.
+    try {
+      const staffMigPath = path.join(__dirname, 'db', 'migrations', '023_barangay_staff_facilities_case_tracking.sql');
+      if (fs.existsSync(staffMigPath)) {
+        await execSql(fs.readFileSync(staffMigPath, 'utf8'));
+        console.log('✅ Barangay staff / facilities / case tracking migration completed successfully.');
+      }
+    } catch (staffMigErr) {
+      console.error('❌ Barangay staff / facilities / case tracking migration failed (continuing with remaining migrations):', staffMigErr.message);
+    }
+
+    // User profile: full_name, optional email, status, last_login_at, must_change_password
+    try {
+      const userProfileMigPath = path.join(__dirname, 'db', 'migrations', '024_user_profile_status.sql');
+      if (fs.existsSync(userProfileMigPath)) {
+        await execSql(fs.readFileSync(userProfileMigPath, 'utf8'));
+        console.log('✅ User profile / status migration completed successfully.');
+      }
+    } catch (userProfileErr) {
+      console.error('❌ User profile / status migration failed (continuing with remaining migrations):', userProfileErr.message);
+    }
+
+    // Administrator account lock (manually_locked / locked_at / locked_by_user_id)
+    try {
+      const manualLockMigPath = path.join(__dirname, 'db', 'migrations', '025_user_manual_lock.sql');
+      if (fs.existsSync(manualLockMigPath)) {
+        await execSql(fs.readFileSync(manualLockMigPath, 'utf8'));
+        console.log('✅ User manual lock migration completed successfully.');
+      }
+    } catch (manualLockErr) {
+      console.error('❌ User manual lock migration failed (continuing with remaining migrations):', manualLockErr.message);
+    }
+
+    // Who created each account (users.created_by_user_id, backfilled from audit_logs)
+    try {
+      const createdByMigPath = path.join(__dirname, 'db', 'migrations', '026_user_created_by.sql');
+      if (fs.existsSync(createdByMigPath)) {
+        await execSql(fs.readFileSync(createdByMigPath, 'utf8'));
+        console.log('✅ User created-by migration completed successfully.');
+      }
+    } catch (createdByErr) {
+      console.error('❌ User created-by migration failed (continuing with remaining migrations):', createdByErr.message);
+    }
+
+    // Patient barangay as a key on tb_cases (barangay_id, kept in step by a trigger)
+    try {
+      const caseBrgyMigPath = path.join(__dirname, 'db', 'migrations', '027_tb_cases_barangay_id.sql');
+      if (fs.existsSync(caseBrgyMigPath)) {
+        await execSql(fs.readFileSync(caseBrgyMigPath, 'utf8'));
+        console.log('✅ tb_cases barangay_id migration completed successfully.');
+      }
+    } catch (caseBrgyErr) {
+      console.error('❌ tb_cases barangay_id migration failed (continuing with remaining migrations):', caseBrgyErr.message);
+    }
+
+    try {
+      const caseBrgyAuthorityMigPath = path.join(__dirname, 'db', 'migrations', '028_tb_cases_barangay_id_authority.sql');
+      if (fs.existsSync(caseBrgyAuthorityMigPath)) {
+        await execSql(fs.readFileSync(caseBrgyAuthorityMigPath, 'utf8'));
+        console.log('✅ tb_cases barangay_id authority migration completed successfully.');
+      }
+    } catch (caseBrgyAuthorityErr) {
+      console.error('❌ tb_cases barangay_id authority migration failed (continuing):', caseBrgyAuthorityErr.message);
     }
 
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,

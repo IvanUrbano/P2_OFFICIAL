@@ -3,13 +3,13 @@ import API from '../api/axios';
 import { useTheme } from '../theme';
 
 const TABS = [
-  { key: 'general', label: 'General', icon: 'ri-user-settings-line' },
-  { key: 'security', label: 'Security', icon: 'ri-shield-keyhole-line' },
-  { key: 'population', label: 'Population Reference Data', icon: 'ri-group-line' },
+  { key: 'general', label: 'General', desc: 'System information and account settings' },
+  { key: 'security', label: 'Security', desc: 'Password and security settings' },
+  { key: 'population', label: 'Population Reference Data', desc: 'Population reference data for incidence indicators' },
 ];
 
 const ADMIN_TABS = [
-  { key: 'maintenance', label: 'Model & Data Maintenance', icon: 'ri-tools-line' },
+  { key: 'maintenance', label: 'Model & Data Maintenance', desc: 'Model and data maintenance' },
 ];
 
 
@@ -484,32 +484,44 @@ export default function Settings() {
   const visibleTabs = isAdmin ? [...TABS, ...ADMIN_TABS] : TABS;
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Tab Navigation */}
-      <div className="flex items-center gap-1 overflow-x-auto" style={{ borderBottom: `1px solid ${t.border}` }}>
-        {visibleTabs.map(tab => (
-          <button
-            key={tab.key}
-            onClick={() => handleTabChange(tab.key)}
-            className="relative flex items-center gap-1.5 whitespace-nowrap text-[12px] font-semibold transition-all duration-200 cursor-pointer"
-            style={{
-              padding: '10px 14px',
-              color: activeTab === tab.key ? '#0F2D52' : t.textMuted,
-              background: 'transparent',
-              borderBottom: activeTab === tab.key ? '2px solid #0F2D52' : '2px solid transparent',
-            }}
-          >
-            <i className={`${tab.icon} text-[13px]`} />
-            <span>{tab.label}</span>
-          </button>
-        ))}
+    <div className="space-y-6">
+      {/* Page header + tab navigation */}
+      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
+        <div className="px-6 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
+          <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Settings</h1>
+          <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
+            {visibleTabs.find(tab => tab.key === activeTab)?.desc}
+          </p>
+        </div>
+        <div style={{ borderBottom: '1px solid #E2E8F0' }}>
+          <div className="flex gap-0 overflow-x-auto">
+            {visibleTabs.map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => handleTabChange(tab.key)}
+                className="relative px-6 py-3 text-left transition-colors whitespace-nowrap"
+                style={{ background: 'transparent' }}
+              >
+                <p className="text-[13px] font-bold" style={{ color: activeTab === tab.key ? '#0F2D52' : '#94A3B8' }}>
+                  {tab.label}
+                </p>
+                <p className="text-[11px] mt-0.5" style={{ color: activeTab === tab.key ? '#64748B' : '#CBD5E1' }}>
+                  {tab.desc}
+                </p>
+                {activeTab === tab.key && (
+                  <div className="absolute bottom-0 left-0 right-0 h-[2px]" style={{ background: '#0F2D52' }} />
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* General Tab */}
       {activeTab === 'general' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
           {/* Profile */}
-          <div className="rounded-xl p-5" style={{ background: t.cardSolid, border: `1px solid ${t.border}` }}>
+          <div style={cardStyle(t)} className="p-5">
             <h2 className="text-sm font-bold mb-4" style={{ color: t.text }}>Profile</h2>
             {profile ? (
               <div className="flex flex-col gap-3">
@@ -551,36 +563,25 @@ export default function Settings() {
           </div>
 
           {/* System */}
-          <div className="rounded-xl p-5" style={{ background: t.cardSolid, border: `1px solid ${t.border}` }}>
-            <h2 className="text-sm font-bold mb-3" style={{ color: t.text }}>System</h2>
+          <div style={cardStyle(t)} className="p-5">
+            <h2 className="text-sm font-bold mb-4" style={{ color: t.text }}>System Information</h2>
             {sysError ? (
               <p className="text-xs" style={{ color: '#991B1B' }}>Cannot reach the API server. Is the backend running?</p>
             ) : !sys ? (
               <p className="text-xs" style={{ color: t.textMuted }}>Loading...</p>
             ) : (
-              <div className="grid grid-cols-2 gap-4 text-xs" style={{ color: t.textSecondary }}>
-                <div>
-                  <p style={{ color: t.textMuted }}>Status</p>
-                  <p className="font-semibold mt-0.5" style={{ color: sys.status === 'ok' ? '#047857' : '#92400E' }}>
-                    {sys.status === 'ok' ? 'Online' : 'Degraded'}
-                  </p>
-                </div>
-                <div>
-                  <p style={{ color: t.textMuted }}>Database</p>
-                  <p className="font-semibold mt-0.5" style={{ color: sys.database === 'connected' ? '#047857' : '#991B1B' }}>
-                    {sys.database === 'connected' ? 'Connected' : 'Disconnected'}
-                  </p>
-                </div>
-                <div>
-                  <p style={{ color: t.textMuted }}>Version</p>
-                  <p className="font-semibold mt-0.5">{sys.version || '\u2014'}</p>
-                </div>
-                <div>
-                  <p style={{ color: t.textMuted }}>Server Time</p>
-                  <p className="font-semibold mt-0.5">
-                    {sys.timestamp ? new Date(sys.timestamp).toLocaleTimeString() : '\u2014'}
-                  </p>
-                </div>
+              <div className="space-y-3">
+                {[
+                  { label: 'Status', value: sys.status === 'ok' ? 'Online' : 'Degraded', color: sys.status === 'ok' ? '#047857' : '#92400E' },
+                  { label: 'Database', value: sys.database === 'connected' ? 'Connected' : 'Disconnected', color: sys.database === 'connected' ? '#047857' : '#991B1B' },
+                  { label: 'Version', value: sys.version || '\u2014' },
+                  { label: 'Server Time', value: sys.timestamp ? new Date(sys.timestamp).toLocaleTimeString() : '\u2014' },
+                ].map((item) => (
+                  <div key={item.label} className="flex justify-between py-2" style={{ borderBottom: `1px solid ${t.border}` }}>
+                    <span className="text-xs" style={{ color: t.textSecondary }}>{item.label}</span>
+                    <span className="text-xs font-semibold" style={{ color: item.color || t.text }}>{item.value}</span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -589,8 +590,8 @@ export default function Settings() {
 
       {/* Security Tab */}
       {activeTab === 'security' && (
-        <div className="rounded-xl p-5 max-w-lg" style={{ background: t.cardSolid, border: `1px solid ${t.border}` }}>
-          <h2 className="text-sm font-bold mb-4" style={{ color: t.text }}>Security</h2>
+        <div style={cardStyle(t)} className="p-5 max-w-lg">
+          <h2 className="text-sm font-bold mb-4" style={{ color: t.text }}>Change Password</h2>
           <div className="flex flex-col gap-3">
             <div>
               <label className={labelCls} style={labelStyle}>Current Password</label>
@@ -630,7 +631,7 @@ export default function Settings() {
       {activeTab === 'population' && (
         <div className="flex flex-col gap-6">
           {/* Info Card */}
-          <div className="rounded-xl p-5" style={{ background: t.cardSolid, border: `1px solid ${t.border}` }}>
+          <div style={cardStyle(t)} className="p-5">
             <h2 className="text-sm font-bold mb-1" style={{ color: t.text }}>Population Reference Data</h2>
             <p className="text-[11px] mt-0.5" style={{ color: t.textSecondary }}>
               Population reference data are used for population-adjusted indicators such as incidence per 100,000. The 2025 reference is sourced from the existing GeoJSON. Future years are stored in the database.
@@ -710,7 +711,7 @@ export default function Settings() {
 
           {/* View Year Detail */}
           {viewingYear && (
-            <div className="rounded-xl p-5" style={{ background: t.cardSolid, border: `1px solid ${t.border}` }}>
+            <div style={cardStyle(t)} className="p-5">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-bold" style={{ color: t.text }}>{viewingYear} Population Reference</h3>
                 <button onClick={() => setViewingYear(null)} className="text-xs cursor-pointer" style={{ color: t.textMuted }}>
@@ -764,7 +765,7 @@ export default function Settings() {
 
           {/* Add Population Reference Modal */}
           {showAddPop && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => setShowAddPop(false)}>
+            <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => setShowAddPop(false)}>
               <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
                 <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100" style={{ background: '#FAFCFF' }}>
                   <div className="flex items-center gap-2">
@@ -950,7 +951,7 @@ export default function Settings() {
 
       {/* Model & Data Maintenance Tab (admin only) */}
       {activeTab === 'maintenance' && isAdmin && (
-        <div className="rounded-xl p-5" style={{ background: t.cardSolid, border: `1px solid ${t.border}` }}>
+        <div style={cardStyle(t)} className="p-5">
           <h2 className="text-sm font-bold mb-1" style={{ color: t.text }}>Model & Data Maintenance</h2>
           <p className="text-xs mb-4" style={{ color: t.textSecondary }}>
             Administrative operations for the forecasting and risk-classification models. These are rare
@@ -1039,3 +1040,10 @@ export default function Settings() {
     </div>
   );
 }
+
+const cardStyle = (t) => ({
+  background: t.cardSolid,
+  border: `1px solid ${t.border}`,
+  borderRadius: '12px',
+  boxShadow: '0 4px 16px rgba(15,23,42,0.04)',
+});

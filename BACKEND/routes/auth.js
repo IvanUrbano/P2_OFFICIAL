@@ -18,15 +18,55 @@ const {
 
 const router = express.Router();
 
+// Staff accounts are assigned to a BARANGAY (required); a health facility is optional.
+// Admin accounts need neither.
+const USER_SELECT = `
+  SELECT u.id, u.username, u.full_name, u.email, u.role, u.status, u.last_login_at,
+         u.must_change_password, u.created_at, u.facility_id, u.barangay_id,
+         b.name AS barangay_name,
+         hf.name AS facility_name, hf.barangay_name AS facility_barangay, hf.facility_type,
+         u.created_by_user_id,
+         COALESCE(NULLIF(cb.full_name, ''), cb.username) AS created_by_name,
+         cb.username AS created_by_username
+  FROM users u
+  LEFT JOIN barangays b ON b.id = u.barangay_id
+  LEFT JOIN health_facilities hf ON u.facility_id = hf.id
+  LEFT JOIN users cb ON cb.id = u.created_by_user_id`;
+
+const isBlank = (v) => v === undefined || v === null || v === '';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Optional email: '' / null -> null; otherwise lowercased and format-checked. */
+function cleanOptionalEmail(email) {
+  if (isBlank(email) || String(email).trim() === '') return { email: null };
+  const e = String(email).trim().toLowerCase();
+  if (!EMAIL_RE.test(e)) return { error: 'Enter a valid email address or leave it blank.' };
+  return { email: e };
+}
+
+/** Validates an optional id against a reference table; returns { id } or { error }. */
+async function checkReference(table, value, label) {
+  if (isBlank(value)) return { id: null };
+  const id = Number(value);
+  if (!Number.isInteger(id)) return { error: `Invalid ${label}.` };
+  const found = await pool.query(`SELECT 1 FROM ${table} WHERE id = $1`, [id]);
+  if (found.rows.length === 0) return { error: `Unknown ${label}. Select a registered ${label}.` };
+  return { id };
+}
+
 // ==================== REGISTER (Admin Only) ====================
 router.post('/register', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {
-    const { username, email, role, facility_id } = req.body;
+    const { full_name, username, email, role, barangay_id } = req.body;
     const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
-    if (!username || !email) {
-      return res.status(400).json({ error: 'Username and email are required.' });
+    // Full name is optional here for older API clients; the PASIG Users page requires it.
+    const fullName = String(full_name ?? '').trim().replace(/\s+/g, ' ') || null;
+    if (!username) {
+      return res.status(400).json({ error: 'Username is required.' });
     }
+    const { email: cleanEmail, error: emailError } = cleanOptionalEmail(email);
+    if (emailError) return res.status(400).json({ error: emailError });
 
     const userRole = role || 'staff';
     if (!['admin', 'staff'].includes(userRole)) {
@@ -34,27 +74,23 @@ router.post('/register', authenticateToken, authorizeRoles('admin'), async (req,
     }
 
     const existingUser = await pool.query(
-      'SELECT id FROM users WHERE email = $1 OR username = $2',
-      [email, username]
+      'SELECT id FROM users WHERE ($1::text IS NOT NULL AND LOWER(email) = $1) OR LOWER(username) = LOWER($2)',
+      [cleanEmail, username]
     );
 
     if (existingUser.rows.length > 0) {
       return res.status(409).json({ error: 'User with this email or username already exists.' });
     }
 
-    // Facility assignment: required for staff, optional (NULL) for admin.
-    let facilityId = null;
-    if (facility_id !== undefined && facility_id !== null && facility_id !== '') {
-      const facResult = await pool.query(
-        'SELECT id FROM health_facilities WHERE id = $1',
-        [Number(facility_id)]
-      );
-      if (facResult.rows.length === 0) {
-        return res.status(400).json({ error: 'Unknown health facility. Select a registered facility.' });
+    // Staff: assigned barangay required. Admin: city-wide, barangay always NULL.
+    let barangayId = null;
+    if (userRole === 'staff') {
+      const brgy = await checkReference('barangays', barangay_id, 'barangay');
+      if (brgy.error) return res.status(400).json({ error: brgy.error });
+      if (brgy.id === null) {
+        return res.status(400).json({ error: 'An assigned barangay is required for staff accounts.' });
       }
-      facilityId = Number(facility_id);
-    } else if (userRole === 'staff') {
-      return res.status(400).json({ error: 'A registered health facility is required for staff accounts.' });
+      barangayId = brgy.id;
     }
 
     // Generate secure temporary password
@@ -64,10 +100,12 @@ router.post('/register', authenticateToken, authorizeRoles('admin'), async (req,
     const hashedPassword = await bcrypt.hash(tempPassword, salt);
 
     const result = await pool.query(
-      `INSERT INTO users (username, email, password_hash, role, facility_id, password_changed_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       RETURNING id, username, email, role, facility_id, created_at`,
-      [username, email, hashedPassword, userRole, facilityId]
+      `INSERT INTO users (username, email, password_hash, role, barangay_id, full_name,
+                          status, must_change_password, password_changed_at, created_by_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'active', TRUE, NOW(), $7)
+       RETURNING id, username, full_name, email, role, barangay_id, status,
+                 must_change_password, created_at, created_by_user_id`,
+      [username, cleanEmail, hashedPassword, userRole, barangayId, fullName, req.user.id]
     );
 
     const newUser = result.rows[0];
@@ -81,7 +119,7 @@ router.post('/register', authenticateToken, authorizeRoles('admin'), async (req,
       targetUsername: newUser.username,
       result: 'SUCCESS',
       ipAddress,
-      details: { role: userRole, facilityId },
+      details: { role: userRole, barangayId, access: barangayId ? 'barangay' : 'city-wide' },
     });
 
     res.status(201).json({
@@ -145,9 +183,22 @@ const result = await pool.query(
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
+    // Deactivated accounts cannot sign in (checked after the password so the response
+    // does not reveal which usernames exist).
+    if (user.status && user.status !== 'active') {
+      await logLoginAttempt(username, ipAddress, false);
+      return res.status(403).json({ error: 'This account is inactive. Contact your administrator.' });
+    }
+    // Locked by an administrator (separate from the automatic failed-login lockout).
+    if (user.manually_locked) {
+      await logLoginAttempt(username, ipAddress, false);
+      return res.status(423).json({ error: 'This account is locked by an administrator. Contact your administrator.' });
+    }
+
     // Success — reset lockout and log
     await resetFailedAttempts(username);
     await logLoginAttempt(username, ipAddress, true);
+    await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
 
     // Generate JWT — includes a per-login CSRF nonce (see middleware/auth.js)
     const csrfToken = crypto.randomBytes(32).toString('hex');
@@ -169,14 +220,23 @@ const result = await pool.query(
     const recentlyChanged = user.password_changed_at &&
       (Date.now() - new Date(user.password_changed_at).getTime()) < 24 * 60 * 60 * 1000;
 
-    // Facility context for the logged-in user (staff accounts are facility-assigned)
+    // Assignment context for the logged-in user: barangay (staff) + optional facility.
     let facility = null;
-    if (user.facility_id) {
-      const facResult = await pool.query(
-        'SELECT id, name, barangay_name, facility_type FROM health_facilities WHERE id = $1',
-        [user.facility_id]
-      );
-      facility = facResult.rows[0] || null;
+    let barangay = null;
+    const ctx = await pool.query(
+      `SELECT u.barangay_id, b.name AS barangay_name,
+              hf.id AS facility_id, hf.name AS facility_name,
+              hf.barangay_name AS facility_barangay, hf.facility_type
+       FROM users u
+       LEFT JOIN barangays b ON b.id = u.barangay_id
+       LEFT JOIN health_facilities hf ON hf.id = u.facility_id
+       WHERE u.id = $1`,
+      [user.id]
+    );
+    const c = ctx.rows[0];
+    if (c?.barangay_id) barangay = { id: c.barangay_id, name: c.barangay_name };
+    if (c?.facility_id) {
+      facility = { id: c.facility_id, name: c.facility_name, barangay_name: c.facility_barangay, facility_type: c.facility_type };
     }
 
     res.json({
@@ -189,7 +249,12 @@ const result = await pool.query(
         created_at: user.created_at,
         facility_id: user.facility_id || null,
         facility,
+        barangay_id: barangay?.id ?? null,
+        barangay,
+        full_name: user.full_name || null,
+        must_change_password: Boolean(user.must_change_password),
       },
+      mustChangePassword: Boolean(user.must_change_password),
       csrfToken,
       passwordRecentlyChanged: recentlyChanged,
     });
@@ -212,14 +277,7 @@ router.post('/logout', (req, res) => {
 // ==================== GET PROFILE (Protected) ====================
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT u.id, u.username, u.email, u.role, u.created_at, u.facility_id,
-              hf.name AS facility_name, hf.barangay_name AS facility_barangay, hf.facility_type
-       FROM users u
-       LEFT JOIN health_facilities hf ON u.facility_id = hf.id
-       WHERE u.id = $1`,
-      [req.user.id]
-    );
+    const result = await pool.query(`${USER_SELECT} WHERE u.id = $1`, [req.user.id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
@@ -295,7 +353,10 @@ router.put('/password', authenticateToken, async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
-    await pool.query('UPDATE users SET password_hash = $1, password_changed_at = NOW() WHERE id = $2', [hashedPassword, req.user.id]);
+    await pool.query(
+      'UPDATE users SET password_hash = $1, password_changed_at = NOW(), must_change_password = FALSE WHERE id = $2',
+      [hashedPassword, req.user.id]
+    );
 
     res.json({ message: 'Password changed successfully.' });
   } catch (err) {
@@ -307,13 +368,7 @@ router.put('/password', authenticateToken, async (req, res) => {
 // ==================== GET ALL USERS (Admin Only) ====================
 router.get('/users', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT u.id, u.username, u.email, u.role, u.created_at, u.facility_id,
-              hf.name AS facility_name, hf.barangay_name AS facility_barangay, hf.facility_type
-       FROM users u
-       LEFT JOIN health_facilities hf ON u.facility_id = hf.id
-       ORDER BY u.created_at DESC`
-    );
+    const result = await pool.query(`${USER_SELECT} ORDER BY u.created_at DESC`);
     res.json({ users: result.rows });
   } catch (err) {
     console.error('Fetch users error:', err.message);
@@ -321,19 +376,11 @@ router.get('/users', authenticateToken, authorizeRoles('admin'), async (req, res
   }
 });
 
-// ==================== DELETE USER (Admin Only) ====================
-router.delete('/users/:id', authenticateToken, authorizeRoles('admin'), async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (parseInt(id) === req.user.id) {
-      return res.status(400).json({ error: 'You cannot delete your own account.' });
-    }
-    await pool.query('DELETE FROM users WHERE id = $1', [id]);
-    res.json({ message: 'User deleted successfully.' });
-  } catch (err) {
-    console.error('Delete user error:', err.message);
-    res.status(500).json({ error: 'Server error deleting user.' });
-  }
+// ==================== DELETE USER — DISABLED ====================
+// Accounts are never deleted: audit logs and records reference the user who made them.
+// Deactivate the account instead (managed from the PASIG Users page).
+router.delete('/users/:id', authenticateToken, authorizeRoles('admin'), (req, res) => {
+  res.status(405).json({ error: 'User accounts cannot be deleted. Deactivate the account instead.' });
 });
 
 // ==================== ADMIN RESET PASSWORD (Admin Only) ====================
@@ -356,7 +403,7 @@ router.put('/users/:id/password', authenticateToken, authorizeRoles('admin'), as
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(tempPassword, salt);
     await pool.query(
-      'UPDATE users SET password_hash = $1, failed_attempts = 0, locked_until = NULL, password_changed_at = NOW() WHERE id = $2',
+      'UPDATE users SET password_hash = $1, failed_attempts = 0, locked_until = NULL, password_changed_at = NOW(), must_change_password = TRUE WHERE id = $2',
       [hashedPassword, id]
     );
 

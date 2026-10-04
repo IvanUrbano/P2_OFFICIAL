@@ -12,6 +12,8 @@ const STYLES = {
   failed: { bg: 'rgba(239,68,68,0.1)', color: '#991B1B', border: 'rgba(239,68,68,0.2)' },
   admin: { bg: 'rgba(46,111,175,0.1)', color: '#2E6FAF', border: 'rgba(46,111,175,0.2)' },
   staff: { bg: 'rgba(16,185,129,0.1)', color: '#047857', border: 'rgba(16,185,129,0.2)' },
+  active: { bg: 'rgba(16,185,129,0.1)', color: '#047857', border: 'rgba(16,185,129,0.2)' },
+  inactive: { bg: 'rgba(100,116,139,0.1)', color: '#475569', border: 'rgba(100,116,139,0.2)' },
 };
 
 export default function StatusBadge({ status }) {

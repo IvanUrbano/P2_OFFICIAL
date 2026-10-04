@@ -21,6 +21,7 @@ const { csrfProtection } = require('./middleware/csrf');
 const authRoutes = require('./routes/auth');
 const csvImportRoutes = require('./routes/csvImport');
 const validationRoutes = require('./routes/validation');
+const validationQueueRoutes = require('./routes/validationQueue');
 const manualEntryRoutes = require('./routes/manualEntry');
 const webhookRoutes = require('./routes/webhook');
 const facilitiesRoutes = require('./routes/facilities');
@@ -53,6 +54,7 @@ app.use('/api', csrfProtection);
 
 app.use('/api/auth/pin', require('./routes/pin'));
 app.use('/api/auth', authRoutes);
+app.use('/api/data/validation-queue', validationQueueRoutes);
 app.use('/api/data', csvImportRoutes);
 app.use('/api/data', validationRoutes);
 app.use('/api/data', manualEntryRoutes);
@@ -89,9 +91,9 @@ async function start() {
 
     // Barangay list comes from the database (refreshed every 10 minutes)
     const { loadBarangays, startBarangayRefresh } = require('./services/barangayRegistry');
-    const brgy = await loadBarangays(authPool);
+    const brgy = await loadBarangays(authPool, pool); // also syncs barangay_ref + case barangay ids
     console.log(`🏘️  Barangays: ${brgy.count} loaded from ${brgy.source}`);
-    startBarangayRefresh(authPool);
+    startBarangayRefresh(authPool, pool);
     app.listen(config.port, () => {
       console.log(`🚀 Pasig Clone backend running on port ${config.port}`);
       console.log(`📦 File upload limits:`);

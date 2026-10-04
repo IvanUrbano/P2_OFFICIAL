@@ -63,6 +63,17 @@ async function assertCanRevalidate(batchId) {
       { status: 409 }
     );
   }
+  // Data issues already corrected or excluded on the Validation page would be lost.
+  const worked = await db.pool.query(
+    `SELECT COUNT(*)::int AS n FROM validation_issues WHERE batch_id = $1 AND status <> 'open'`,
+    [batchId]
+  ).catch(() => ({ rows: [{ n: 0 }] })); // before migration 007
+  if (worked.rows[0].n > 0) {
+    throw Object.assign(
+      new Error(`${worked.rows[0].n} data issue(s) in this batch were already corrected or excluded; it cannot be re-validated.`),
+      { status: 409 }
+    );
+  }
 }
 
 function rowValues(batchId, r) {
@@ -141,6 +152,7 @@ async function validateBatch(batchId) {
   }
 
   const validRecords = results.validatedRecords.filter(r => r.is_valid);
+  const invalidRecords = results.validatedRecords.filter(r => !r.is_valid);
 
   await assertCanRevalidate(batchId);
 
@@ -168,6 +180,25 @@ async function validateBatch(batchId) {
        AND NOT EXISTS (SELECT 1 FROM validated_tb_cases v WHERE v.patient_id = p.id)`,
       [batchId]
     );
+
+    // Rows that failed validation are kept as open Data Issues (Validation page) so they
+    // can be corrected or excluded, instead of being dropped. Only open issues exist
+    // here: assertCanRevalidate refuses once any were corrected/excluded.
+    await client.query(`DELETE FROM validation_issues WHERE batch_id = $1`, [batchId]);
+    for (let i = 0; i < invalidRecords.length; i += 200) {
+      const chunk = invalidRecords.slice(i, i + 200);
+      await client.query(
+        `INSERT INTO validation_issues
+           (batch_id, raw_case_id, row_number, source_type, record, errors, warnings, barangay_name)
+         SELECT $1, x.raw_id, x.row_number, x.source_type, x.record, x.errors, x.warnings, x.barangay_name
+         FROM jsonb_to_recordset($2::jsonb) AS x(raw_id bigint, row_number int, source_type text,
+              record jsonb, errors jsonb, warnings jsonb, barangay_name text)`,
+        [batchId, JSON.stringify(chunk.map(r => {
+          const { raw_id, row_number, source_type, is_valid, errors, warnings, ...record } = r;
+          return { raw_id, row_number, source_type, record, errors, warnings, barangay_name: record.barangay_name || null };
+        }))]
+      );
+    }
 
     if (newIdx.length > 0) {
       const patientSeqs = await client.query(
@@ -313,4 +344,6 @@ module.exports = {
   validateBatch,
   validateRecord,
   getValidBarangays,
+  INSERT_COLUMNS,
+  rowValues,
 };

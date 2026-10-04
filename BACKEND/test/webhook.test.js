@@ -221,9 +221,10 @@ describe('Webhook Endpoint', () => {
 
   it('processes valid payload with correct signature', async () => {
     // Mock: barangays query returns valid list, insert succeeds
+    let insertedBarangayId = null;
     mockQueryFn = async (sql, params) => {
-      if (sql.includes('SELECT name FROM barangays')) {
-        return { rows: [{ name: 'san antonio' }] };
+      if (sql.includes('SELECT id, name FROM barangays')) {
+        return { rows: [{ id: 11, name: 'San Antonio' }] };
       }
       if (sql.includes('INSERT INTO tb_cases')) {
         return { rows: [] };
@@ -236,8 +237,9 @@ describe('Webhook Endpoint', () => {
 
     // Mock transaction client
     mockConnectFn = async () => ({
-      query: async (sql) => {
+      query: async (sql, params) => {
         if (sql.includes('INSERT INTO tb_cases')) {
+          insertedBarangayId = params[1];
           return { rows: [{ id: 1, dstb_fingerprint: null, itis_case_id: null, source_type: 'DSTB' }] };
         }
         return { rows: [] };
@@ -252,6 +254,7 @@ describe('Webhook Endpoint', () => {
     app.use('/api/webhook', webhook);
 
     const payload = buildPayload();
+    payload.sheets[0].records[0].barangay_id = 11;
     const schedBefore = mockScheduleCalls.length;
     const res = await request(app)
       .post('/api/webhook/pasig-clone')
@@ -262,6 +265,7 @@ describe('Webhook Endpoint', () => {
     assert.equal(res.body.success, true);
     assert.equal(res.body.importedCount, 1);
     assert.equal(res.body.errorCount, 0);
+    assert.equal(insertedBarangayId, 11);
     // Successful import triggers exactly one debounced background pipeline run
     assert.equal(mockScheduleCalls.length, schedBefore + 1);
     assert.ok(mockScheduleCalls[schedBefore].trigger.startsWith('webhook:'));
@@ -270,7 +274,7 @@ describe('Webhook Endpoint', () => {
 
   it('returns errors for invalid records', async () => {
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }] };
       }
       return { rows: [] };
@@ -324,7 +328,7 @@ describe('Webhook Endpoint', () => {
   it('returns success for duplicate webhook (idempotent)', async () => {
     // Mock: batch already processed in webhook_logs
     mockQueryFn = async (sql, params) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }] };
       }
       if (sql.includes("FROM webhook_logs WHERE batch_id")) {
@@ -359,7 +363,7 @@ describe('Webhook Endpoint', () => {
 
   it('accepts request with valid signature (no secret header needed)', async () => {
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }] };
       }
       if (sql.includes("SELECT id FROM webhook_logs WHERE batch_id")) {
@@ -446,7 +450,7 @@ describe('Webhook Endpoint', () => {
 
   it('rejects sheet with unknown source_type', async () => {
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }] };
       }
       return { rows: [] };
@@ -482,7 +486,7 @@ describe('Webhook Endpoint', () => {
 
   it('accepts MANUAL sheet with a valid record', async () => {
     mockQueryFn = async (sql, params) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }] };
       }
       if (sql.includes('INSERT INTO tb_cases')) {
@@ -541,7 +545,7 @@ describe('Webhook Endpoint', () => {
 
   it('accepts MANUAL sheet with zero records', async () => {
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }] };
       }
       return { rows: [] };
@@ -581,7 +585,7 @@ describe('Webhook Endpoint', () => {
 
   it('rejects payload with record_count mismatch', async () => {
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }] };
       }
       return { rows: [] };
@@ -618,7 +622,7 @@ describe('Webhook Endpoint', () => {
   it('imports non-Pasig record with warning classification', async () => {
     let insertedLocation = null;
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'santa cruz' }] };
       }
       if (sql.includes('INSERT INTO webhook_logs')) {
@@ -630,7 +634,7 @@ describe('Webhook Endpoint', () => {
     mockConnectFn = async () => ({
       query: async (sql, params) => {
         if (sql.includes('INSERT INTO tb_cases')) {
-          insertedLocation = params[19]; // location_classification is 20th param
+          insertedLocation = params[20]; // location_classification is 21st param
           return { rows: [{ id: 1, dstb_fingerprint: null, itis_case_id: null, source_type: 'DSTB' }] };
         }
         return { rows: [] };
@@ -673,7 +677,7 @@ describe('Webhook Endpoint', () => {
 
   it('rejects Pasig record with invalid barangay', async () => {
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }, { name: 'bagong ilog' }] };
       }
       return { rows: [] };
@@ -719,7 +723,7 @@ describe('Webhook Endpoint', () => {
   it('maps ITIS Lite field for MN sheets', async () => {
     let insertedItisId = null;
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'caniogan' }] };
       }
       if (sql.includes('INSERT INTO webhook_logs')) {
@@ -731,7 +735,7 @@ describe('Webhook Endpoint', () => {
     mockConnectFn = async () => ({
       query: async (sql, params) => {
         if (sql.includes('INSERT INTO tb_cases')) {
-          insertedItisId = params[17]; // itis_case_id is 18th param
+          insertedItisId = params[18]; // itis_case_id is 19th param
           return { rows: [{ id: 1, dstb_fingerprint: null, itis_case_id: insertedItisId, source_type: 'MN' }] };
         }
         return { rows: [] };
@@ -774,7 +778,7 @@ describe('Webhook Endpoint', () => {
   it('parses various date formats in records', async () => {
     let insertedDates = {};
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }] };
       }
       if (sql.includes('INSERT INTO webhook_logs')) {
@@ -787,9 +791,9 @@ describe('Webhook Endpoint', () => {
       query: async (sql, params) => {
         if (sql.includes('INSERT INTO tb_cases')) {
           insertedDates = {
-            diagnosis: params[1],
-            screening: params[2],
-            notification: params[3],
+            diagnosis: params[2],
+            screening: params[3],
+            notification: params[4],
           };
           return { rows: [{ id: 1, dstb_fingerprint: null, itis_case_id: null, source_type: 'DSTB' }] };
         }
@@ -833,7 +837,7 @@ describe('Webhook Endpoint', () => {
 
   it('returns 500 when DB insert fails during import', async () => {
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) {
+      if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'san antonio' }] };
       }
       if (sql.includes('INSERT INTO webhook_logs')) {
@@ -877,7 +881,7 @@ describe('Webhook Endpoint', () => {
   it('TEST A — MN same itis_case_id but clearly different record: both preserved, collision flagged, no silent rejection', async () => {
     let mnFlagParams = null;
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
+      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
       return { rows: [] };
     };
     mockConnectFn = async () => ({
@@ -933,7 +937,7 @@ describe('Webhook Endpoint', () => {
     // distinction by resending under a brand-new batch_id and confirming
     // the record still lands (never silently dropped).
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
+      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
       if (sql.includes('FROM webhook_logs WHERE batch_id')) return { rows: [] }; // new batch, not seen before
       return { rows: [] };
     };
@@ -978,7 +982,7 @@ describe('Webhook Endpoint', () => {
 
   it('TEST B2 — same batch_id resent: batch-level idempotency handles it before any record-level processing', async () => {
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
+      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
       if (sql.includes('FROM webhook_logs WHERE batch_id')) return { rows: [{ id: 1, status: 'processed' }] };
       return { rows: [] };
     };
@@ -1011,7 +1015,7 @@ describe('Webhook Endpoint', () => {
   it('TEST C — same itis_case_id reappears with a changed outcome_status: still just flagged as possible_duplicate, never auto-confirmed', async () => {
     let mnFlagSql = null;
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
+      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
       return { rows: [] };
     };
     mockConnectFn = async () => ({
@@ -1064,14 +1068,14 @@ describe('Webhook Endpoint', () => {
   it('TEST D — DSTB fingerprint matches an earlier row: flagged as possible duplicate, record preserved', async () => {
     let dstbFlagParams = null;
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
+      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
       return { rows: [] };
     };
     mockConnectFn = async () => ({
       query: async (sql, params) => {
         if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
         if (sql.includes('INSERT INTO tb_cases')) {
-          const fp = params[params.length - 1]; // dstb_fingerprint is the last column
+          const fp = params[31]; // dstb_fingerprint follows outcome_reason
           return { rows: [{ id: 9004, dstb_fingerprint: fp, itis_case_id: null, source_type: 'DSTB' }] };
         }
         if (sql.includes('DSTB_FINGERPRINT_COLLISION')) {
@@ -1113,7 +1117,7 @@ describe('Webhook Endpoint', () => {
 
   it('TEST E — two legitimate DSTB records share all fingerprint fields: neither is silently lost', async () => {
     mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
+      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
       return { rows: [] };
     };
     mockConnectFn = async () => ({
@@ -1122,7 +1126,7 @@ describe('Webhook Endpoint', () => {
         if (sql.includes('INSERT INTO tb_cases')) {
           // Both records in this batch normalize to the same fingerprint —
           // simulate both landing as distinct rows sharing it.
-          const fp = params[params.length - 1];
+          const fp = params[31];
           return {
             rows: [
               { id: 9005, dstb_fingerprint: fp, itis_case_id: null, source_type: 'DSTB' },
