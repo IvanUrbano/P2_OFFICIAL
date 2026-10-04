@@ -71,7 +71,8 @@ export default function IssuesTab({ batch, refreshKey, onChanged }) {
   const saveFix = async (e) => {
     e.preventDefault();
     const changes = Object.fromEntries(Object.keys(fixing.touched).map(f => [f, fixing.values[f]]));
-    if (Object.keys(changes).length === 0) { setFixing(x => ({ ...x, errors: ['Change at least one field.', ...x.errors.filter(m => m !== 'Change at least one field.')] })); return; }
+    // An issue with nothing left to fix under the current rules can be saved as is.
+    if (Object.keys(changes).length === 0 && !fixing.issue.no_remaining_errors) { setFixing(x => ({ ...x, errors: ['Change at least one field.', ...x.errors.filter(m => m !== 'Change at least one field.')] })); return; }
     setSaving(true);
     try {
       const res = await API.put(`/api/data/validation-queue/issues/${fixing.issue.id}`, { changes });
@@ -155,6 +156,9 @@ export default function IssuesTab({ batch, refreshKey, onChanged }) {
                         </div>
                         <ul className="text-[11px] space-y-0.5" style={{ color: '#475569' }}>
                           {(i.errors || []).map((m, k) => <li key={k}>{m}</li>)}
+                          {i.no_remaining_errors && (
+                            <li style={{ color: '#047857' }}>No remaining problems under the current rules. Open it and save to add it as a case.</li>
+                          )}
                         </ul>
                       </td>
                       <td className={`${td} whitespace-nowrap text-right`}>
