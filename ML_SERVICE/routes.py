@@ -77,8 +77,13 @@ async def health_check():
 
 # ==================== POST /thresholds ====================
 
+# The model endpoints below are plain `def`, not `async def`: their work is CPU-bound
+# (ARIMA / Random Forest fits), and FastAPI runs a plain `def` endpoint in a worker
+# thread. As `async def` they ran on the event loop and blocked it, so /health stopped
+# answering during a forecast and the backend reported the service as down.
+
 @router.post("/thresholds", response_model=ThresholdResponse, dependencies=[Depends(verify_api_key)])
-async def compute_risk_thresholds(req: ThresholdRequest):
+def compute_risk_thresholds(req: ThresholdRequest):
     """
     Compute risk band thresholds from incidence data.
 
@@ -101,7 +106,7 @@ async def compute_risk_thresholds(req: ThresholdRequest):
 # ==================== POST /forecast ====================
 
 @router.post("/forecast", response_model=ForecastResponse, dependencies=[Depends(verify_api_key)])
-async def run_forecast(req: ForecastRequest):
+def run_forecast(req: ForecastRequest):
     """
     Run ARIMA forecasting on time series data.
 
@@ -172,7 +177,7 @@ async def run_forecast(req: ForecastRequest):
 # ==================== POST /classify ====================
 
 @router.post("/classify", response_model=ClassifyResponse, dependencies=[Depends(verify_api_key)])
-async def run_classify(req: ClassifyRequest):
+def run_classify(req: ClassifyRequest):
     """
     Train RF on training data and predict risk classes.
 
@@ -230,7 +235,7 @@ async def run_classify(req: ClassifyRequest):
 # ==================== POST /evaluate ====================
 
 @router.post("/evaluate", response_model=EvaluateResponse, dependencies=[Depends(verify_api_key)])
-async def evaluate_models(req: EvaluateRequest):
+def evaluate_models(req: EvaluateRequest):
     """
     Walk-forward evaluation for both ARIMA and RF models.
 

@@ -26,6 +26,18 @@ def test_health():
     print("  PASS: test_health")
 
 
+def test_model_endpoints_do_not_block_event_loop():
+    """CPU-bound model endpoints must be plain `def` so FastAPI runs them in a worker
+    thread. As `async def` they block the event loop: /health stops answering during a
+    forecast and the Express backend's 5 s health check reports the service as down."""
+    import inspect
+    import routes
+
+    for fn in (routes.compute_risk_thresholds, routes.run_forecast, routes.run_classify, routes.evaluate_models):
+        assert not inspect.iscoroutinefunction(fn), f"{fn.__name__} must not be async def"
+    print("  PASS: test_model_endpoints_do_not_block_event_loop")
+
+
 # ==================== Thresholds ====================
 
 def test_thresholds_tertile():
