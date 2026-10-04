@@ -80,6 +80,7 @@ export default function InterventionPlanning() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [deleting, setDeleting] = useState(false);
   const [saving, setSaving] = useState(false);
 
   /* ── Form state ── */
@@ -243,6 +244,7 @@ export default function InterventionPlanning() {
   };
 
   const handleDelete = async (id) => {
+    setDeleting(true);
     try {
       await API.delete(`/api/tb/interventions/${id}`);
       setInterventions(prev => prev.filter(i => i.id !== id));
@@ -253,6 +255,8 @@ export default function InterventionPlanning() {
     } catch (err) {
       if (import.meta.env.DEV) console.error('Delete error:', err);
       alert('Failed to delete intervention. Please try again.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -940,12 +944,13 @@ export default function InterventionPlanning() {
               </button>
               <button
                 onClick={() => handleDelete(deleteConfirm.id)}
-                className="px-4 py-1.5 text-xs font-semibold"
+                disabled={deleting}
+                className="px-4 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-70"
                  style={{ background: '#991B1B', color: '#ffffff', border: '1px solid #991B1B', borderRadius: 4, transition: 'background 0.15s' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#B91C1C'; }}
                  onMouseLeave={e => { e.currentTarget.style.background = '#991B1B'; }}
               >
-                Yes, Delete
+                {deleting ? <><i className="ri-loader-4-line animate-spin" /> Deleting…</> : 'Yes, Delete'}
               </button>
             </div>
           </div>

@@ -1,37 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
-const { sendWebhook } = require('../services/webhookSender');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
-const notifications = require('../services/notifications');
-
-// Sync outcome: a failure goes to the other admins; the person who uploaded the file
-// hears either way.
-async function notifySync(batchId, result, user) {
-  try {
-    const batch = (await db.pool.query('SELECT filename, uploaded_by FROM import_batches WHERE id = $1', [batchId])).rows[0];
-    if (!batch) return;
-    const partial = result.success && result.recordsRejected > 0;
-    const n = {
-      type: result.success ? 'sync_completed' : 'sync_failed',
-      severity: !result.success ? 'danger' : partial ? 'warning' : 'success',
-      actorId: user.id,
-      title: result.success
-        ? `${batch.filename} synced to TBInsight${partial ? ` (${result.recordsRejected} rejected)` : ''}`
-        : `Sync to TBInsight failed: ${batch.filename}`,
-      message: result.success
-        ? `${result.message} Synced by ${user.username}.`
-        : `${result.message || 'TBInsight did not accept the records.'} Try again from Data Sync.`,
-      link: '/sync-history', entityType: 'import_batch', entityId: batchId,
-    };
-    const recipients = [batch.uploaded_by];
-    if (!result.success) recipients.push(...(await notifications.admins()));
-    await notifications.notify(recipients, n);
-  } catch (err) {
-    console.error('[notifications] sync notification failed:', err.message);
-  }
-}
+const { startBackgroundSync, claimBatchForSync } = require('../services/backgroundSync');
 
 const sendLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -41,6 +13,7 @@ const sendLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Starts the sync and answers immediately (202); the page follows it via GET /status.
 router.post('/send', sendLimiter, authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const { batchId } = req.body;
@@ -49,27 +22,41 @@ router.post('/send', sendLimiter, authenticate, authorizeRoles('admin'), async (
       return res.status(400).json({ error: 'batchId is required' });
     }
 
-    // Pass userId to sendWebhook for audit tracking
-    const result = await sendWebhook(batchId, req.user.id);
-    await notifySync(batchId, result, req.user);
+    const claim = await claimBatchForSync(batchId, req.user.id);
+    if (!claim.ok) {
+      return res.status(claim.status).json({ error: claim.error, inProgress: claim.inProgress || undefined });
+    }
 
-    res.json({
-      message: result.message,
-      success: result.success,
-      status: result.status,
-      recordsSent: result.recordsSent,
-      recordsAccepted: result.recordsAccepted,
-      recordsImported: result.recordsImported,
-      recordsUpdated: result.recordsUpdated,
-      recordsRejected: result.recordsRejected,
-      rejectedSamples: result.rejectedSamples,
-      nonPasigExcluded: result.nonPasigExcluded,
-      alreadySynced: result.alreadySynced,
-      inProgress: result.inProgress,
-    });
+    startBackgroundSync(batchId, req.user);
+    res.status(202).json({ started: true, batchId, message: 'Sync started.' });
   } catch (error) {
     console.error('Webhook send error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Current sync state of a batch, plus TBInsight's counts once it has finished.
+router.get('/status/:batchId', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  try {
+    const { rows } = await db.pool.query(
+      `SELECT id, filename, sync_status, sync_error, sync_result, sync_started_at, synced_at
+       FROM import_batches WHERE id = $1`,
+      [req.params.batchId]
+    );
+    const b = rows[0];
+    if (!b) return res.status(404).json({ error: 'Batch not found' });
+    res.json({
+      batchId: b.id,
+      filename: b.filename,
+      syncStatus: b.sync_status,
+      error: b.sync_error,
+      result: b.sync_result,
+      startedAt: b.sync_started_at,
+      finishedAt: b.synced_at,
+    });
+  } catch (error) {
+    console.error('Error fetching sync status:', error);
+    res.status(500).json({ error: 'Failed to fetch sync status' });
   }
 });
 

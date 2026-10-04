@@ -4,6 +4,7 @@ import EmptyState from '../EmptyState';
 import { fmtDate, fullName, Notice, ChipFilter, th, thStyle, td, FIELD_LABELS, PinHint } from './shared';
 import { primaryBtn, secondaryBtn } from '../SidePanel';
 import { can } from '../../utils/permissions';
+import ProgressOverlay from '../ProgressOverlay';
 
 const CATEGORY = {
   duplicate: { label: 'Duplicate', color: '#475569', bg: '#F1F5F9', hint: 'Same patient, same diagnosis date, nothing new.' },
@@ -41,6 +42,7 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
   const [selected, setSelected] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [bulkCount, setBulkCount] = useState(0); // records in a running bulk resolve
   const [notice, setNotice] = useState(null);
 
   const load = useCallback(async () => {
@@ -85,6 +87,7 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
     const label = resolution === 'suggested' ? 'the suggested decision' : `"${resolution.replace('_', ' ')}"`;
     if (!window.confirm(`Apply ${label} to ${selected.length} selected record(s)?`)) return;
     setBusy(true);
+    setBulkCount(selected.length);
     setNotice(null);
     try {
       const res = await API.post('/api/data/records/resolve-matches', { ids: selected, resolution });
@@ -99,6 +102,7 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
       setNotice({ type: 'error', text: err.response?.data?.error || 'Failed to resolve the selected matches.' });
     } finally {
       setBusy(false);
+      setBulkCount(0);
     }
   };
 
@@ -109,6 +113,12 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
 
   return (
     <div>
+      <ProgressOverlay
+        open={bulkCount > 0}
+        title={`Resolving ${bulkCount} possible match${bulkCount === 1 ? '' : 'es'}`}
+        detail="Applying the decision to each selected record."
+        icon="ri-git-merge-line"
+      />
       <Notice notice={notice} onClose={() => setNotice(null)} />
       <div className="px-5 pt-4 space-y-3">
         <ChipFilter options={chips} value={category} onChange={(k) => { setCategory(k); setSelected([]); }} />

@@ -5,7 +5,7 @@ const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { validateRecord, getValidBarangays } = require('../services/validator');
 const { cleanRecord, isPasigBarangay } = require('../services/dataCleaner');
 const { logAuditEvent } = require('../utils/auditLogger');
-const { sendWebhook } = require('../services/webhookSender');
+const { startBackgroundSync, SYNC_STARTED } = require('../services/backgroundSync');
 const { resolveMatch, createPatient, nextCaseNo, RESOLUTIONS } = require('../services/matchResolution');
 const { resolveUserScope } = require('../policies/caseAccessPolicy');
 const { ACTIONS, can, assertCaseAction } = require('../policies/permissions');
@@ -217,24 +217,17 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
       },
     });
 
-    // Auto-sync after commit — a sync failure never rolls back the saved record;
-    // the batch stays sync_status='sync_failed' and can be retried from the Sync page.
-    let sync = { status: 'pending', message: null };
-    try {
-      const result = await sendWebhook(batchId, req.user.id);
-      sync = result.success
-        ? { status: 'synced', message: result.message, recordsSent: result.recordsSent }
-        : { status: 'failed', message: result.message };
-    } catch (syncErr) {
-      console.error('Manual entry auto-sync failed:', syncErr.message);
-      sync = { status: 'failed', message: syncErr.message };
-    }
+    // Auto-sync after commit, in the background so saving never waits on TBInsight.
+    // A sync failure never rolls back the saved record; the batch ends up
+    // sync_status='sync_failed' (with a notification) and can be retried from the Sync page.
+    startBackgroundSync(batchId, req.user);
+    const sync = SYNC_STARTED;
 
     const what = identity.resolution === 'same_case'
       ? `Existing case ${identity.caseNo} updated`
       : `TB record created (Case ID ${identity.caseNo})`;
     res.status(201).json({
-      message: sync.status === 'synced' ? `${what} and synced to TBInsight.` : `${what}.`,
+      message: `${what}.`,
       batch_id: batchId,
       record_id: recordId,
       case_no: identity.caseNo,

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import API from '../api/axios';
 import { useTheme } from '../theme';
+import ProgressOverlay from '../components/ProgressOverlay';
 
 const TABS = [
   { key: 'general', label: 'General', desc: 'System information and account settings' },
@@ -38,6 +39,7 @@ export default function Settings() {
   const [popRecords, setPopRecords] = useState([]);
   const [popValidation, setPopValidation] = useState(null);
   const [savingPop, setSavingPop] = useState(false);
+  const [validatingPop, setValidatingPop] = useState(false);
   const [popMsg, setPopMsg] = useState(null);
   const [viewingYear, setViewingYear] = useState(null);
   const [viewingData, setViewingData] = useState([]);
@@ -228,6 +230,15 @@ export default function Settings() {
   };
 
   const handleValidatePop = async () => {
+    setValidatingPop(true);
+    try {
+      await runValidatePop();
+    } finally {
+      setValidatingPop(false);
+    }
+  };
+
+  const runValidatePop = async () => {
     setPopMsg(null);
 
     // For XLSX, reference info comes from the file
@@ -485,6 +496,25 @@ export default function Settings() {
 
   return (
     <div className="space-y-6">
+      <ProgressOverlay
+        open={validatingPop}
+        title="Validating population data"
+        detail="Reading the reference information and checking each barangay's population."
+        icon="ri-shield-check-line"
+      />
+      <ProgressOverlay
+        open={savingPop}
+        title="Importing population data"
+        detail="Saving the population values for each barangay."
+        icon="ri-upload-cloud-2-line"
+      />
+      <ProgressOverlay
+        open={historicalLoading}
+        title="Backfilling historical risk snapshots"
+        detail="Classifying risk once for each past year so the GIS year filter has its own assessment per year."
+        icon="ri-history-line"
+        note="This can take several minutes. Keep this page open until it finishes."
+      />
       {/* Page header + tab navigation */}
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
         <div className="px-6 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>

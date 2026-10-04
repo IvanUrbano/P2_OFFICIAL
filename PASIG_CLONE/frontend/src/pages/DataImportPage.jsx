@@ -4,6 +4,9 @@ import API from '../api/axios';
 import { useTheme } from '../theme';
 import EmptyState from '../components/EmptyState';
 import StatusBadge from '../components/StatusBadge';
+import ProgressOverlay from '../components/ProgressOverlay';
+
+const IMPORT_STEPS = ['Uploading file', 'Reading sheets, checking and saving records'];
 
 const cardStyle = (t) => ({
   background: t.cardSolid,
@@ -30,6 +33,8 @@ export default function DataImportPage() {
   const fileRef = useRef(null);
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  // Real upload progress (0–100) while the file is sent; null once the server is processing it.
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [duplicateInfo, setDuplicateInfo] = useState(null);
@@ -97,12 +102,19 @@ export default function DataImportPage() {
   const handleUpload = async () => {
     if (!file) return;
     setUploading(true);
+    setUploadPercent(0);
     setError('');
     setDuplicateInfo(null);
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const res = await API.post('/api/data/import', formData);
+      const res = await API.post('/api/data/import', formData, {
+        onUploadProgress: (e) => {
+          if (!e.total) return;
+          // Fully sent → the server is now reading and checking the file.
+          setUploadPercent(e.loaded >= e.total ? null : (e.loaded / e.total) * 100);
+        },
+      });
       setResult(res.data);
       window.dispatchEvent(new Event('IMPORT_COMPLETED'));
     } catch (err) {
@@ -170,6 +182,31 @@ export default function DataImportPage() {
 
   return (
     <div className="space-y-6">
+      <ProgressOverlay
+        open={uploading}
+        title={`Importing ${file?.name || 'file'}`}
+        detail={uploadPercent === null ? 'File received. Checking every record — large files can take a minute.' : 'Sending the file to PASIG TB-IS…'}
+        percent={uploadPercent}
+        steps={IMPORT_STEPS}
+        activeStep={uploadPercent === null ? 1 : 0}
+        icon="ri-upload-cloud-2-line"
+        note="Keep this page open until the import finishes."
+      />
+      <ProgressOverlay
+        open={deleting}
+        title={`Deleting ${showDelete?.filename || 'batch'}`}
+        detail="Removing its records from PASIG TB-IS and TBInsight. TBInsight's analysis is then re-run on the remaining data."
+        icon="ri-delete-bin-line"
+        tone="#DC2626"
+        note="Keep this page open until deletion finishes."
+      />
+      <ProgressOverlay
+        open={archiving}
+        title={`Archiving ${showArchive?.filename || 'batch'}`}
+        detail="Moving the batch out of the active import list."
+        icon="ri-archive-line"
+        tone="#D97706"
+      />
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
         <div className="px-6 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Data Import</h1>

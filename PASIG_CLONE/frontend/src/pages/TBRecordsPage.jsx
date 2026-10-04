@@ -8,6 +8,7 @@ import SkeletonBlock from '../components/SkeletonBlock';
 import RecordDetailDrawer from '../components/RecordDetailDrawer';
 import IncomingReferrals from '../components/IncomingReferrals';
 import RowMenu from '../components/RowMenu';
+import ProgressOverlay from '../components/ProgressOverlay';
 import { can, accessBasis } from '../utils/permissions';
 
 const EMPTY_FORM = {
@@ -81,6 +82,7 @@ export default function TBRecordsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(null);
+  const [archivingRecord, setArchivingRecord] = useState(null);
   const [detailId, setDetailId] = useState(null);
   const [detailMode, setDetailMode] = useState('view'); // 'view' | 'edit' | 'refer'
   const [rowMenu, setRowMenu] = useState(null); // { record, anchor }
@@ -197,12 +199,15 @@ export default function TBRecordsPage() {
     : 'View only for your account');
   const archiveRecord = async (r) => {
     if (!window.confirm(`Archive ${r.case_no || 'this record'}? It is hidden from lists and analysis but kept for the record.`)) return;
+    setArchivingRecord(r);
     try {
       await API.patch(`/api/data/records/${r.id}/archive`);
       setNotice({ type: 'success', text: `${r.case_no || 'Record'} archived.` });
       fetchRecords();
     } catch (err) {
       setNotice({ type: 'error', text: err.response?.data?.error || 'Failed to archive the record.' });
+    } finally {
+      setArchivingRecord(null);
     }
   };
   const rowMenuItems = (r) => [
@@ -303,6 +308,13 @@ export default function TBRecordsPage() {
 
   return (
     <div className="space-y-5">
+      <ProgressOverlay
+        open={Boolean(archivingRecord)}
+        title={`Archiving ${archivingRecord?.case_no || 'record'}`}
+        detail="Hiding the record from lists and analysis. It is kept for the record."
+        icon="ri-archive-line"
+        tone="#D97706"
+      />
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <div>
@@ -511,8 +523,13 @@ export default function TBRecordsPage() {
             </div>
 
             {result && (
-              <div className="mx-6 mt-4 px-4 py-3 rounded-lg text-xs font-semibold" style={{ background: result.sync?.status === 'synced' ? '#DCFCE7' : '#FEF9C3', color: result.sync?.status === 'synced' ? '#166534' : '#854D0E' }}>
+              <div className="mx-6 mt-4 px-4 py-3 rounded-lg text-xs font-semibold" style={{ background: result.sync?.status === 'failed' ? '#FEF9C3' : '#DCFCE7', color: result.sync?.status === 'failed' ? '#854D0E' : '#166534' }}>
                 {result.message}
+                {result.sync?.status === 'syncing' && (
+                  <span className="flex items-center gap-1.5 text-[11px] font-normal mt-0.5 opacity-80">
+                    <i className="ri-loader-4-line animate-spin" /> {result.sync.message}
+                  </span>
+                )}
                 {result.sync?.status === 'failed' && <span className="block text-[11px] font-normal mt-0.5 opacity-80">Sync failed — record saved. Retry from Sync page.</span>}
               </div>
             )}
@@ -698,7 +715,7 @@ export default function TBRecordsPage() {
 
               <div className="flex gap-3 pt-2">
                 <button type="submit" disabled={saving || !!possibleMatch} className="flex-1 px-4 py-2.5 text-xs font-bold rounded-md disabled:opacity-50" style={{ background: '#16A34A', color: '#ffffff' }}>
-                  {saving ? 'Saving…' : possibleMatch ? 'Choose an option above' : 'Save Record'}
+                  {saving ? <><i className="ri-loader-4-line animate-spin mr-1" />Saving…</> : possibleMatch ? 'Choose an option above' : 'Save Record'}
                 </button>
                 <button type="button" onClick={closeForm} className="px-4 py-2.5 text-xs font-bold rounded-md" style={{ border: '1px solid #CBD5E1', background: '#ffffff', color: '#0F2D52' }}>
                   Cancel

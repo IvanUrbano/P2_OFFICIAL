@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import { useTheme } from '../theme';
 import EmptyState from '../components/EmptyState';
+import ProgressOverlay from '../components/ProgressOverlay';
 
 const cardStyle = (t) => ({
   background: t.cardSolid,
@@ -17,27 +18,76 @@ export default function SyncPage() {
   const [searchParams] = useSearchParams();
   const batchId = searchParams.get('batchId');
   const [sending, setSending] = useState(false);
+  const [syncStartedAt, setSyncStartedAt] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
+  const pollRef = useRef(null);
+
+  const stopPolling = () => {
+    if (pollRef.current) clearTimeout(pollRef.current);
+    pollRef.current = null;
+  };
+
+  // The sync runs in the background on the server; follow it until it settles.
+  const followSync = useCallback(() => {
+    stopPolling();
+    setSending(true);
+    const poll = async () => {
+      try {
+        const { data } = await API.get(`/api/webhook/status/${batchId}`);
+        setSyncStartedAt(data.startedAt);
+        if (data.syncStatus === 'syncing') {
+          pollRef.current = setTimeout(poll, 2000);
+          return;
+        }
+        setSending(false);
+        if (data.syncStatus === 'synced') {
+          setResult({ ...(data.result || {}), message: data.result?.message || 'Synchronized with TBInsight.' });
+        } else {
+          setError(data.error || 'Synchronization failed.');
+        }
+      } catch (err) {
+        // A brief network hiccup shouldn't end the wait; the sync itself keeps running.
+        if (err.response?.status === 404) {
+          setSending(false);
+          setError('Batch not found.');
+        } else {
+          pollRef.current = setTimeout(poll, 4000);
+        }
+      }
+    };
+    poll();
+  }, [batchId]);
+
+  // Opening the page while this batch is already syncing (e.g. coming back to it)
+  // picks the running sync up again.
+  useEffect(() => {
+    if (!batchId) return undefined;
+    let cancelled = false;
+    API.get(`/api/webhook/status/${batchId}`)
+      .then(({ data }) => { if (!cancelled && data.syncStatus === 'syncing') followSync(); })
+      .catch(() => {});
+    return () => { cancelled = true; stopPolling(); };
+  }, [batchId, followSync]);
 
   const handleSync = async () => {
     if (!batchId) return;
     setShowConfirm(false);
     setSending(true);
+    setSyncStartedAt(null);
     setError('');
+    setResult(null);
     try {
-      const res = await API.post('/api/webhook/send', { batchId });
-      // A sync TBInsight refused still comes back as HTTP 200 with success: false.
-      if (res.data.success === false) {
-        setError(res.data.message || 'Synchronization failed.');
-      } else {
-        setResult(res.data);
-      }
+      await API.post('/api/webhook/send', { batchId });
+      followSync();
     } catch (err) {
-      setError(err.response?.data?.error || 'Synchronization failed.');
-    } finally {
+      if (err.response?.status === 409 && err.response?.data?.inProgress) {
+        followSync(); // someone already started it — show that sync instead
+        return;
+      }
       setSending(false);
+      setError(err.response?.data?.error || 'Synchronization failed.');
     }
   };
 
@@ -74,7 +124,18 @@ export default function SyncPage() {
         </div>
       )}
 
-      {batchId && !result && (
+      <ProgressOverlay
+        inline
+        open={sending}
+        title="Syncing to TBInsight"
+        detail="Sending validated records and waiting for TBInsight to import them. This can take a few minutes if TBInsight was idle."
+        icon="ri-server-line"
+        tone="#06B6D4"
+        startedAt={syncStartedAt}
+        note="You can leave this page — the sync keeps running, and you'll get a notification when it finishes."
+      />
+
+      {batchId && !result && !sending && (
         <div className="rounded-xl p-6" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
           <h3 className="text-sm font-bold mb-1" style={{ color: '#0F2D52' }}>Ready to Synchronize</h3>
           <p className="text-xs mb-4" style={{ color: '#64748B' }}>Batch Reference ID: <span className="font-mono text-gray-700">{batchId}</span></p>
@@ -89,7 +150,7 @@ export default function SyncPage() {
         </div>
       )}
 
-      {error && (
+      {error && !sending && (
         <div className="rounded-xl p-6" style={{ background: '#ffffff', border: '1px solid #FCA5A5', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
           <div className="flex items-center gap-3 mb-2">
             <i className="ri-error-warning-line text-xl" style={{ color: '#EF4444' }} />

@@ -222,7 +222,7 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [] } = {}) {
     await client.query('BEGIN');
     await client.query(
       `UPDATE import_batches
-       SET sync_status = 'syncing', synced_by = $1, sync_started_at = NOW()
+       SET sync_status = 'syncing', synced_by = $1, sync_started_at = NOW(), sync_result = NULL
        WHERE id = $2`,
       [userId, batchId]
     );
@@ -275,9 +275,13 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [] } = {}) {
           await client.query('BEGIN');
           await client.query(
             `UPDATE import_batches
-             SET sync_status = 'synced', synced_at = NOW(), sync_error = $2
+             SET sync_status = 'synced', synced_at = NOW(), sync_error = $2, sync_result = $3
              WHERE id = $1`,
-            [batchId, outcome.recordsRejected > 0 ? `${outcome.recordsRejected} record(s) rejected by TBInsight` : null]
+            [
+              batchId,
+              outcome.recordsRejected > 0 ? `${outcome.recordsRejected} record(s) rejected by TBInsight` : null,
+              JSON.stringify({ recordsSent, nonPasigExcluded: nonPasigCount, ...outcome }),
+            ]
           );
           await client.query('COMMIT');
 

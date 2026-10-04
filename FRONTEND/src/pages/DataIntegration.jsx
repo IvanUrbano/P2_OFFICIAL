@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import API from '../api/axios';
 import SkeletonBlock from '../../components/SkeletonBlock';
+import ProgressOverlay from '../components/ProgressOverlay';
 
 const STATUS_MAP = {
   connected: { bg: '#ECFDF5', text: '#047857', dot: '#10B981' },
@@ -110,6 +111,14 @@ export default function DataIntegrationPage() {
 
   return (
     <div className="flex flex-col gap-5">
+      <ProgressOverlay
+        open={undoing}
+        title={`Undoing import ${batchToUndo?.batch_id?.slice(0, 8) || ''}`}
+        detail="Removing this import's cases and raw rows, then rebuilding the dashboard totals."
+        icon="ri-arrow-go-back-line"
+        tone="#DC2626"
+        note="Keep this page open until the undo finishes."
+      />
 
       {/* ── Page Header ── */}
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>

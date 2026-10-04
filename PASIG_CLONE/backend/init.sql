@@ -135,6 +135,9 @@ ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_status TEXT DEFAULT 'pe
 ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_error TEXT;
 -- When the current/last sync attempt began; lets an interrupted 'syncing' batch be recovered.
 ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_started_at TIMESTAMP;
+-- What TBInsight reported for the last successful sync (imported/updated/rejected counts),
+-- so the result can be shown after a sync that ran in the background.
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_result JSONB;
 
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS source_record_id TEXT;
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS record_status TEXT DEFAULT 'new';

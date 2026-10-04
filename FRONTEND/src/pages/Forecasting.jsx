@@ -8,6 +8,7 @@ import AiInsightPanel from '../components/AiInsightPanel';
 import ChartInsight from '../components/ChartInsight';
 import { forecastInsight, accuracyInsight } from '../utils/chartInsights';
 import FilterSelect from '../components/FilterSelect';
+import ProgressOverlay from '../components/ProgressOverlay';
 import { getForecastingInsight } from '../services/insightService';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
@@ -1053,6 +1054,20 @@ export default function Forecasting() {
 
   return (
     <div className="space-y-6">
+      <ProgressOverlay
+        open={pipelineRunStatus === 'loading'}
+        title="Running the prediction pipeline"
+        detail="Fitting an ARIMA forecast for each barangay, classifying risk with the Random Forest, and updating alerts."
+        icon="ri-line-chart-line"
+        note="This usually takes a few minutes. Keep this page open until it finishes."
+      />
+      <ProgressOverlay
+        open={evalLoading}
+        title="Evaluating the models"
+        detail="Walk-forward testing of ARIMA and the Random Forest against past months."
+        icon="ri-bar-chart-box-line"
+        note="This can take several minutes. Keep this page open until it finishes."
+      />
 
       {basisStart && basisEnd && (
         <div className="rounded-xl px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs" style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', color: '#1E3A5F' }}>
