@@ -10,7 +10,8 @@
     "dev:backend": "npm run dev --prefix BACKEND",
     "dev:frontend": "npm run dev --prefix FRONTEND",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "vercel-build": "cd FRONTEND && npm install --no-package-lock && npm run build"
+    "vercel-build": "cd FRONTEND && npm install --no-package-lock && npm run build",
+    "prepare": "node -e \"try{require('child_process').execSync('git config core.hooksPath .githooks',{stdio:'ignore'})}catch{}\""
   },
   "dependencies": {
     "concurrently": "^8.2.2"

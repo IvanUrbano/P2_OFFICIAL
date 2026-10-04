@@ -1,0 +1,3 @@
+#!/bin/sh
+# Blocks commits containing credentials. Installed by `npm install` (root "prepare" script).
+exec node scripts/check-secrets.js
