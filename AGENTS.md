@@ -60,7 +60,7 @@ Allows `localhost:5173`, `localhost:5174`, `localhost:3000`, and any Vercel prev
 - No TypeScript anywhere — all `.js`/`.jsx`.
 - Frontend uses Tailwind v4 (no `tailwind.config.js` — CSS-based config via `@tailwindcss/vite` plugin, theme defined in `src/index.css` with `@theme`).
 - Express 5 (not 4) — async route handlers automatically catch rejections; no need for explicit `try/catch` wrappers around async middleware.
-- `BACKEND/scratch_check_db.js` is a one-off debug utility for querying users — not part of the app.
+- Not part of the app: `BACKEND/reset_data.js` (wipes case data in both databases; preview by default, `--confirm` to delete) and `BACKEND/_scratch_run_eval.js` (one-off walk-forward accuracy check against a local ML service).
 
 ## TBInsight — GIS-Based TB Hotspot & Resource-Prioritization System
 
