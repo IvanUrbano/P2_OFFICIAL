@@ -249,6 +249,80 @@ describe('GET /api/tb/cases', () => {
     assert.strictEqual(screened.outcome_status, 'SCREENED');
     assert.strictEqual(screened.outcome_status_approved, false);
   });
+
+  it('caps the page size at 100 (no more limit=<total> dumps)', async () => {
+    let pageParams;
+    mockQueryFn = async (sql, params) => {
+      if (sql.includes('COUNT(*)')) return { rows: [{ total: '8518' }] };
+      pageParams = params;
+      return { rows: [] };
+    };
+    const res = await request(buildApp()).get('/api/tb/cases?limit=8518');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.pagination.limit, 100);
+    assert.strictEqual(pageParams[pageParams.length - 2], 100, 'SQL LIMIT is capped too');
+  });
+
+  it('still serves the page sizes TB Records offers (10/20/50/100)', async () => {
+    mockQueryFn = async (sql) => (sql.includes('COUNT(*)') ? { rows: [{ total: '500' }] } : { rows: [] });
+    for (const n of [10, 20, 50, 100]) {
+      const res = await request(buildApp()).get(`/api/tb/cases?limit=${n}`);
+      assert.strictEqual(res.body.pagination.limit, n);
+    }
+  });
+});
+
+describe('GET /api/tb/cases/analytics-dataset', () => {
+  // Same as buildApp, but lets a test set token claims (e.g. a staff facility).
+  function buildAppAs(claims) {
+    uninstallMockDb();
+    installMockDb();
+    clearTbinsightCache();
+    const app = express();
+    const token = signToken(claims.role, claims);
+    app.use((req, _res, next) => { req.headers.authorization = `Bearer ${token}`; next(); });
+    app.use('/api/tb', require('../../tbinsight/routes'));
+    return app;
+  }
+
+  const FIELDS = ['barangay_name', 'age', 'sex', 'date_of_diagnosis', 'screening_facility',
+    'treatment_facility', 'bacteriological_status', 'outcome_status', 'imported_at'];
+
+  it('returns every case with only the fields the charts use — no identifiers', async () => {
+    let captured;
+    mockQueryFn = async (sql, params) => {
+      captured = { sql, params };
+      return { rows: [{ barangay_name: 'Pinagbuhatan', age: 41, sex: 'M', date_of_diagnosis: '2025-01-05', screening_facility: 'A', treatment_facility: 'B', bacteriological_status: 'BC', outcome_status: 'TREATMENT FAILED', imported_at: '2025-02-01' }] };
+    };
+    const res = await request(buildAppAs({ role: 'admin' })).get('/api/tb/cases/analytics-dataset');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.total, 1);
+    assert.deepStrictEqual(Object.keys(res.body.cases[0]).sort(), [...FIELDS].sort());
+    for (const id of ['case_no', 'patient_no', 'itis_case_id', 'batch_id']) {
+      assert.ok(!captured.sql.includes(`c.${id}`), `${id} must not be selected`);
+    }
+    assert.ok(!/\bLIMIT\b/.test(captured.sql), 'not paginated: Analytics needs every case');
+    assert.match(captured.sql, /ORDER BY c\.date_of_diagnosis DESC/, 'same order as /api/tb/cases');
+    assert.strictEqual(res.body.cases[0].outcome_status, 'FAILED', 'same outcome labels as /api/tb/cases');
+    assert.deepStrictEqual(captured.params, [], 'admin is not facility-scoped');
+  });
+
+  it('applies the same facility scope to staff as /api/tb/cases', async () => {
+    const seen = [];
+    mockQueryFn = async (sql, params) => {
+      seen.push({ sql, params });
+      return sql.includes('COUNT(*)') ? { rows: [{ total: '0' }] } : { rows: [] };
+    };
+    await request(buildAppAs({ role: 'staff', facility_id: 7 })).get('/api/tb/cases/analytics-dataset');
+    await request(buildAppAs({ role: 'staff', facility_id: 7 })).get('/api/tb/cases?limit=10');
+    const scope = '(c.current_responsible_facility_id = $1 OR c.current_responsible_facility_id IS NULL)';
+    const dataset = seen[0];
+    const listCount = seen.find(q => q.sql.includes('COUNT(*)'));
+    assert.ok(dataset.sql.includes(scope));
+    assert.deepStrictEqual(dataset.params, [7]);
+    assert.ok(listCount.sql.includes(scope), 'both endpoints use the shared rule');
+    assert.deepStrictEqual(listCount.params, [7]);
+  });
 });
 
 describe('GET /api/tb/dashboard/summary', () => {

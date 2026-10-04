@@ -364,19 +364,16 @@ export default function Forecasting() {
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [monthlyRes, forecastsRes, barangaysRes, firstPageRes, pipelineRes, backtestRes] =
+      // Every case, but only the fields the charts compute from (no identifiers).
+      const [monthlyRes, forecastsRes, barangaysRes, allCasesRes, pipelineRes, backtestRes] =
         await Promise.all([
           API.get('/api/tb/dashboard/monthly'),
           API.get('/api/tb/forecasts'),
           API.get('/api/tb/barangays'),
-          API.get('/api/tb/cases?limit=1'),
+          API.get('/api/tb/cases/analytics-dataset'),
           API.get('/api/tb/pipeline/status').catch(() => ({ data: { latest_run: null } })),
           API.get('/api/tb/forecast/backtest').catch(() => ({ data: { data: [] } })),
         ]);
-      const totalCases = firstPageRes.data.pagination?.total || 0;
-      const allCasesRes = totalCases > 0
-        ? await API.get(`/api/tb/cases?limit=${totalCases}`)
-        : firstPageRes;
       setMonthlyData(monthlyRes.data.monthly || []);
       setForecastsData(forecastsRes.data.forecasts || []);
       setBarangays(barangaysRes.data.barangays || []);

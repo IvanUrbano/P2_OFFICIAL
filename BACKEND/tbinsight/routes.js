@@ -159,6 +159,27 @@ router.post('/barangays/seed-geom', authenticateToken, authorizeRoles('admin'), 
 
 // ==================== CASE RECORDS ====================
 
+// Largest page /api/tb/cases serves (TB Records offers 10/20/50/100 per page). Pages that
+// need every case use /api/tb/cases/analytics-dataset instead.
+const MAX_CASES_PAGE = 100;
+
+/**
+ * Facility-scoped access for STAFF users: they see cases where their facility is the
+ * current responsible facility, OR where current_responsible_facility_id is NULL
+ * (historical/unresolved). ADMIN sees all cases city-wide.
+ * Shared by every endpoint that lists cases so the rule cannot drift between them.
+ * @returns {{ sql: string, params: any[] } | null}
+ */
+function staffCaseScope(user, paramIdx) {
+  if (user.role === 'staff' && user.facility_id) {
+    return {
+      sql: `(c.current_responsible_facility_id = $${paramIdx} OR c.current_responsible_facility_id IS NULL)`,
+      params: [user.facility_id],
+    };
+  }
+  return null;
+}
+
 /**
  * GET /api/tb/cases
  * List individual TB case records with filtering, search, and pagination
@@ -187,7 +208,7 @@ router.get('/cases', async (req, res) => {
     } = req.query;
 
     const safePage = Math.max(1, parseInt(page) || 1);
-    const safeLimit = Math.max(1, parseInt(limit) || 20);
+    const safeLimit = Math.min(MAX_CASES_PAGE, Math.max(1, parseInt(limit) || 20));
     const offset = (safePage - 1) * safeLimit;
     const conditions = [];
     const params = [];
@@ -292,14 +313,11 @@ router.get('/cases', async (req, res) => {
       paramIdx++;
     }
 
-    // Facility-scoped access for STAFF users
-    // STAFF can only see cases where their facility is the current responsible facility,
-    // OR where current_responsible_facility_id is NULL (historical/unresolved).
-    // ADMIN sees all cases city-wide.
-    if (req.user.role === 'staff' && req.user.facility_id) {
-      conditions.push(`(c.current_responsible_facility_id = $${paramIdx} OR c.current_responsible_facility_id IS NULL)`);
-      params.push(req.user.facility_id);
-      paramIdx++;
+    const scope = staffCaseScope(req.user, paramIdx);
+    if (scope) {
+      conditions.push(scope.sql);
+      params.push(...scope.params);
+      paramIdx += scope.params.length;
     }
 
     const whereClause = conditions.length > 0
@@ -374,6 +392,52 @@ router.get('/cases', async (req, res) => {
   } catch (err) {
     console.error('Cases list error:', err.message);
     res.status(500).json({ error: 'Server error fetching cases.' });
+  }
+});
+
+/**
+ * GET /api/tb/cases/analytics-dataset
+ * Every case the user may see, with ONLY the fields Analytics and Forecasting compute
+ * from — no identifiers (case_no, patient_no, itis_case_id, batch_id). Those pages
+ * filter and chart client-side, so they need all rows; they used to fetch them via
+ * /api/tb/cases?limit=<total>, which shipped all 25 columns (~7 MB at 8.5k cases).
+ * Same access scope, outcome labels and order as /api/tb/cases.
+ */
+router.get('/cases/analytics-dataset', async (req, res) => {
+  try {
+    const conditions = [];
+    const params = [];
+    const scope = staffCaseScope(req.user, 1);
+    if (scope) {
+      conditions.push(scope.sql);
+      params.push(...scope.params);
+    }
+    const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+
+    const { rows } = await pool.query(
+      `SELECT
+        c.barangay_name,
+        c.age,
+        c.sex,
+        c.date_of_diagnosis,
+        c.screening_facility,
+        c.treatment_facility,
+        c.bacteriological_status,
+        c.outcome_status,
+        c.imported_at
+      FROM tb_cases c
+      ${whereClause}
+      ORDER BY c.date_of_diagnosis DESC`,
+      params
+    );
+
+    res.json({
+      cases: rows.map((r) => ({ ...r, outcome_status: normalizeRecordOutcome(r.outcome_status) })),
+      total: rows.length,
+    });
+  } catch (err) {
+    console.error('Analytics dataset error:', err.message);
+    res.status(500).json({ error: 'Server error fetching the analytics dataset.' });
   }
 });
 
