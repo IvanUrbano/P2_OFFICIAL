@@ -98,6 +98,16 @@ async function start() {
     console.log(`🏘️  Barangays: ${brgy.count} loaded from ${brgy.source}`);
     startBarangayRefresh(authPool, pool);
 
+    // Stored data-issue errors written under older validation rules (e.g. historical
+    // rows that no longer need a name / date of birth) are re-checked once per start.
+    try {
+      const { refreshOpenIssueErrors } = require('./services/validator');
+      const refreshed = await refreshOpenIssueErrors();
+      if (refreshed.updated) console.log(`🧹 Data issues: ${refreshed.updated} of ${refreshed.checked} re-checked against current rules.`);
+    } catch (err) {
+      console.error('Data-issue error refresh failed (continuing):', err.message);
+    }
+
     // Syncs are tracked in this process, so any batch still 'syncing' at startup was
     // interrupted by the previous run; while running, recover ones stuck past the limit.
     const { recoverStuckSyncs } = require('./services/webhookSender');
