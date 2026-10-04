@@ -133,12 +133,21 @@ ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS synced_by INTEGER;
 ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS synced_at TIMESTAMP;
 ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_status TEXT DEFAULT 'pending';
 ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_error TEXT;
+-- When the current/last sync attempt began; lets an interrupted 'syncing' batch be recovered.
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_started_at TIMESTAMP;
+-- What TBInsight reported for the last successful sync (imported/updated/rejected counts),
+-- so the result can be shown after a sync that ran in the background.
+ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS sync_result JSONB;
 
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS source_record_id TEXT;
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS record_status TEXT DEFAULT 'new';
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS updated_by INTEGER;
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false;
+-- Set when TBInsight rejected this record in its latest sync (reason text); cleared when a
+-- later sync of the record is accepted. Lets staff find and fix records that didn't arrive.
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS tbinsight_rejection TEXT;
+ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS tbinsight_rejected_at TIMESTAMP;
 
 -- New MN-specific clinical/laboratory columns
 ALTER TABLE validated_tb_cases ADD COLUMN IF NOT EXISTS type TEXT;

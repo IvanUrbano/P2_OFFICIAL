@@ -13,6 +13,7 @@ const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
+const compression = require('compression');
 const morgan = require('morgan');
 const config = require('./config');
 const { initSchema } = require('./db/pasigSchema');
@@ -37,6 +38,8 @@ app.use(cors({
   credentials: true,
 }));
 app.use(helmet());
+// Gzip responses (only when the client accepts it and the body is over 1 KB).
+app.use(compression());
 app.use(morgan('dev'));
 const fileUpload = require('express-fileupload');
 app.use(fileUpload({ 
@@ -94,6 +97,15 @@ async function start() {
     const brgy = await loadBarangays(authPool, pool); // also syncs barangay_ref + case barangay ids
     console.log(`🏘️  Barangays: ${brgy.count} loaded from ${brgy.source}`);
     startBarangayRefresh(authPool, pool);
+
+    // Syncs are tracked in this process, so any batch still 'syncing' at startup was
+    // interrupted by the previous run; while running, recover ones stuck past the limit.
+    const { recoverStuckSyncs } = require('./services/webhookSender');
+    const recoverSyncs = (minutes) => recoverStuckSyncs(pool, minutes)
+      .catch(err => console.error('Stuck sync recovery failed:', err.message));
+    await recoverSyncs(0);
+    setInterval(() => recoverSyncs(), 5 * 60 * 1000).unref();
+
     app.listen(config.port, () => {
       console.log(`🚀 Pasig Clone backend running on port ${config.port}`);
       console.log(`📦 File upload limits:`);

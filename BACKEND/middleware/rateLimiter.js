@@ -19,11 +19,23 @@ const loginLimiter = rateLimit({
   }
 });
 
+// Lightweight status checks the open pages poll on a timer (Topbar alert bell every 30 s,
+// GIS map every 4 s while a pipeline runs). Counting them used up most of the 300-request
+// budget by themselves — and everyone behind one office IP shares that budget — so
+// normal clicks started failing with 429. They still require a logged-in user.
+const POLLING_PATHS = new Set([
+  '/api/tb/pipeline/status',
+  '/api/tb/alerts/unread-count',
+]);
+
+const isPollingRequest = (req) =>
+  req.method === 'GET' && POLLING_PATHS.has(String(req.originalUrl || '').split('?')[0]);
+
 // General rate limiter for all API routes
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: parseInt(process.env.API_LIMIT_MAX, 10) || 300,
-  skip: (req) => req.method === 'OPTIONS',
+  skip: (req) => req.method === 'OPTIONS' || isPollingRequest(req),
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests. Please try again later.' },
@@ -38,4 +50,4 @@ const webhookLimiter = rateLimit({
   message: { error: 'Too many webhook requests. Please slow down.' },
 });
 
-module.exports = { loginLimiter, apiLimiter, webhookLimiter };
+module.exports = { loginLimiter, apiLimiter, webhookLimiter, isPollingRequest };

@@ -3,6 +3,7 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const fileUpload = require('express-fileupload');
 const helmet = require('helmet');
+const compression = require('compression');
 require('dotenv').config();
 
 // Validate required environment variables
@@ -34,6 +35,10 @@ app.set('trust proxy', 1);
 // This is a JSON API with no HTML views, so the default CSP is left as-is —
 // it only affects browser-rendered documents, not fetch/XHR JSON responses.
 app.use(helmet());
+
+// Gzip responses (only when the client accepts it and the body is over 1 KB). The
+// dashboard/forecast JSON compresses to a fraction of its size.
+app.use(compression());
 
 // ==================== MIDDLEWARE ====================
 const allowedOrigins = [

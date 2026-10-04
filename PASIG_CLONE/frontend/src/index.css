@@ -91,6 +91,20 @@ body {
   /* Page switch transition animation disabled */
 }
 
+/* Progress bar for work whose remaining time isn't known (server-side processing). */
+@keyframes progress-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+.progress-indeterminate {
+  animation: progress-indeterminate 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-indeterminate { animation-duration: 4s; }
+}
+
 /* ==================== Glass Card ==================== */
 .glass-card {
   background: var(--glass-bg);

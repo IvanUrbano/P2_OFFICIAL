@@ -10,7 +10,7 @@ const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { getCaseListScope, resolveUserScope, responsibleBarangay } = require('../policies/caseAccessPolicy');
 const { ACTIONS, can, assertCaseAction, casePermissions, referralPermissions } = require('../policies/permissions');
 const { PASIG_BARANGAYS } = require('../services/dataCleaner');
-const { sendWebhook } = require('../services/webhookSender');
+const { startBackgroundSync, SYNC_STARTED } = require('../services/backgroundSync');
 const { NEEDS_LOCATION, NEEDS_FACILITY } = require('../services/validationQueue');
 const { logReviews } = require('../services/caseFollowUp');
 const pinService = require('../services/pinService');
@@ -802,7 +802,7 @@ router.put('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
     });
 
     res.json({
-      message: `Saved ${fields.length} change${fields.length === 1 ? '' : 's'}${sync.status === 'synced' ? ' and updated TBInsight' : ''}.`,
+      message: `Saved ${fields.length} change${fields.length === 1 ? '' : 's'}${sync.status === 'syncing' ? '. Updating TBInsight in the background' : ''}.`,
       changed: fields,
       sync,
     });
@@ -1011,12 +1011,8 @@ router.patch('/records/:id/assign', authenticate, authorizeRoles('admin'), async
          VALUES ($1, $2, 0, 0, 0, 'validated', $2, NOW()) RETURNING id`,
         [`Correction — ${req.user.username}`, req.user.id]
       );
-      try {
-        const result = await sendWebhook(corr.rows[0].id, req.user.id, { extraCaseNos: [row.case_no] });
-        sync = { status: result.success ? 'synced' : 'failed', message: result.message };
-      } catch (err) {
-        sync = { status: 'failed', message: err.message };
-      }
+      startBackgroundSync(corr.rows[0].id, req.user, { extraCaseNos: [row.case_no] });
+      sync = SYNC_STARTED;
     }
 
     await logAuditEvent({

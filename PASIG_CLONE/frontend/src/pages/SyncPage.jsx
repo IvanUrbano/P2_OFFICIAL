@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import { useTheme } from '../theme';
 import EmptyState from '../components/EmptyState';
+import ProgressOverlay from '../components/ProgressOverlay';
 
 const cardStyle = (t) => ({
   background: t.cardSolid,
@@ -17,22 +18,76 @@ export default function SyncPage() {
   const [searchParams] = useSearchParams();
   const batchId = searchParams.get('batchId');
   const [sending, setSending] = useState(false);
+  const [syncStartedAt, setSyncStartedAt] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
+  const pollRef = useRef(null);
+
+  const stopPolling = () => {
+    if (pollRef.current) clearTimeout(pollRef.current);
+    pollRef.current = null;
+  };
+
+  // The sync runs in the background on the server; follow it until it settles.
+  const followSync = useCallback(() => {
+    stopPolling();
+    setSending(true);
+    const poll = async () => {
+      try {
+        const { data } = await API.get(`/api/webhook/status/${batchId}`);
+        setSyncStartedAt(data.startedAt);
+        if (data.syncStatus === 'syncing') {
+          pollRef.current = setTimeout(poll, 2000);
+          return;
+        }
+        setSending(false);
+        if (data.syncStatus === 'synced') {
+          setResult({ ...(data.result || {}), message: data.result?.message || 'Synchronized with TBInsight.' });
+        } else {
+          setError(data.error || 'Synchronization failed.');
+        }
+      } catch (err) {
+        // A brief network hiccup shouldn't end the wait; the sync itself keeps running.
+        if (err.response?.status === 404) {
+          setSending(false);
+          setError('Batch not found.');
+        } else {
+          pollRef.current = setTimeout(poll, 4000);
+        }
+      }
+    };
+    poll();
+  }, [batchId]);
+
+  // Opening the page while this batch is already syncing (e.g. coming back to it)
+  // picks the running sync up again.
+  useEffect(() => {
+    if (!batchId) return undefined;
+    let cancelled = false;
+    API.get(`/api/webhook/status/${batchId}`)
+      .then(({ data }) => { if (!cancelled && data.syncStatus === 'syncing') followSync(); })
+      .catch(() => {});
+    return () => { cancelled = true; stopPolling(); };
+  }, [batchId, followSync]);
 
   const handleSync = async () => {
     if (!batchId) return;
     setShowConfirm(false);
     setSending(true);
+    setSyncStartedAt(null);
     setError('');
+    setResult(null);
     try {
-      const res = await API.post('/api/webhook/send', { batchId });
-      setResult(res.data);
+      await API.post('/api/webhook/send', { batchId });
+      followSync();
     } catch (err) {
-      setError(err.response?.data?.error || 'Synchronization failed.');
-    } finally {
+      if (err.response?.status === 409 && err.response?.data?.inProgress) {
+        followSync(); // someone already started it — show that sync instead
+        return;
+      }
       setSending(false);
+      setError(err.response?.data?.error || 'Synchronization failed.');
     }
   };
 
@@ -69,7 +124,18 @@ export default function SyncPage() {
         </div>
       )}
 
-      {batchId && !result && (
+      <ProgressOverlay
+        inline
+        open={sending}
+        title="Syncing to TBInsight"
+        detail="Sending validated records and waiting for TBInsight to import them. This can take a few minutes if TBInsight was idle."
+        icon="ri-server-line"
+        tone="#06B6D4"
+        startedAt={syncStartedAt}
+        note="You can leave this page — the sync keeps running, and you'll get a notification when it finishes."
+      />
+
+      {batchId && !result && !sending && (
         <div className="rounded-xl p-6" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
           <h3 className="text-sm font-bold mb-1" style={{ color: '#0F2D52' }}>Ready to Synchronize</h3>
           <p className="text-xs mb-4" style={{ color: '#64748B' }}>Batch Reference ID: <span className="font-mono text-gray-700">{batchId}</span></p>
@@ -84,7 +150,7 @@ export default function SyncPage() {
         </div>
       )}
 
-      {error && (
+      {error && !sending && (
         <div className="rounded-xl p-6" style={{ background: '#ffffff', border: '1px solid #FCA5A5', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
           <div className="flex items-center gap-3 mb-2">
             <i className="ri-error-warning-line text-xl" style={{ color: '#EF4444' }} />
@@ -95,25 +161,52 @@ export default function SyncPage() {
         </div>
       )}
 
-      {result && (
-        <div className="rounded-xl p-6" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
+      {result && (() => {
+        const rejected = result.recordsRejected || 0;
+        const hasCounts = typeof result.recordsImported === 'number';
+        const stats = [
+          { label: 'Sent', value: result.recordsSent, color: '#0F2D52' },
+          { label: 'Imported', value: result.recordsImported, color: '#10B981' },
+          { label: 'Updated', value: result.recordsUpdated, color: '#2563EB' },
+          { label: 'Rejected', value: result.recordsRejected, color: rejected > 0 ? '#DC2626' : '#64748B' },
+        ];
+        return (
+        <div className="rounded-xl p-6" style={{ background: '#ffffff', border: `1px solid ${rejected > 0 ? '#FCD34D' : '#E2E8F0'}`, boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
           <div className="flex items-center gap-3 mb-4 pb-3" style={{ borderBottom: '1px solid #F1F5F9' }}>
-            <i className="ri-check-double-line text-xl" style={{ color: '#10B981' }} />
-            <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Synchronization Complete</h3>
+            <i className={`${rejected > 0 ? 'ri-error-warning-line' : 'ri-check-double-line'} text-xl`} style={{ color: rejected > 0 ? '#D97706' : '#10B981' }} />
+            <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>
+              {result.inProgress ? 'Sync In Progress' : result.alreadySynced ? 'Already Synced' : rejected > 0 ? 'Synchronization Complete — Some Records Rejected' : 'Synchronization Complete'}
+            </h3>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="p-3.5 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #F1F5F9' }}>
-              <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Status</p>
-              <p className="text-xs font-bold mt-1" style={{ color: '#10B981' }}>{result.status || 'Sent'}</p>
+          <p className="text-xs mb-3" style={{ color: '#0F2D52' }}>{result.message || '—'}</p>
+          {hasCounts && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {stats.map(s => (
+                <div key={s.label} className="p-3.5 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #F1F5F9' }}>
+                  <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>{s.label}</p>
+                  <p className="text-lg font-extrabold mt-1" style={{ color: s.color }}>{s.value ?? '—'}</p>
+                </div>
+              ))}
             </div>
-            <div className="p-3.5 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #F1F5F9' }}>
-              <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Message</p>
-              <p className="text-xs mt-1" style={{ color: '#0F2D52' }}>{result.message || '—'}</p>
+          )}
+          {rejected > 0 && result.rejectedSamples?.length > 0 && (
+            <div className="mt-4 rounded-lg p-3.5" style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+              <p className="text-[11px] font-bold mb-2" style={{ color: '#991B1B' }}>
+                Rejected by TBInsight{rejected > result.rejectedSamples.length ? ` (showing first ${result.rejectedSamples.length} of ${rejected})` : ''}
+              </p>
+              <ul className="space-y-1">
+                {result.rejectedSamples.map((e, i) => (
+                  <li key={i} className="text-[11px]" style={{ color: '#7F1D1D' }}>
+                    <span className="font-mono">{e.source_type}{e.row != null ? ` row ${e.row}` : ''}</span>: {(e.errors || []).join('; ')}
+                  </li>
+                ))}
+              </ul>
             </div>
-          </div>
+          )}
           <button onClick={() => navigate('/sync-history')} className="mt-4 px-4 py-2 text-xs font-bold rounded-lg cursor-pointer" style={{ border: '1px solid #CBD5E1', background: '#ffffff', color: '#0F2D52' }}>View Sync History &rarr;</button>
         </div>
-      )}
+        );
+      })()}
 
       {/* Confirmation Modal */}
       {showConfirm && (

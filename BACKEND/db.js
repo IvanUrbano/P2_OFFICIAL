@@ -31,10 +31,20 @@ const poolConfig = process.env.DATABASE_URL
   };
 const pool = new Pool(poolConfig);
 
+// An idle connection the server drops (Neon closes idle ones) is reported as an 'error'
+// on the pool; without a listener Node treats it as unhandled and crashes the process.
+// The pool discards that connection and opens a new one on the next query.
+pool.on('error', (err) => {
+  console.error('[tbinsight] Unexpected pool error:', err.message);
+});
+
 const execSql = async (sqlContent) => {
   const client = await pool.connect();
   try {
-    await client.query(sqlContent);
+    // A file saved "UTF-8 with BOM" starts with an invisible U+FEFF that Postgres
+    // rejects as a syntax error — which aborted startup init and silently skipped every
+    // later migration (015 had one from 2026-09-27 to 2026-10-04). Strip it.
+    await client.query(String(sqlContent).replace(/^﻿/, ''));
   } finally {
     client.release();
   }

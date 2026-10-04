@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import API from '../api/axios';
 import FilterSelect from '../components/FilterSelect';
 import SkeletonBlock from '../components/SkeletonBlock';
+import ProgressOverlay from '../components/ProgressOverlay';
 import { primaryBtn } from '../components/SidePanel';
 import ReadyTab from '../components/validation/ReadyTab';
 import MatchesTab from '../components/validation/MatchesTab';
@@ -170,11 +171,13 @@ export default function ValidationPage() {
         </div>
       </div>
 
-      {validating && (
-        <div className="px-4 py-3 rounded-lg text-xs flex items-center gap-2" style={{ background: '#EFF6FF', color: '#1E40AF', border: '1px solid #BFDBFE' }}>
-          <i className="ri-loader-4-line animate-spin" /> Validating the batch — large files can take a minute…
-        </div>
-      )}
+      <ProgressOverlay
+        open={Boolean(validating)}
+        title={`Validating ${(summary?.batches || []).find(b => b.id === validating)?.filename || 'batch'}`}
+        detail="Cleaning each record, checking required fields and looking for possible patient matches. Large files can take a minute."
+        icon="ri-shield-check-line"
+        note="Keep this page open until validation finishes."
+      />
       {validateNotice && (
         <div className="px-4 py-3 rounded-lg text-xs flex items-center justify-between gap-3"
           style={validateNotice.type === 'error'

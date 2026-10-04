@@ -167,17 +167,14 @@ export default function Analytics() {
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [firstPageRes, brgyRes, riskRes, filterRes, facilityRes] = await Promise.all([
-        API.get('/api/tb/cases?limit=1'),
+      // Every case, but only the fields this page computes from (no identifiers).
+      const [allCasesRes, brgyRes, riskRes, filterRes, facilityRes] = await Promise.all([
+        API.get('/api/tb/cases/analytics-dataset'),
         API.get('/api/tb/barangays'),
         API.get('/api/tb/gis/choropleth'),
         API.get('/api/tb/filter-options').catch(() => ({ data: {} })),
         API.get('/api/tb/facilities').catch(() => ({ data: { facilities: [] } })),
       ]);
-      const totalCases = firstPageRes.data.pagination?.total || 0;
-      const allCasesRes = totalCases > 0
-        ? await API.get(`/api/tb/cases?limit=${totalCases}`)
-        : firstPageRes;
       setAllCases(allCasesRes.data.cases || []);
       setBarangays(brgyRes.data.barangays || brgyRes.data || []);
       setRiskData(riskRes.data.choropleth || []);

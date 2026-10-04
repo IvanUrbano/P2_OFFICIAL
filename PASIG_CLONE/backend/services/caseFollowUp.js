@@ -10,7 +10,7 @@
  */
 
 const db = require('../db/pasigSchema');
-const { sendWebhook } = require('./webhookSender');
+const { startBackgroundSync, SYNC_STARTED } = require('./backgroundSync');
 
 async function resyncSyncedCases(caseNos, user, label = 'Correction') {
   const nos = [...new Set((caseNos || []).filter(Boolean))];
@@ -27,12 +27,9 @@ async function resyncSyncedCases(caseNos, user, label = 'Correction') {
      VALUES ($1, $2, 0, 0, 0, 'validated', $2, NOW()) RETURNING id`,
     [`${label} — ${user.username}`, user.id]
   );
-  try {
-    const result = await sendWebhook(corr.rows[0].id, user.id, { extraCaseNos: synced.rows.map(r => r.case_no) });
-    return { status: result.success ? 'synced' : 'failed', count: synced.rows.length, message: result.message };
-  } catch (err) {
-    return { status: 'failed', count: synced.rows.length, message: err.message };
-  }
+  // Sent in the background; the outcome arrives as a notification (and on Sync History).
+  startBackgroundSync(corr.rows[0].id, user, { extraCaseNos: synced.rows.map(r => r.case_no) });
+  return { ...SYNC_STARTED, count: synced.rows.length };
 }
 
 /**
