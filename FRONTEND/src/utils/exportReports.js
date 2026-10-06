@@ -5,7 +5,7 @@ let pdfPluginApplied = false;
 export async function exportCSV(cases) {
   if (!cases?.length) return;
   const { saveAs } = await import('file-saver');
-  const headers = ['Case ID', 'Date', 'Barangay', 'Sex', 'Age', 'Registration Group', 'Anatomical Site', 'Outcome', 'Bacteriological Status'];
+  const headers = ['Case ID', 'Date', 'Barangay', 'Sex', 'Age', 'Registration Group', 'Anatomical Site', 'Case Status', 'Treatment Outcome', 'Source Outcome Value', 'Bacteriological Status'];
   const rows = cases.map(r => [
     r.id,
     r.date_of_diagnosis ? new Date(r.date_of_diagnosis).toLocaleDateString('en-US') : '',
@@ -14,7 +14,9 @@ export async function exportCSV(cases) {
     r.age ?? '',
     r.registration_group || '',
     r.anatomical_site || '',
+    r.case_status || '',
     r.outcome_status || '',
+    r.source_outcome_status || '',
     r.bacteriological_status || '',
   ]);
   const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -35,7 +37,8 @@ export async function exportExcel(reportData) {
     ['Generated', reportData.report?.generatedAt ? new Date(reportData.report.generatedAt).toLocaleString() : ''],
     [],
     ['Total Cases', reportData.summary?.totalCases ?? ''],
-    ['Active Cases', reportData.summary?.activeCases ?? ''],
+    ['Diagnosed', reportData.summary?.diagnosedCases ?? ''],
+    ['On Treatment', reportData.summary?.onTreatmentCases ?? ''],
     ['Treatment Success Rate', reportData.summary?.successRate != null ? `${reportData.summary.successRate}%` : 'N/A'],
   ];
   const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
@@ -43,7 +46,7 @@ export async function exportExcel(reportData) {
 
   // TB Records sheet
   if (reportData.cases?.length) {
-    const recordHeaders = ['Case ID', 'Date', 'Barangay', 'Sex', 'Age', 'Registration Group', 'Outcome'];
+    const recordHeaders = ['Case ID', 'Date', 'Barangay', 'Sex', 'Age', 'Registration Group', 'Case Status', 'Treatment Outcome', 'Source Outcome Value'];
     const recordRows = reportData.cases.map(r => [
       r.id,
       r.date_of_diagnosis ? new Date(r.date_of_diagnosis).toLocaleDateString('en-US') : '',
@@ -51,7 +54,9 @@ export async function exportExcel(reportData) {
       r.sex || '',
       r.age ?? '',
       r.registration_group || '',
+      r.case_status || '',
       r.outcome_status || '',
+      r.source_outcome_status || '',
     ]);
     const wsRecords = XLSX.utils.aoa_to_sheet([recordHeaders, ...recordRows]);
     XLSX.utils.book_append_sheet(wb, wsRecords, 'TB Records');

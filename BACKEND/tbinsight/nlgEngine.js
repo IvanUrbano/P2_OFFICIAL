@@ -262,7 +262,8 @@ function generateAnalyticsInsight(metrics, filters = {}) {
     if (filters.sex) parts.push(filters.sex);
     if (filters.ageGroup) parts.push(`Age ${filters.ageGroup}`);
     if (filters.bacteriological) parts.push(filters.bacteriological);
-    if (filters.outcome) parts.push(filters.outcome);
+    if (filters.status) parts.push(`Case status: ${filters.status}`);
+    if (filters.outcome) parts.push(`Treatment outcome: ${filters.outcome}`);
     return parts;
   };
 

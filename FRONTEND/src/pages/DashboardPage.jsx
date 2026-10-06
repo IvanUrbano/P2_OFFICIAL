@@ -9,7 +9,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import API from '../api/axios';
 import DashboardWelcomeInsightsSection from '../components/DashboardWelcomeInsightsSection';
-import TreatmentCascadeCard from '../components/TreatmentCascadeCard';
+import OutcomeStatusPanel from '../components/OutcomeStatusPanel';
 import ChartInsight from '../components/ChartInsight';
 import { trendInsight, riskInsight, shareInsight, outcomeInsight, forecastInsight } from '../utils/chartInsights';
 import { getDashboardInsight } from '../services/insightService';
@@ -316,7 +316,7 @@ export default function DashboardPage() {
   const [riskYear, setRiskYear] = useState(null);
   const [pipelineStatus, setPipelineStatus] = useState(null);
   const [demographicsData, setDemographicsData] = useState([]);
-  const [cascadeData, setCascadeData] = useState(null);
+  const [statusSummary, setStatusSummary] = useState(null); // diagnosed / on treatment counts
   // Freshness metadata from GET /api/tb/data-freshness: Last Synced and Last
   // Model Run are distinct timestamps and are kept distinct.
   const [freshness, setFreshness] = useState(null);
@@ -378,7 +378,7 @@ export default function DashboardPage() {
     );
 
     const [monthlyRes, outcomesRes, forecastsRes, alertsRes, riskRes,
-      pipelineRes, demoRes, cascadeRes, tsrRes, cfrRes, freshRes] =
+      pipelineRes, demoRes, statusRes, tsrRes, cfrRes, freshRes] =
       await Promise.all([
         get('/api/tb/dashboard/monthly'),
         get('/api/tb/dashboard/outcomes'),
@@ -391,7 +391,8 @@ export default function DashboardPage() {
         get('/api/tb/gis/choropleth'),
         get('/api/tb/pipeline/status'),
         get('/api/tb/dashboard/demographics'),
-        get('/api/tb/treatment-cascade'),
+        // Case status counts (Diagnosed / On Treatment) for the outcomes panel
+        get('/api/tb/dashboard/summary'),
         // Unfiltered (no year/barangay) — the Dashboard is an overview page —
         // which defaults to the current-year Y-1 cohort.
         get('/api/tb/treatment-success-rate'),
@@ -407,7 +408,7 @@ export default function DashboardPage() {
       risk: !riskRes.ok,
       pipeline: !pipelineRes.ok,
       demographics: !demoRes.ok,
-      cascade: !cascadeRes.ok,
+      status: !statusRes.ok,
       tsr: !tsrRes.ok,
       cfr: !cfrRes.ok,
       freshness: !freshRes.ok,
@@ -422,7 +423,7 @@ export default function DashboardPage() {
     setRiskYear(riskRes.data?.year ?? null);
     setPipelineStatus(pipelineRes.data?.latest_run || null);
     setDemographicsData(demoRes.data?.demographics || []);
-    setCascadeData(cascadeRes.data || null);
+    setStatusSummary(statusRes.data?.summary || null);
     setTsrData(tsrRes.data || null);
     setCfrData(cfrRes.data || null);
     setFreshness(freshRes.data || null);
@@ -431,7 +432,7 @@ export default function DashboardPage() {
     // there is genuinely nothing to show. A partial failure keeps the page
     // and degrades the affected cards individually.
     const anyOk = [monthlyRes, outcomesRes, forecastsRes, riskRes,
-      alertsRes, demoRes, cascadeRes, tsrRes, cfrRes, freshRes].some((r) => r.ok);
+      alertsRes, demoRes, statusRes, tsrRes, cfrRes, freshRes].some((r) => r.ok);
     if (!anyOk) {
       setError('Dashboard data could not be retrieved. Please try again.');
     }
@@ -1332,9 +1333,6 @@ export default function DashboardPage() {
             </SectionCard>
           </div>
 
-          {/* ─── Treatment Cascade (shared backend calculation) ─── */}
-          <TreatmentCascadeCard data={cascadeData} failed={!!failed.cascade} />
-
           {/* ─── 7. Demographics — Sex + Treatment Outcomes ─── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Sex Distribution */}
@@ -1401,10 +1399,10 @@ export default function DashboardPage() {
 
             {/* Treatment Outcomes */}
             <SectionCard
-              title="Case Status / Outcome Distribution"
+              title="Treatment Outcomes & Case Status"
               insight={outcomeInsight(outcomeChartData, { nameKey: 'outcome', valueKey: 'count' })}
               iconColor="#10B981"
-              description="Distribution of reported TB records by the Outcome/Status values recorded in the source data."
+              description="Final treatment outcomes, with cases still diagnosed or on treatment shown separately."
               action="View Analytics"
               actionTo="/analytics"
             >
@@ -1413,51 +1411,18 @@ export default function DashboardPage() {
                   <i className="ri-cloud-off-line text-xl" style={{ color: '#B07070' }} />
                   <p className="text-xs" style={{ color: '#B07070' }}>Outcome data could not be loaded.</p>
                 </div>
-              ) : outcomeChartData.length > 0 ? (
-                <div className="flex items-center justify-center gap-6">
-                  <div className="w-[180px] h-[180px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={outcomeChartData.map(e => ({ name: e.outcome, value: e.count }))}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={45}
-                          outerRadius={80}
-                          paddingAngle={2}
-                          dataKey="value"
-                        >
-                          {outcomeChartData.map((entry, i) => (
-                            <Cell key={i} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip formatter={(value) => value.toLocaleString()} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="space-y-1.5">
-                    {outcomeChartData.map((entry) => (
-                      <div key={entry.outcome} className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: entry.color }} />
-                        <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>
-                          {entry.outcome?.length > 16 ? entry.outcome.slice(0, 14) + '...' : entry.outcome}
-                        </span>
-                        <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{entry.count}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-16 gap-2">
-                  <i className="ri-pie-chart-2-line text-xl" style={{ color: '#CBD5E1' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>No outcome data available.</p>
-                </div>
+                <OutcomeStatusPanel
+                  outcomes={Object.fromEntries(outcomeChartData.map((e) => [e.outcome, e.count]))}
+                  diagnosed={statusSummary?.diagnosed_count || 0}
+                  onTreatment={statusSummary?.on_treatment_count || 0}
+                />
               )}
               {outcomeChart.excluded > 0 && (
                 <p className="text-[10px] mt-3" style={{ color: '#94A3B8' }}>
                   Showing {outcomeChart.chartTotal.toLocaleString()} of {totalCases.total.toLocaleString()} records.
                   {' '}{outcomeChart.excluded.toLocaleString()} record{outcomeChart.excluded === 1 ? '' : 's'} carry a
-                  status that is not one of the verified source Outcome/Status categories and are not charted.
+                  source value without a final treatment outcome and are not charted.
                 </p>
               )}
             </SectionCard>

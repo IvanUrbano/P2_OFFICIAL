@@ -330,6 +330,11 @@ const initDb = async () => {
       console.error('❌ Facility codes migration failed (continuing):', facilityCodesErr.message);
     }
 
+    const treatmentStateMigPath = path.join(__dirname, 'db', 'migrations', '031_case_status_treatment_outcome.sql');
+    if (fs.existsSync(treatmentStateMigPath)) {
+      await execSql(fs.readFileSync(treatmentStateMigPath, 'utf8'));
+    }
+
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,
     // undoing two earlier over-broad attempts, and keep only the Kapasigan Extension ->
     // Bagong Katipunan rename/population fix (idempotent)

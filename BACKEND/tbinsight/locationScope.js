@@ -17,7 +17,7 @@
  *
  * Nothing else decides inclusion. A query that filters on a barangay name already
  * excludes these rows for free (their barangay_name IS NULL), so cohort rates such as
- * TSR / CFR / the treatment cascade need no predicate.
+ * TSR / CFR need no predicate.
  *
  * Every predicate takes an optional table alias so it can be dropped into a JOINed
  * query without shadowing.

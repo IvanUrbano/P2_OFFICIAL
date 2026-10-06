@@ -79,8 +79,8 @@ function buildReport(data, config) {
   } else {
     executiveSummary.push(`${summary.totalCases} TB cases were recorded in Barangay ${barangay} for ${year}.`);
   }
-  if (summary.activeCases > 0) {
-    executiveSummary.push(`${summary.activeCases} cases remain active on treatment.`);
+  if (summary.onTreatmentCases > 0) {
+    executiveSummary.push(`${summary.onTreatmentCases} cases are recorded as on treatment.`);
   }
   if (summary.successRate != null) {
     executiveSummary.push(`Treatment success rate is ${summary.successRate}%, ${summary.successRate >= 85 ? 'above' : 'below'} the 85% target.`);
@@ -105,6 +105,13 @@ function buildReport(data, config) {
 
   // Tables
   const tables = [{
+    title: 'CASE STATUS BREAKDOWN',
+    headers: ['Status', 'Count'],
+    rows: [
+      ['DIAGNOSED', summary.diagnosedCases || 0],
+      ['ON TREATMENT', summary.onTreatmentCases || 0],
+    ],
+  }, {
     title: 'TREATMENT OUTCOME BREAKDOWN',
     headers: ['Outcome', 'Count', 'Percentage'],
     rows: outcomes?.map(o => [o.outcome_status, o.count, `${o.percentage}%`]) || [],
@@ -171,7 +178,8 @@ function ReportRenderer({ report, reportData }) {
             <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
             <div className="flex flex-wrap gap-x-8 gap-y-1 text-xs" style={{ color: '#1E293B' }}>
               <span><strong>Total Cases:</strong> {reportData.summary.totalCases ?? 0}</span>
-              <span><strong>Active Cases:</strong> {reportData.summary.activeCases ?? 0}</span>
+              <span><strong>Diagnosed:</strong> {reportData.summary.diagnosedCases ?? 0}</span>
+              <span><strong>On Treatment:</strong> {reportData.summary.onTreatmentCases ?? 0}</span>
               <span><strong>Success Rate:</strong> {reportData.summary.successRate != null ? `${reportData.summary.successRate}%` : 'N/A'}</span>
               <span><strong>Case Fatality Rate:</strong> {reportData.summary.fatalityRate != null ? `${reportData.summary.fatalityRate}%` : 'N/A'}</span>
             </div>

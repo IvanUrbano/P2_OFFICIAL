@@ -202,7 +202,7 @@ describe('GET /api/tb/cases', () => {
     const outcomeParam = capturedParams.find((p) => Array.isArray(p) && p.includes('CURED'));
     assert.ok(outcomeParam, `expected a bound array containing CURED, got ${JSON.stringify(capturedParams)}`);
     assert.deepStrictEqual(outcomeParam, ['CURED']);
-    assert.match(capturedSql, /UPPER\(TRIM\(c\.outcome_status\)\)\s*=\s*ANY\(\$\d+\)/);
+    assert.match(capturedSql, /c\.treatment_outcome\s*=\s*ANY\(\$\d+\)/);
   });
 
   it('expands FAILED to the legacy TREATMENT FAILED value', async () => {
@@ -225,15 +225,15 @@ describe('GET /api/tb/cases', () => {
     assert.ok(outcomeParam.includes('TREATMENT FAILED'), 'also matches the legacy stored value');
   });
 
-  it('returns record outcomes as the source-aligned label, never the legacy form', async () => {
+  it('returns separate canonical treatment state and the retained source value', async () => {
     let callCount = 0;
     mockQueryFn = async () => {
       callCount++;
       if (callCount === 1) return { rows: [{ total: 2 }] };
       return {
         rows: [
-          { id: 1, outcome_status: 'TREATMENT FAILED' },
-          { id: 2, outcome_status: 'SCREENED' },
+          { id: 1, outcome_status: 'TREATMENT FAILED', source_outcome_status: 'Failed', case_status: null, treatment_outcome: 'TREATMENT FAILED' },
+          { id: 2, outcome_status: 'SCREENED', case_status: null, treatment_outcome: null },
         ],
       };
     };
@@ -241,12 +241,11 @@ describe('GET /api/tb/cases', () => {
     assert.strictEqual(res.status, 200);
 
     const [failed, screened] = res.body.cases;
-    // Legacy value is presented under the source-aligned label...
-    assert.strictEqual(failed.outcome_status, 'FAILED');
-    assert.strictEqual(failed.outcome_status_raw, 'TREATMENT FAILED');
+    assert.strictEqual(failed.outcome_status, 'TREATMENT FAILED');
+    assert.strictEqual(failed.outcome_status_raw, 'Failed');
     assert.strictEqual(failed.outcome_status_approved, true);
-    // ...and an unverified value is preserved, not remapped, but flagged.
-    assert.strictEqual(screened.outcome_status, 'SCREENED');
+    assert.strictEqual(screened.outcome_status, null);
+    assert.strictEqual(screened.outcome_status_raw, 'SCREENED');
     assert.strictEqual(screened.outcome_status_approved, false);
   });
 
@@ -286,13 +285,13 @@ describe('GET /api/tb/cases/analytics-dataset', () => {
   }
 
   const FIELDS = ['barangay_name', 'age', 'sex', 'date_of_diagnosis', 'screening_facility',
-    'treatment_facility', 'bacteriological_status', 'outcome_status', 'imported_at'];
+    'treatment_facility', 'bacteriological_status', 'outcome_status', 'outcome_status_raw', 'source_outcome_status', 'case_status', 'treatment_outcome', 'imported_at'];
 
   it('returns every case with only the fields the charts use — no identifiers', async () => {
     let captured;
     mockQueryFn = async (sql, params) => {
       captured = { sql, params };
-      return { rows: [{ barangay_name: 'Pinagbuhatan', age: 41, sex: 'M', date_of_diagnosis: '2025-01-05', screening_facility: 'A', treatment_facility: 'B', bacteriological_status: 'BC', outcome_status: 'TREATMENT FAILED', imported_at: '2025-02-01' }] };
+      return { rows: [{ barangay_name: 'Pinagbuhatan', age: 41, sex: 'M', date_of_diagnosis: '2025-01-05', screening_facility: 'A', treatment_facility: 'B', bacteriological_status: 'BC', outcome_status: 'TREATMENT FAILED', source_outcome_status: 'Failed', case_status: null, treatment_outcome: 'TREATMENT FAILED', imported_at: '2025-02-01' }] };
     };
     const res = await request(buildAppAs({ role: 'admin' })).get('/api/tb/cases/analytics-dataset');
     assert.strictEqual(res.status, 200);
@@ -303,7 +302,8 @@ describe('GET /api/tb/cases/analytics-dataset', () => {
     }
     assert.ok(!/\bLIMIT\b/.test(captured.sql), 'not paginated: Analytics needs every case');
     assert.match(captured.sql, /ORDER BY c\.date_of_diagnosis DESC/, 'same order as /api/tb/cases');
-    assert.strictEqual(res.body.cases[0].outcome_status, 'FAILED', 'same outcome labels as /api/tb/cases');
+    assert.strictEqual(res.body.cases[0].outcome_status, 'TREATMENT FAILED', 'same outcome labels as /api/tb/cases');
+    assert.strictEqual(res.body.cases[0].outcome_status_raw, 'Failed', 'original source value is retained');
     assert.deepStrictEqual(captured.params, [], 'admin is not facility-scoped');
   });
 

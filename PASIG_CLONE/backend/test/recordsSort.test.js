@@ -73,7 +73,18 @@ describe('GET /records sorting', () => {
   it('whitelisted keys map to their column with the requested direction', async () => {
     const r = await fetchOrder('?sort=outcome&dir=asc');
     assert.strictEqual(r.status, 200);
-    assert.ok(r.sql.includes('ORDER BY v.outcome_status ASC LIMIT'), r.sql);
+    assert.ok(r.sql.includes('ORDER BY v.treatment_outcome ASC LIMIT'), r.sql);
+    const status = await fetchOrder('?sort=status&dir=asc');
+    assert.ok(status.sql.includes('ORDER BY v.case_status ASC LIMIT'), status.sql);
+  });
+
+  it('filters case status and treatment outcome independently', async () => {
+    const status = await fetchOrder('?status=ON%20TREATMENT');
+    assert.ok(status.sql.includes('AND v.case_status = $1'), status.sql);
+    assert.ok(!status.sql.includes('v.treatment_outcome ='), status.sql);
+    const outcome = await fetchOrder('?outcome=CURED');
+    assert.ok(outcome.sql.includes('AND v.treatment_outcome = $1'), outcome.sql);
+    assert.ok(!outcome.sql.includes('v.case_status ='), outcome.sql);
   });
 
   it('multi-column keys apply the direction to every column', async () => {

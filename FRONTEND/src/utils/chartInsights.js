@@ -75,7 +75,7 @@ export function shareInsight(items, { nameKey = 'name', valueKey = 'value', noun
   return `${text}.`;
 }
 
-/** Treatment outcomes: most common status, success share, still on treatment, lost to follow-up. */
+/** Final treatment outcomes only; current case status is a separate measure. */
 export function outcomeInsight(items, { nameKey = 'name', valueKey = 'Cases' } = {}) {
   const rows = (items || []).filter((r) => r && Number(r[valueKey]) > 0);
   if (rows.length === 0) return null;
@@ -83,11 +83,9 @@ export function outcomeInsight(items, { nameKey = 'name', valueKey = 'Cases' } =
   const get = (...names) => sum(rows.filter((r) => names.includes(String(r[nameKey]).toUpperCase())).map((r) => Number(r[valueKey])));
   const top = [...rows].sort((a, b) => Number(b[valueKey]) - Number(a[valueKey]))[0];
   const success = get('CURED', 'TREATMENT COMPLETED');
-  const onTx = get('ON TREATMENT');
-  const ltfu = get('LOST TO FF-UP', 'LOST TO FOLLOW-UP');
-  let text = `${titleCase(top[nameKey])} is the most common status (${pct(top[valueKey], total)}%). `;
-  text += `Cured or treatment completed: ${pct(success, total)}% of these cases`;
-  if (onTx) text += `; still on treatment: ${pct(onTx, total)}%`;
+  const ltfu = get('LOST TO FOLLOW-UP');
+  let text = `${titleCase(top[nameKey])} is the most common recorded treatment outcome (${pct(top[valueKey], total)}%). `;
+  text += `Cured or treatment completed: ${pct(success, total)}% of recorded outcomes`;
   if (ltfu) text += `; lost to follow-up: ${pct(ltfu, total)}%`;
   return `${text}.`;
 }

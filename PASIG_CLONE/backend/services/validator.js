@@ -26,6 +26,7 @@ const INSERT_COLUMNS = [
   'patient_id', 'case_no', 'match_status', 'match_candidate_case_no', 'match_suggestion',
   // Source traceability (file row; MN ITIS Lite Case No.)
   'source_case_id',
+  'source_outcome_status',
 ];
 
 async function insertPatients(client, patientNos, batchId) {
@@ -95,6 +96,7 @@ function rowValues(batchId, r) {
     r.patient_id ?? null, r.case_no ?? null, r.match_status || 'none',
     r.match_candidate_case_no ?? null, r.match_suggestion ?? null,
     r.source_case_id ?? null,
+    r.source_outcome_status ?? null,
   ].map(v => (v === undefined ? null : v));
 }
 
@@ -142,6 +144,7 @@ async function validateBatch(batchId) {
     results.validatedRecords.push({
       raw_id: record.id,
       ...cleaned,
+      source_outcome_status: record.csv_data?.outcome_status == null ? null : String(record.csv_data.outcome_status),
       source_type: record.source_type,
       row_number: record.row_number,
       is_valid: validation.valid,

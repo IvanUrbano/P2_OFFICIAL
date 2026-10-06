@@ -49,6 +49,7 @@ function formatRecord(record) {
     bacteriological_status: record.bacteriological_status,
     date_started_treatment: toYmd(record.date_started_treatment),
     outcome_status: record.outcome_status,
+    source_outcome_status: record.source_outcome_status ?? record.outcome_status,
     date_of_outcome: toYmd(record.date_of_outcome),
     record_created_at: record.record_created_at,
     source_type: record.source_type,

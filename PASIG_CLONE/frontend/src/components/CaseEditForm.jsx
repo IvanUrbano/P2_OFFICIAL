@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import API from '../api/axios';
 
-const OUTCOMES = ['ON TREATMENT', 'CURED', 'TREATMENT COMPLETED', 'TREATMENT FAILED', 'DIED', 'LOST TO FOLLOW-UP', 'NOT EVALUATED'];
+const CASE_STATUSES = ['DIAGNOSED', 'ON TREATMENT'];
+const OUTCOMES = ['CURED', 'TREATMENT COMPLETED', 'TREATMENT FAILED', 'LOST TO FOLLOW-UP', 'DIED', 'NOT EVALUATED', 'EXCLUDED'];
 
 const CASE_FIELDS = [
-  { key: 'outcome_status', label: 'Outcome', type: 'outcome' },
+  { key: 'case_status', label: 'Case status', type: 'status' },
+  { key: 'treatment_outcome', label: 'Treatment outcome', type: 'outcome' },
   { key: 'date_of_outcome', label: 'Date of outcome', type: 'date' },
   { key: 'outcome_reason', label: 'Outcome reason', type: 'text' },
   { key: 'date_started_treatment', label: 'Treatment started', type: 'date' },
@@ -53,11 +55,15 @@ export default function CaseEditForm({ record, identityUnlocked, deidentified, f
   const [errors, setErrors] = useState([]);
   const [saving, setSaving] = useState(false);
 
-  const setValue = (k, v) => { setValues(x => ({ ...x, [k]: v })); setTouched(x => ({ ...x, [k]: true })); };
+  const setValue = (k, v) => {
+    setValues(x => ({ ...x, [k]: v, ...(v && k === 'case_status' ? { treatment_outcome: '' } : v && k === 'treatment_outcome' ? { case_status: '' } : {}) }));
+    setTouched(x => ({ ...x, [k]: true }));
+  };
 
   const save = async (e) => {
     e.preventDefault();
-    const changes = Object.fromEntries(Object.keys(touched).map(k => [k, values[k]]));
+    const changes = Object.fromEntries(Object.keys(touched).filter(k => !['case_status', 'treatment_outcome'].includes(k)).map(k => [k, values[k]]));
+    if (touched.case_status || touched.treatment_outcome) changes.outcome_status = values.treatment_outcome || values.case_status || null;
     if (Object.keys(changes).length === 0) { onCancel(); return; }
     setSaving(true);
     setErrors([]);
@@ -77,10 +83,10 @@ export default function CaseEditForm({ record, identityUnlocked, deidentified, f
     if (f.type === 'sex') return (
       <FormSelect {...common}><option value="">—</option><option value="Male">Male</option><option value="Female">Female</option></FormSelect>
     );
-    if (f.type === 'outcome') return (
+    if (f.type === 'outcome' || f.type === 'status') return (
       <FormSelect {...common}>
         <option value="">— not set —</option>
-        {[...new Set([...OUTCOMES, values[f.key]].filter(Boolean))].map(o => <option key={o} value={o}>{o}</option>)}
+        {[...new Set([...(f.type === 'status' ? CASE_STATUSES : OUTCOMES), values[f.key]].filter(Boolean))].map(o => <option key={o} value={o}>{o}</option>)}
       </FormSelect>
     );
     if (f.type === 'facility') return (<><input type="text" list="case-edit-facilities" {...common} /></>);

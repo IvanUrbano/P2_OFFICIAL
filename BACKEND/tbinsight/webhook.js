@@ -354,6 +354,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
             record.case_no || null, record.patient_no || null, record.source_case_id || null,
             isPasigResident ? null : residenceBarangay,
             isPasigResident ? null : residenceCity,
+            record.source_outcome_status ?? record.outcome_status ?? null,
           ]);
           // NOT incremented here — this only means "passed validation".
           // The real insert count (importedCount, set below) reflects what
@@ -366,7 +367,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       }
     }
 
-    const COLS = 38;
+    const COLS = 39;
     const chunkSize = 100;
     let insertedCount = 0;
     let updatedCount = 0;
@@ -397,7 +398,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
           rdt_result, rdt_release_date, outcome_reason,
           dstb_fingerprint, current_responsible_facility_id,
           case_no, patient_no, source_case_id,
-          residence_barangay_name, residence_city
+          residence_barangay_name, residence_city, source_outcome_status
         ) VALUES ${placeholders}
         ON CONFLICT (case_no) WHERE case_no IS NOT NULL DO UPDATE SET
           barangay_id = EXCLUDED.barangay_id,
@@ -406,6 +407,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
           residence_city = EXCLUDED.residence_city,
           location_classification = EXCLUDED.location_classification,
           outcome_status = EXCLUDED.outcome_status,
+          source_outcome_status = COALESCE(EXCLUDED.source_outcome_status, tb_cases.source_outcome_status),
           date_of_outcome = EXCLUDED.date_of_outcome,
           date_started_treatment = EXCLUDED.date_started_treatment,
           treatment_facility = EXCLUDED.treatment_facility,

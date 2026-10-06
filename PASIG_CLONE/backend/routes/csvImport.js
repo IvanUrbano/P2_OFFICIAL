@@ -611,7 +611,8 @@ const RECORD_SORT_COLUMNS = {
   date: 'v.date_of_diagnosis',
   sex: 'v.sex',
   age: 'v.age',
-  outcome: 'v.outcome_status',
+  status: 'v.case_status',
+  outcome: 'v.treatment_outcome',
   facility: 'v.screening_facility',
   bact: 'v.bacteriological_status',
   source: 'v.source_type',
@@ -660,6 +661,14 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
     if (req.query.source_type) {
       params.push(req.query.source_type);
       filters += ` AND v.source_type = $${params.length}`;
+    }
+    if (['DIAGNOSED', 'ON TREATMENT'].includes(req.query.status)) {
+      params.push(req.query.status);
+      filters += ` AND v.case_status = $${params.length}`;
+    }
+    if (['CURED', 'TREATMENT COMPLETED', 'TREATMENT FAILED', 'LOST TO FOLLOW-UP', 'DIED', 'NOT EVALUATED', 'EXCLUDED'].includes(req.query.outcome)) {
+      params.push(req.query.outcome);
+      filters += ` AND v.treatment_outcome = $${params.length}`;
     }
     const namesUnlocked = pinService.isUnlocked(req);
     if (req.query.search) {

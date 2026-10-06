@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  APPROVED_OUTCOMES, normalizeRecordOutcome, isApprovedOutcome,
+  APPROVED_OUTCOMES, CASE_STATUSES, normalizeRecordOutcome, isApprovedOutcome,
 } from '../utils/outcomeStatus';
 import API from "../api/axios";
 
@@ -21,20 +21,21 @@ const statusColors = {
   "CURED": { bg: '#ECFDF5', text: '#047857', dot: '#059669' },
   "DIED": { bg: '#FEF2F2', text: '#991B1B', dot: '#B91C1C' },
   "LOST TO FF-UP": { bg: '#F3F4F6', text: '#374151', dot: '#6B7280' },
+  "LOST TO FOLLOW-UP": { bg: '#F3F4F6', text: '#374151', dot: '#6B7280' },
   "FAILED": { bg: '#FEF2F2', text: '#991B1B', dot: '#B91C1C' },
+  "TREATMENT FAILED": { bg: '#FEF2F2', text: '#991B1B', dot: '#B91C1C' },
   "DIAGNOSED": { bg: '#F0F9FF', text: '#0369A1', dot: '#0284C7' },
   "EXCLUDED": { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' },
   "NOT EVALUATED": { bg: '#F5F3FF', text: '#5B21B6', dot: '#7C3AED' },
   "PENDING": { bg: '#FFFBEB', text: '#92400E', dot: '#B45309' },
 };
 
-function StatusBadge({ status }) {
-  // The API returns the source-aligned label (a legacy 'TREATMENT FAILED' row
-  // arrives as 'FAILED'); normalizing again here keeps the badge correct for
-  // any value that reaches it unmapped.
+function StatusBadge({ status, kind = 'outcome' }) {
+  if (!status) return <span className="text-xs text-slate-400">—</span>;
+  // Keep legacy aliases readable when an older API response reaches this view.
   const raw = (status || "PENDING").trim();
   const value = raw === 'PENDING' ? raw : (normalizeRecordOutcome(raw) || raw);
-  const unverified = raw !== 'PENDING' && !isApprovedOutcome(raw);
+  const unverified = kind === 'outcome' && raw !== 'PENDING' && !isApprovedOutcome(raw);
   const colors = statusColors[value] || { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' };
   return (
     <span
@@ -43,15 +44,12 @@ function StatusBadge({ status }) {
     >
       <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: colors.dot }} />
       {value.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
-      {/* A value outside the 9 verified source categories is shown as stored
-          (traceability) but marked, so it is never read as an Excel-defined
-          Outcome/Status. It is deliberately not remapped onto another
-          category without evidence. */}
+      {/* Mark values outside the seven treatment outcome categories. */}
       {unverified && (
         <span
           className="ml-0.5 text-[9px] font-extrabold"
           style={{ color: '#B45309' }}
-          title="Not one of the verified source Outcome/Status categories - shown as stored, pending review"
+          title="Not a recognized treatment outcome; shown as stored for review"
         >
           ⚠
         </span>
@@ -151,6 +149,7 @@ export default function TBRecords() {
   const [selectedMonth, setSelectedMonth] = useState("");
   const [selectedBarangay, setSelectedBarangay] = useState("");
   const [selectedOutcomeStatus, setSelectedOutcomeStatus] = useState("");
+  const [selectedCaseStatus, setSelectedCaseStatus] = useState("");
   const [selectedFacility, setSelectedFacility] = useState("");
   const [selectedSex, setSelectedSex] = useState("");
   const [selectedBacteriologicalStatus, setSelectedBacteriologicalStatus] = useState("");
@@ -176,6 +175,7 @@ export default function TBRecords() {
       month: selectedMonth,
       barangay: selectedBarangay,
       outcome: selectedOutcomeStatus,
+      status: selectedCaseStatus,
       facility: selectedFacility,
       sex: selectedSex,
       bacteriological: selectedBacteriologicalStatus,
@@ -195,6 +195,7 @@ export default function TBRecords() {
     setSelectedMonth(pendingFilters.month || "");
     setSelectedBarangay(pendingFilters.barangay || "");
     setSelectedOutcomeStatus(pendingFilters.outcome || "");
+    setSelectedCaseStatus(pendingFilters.status || "");
     setSelectedFacility(pendingFilters.facility || "");
     setSelectedSex(pendingFilters.sex || "");
     setSelectedBacteriologicalStatus(pendingFilters.bacteriological || "");
@@ -206,7 +207,7 @@ export default function TBRecords() {
   };
 
   const clearPendingFilters = () => {
-    setPendingFilters({ year: "", month: "", barangay: "", outcome: "", facility: "", sex: "", bacteriological: "", validation: "", source: "", location: "" });
+    setPendingFilters({ year: "", month: "", barangay: "", outcome: "", status: "", facility: "", sex: "", bacteriological: "", validation: "", source: "", location: "" });
   };
 
   /* --- Format chip display --- */
@@ -228,6 +229,7 @@ export default function TBRecords() {
       if (monthNum) params.append("month", monthNum);
     }
     if (selectedOutcomeStatus) params.append("outcome", selectedOutcomeStatus);
+    if (selectedCaseStatus) params.append("status", selectedCaseStatus);
     if (selectedFacility) params.append("facility", selectedFacility);
     if (selectedSex) params.append("sex", selectedSex);
     if (selectedBacteriologicalStatus) params.append("bacteriological_status", selectedBacteriologicalStatus);
@@ -235,7 +237,7 @@ export default function TBRecords() {
     if (selectedSourceType) params.append("source_type", selectedSourceType);
     if (selectedLocationClassification) params.append("location_classification", selectedLocationClassification);
     return params;
-  }, [debouncedSearch, selectedBarangay, selectedYear, selectedMonth, selectedOutcomeStatus, selectedFacility, selectedSex, selectedBacteriologicalStatus, selectedValidationStatus, selectedSourceType, selectedLocationClassification]);
+  }, [debouncedSearch, selectedBarangay, selectedYear, selectedMonth, selectedOutcomeStatus, selectedCaseStatus, selectedFacility, selectedSex, selectedBacteriologicalStatus, selectedValidationStatus, selectedSourceType, selectedLocationClassification]);
 
   /* --- Fetch metrics (filter-aware) --- */
   const fetchMetrics = useCallback(async () => {
@@ -283,6 +285,7 @@ export default function TBRecords() {
     { key: 'month', label: 'Month', value: selectedMonth },
     { key: 'barangay', label: 'Barangay', value: selectedBarangay },
     { key: 'outcome', label: 'Outcome', value: selectedOutcomeStatus },
+    { key: 'status', label: 'Case Status', value: selectedCaseStatus },
     { key: 'facility', label: 'Facility', value: selectedFacility },
     { key: 'sex', label: 'Sex', value: selectedSex },
     { key: 'bacteriological', label: 'Bacteriological', value: selectedBacteriologicalStatus },
@@ -299,6 +302,7 @@ export default function TBRecords() {
     month: setSelectedMonth,
     barangay: setSelectedBarangay,
     outcome: setSelectedOutcomeStatus,
+    status: setSelectedCaseStatus,
     facility: setSelectedFacility,
     sex: setSelectedSex,
     bacteriological: setSelectedBacteriologicalStatus,
@@ -666,14 +670,15 @@ export default function TBRecords() {
                     { label: "Facility", field: "screening_facility", idx: 5 },
                     { label: "Source", field: "source_type", idx: 6 },
                     { label: "Bacteriologic Status", field: null, idx: 7 },
-                    { label: "Status", field: null, idx: 8 },
-                    { label: "Action", field: null, idx: 9 },
+                    { label: "Case Status", field: null, idx: 8 },
+                    { label: "Treatment Outcome", field: null, idx: 9 },
+                    { label: "Action", field: null, idx: 10 },
                   ].map(({ label, field, idx }) => {
                     const isActive = field && sortField === field;
                     return (
                       <th key={label}
                         className={`${idx === 0 ? 'pl-6' : 'px-3'} pr-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${idx === 5 ? 'max-w-[200px]' : ''} ${field ? 'cursor-pointer select-none' : ''}`}
-                        style={{ color: isActive ? '#93C5FD' : '#ffffff', borderBottom: '1px solid #1E40AF', borderRight: idx < 9 ? '1px solid #1E40AF' : 'none', transition: 'color 0.15s' }}
+                        style={{ color: isActive ? '#93C5FD' : '#ffffff', borderBottom: '1px solid #1E40AF', borderRight: idx < 10 ? '1px solid #1E40AF' : 'none', transition: 'color 0.15s' }}
                         onClick={field ? () => handleSort(field) : undefined}
                         onMouseEnter={e => { if (field && !isActive) e.currentTarget.style.color = '#CBD5E1'; }}
                         onMouseLeave={e => { if (field && !isActive) e.currentTarget.style.color = '#ffffff'; }}
@@ -696,7 +701,7 @@ export default function TBRecords() {
                 {loading ? (
                   Array.from({ length: 8 }).map((_, i) => (
                     <tr key={`skeleton-${i}`} style={{ borderBottom: '1px solid #E2E8F0', background: i % 2 === 0 ? '#ffffff' : '#F8FAFC' }}>
-                      {Array.from({ length: 10 }).map((_, j) => (
+                      {Array.from({ length: 11 }).map((_, j) => (
                         <td key={j} className={`${j === 0 ? 'pl-6' : 'px-3'} pr-3 py-2`} style={{ borderRight: j < 9 ? '1px solid #E2E8F0' : 'none' }}>
                           <div className="h-3 rounded animate-pulse" style={{
                              background: 'linear-gradient(90deg, #F1F5F9 25%, #E2E8F0 50%, #F1F5F9 75%)',
@@ -709,7 +714,7 @@ export default function TBRecords() {
                   ))
                 ) : error ? (
                   <tr>
-                    <td colSpan={10} className="px-5 py-12 text-center text-sm" style={{ color: '#DC2626' }}>
+                    <td colSpan={11} className="px-5 py-12 text-center text-sm" style={{ color: '#DC2626' }}>
                       <div className="flex flex-col items-center gap-3">
                         <i className="ri-error-warning-line text-2xl" />
                         <p>{error}</p>
@@ -725,7 +730,7 @@ export default function TBRecords() {
                   </tr>
                 ) : records.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-5 py-12 text-center text-sm" style={{ color: '#94A3B8' }}>
+                    <td colSpan={11} className="px-5 py-12 text-center text-sm" style={{ color: '#94A3B8' }}>
                       No records found matching your filters.
                     </td>
                   </tr>
@@ -750,7 +755,14 @@ export default function TBRecords() {
                       </td>
                       <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.bacteriological_status ? record.bacteriological_status.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
                       <td className="px-3 py-2" style={{ borderRight: '1px solid #E2E8F0' }}>
-                        <StatusBadge status={record.outcome_status} />
+                        <StatusBadge status={record.case_status} kind="status" />
+                      </td>
+                      <td className="px-3 py-2" style={{ borderRight: '1px solid #E2E8F0' }}>
+                        {record.treatment_outcome
+                          ? <StatusBadge status={record.treatment_outcome} />
+                          : record.case_status
+                            ? <span className="text-xs text-slate-400 cursor-help" title={record.case_status === 'DIAGNOSED' ? 'Diagnosed, not yet on treatment — no final outcome yet' : 'Still on treatment — no final outcome yet'}>—</span>
+                            : <span className="text-xs text-slate-400">—</span>}
                       </td>
                       <td className="px-3 py-2 text-center">
                         <button aria-label="View record" onClick={() => setSelectedRecord(record)}
@@ -906,10 +918,15 @@ export default function TBRecords() {
               </div>
               <div style={{ borderTop: '1px solid #E2E8F0' }} />
               <div>
-                <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Case Status</h3>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Treatment</h3>
                 <div className="space-y-3">
                   <FilterSelect
-                    label="Outcome Status"
+                    label="Case Status"
+                    value={pendingFilters.status || ""} onChange={(v) => updatePending('status', v)}
+                    options={CASE_STATUSES} placeholder="All"
+                  />
+                  <FilterSelect
+                    label="Treatment Outcome"
                     value={pendingFilters.outcome || ""} onChange={(v) => updatePending('outcome', v)}
                     options={outcomeStatuses.length > 0 ? outcomeStatuses : ALL_OUTCOME_STATUSES} placeholder="All"
                   />
@@ -987,7 +1004,8 @@ export default function TBRecords() {
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Case ID</p>
                 <p className="text-2xl font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{selectedRecord.source_case_id || selectedRecord.case_no || String(selectedRecord.id).padStart(4, "0")}</p>
-                <div className="mt-2"><StatusBadge status={selectedRecord.outcome_status} /></div>
+                <div className="mt-2 flex gap-2"><StatusBadge status={selectedRecord.case_status} kind="status" />{selectedRecord.treatment_outcome ? <StatusBadge status={selectedRecord.treatment_outcome} /> : <span className="text-xs text-slate-400 self-center cursor-help" title={selectedRecord.case_status === 'DIAGNOSED' ? 'Diagnosed, not yet on treatment — no final outcome yet' : 'Still on treatment — no final outcome yet'}>—</span>}</div>
+                <p className="text-xs text-slate-400 mt-1">Original source value: {selectedRecord.outcome_status_raw || '—'}</p>
               </div>
               <div>
                 <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Case Summary</h3>

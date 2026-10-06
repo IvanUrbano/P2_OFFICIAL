@@ -11,11 +11,10 @@ const {
 } = require('./alertEngine');
 const { buildAnalyticsMetrics, buildForecastingMetrics, buildGisMetrics } = require('./insightDataBuilder');
 const { generateAnalyticsInsight, generateForecastingInsight, generateGisInsight } = require('./nlgEngine');
-const { computeTreatmentCascade } = require('./treatmentCascade');
 const { buildDashboardMetrics, generateDashboardInsight } = require('./dashboardInsight');
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 const {
-  APPROVED_OUTCOMES, normalizeDisplayOutcome, normalizeRecordOutcome,
+  APPROVED_OUTCOMES, CASE_STATUSES, normalizeDisplayOutcome, normalizeRecordOutcome,
   isApprovedOutcome, getOutcomeFilterValues, foldOutcomeCounts, SUCCESS_OUTCOMES_SQL,
 } = require('./outcomeNormalization');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
@@ -102,7 +101,7 @@ router.get('/filter-options', async (req, res) => {
     const [sexRes, bactRes, outcomeRes, validationRes, sourceTypeRes, locationRes] = await Promise.all([
       pool.query(`SELECT DISTINCT TRIM(sex) as sex FROM tb_cases WHERE sex IS NOT NULL AND TRIM(sex) != '' ORDER BY sex`),
       pool.query(`SELECT DISTINCT TRIM(bacteriological_status) as bacteriological_status FROM tb_cases WHERE bacteriological_status IS NOT NULL AND TRIM(bacteriological_status) != '' ORDER BY bacteriological_status`),
-      pool.query(`SELECT DISTINCT TRIM(outcome_status) as outcome_status FROM tb_cases WHERE outcome_status IS NOT NULL AND TRIM(outcome_status) != '' ORDER BY outcome_status`),
+      pool.query(`SELECT DISTINCT treatment_outcome AS outcome_status FROM tb_cases WHERE treatment_outcome IS NOT NULL ORDER BY outcome_status`),
       pool.query(`SELECT DISTINCT TRIM(validation_status) as validation_status FROM tb_cases WHERE validation_status IS NOT NULL AND TRIM(validation_status) != '' ORDER BY validation_status`),
       pool.query(`SELECT DISTINCT TRIM(source_type) as source_type FROM tb_cases WHERE source_type IS NOT NULL AND TRIM(source_type) != '' ORDER BY source_type`),
       pool.query(`SELECT DISTINCT TRIM(location_classification) as location_classification FROM tb_cases WHERE location_classification IS NOT NULL AND TRIM(location_classification) != '' ORDER BY location_classification`),
@@ -115,6 +114,7 @@ router.get('/filter-options', async (req, res) => {
         .filter(v => v != null)
         .filter((v, i, arr) => arr.indexOf(v) === i)  // dedupe
         .sort((a, b) => APPROVED_OUTCOMES.indexOf(a) - APPROVED_OUTCOMES.indexOf(b)),
+      case_status: CASE_STATUSES,
       validation_status: validationRes.rows.map(r => r.validation_status),
       source_type: sourceTypeRes.rows.map(r => r.source_type),
       location_classification: locationRes.rows.map(r => r.location_classification),
@@ -198,6 +198,7 @@ router.get('/cases', async (req, res) => {
       year = '',
       month = '',
       outcome = '',
+      status = '',
       facility = '',
       sex = '',
       bacteriological_status = '',
@@ -232,6 +233,8 @@ router.get('/cases', async (req, res) => {
         `TRIM(c.sex) ILIKE $${paramIdx}`,
         `TRIM(c.bacteriological_status) ILIKE $${paramIdx}`,
         `TRIM(c.outcome_status) ILIKE $${paramIdx}`,
+        `TRIM(c.case_status) ILIKE $${paramIdx}`,
+        `TRIM(c.treatment_outcome) ILIKE $${paramIdx}`,
         `TRIM(c.source_of_patient) ILIKE $${paramIdx}`,
         `TRIM(c.anatomical_site) ILIKE $${paramIdx}`,
         `TRIM(c.registration_group) ILIKE $${paramIdx}`,
@@ -275,8 +278,14 @@ router.get('/cases', async (req, res) => {
     }
 
     if (outcome) {
-      conditions.push(`UPPER(TRIM(c.outcome_status)) = ANY($${paramIdx})`);
+      conditions.push(`c.treatment_outcome = ANY($${paramIdx})`);
       params.push(getOutcomeFilterValues(outcome));
+      paramIdx++;
+    }
+
+    if (status) {
+      conditions.push(`c.case_status = $${paramIdx}`);
+      params.push(status.trim().toUpperCase());
       paramIdx++;
     }
 
@@ -356,6 +365,9 @@ router.get('/cases', async (req, res) => {
         c.bacteriological_status,
         c.date_started_treatment,
         c.outcome_status,
+        c.source_outcome_status,
+        c.case_status,
+        c.treatment_outcome,
         c.date_of_outcome,
         c.imported_at,
         c.validation_status,
@@ -374,17 +386,12 @@ router.get('/cases', async (req, res) => {
       [...params, safeLimit, offset]
     );
 
-    // Record rows carry the SOURCE-ALIGNED outcome label, not the raw storage
-    // form: a legacy 'TREATMENT FAILED' row is returned as 'FAILED', which is
-    // the only user-facing terminology. The raw stored value is preserved
-    // alongside it for traceability, and `outcome_status_approved` is false for
-    // any value outside the 9 Excel-verified categories (e.g. SCREENED) so the
-    // UI can mark it rather than present it as a verified source category.
+    // Keep the source value for audit while exposing status and outcome separately.
     res.json({
       cases: dataResult.rows.map((r) => ({
         ...r,
-        outcome_status: normalizeRecordOutcome(r.outcome_status),
-        outcome_status_raw: r.outcome_status,
+        outcome_status: r.treatment_outcome,
+        outcome_status_raw: r.source_outcome_status ?? r.outcome_status,
         outcome_status_approved: isApprovedOutcome(r.outcome_status),
       })),
       pagination: {
@@ -429,7 +436,10 @@ router.get('/cases/analytics-dataset', async (req, res) => {
         c.treatment_facility,
         c.bacteriological_status,
         c.outcome_status,
+        c.source_outcome_status,
         c.imported_at,
+        c.case_status,
+        c.treatment_outcome,
         c.location_classification,
         c.residence_barangay_name,
         c.residence_city
@@ -440,7 +450,7 @@ router.get('/cases/analytics-dataset', async (req, res) => {
     );
 
     res.json({
-      cases: rows.map((r) => ({ ...r, outcome_status: normalizeRecordOutcome(r.outcome_status) })),
+      cases: rows.map((r) => ({ ...r, outcome_status_raw: r.source_outcome_status ?? r.outcome_status, outcome_status: r.treatment_outcome })),
       total: rows.length,
     });
   } catch (err) {
@@ -461,6 +471,7 @@ router.get('/cases/export', async (req, res) => {
       year = '',
       month = '',
       outcome = '',
+      status = '',
       facility = '',
       sex = '',
       bacteriological_status = '',
@@ -517,7 +528,8 @@ router.get('/cases/export', async (req, res) => {
     if (barangay) { conditions.push(`TRIM(c.barangay_name) = $${paramIdx}`); params.push(barangay.trim()); paramIdx++; }
     if (year) { conditions.push(`EXTRACT(YEAR FROM c.date_of_diagnosis) = $${paramIdx}`); params.push(Number(year)); paramIdx++; }
     if (month) { conditions.push(`EXTRACT(MONTH FROM c.date_of_diagnosis) = $${paramIdx}`); params.push(Number(month)); paramIdx++; }
-    if (outcome) { conditions.push(`UPPER(TRIM(c.outcome_status)) = ANY($${paramIdx})`); params.push(getOutcomeFilterValues(outcome)); paramIdx++; }
+    if (outcome) { conditions.push(`c.treatment_outcome = ANY($${paramIdx})`); params.push(getOutcomeFilterValues(outcome)); paramIdx++; }
+    if (status) { conditions.push(`c.case_status = $${paramIdx}`); params.push(status.trim().toUpperCase()); paramIdx++; }
     if (facility) { conditions.push(`(TRIM(c.screening_facility) = $${paramIdx} OR TRIM(c.treatment_facility) = $${paramIdx})`); params.push(facility.trim()); paramIdx++; }
     if (sex) { conditions.push(`TRIM(c.sex) ILIKE $${paramIdx}`); params.push(sex.trim()); paramIdx++; }
     if (bacteriological_status) { conditions.push(`TRIM(c.bacteriological_status) ILIKE $${paramIdx}`); params.push(bacteriological_status.trim()); paramIdx++; }
@@ -553,6 +565,9 @@ router.get('/cases/export', async (req, res) => {
         c.bacteriological_status,
         c.date_started_treatment,
         c.outcome_status,
+        c.source_outcome_status,
+        c.case_status,
+        c.treatment_outcome,
         c.date_of_outcome,
         c.validation_status,
         c.location_classification,
@@ -565,7 +580,7 @@ router.get('/cases/export', async (req, res) => {
       params
     );
 
-    const headers = ['Case ID', 'ITIS Case ID', 'Barangay', 'Age', 'Sex', 'Diagnosis Date', 'Screening Date', 'Notification Date', 'Screening Facility', 'Treatment Facility', 'Source', 'Source of Patient', 'Anatomical Site', 'Registration Group', 'Bacteriologic Status', 'Treatment Start Date', 'Status', 'Outcome Date', 'Validation', 'Location', 'Residence Barangay', 'Residence City'];
+    const headers = ['Case ID', 'ITIS Case ID', 'Barangay', 'Age', 'Sex', 'Diagnosis Date', 'Screening Date', 'Notification Date', 'Screening Facility', 'Treatment Facility', 'Source', 'Source of Patient', 'Anatomical Site', 'Registration Group', 'Bacteriologic Status', 'Treatment Start Date', 'Case Status', 'Treatment Outcome', 'Source Outcome Value', 'Outcome Date', 'Validation', 'Location', 'Residence Barangay', 'Residence City'];
     const csvRows = [headers.join(',')];
 
     for (const row of result.rows) {
@@ -586,7 +601,9 @@ router.get('/cases/export', async (req, res) => {
         row.registration_group || '',
         row.bacteriological_status || '',
         row.date_started_treatment ? new Date(row.date_started_treatment).toISOString().split('T')[0] : '',
-        normalizeRecordOutcome(row.outcome_status) || '',
+        row.case_status || '',
+        row.treatment_outcome || '',
+        `"${(row.source_outcome_status ?? row.outcome_status ?? '').replace(/"/g, '""')}"`,
         row.date_of_outcome ? new Date(row.date_of_outcome).toISOString().split('T')[0] : '',
         row.validation_status || '',
         row.location_classification || '',
@@ -619,6 +636,7 @@ router.get('/dashboard/summary', async (req, res) => {
       month = '',
       barangay = '',
       outcome = '',
+      status = '',
       facility = '',
       sex = '',
       bacteriological_status = '',
@@ -647,8 +665,13 @@ router.get('/dashboard/summary', async (req, res) => {
       paramIdx++;
     }
     if (outcome) {
-      conditions.push(`UPPER(TRIM(outcome_status)) = ANY($${paramIdx})`);
+      conditions.push(`treatment_outcome = ANY($${paramIdx})`);
       params.push(getOutcomeFilterValues(outcome));
+      paramIdx++;
+    }
+    if (status) {
+      conditions.push(`case_status = $${paramIdx}`);
+      params.push(status.trim().toUpperCase());
       paramIdx++;
     }
     if (facility) {
@@ -697,13 +720,19 @@ router.get('/dashboard/summary', async (req, res) => {
         COUNT(DISTINCT DATE_TRUNC('month', date_of_diagnosis))::INTEGER as months_covered,
         MIN(date_of_diagnosis) as earliest_date,
         MAX(date_of_diagnosis) as latest_date,
-        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER as on_treatment_count,
-        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'CURED' THEN 1 ELSE 0 END)::INTEGER as cured_count,
-        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER as treatment_completed_count,
-        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'DIED' THEN 1 ELSE 0 END)::INTEGER as died_count,
-        SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN ('LOST TO FF-UP','LOST TO FOLLOW-UP') THEN 1 ELSE 0 END)::INTEGER as ltfu_count,
-        SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER as successful_count,
-        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(TRIM(outcome_status)) != 'NOT EVALUATED')::INTEGER as total_outcomes,
+        SUM(CASE WHEN case_status = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER as on_treatment_count,
+        SUM(CASE WHEN treatment_outcome = 'CURED' THEN 1 ELSE 0 END)::INTEGER as cured_count,
+        SUM(CASE WHEN treatment_outcome = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER as treatment_completed_count,
+        SUM(CASE WHEN treatment_outcome = 'DIED' THEN 1 ELSE 0 END)::INTEGER as died_count,
+        SUM(CASE WHEN treatment_outcome = 'LOST TO FOLLOW-UP' THEN 1 ELSE 0 END)::INTEGER as ltfu_count,
+        -- remaining outcomes + the other case status, so the TB Records outcome chart
+        -- and status counts cover every category
+        SUM(CASE WHEN treatment_outcome = 'TREATMENT FAILED' THEN 1 ELSE 0 END)::INTEGER as treatment_failed_count,
+        SUM(CASE WHEN treatment_outcome = 'NOT EVALUATED' THEN 1 ELSE 0 END)::INTEGER as not_evaluated_count,
+        SUM(CASE WHEN treatment_outcome = 'EXCLUDED' THEN 1 ELSE 0 END)::INTEGER as excluded_count,
+        SUM(CASE WHEN case_status = 'DIAGNOSED' THEN 1 ELSE 0 END)::INTEGER as diagnosed_count,
+        SUM(CASE WHEN treatment_outcome IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER as successful_count,
+        COUNT(*) FILTER (WHERE treatment_outcome IN ('CURED','TREATMENT COMPLETED','TREATMENT FAILED','LOST TO FOLLOW-UP','DIED'))::INTEGER as total_outcomes,
         SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as current_month_cases,
         SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
                   AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as prev_month_cases
@@ -721,7 +750,7 @@ router.get('/dashboard/summary', async (req, res) => {
 /**
  * GET /api/tb/dashboard/metrics
  * Single consolidated endpoint for the 6 metric cards.
- * Returns: totalCases, activeCases, highRiskAreas, successRate,
+ * Returns: totalCases, onTreatmentCount, successRate,
  *          forecastTotal, lastSync, plus trend badges.
  */
 router.get('/dashboard/metrics', async (req, res) => {
@@ -730,10 +759,10 @@ router.get('/dashboard/metrics', async (req, res) => {
     const result = await pool.query(`
       SELECT
         COUNT(*)::INTEGER AS total_cases,
-        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS on_treatment_count,
-        SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
-        SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN ('CURED', 'TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful_count,
-        COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(TRIM(outcome_status)) != 'NOT EVALUATED')::INTEGER AS total_outcomes,
+        SUM(CASE WHEN case_status = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS on_treatment_count,
+        SUM(CASE WHEN treatment_outcome = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
+        SUM(CASE WHEN treatment_outcome IN ('CURED', 'TREATMENT COMPLETED') THEN 1 ELSE 0 END)::INTEGER AS successful_count,
+        COUNT(*) FILTER (WHERE treatment_outcome IN ('CURED','TREATMENT COMPLETED','TREATMENT FAILED','LOST TO FOLLOW-UP','DIED'))::INTEGER AS total_outcomes,
         SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER AS current_month_cases,
         SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
                   AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER AS prev_month_cases
@@ -865,14 +894,19 @@ router.get('/dashboard/barangay/:name', async (req, res) => {
     }
 
     // Get outcomes — always query tb_cases directly
+    const statusCounts = await pool.query(
+      `SELECT case_status, COUNT(*)::INTEGER AS total FROM tb_cases
+       WHERE LOWER(barangay_name) = LOWER($1) AND case_status IS NOT NULL
+       GROUP BY case_status`, [name]
+    );
     let outcomesRows = [];
     try {
       const outcomes = await pool.query(
-        `SELECT COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status,
+        `SELECT treatment_outcome AS outcome_status,
                 COUNT(*)::INTEGER AS total
          FROM tb_cases
-         WHERE LOWER(barangay_name) = LOWER($1)
-         GROUP BY COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
+         WHERE LOWER(barangay_name) = LOWER($1) AND treatment_outcome IS NOT NULL
+         GROUP BY treatment_outcome
          ORDER BY total DESC`,
         [name]
       );
@@ -890,6 +924,7 @@ router.get('/dashboard/barangay/:name', async (req, res) => {
       barangay,
       monthly: monthlyRows,
       demographics: demographicsRows,
+      case_status_counts: statusCounts.rows,
       outcomes: outcomesRows,
     });
   } catch (err) {
@@ -1028,16 +1063,16 @@ router.get('/dashboard/outcomes', async (req, res) => {
     conditions.push(pasigResidentOnly());
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
     // Normalize case/whitespace before grouping — matches the UPPER(TRIM(...))
-    // pattern used elsewhere (treatmentSuccessRate.js, treatmentCascade.js).
+    // pattern used elsewhere (treatmentSuccessRate.js).
     // Without this, a stray casing difference (e.g. "Cured" vs "CURED") would
     // silently split one real outcome into two separate rows/pie slices.
     const result = await pool.query(`
       SELECT barangay_name,
-             COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status,
+             treatment_outcome AS outcome_status,
              COUNT(*)::INTEGER as total
       FROM tb_cases
-      ${where}
-      GROUP BY barangay_name, COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
+      ${where} AND treatment_outcome IS NOT NULL
+      GROUP BY barangay_name, treatment_outcome
       ORDER BY barangay_name, total DESC
     `, params);
     // Emit the source-aligned label per row (legacy 'TREATMENT FAILED' becomes
@@ -2431,13 +2466,14 @@ router.get('/reports/summary', async (req, res) => {
 
     // Run queries in 2 batches to stay within pool limit (max 20, but be safe)
     const [summaryRes, outcomesRes, sexRes, ageRes, caseProfileRes, trendRes] = await Promise.all([
-      // Summary: total cases, active cases, success rate
+      // Summary: total cases, current case statuses, and success rate
       pool.query(`
         SELECT
           COUNT(*)::INTEGER AS total_cases,
-          SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS active_cases,
-          SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER AS successful_count,
-          COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != '' AND UPPER(TRIM(outcome_status)) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated_count
+          SUM(CASE WHEN case_status = 'DIAGNOSED' THEN 1 ELSE 0 END)::INTEGER AS diagnosed_cases,
+          SUM(CASE WHEN case_status = 'ON TREATMENT' THEN 1 ELSE 0 END)::INTEGER AS on_treatment_cases,
+          SUM(CASE WHEN treatment_outcome IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER AS successful_count,
+          COUNT(*) FILTER (WHERE treatment_outcome IN ('CURED','TREATMENT COMPLETED','TREATMENT FAILED','LOST TO FOLLOW-UP','DIED'))::INTEGER AS evaluated_count
         FROM tb_cases c
         ${whereClause}
       `, params),
@@ -2445,10 +2481,10 @@ router.get('/reports/summary', async (req, res) => {
       // Outcomes breakdown — raw grouping; the rows are folded into the
       // approved source-aligned categories after the query (see below).
       pool.query(`
-        SELECT COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status, COUNT(*)::INTEGER AS count
+        SELECT treatment_outcome AS outcome_status, COUNT(*)::INTEGER AS count
         FROM tb_cases c
-        ${whereClause}
-        GROUP BY COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
+        ${whereClause} AND treatment_outcome IS NOT NULL
+        GROUP BY treatment_outcome
         ORDER BY count DESC
       `, params),
 
@@ -2543,7 +2579,9 @@ router.get('/reports/summary', async (req, res) => {
         SELECT c.id, c.date_of_diagnosis, c.barangay_name, c.sex, c.age,
           COALESCE(c.registration_group, 'Unknown') AS registration_group,
           COALESCE(c.anatomical_site, 'Unknown') AS anatomical_site,
-          COALESCE(c.outcome_status, 'Unknown') AS outcome_status,
+          c.case_status,
+          c.treatment_outcome AS outcome_status,
+          COALESCE(c.source_outcome_status, c.outcome_status) AS source_outcome_status,
           COALESCE(c.bacteriological_status, 'Unknown') AS bacteriological_status
         FROM tb_cases c
         ${whereClause}
@@ -2555,9 +2593,8 @@ router.get('/reports/summary', async (req, res) => {
         SELECT
           TRIM(screening_facility) AS facility,
           COUNT(*)::INTEGER AS total_cases,
-          SUM(CASE WHEN UPPER(TRIM(outcome_status)) IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER AS successful,
-          COUNT(*) FILTER (WHERE outcome_status IS NOT NULL AND outcome_status != ''
-            AND UPPER(TRIM(outcome_status)) NOT IN ('ON TREATMENT','NOT EVALUATED'))::INTEGER AS evaluated
+          SUM(CASE WHEN treatment_outcome IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER AS successful,
+          COUNT(*) FILTER (WHERE treatment_outcome IN ('CURED','TREATMENT COMPLETED','TREATMENT FAILED','LOST TO FOLLOW-UP','DIED'))::INTEGER AS evaluated
         FROM tb_cases c
         ${whereClause}
         AND screening_facility IS NOT NULL AND screening_facility != ''
@@ -2569,7 +2606,8 @@ router.get('/reports/summary', async (req, res) => {
     // Compute summary values
     const summaryRow = summaryRes.rows[0] || {};
     const totalCases = summaryRow.total_cases || 0;
-    const activeCases = summaryRow.active_cases || 0;
+    const onTreatmentCases = summaryRow.on_treatment_cases || 0;
+    const diagnosedCases = summaryRow.diagnosed_cases || 0;
 
     // TSR: single shared calculation (see treatmentSuccessRate.js) — do not
     // reimplement the cohort query here.
@@ -2715,7 +2753,7 @@ router.get('/reports/summary', async (req, res) => {
         generatedAt: new Date().toISOString(),
         lastSync,
       },
-      summary: { totalCases, activeCases, successRate, evaluatedCount, fatalityRate, fatalityEvaluated },
+      summary: { totalCases, diagnosedCases, onTreatmentCases, successRate, evaluatedCount, fatalityRate, fatalityEvaluated },
       outcomes,
       outcomeReconciliation,
       demographics: { sex, ageGroups },
@@ -2997,6 +3035,7 @@ router.get('/insights/analytics', async (req, res) => {
     if (barangay) filters.barangay = barangay;
     if (facility) filters.facility = facility;
     if (outcome) filters.outcome = outcome;
+    if (req.query.status) filters.status = req.query.status;
     if (sex) filters.sex = sex;
     if (ageGroup) filters.ageGroup = ageGroup;
     if (bacteriological) filters.bacteriological = bacteriological;
@@ -3150,34 +3189,6 @@ router.get('/insights/gis', async (req, res) => {
   } catch (err) {
     console.error('GIS insight error:', err.message);
     res.status(500).json({ error: 'Server error generating GIS insight.' });
-  }
-});
-
-/**
- * GET /api/tb/treatment-cascade
- * Shared treatment cascade calculation for Dashboard and Analytics.
- * Query params: year, month, barangay, sex, ageGroup, bacteriological, outcome
- *
- * Stage rates (started_pct, evaluated_pct, successful_outcome_pct_of_*) are
- * cascade progression percentages — NOT the Treatment Success Rate (TSR).
- * TSR is a separate previous-year cohort calculation (see /dashboard/metrics).
- */
-router.get('/treatment-cascade', async (req, res) => {
-  try {
-    const { year, month, barangay, sex, ageGroup, bacteriological } = req.query;
-    const filters = {};
-    if (year) filters.year = year;
-    if (month) filters.month = month;
-    if (barangay) filters.barangay = barangay;
-    if (sex) filters.sex = sex;
-    if (ageGroup) filters.ageGroup = ageGroup;
-    if (bacteriological) filters.bacteriological = bacteriological;
-
-    const cascade = await computeTreatmentCascade(pool, filters);
-    res.json(cascade);
-  } catch (err) {
-    console.error('Treatment cascade error:', err.message);
-    res.status(500).json({ error: 'Server error computing treatment cascade.' });
   }
 });
 

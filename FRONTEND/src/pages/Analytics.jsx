@@ -8,11 +8,11 @@ import API from '../api/axios';
 import AiInsightPanel from '../components/AiInsightPanel';
 import ChartInsight from '../components/ChartInsight';
 import { trendInsight, yoyInsight, rankingInsight, incidenceInsight, shareInsight, outcomeInsight } from '../utils/chartInsights';
-import TreatmentCascadeCard from '../components/TreatmentCascadeCard';
+import OutcomeStatusPanel from '../components/OutcomeStatusPanel';
 import FilterSelect from '../components/FilterSelect';
 import { getAnalyticsInsight } from '../services/insightService';
 import {
-  APPROVED_OUTCOMES, OUTCOME_FILTER_OPTIONS, OUTCOME_COLORS, ACTIVE_OUTCOMES,
+  APPROVED_OUTCOMES, CASE_STATUSES, OUTCOME_FILTER_OPTIONS,
 } from '../utils/outcomeStatus';
 import {
   categorizeAge,
@@ -109,7 +109,7 @@ function EmptyState() {
 export default function Analytics() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  /* Nonce re-triggering the metric-card effects (cascade/TSR/CFR/population)
+  /* Nonce re-triggering the metric-card effects (TSR/CFR/population)
    * on header Refresh — their deps are filter values only, so identical
    * filters would otherwise never refetch. */
   const [refreshTick, setRefreshTick] = useState(0);
@@ -128,6 +128,7 @@ export default function Analytics() {
   const [filterBarangay, setFilterBarangay] = useState('');
   const [filterFacility, setFilterFacility] = useState('');
   const [filterOutcome, setFilterOutcome] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
   const [filterSex, setFilterSex] = useState('');
   const [filterAgeGroup, setFilterAgeGroup] = useState('');
   const [filterBact, setFilterBact] = useState('');
@@ -139,6 +140,7 @@ export default function Analytics() {
   const [aBarangay, setABarangay] = useState('');
   const [aFacility, setAFacility] = useState('');
   const [aOutcome, setAOutcome] = useState('');
+  const [aStatus, setAStatus] = useState('');
   const [aSex, setASex] = useState('');
   const [aAgeGroup, setAAgeGroup] = useState('');
   const [aBact, setABact] = useState('');
@@ -157,11 +159,9 @@ export default function Analytics() {
   const [insightData, setInsightData] = useState(null);
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightError, setInsightError] = useState(null);
-  const [cascadeData, setCascadeData] = useState(null);
   const [tsrData, setTsrData] = useState(null);
   const [prevTsrData, setPrevTsrData] = useState(null);
   const [cfrData, setCfrData] = useState(null);
-  const [cascadeLoading, setCascadeLoading] = useState(false);
 
   /* ── Data fetching ── */
   const loadAll = useCallback(async () => {
@@ -197,11 +197,12 @@ export default function Analytics() {
     setABarangay(filterBarangay);
     setAFacility(filterFacility);
     setAOutcome(filterOutcome);
+    setAStatus(filterStatus);
     setASex(filterSex);
     setAAgeGroup(filterAgeGroup);
     setABact(filterBact);
     setApplied(true);
-  }, [filterYear, filterMonth, filterBarangay, filterFacility, filterOutcome, filterSex, filterAgeGroup, filterBact]);
+  }, [filterYear, filterMonth, filterBarangay, filterFacility, filterOutcome, filterStatus, filterSex, filterAgeGroup, filterBact]);
 
   const handleClear = useCallback(() => {
     setFilterYear('');
@@ -209,6 +210,7 @@ export default function Analytics() {
     setFilterBarangay('');
     setFilterFacility('');
     setFilterOutcome('');
+    setFilterStatus('');
     setFilterSex('');
     setFilterAgeGroup('');
     setFilterBact('');
@@ -217,6 +219,7 @@ export default function Analytics() {
     setABarangay('');
     setAFacility('');
     setAOutcome('');
+    setAStatus('');
     setASex('');
     setAAgeGroup('');
     setABact('');
@@ -234,6 +237,7 @@ export default function Analytics() {
         barangay: aBarangay,
         facility: aFacility,
         outcome: aOutcome,
+        status: aStatus,
         sex: aSex,
         ageGroup: aAgeGroup,
         bacteriological: aBact,
@@ -245,7 +249,7 @@ export default function Analytics() {
     } finally {
       setInsightLoading(false);
     }
-  }, [insightLoading, aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [insightLoading, aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Header refresh: reload EVERYTHING — base data (loadAll), the metric
    * cards (refreshTick re-fires their effects), and a fresh NLG insight
@@ -261,37 +265,6 @@ export default function Analytics() {
       setRefreshing(false);
     }
   }, [loadAll, refreshing, handleGenerateInsight]);
-
-  /* ── Treatment Cascade — shared backend calculation with active filters ── */
-  const activeCascadeFilters = useMemo(() => {
-    const f = {};
-    if (aYear) f.year = aYear;
-    if (aMonth) f.month = aMonth;
-    if (aBarangay) f.barangay = aBarangay;
-    if (aSex) f.sex = aSex;
-    if (aAgeGroup) f.ageGroup = aAgeGroup;
-    if (aBact) f.bacteriological = aBact;
-    return f;
-  }, [aYear, aMonth, aBarangay, aSex, aAgeGroup, aBact]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setCascadeLoading(true);
-        const res = await API.get('/api/tb/treatment-cascade', { params: activeCascadeFilters });
-        if (!cancelled) setCascadeData(res.data);
-      } catch (err) {
-        if (!cancelled) {
-          if (import.meta.env.DEV) console.error('Cascade fetch failed:', err);
-          setCascadeData(null);
-        }
-      } finally {
-        if (!cancelled) setCascadeLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [activeCascadeFilters, refreshTick]);
 
   /* ── Treatment Success Rate — shared backend cohort calculation ──
    * GET /api/tb/treatment-success-rate: (Cured+Completed) / patients whose
@@ -324,7 +297,7 @@ export default function Analytics() {
 
   /* ── Case Fatality Rate — shared backend calculation ──
    * GET /api/tb/case-fatality-rate: DIED / evaluated terminal outcomes,
-   * scoped by diagnosis year (same year semantics as Total/Active Cases),
+   * scoped by diagnosis year (same year semantics as Total Cases / On Treatment),
    * optionally scoped to aBarangay. */
   useEffect(() => {
     let cancelled = false;
@@ -411,6 +384,7 @@ export default function Analytics() {
       barangay: () => { setFilterBarangay(''); setABarangay(''); },
       facility: () => { setFilterFacility(''); setAFacility(''); },
       outcome: () => { setFilterOutcome(''); setAOutcome(''); },
+      status: () => { setFilterStatus(''); setAStatus(''); },
       sex: () => { setFilterSex(''); setASex(''); },
       age: () => { setFilterAgeGroup(''); setAAgeGroup(''); },
       bacterio: () => { setFilterBact(''); setABact(''); },
@@ -446,6 +420,7 @@ export default function Analytics() {
         barangay: aBarangay,
         facility: aFacility,
         outcome: aOutcome,
+        status: aStatus,
         sex: aSex,
         ageGroup: aAgeGroup,
         bacteriological: aBact,
@@ -458,7 +433,7 @@ export default function Analytics() {
       }
       return true;
     });
-  }, [allCases, applied, aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [allCases, applied, aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Previous year cases (for trend indicators) ──
      Non-year filters go through the SAME `matchesNonYearFilters` predicate
@@ -476,17 +451,18 @@ export default function Analytics() {
         barangay: aBarangay,
         facility: aFacility,
         outcome: aOutcome,
+        status: aStatus,
         sex: aSex,
         ageGroup: aAgeGroup,
         bacteriological: aBact,
       });
     });
-  }, [allCases, aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [allCases, aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Summary Metrics ── */
   const metrics = useMemo(() => {
     const total = filteredCases.length;
-    const active = filteredCases.filter((c) => ACTIVE_OUTCOMES.includes((c.outcome_status || '').toUpperCase())).length;
+    const active = filteredCases.filter((c) => c.case_status === 'ON TREATMENT').length;
     // Treatment Success Rate: from GET /api/tb/treatment-success-rate (the
     // cohort-based methodology — Cured+Completed / patients whose treatment
     // started in year Y-1). Previously computed here as
@@ -539,7 +515,7 @@ export default function Analytics() {
   /* ── Previous year metrics (for trend badges) ── */
   const previousMetrics = useMemo(() => {
     const total = previousYearCases.length;
-    const active = previousYearCases.filter((c) => ACTIVE_OUTCOMES.includes((c.outcome_status || '').toUpperCase())).length;
+    const active = previousYearCases.filter((c) => c.case_status === 'ON TREATMENT').length;
     // Same cohort-based TSR, for the year before the selected one — see the
     // prevTsrData fetch above (year: aYear-1, so its own cohort is aYear-2).
     const successRate = prevTsrData?.successRate != null ? prevTsrData.successRate.toFixed(1) : null;
@@ -568,12 +544,13 @@ export default function Analytics() {
         barangay: aBarangay,
         facility: aFacility,
         outcome: aOutcome,
+        status: aStatus,
         sex: aSex,
         ageGroup: aAgeGroup,
         bacteriological: aBact,
       },
     });
-  }, [compareYear, aYear, aMonth, allCases, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [compareYear, aYear, aMonth, allCases, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Merged YoY trend data ──
      Merges by remapped month key ("2023-10" → "2024-10") and stores the
@@ -713,15 +690,19 @@ export default function Analytics() {
 
   const totalSex = useMemo(() => sexData.reduce((s, r) => s + r.value, 0), [sexData]);
 
+  /* ── Case status (current state; never an outcome) ── */
+  const statusCounts = useMemo(() => ({
+    diagnosed: filteredCases.filter((c) => c.case_status === 'DIAGNOSED').length,
+    onTreatment: filteredCases.filter((c) => c.case_status === 'ON TREATMENT').length,
+  }), [filteredCases]);
+
   /* ── Treatment Outcomes ── */
   const outcomeData = useMemo(() => {
     const byOutcome = {};
     filteredCases.forEach((c) => {
       const raw = (c.outcome_status || 'Unknown').toUpperCase();
       // Map DB variants to source-aligned display form
-      const status = raw === 'TREATMENT FAILED' ? 'FAILED'
-        : raw === 'LOST TO FOLLOW-UP' ? 'LOST TO FF-UP'
-        : raw;
+      const status = raw;
       if (!OUTCOME_ORDER.includes(status)) return; // exclude SCREENED etc.
       if (!byOutcome[status]) byOutcome[status] = 0;
       byOutcome[status]++;
@@ -738,12 +719,13 @@ export default function Analytics() {
     if (aMonth) chips.push({ key: 'month', label: 'Month', value: MONTHS[Number(aMonth)] || aMonth });
     if (aBarangay) chips.push({ key: 'barangay', label: 'Barangay', value: aBarangay });
     if (aFacility) chips.push({ key: 'facility', label: 'Facility', value: aFacility });
-    if (aOutcome) chips.push({ key: 'outcome', label: 'Case Status / Outcome', value: aOutcome });
+    if (aOutcome) chips.push({ key: 'outcome', label: 'Treatment Outcome', value: aOutcome });
+    if (aStatus) chips.push({ key: 'status', label: 'Case Status', value: aStatus });
     if (aSex) chips.push({ key: 'sex', label: 'Sex', value: aSex });
     if (aAgeGroup) chips.push({ key: 'age', label: 'Age Group', value: aAgeGroup });
     if (aBact) chips.push({ key: 'bacterio', label: 'Bacterio', value: aBact });
     return chips;
-  }, [aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Last updated ── */
   const lastUpdated = useMemo(() => {
@@ -864,11 +846,15 @@ export default function Analytics() {
               <option value="">All Facilities</option>
               {facilities.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
             </FilterSelect>
-            <FilterSelect label="Case Status / Outcome" value={filterOutcome} onChange={setFilterOutcome} selectStyle={{ maxWidth: 150 }}>
+            <FilterSelect label="Treatment Outcome" value={filterOutcome} onChange={setFilterOutcome} selectStyle={{ maxWidth: 150 }}>
               <option value="">All</option>
               {(filterOptions.outcome_status || OUTCOMES.filter(o => o !== 'All')).map((o) => (
                 <option key={o} value={o}>{o}</option>
               ))}
+            </FilterSelect>
+            <FilterSelect label="Case Status" value={filterStatus} onChange={setFilterStatus} selectStyle={{ maxWidth: 150 }}>
+              <option value="">All</option>
+              {CASE_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
             </FilterSelect>
             <FilterSelect label="Sex" value={filterSex} onChange={setFilterSex}>
               <option value="">All</option>
@@ -982,7 +968,7 @@ export default function Analytics() {
               </div>
 
               {/* Treatment Success Rate (TSR) */}
-              <div className="flex flex-col px-4 py-4 relative" title="TSR is a cohort-based indicator: (Cured + Treatment Completed) among patients whose treatment started in the previous year, divided by the total previous-year treatment cohort. This differs from the Treatment Cascade's Successful Outcome % of Evaluated.">
+              <div className="flex flex-col px-4 py-4 relative" title="TSR is a cohort-based indicator: (Cured + Treatment Completed) among patients whose treatment started in the previous year, divided by the total previous-year treatment cohort.">
                 <div className="flex items-center justify-between gap-2 h-5">
                   <div className="flex items-center gap-2 min-w-0">
                     <i className="ri-check-double-line text-sm shrink-0" style={{ color: '#6B9E8A' }} />
@@ -1053,21 +1039,8 @@ export default function Analytics() {
           </div>
 
           <div className="flex gap-6">
-            {/* ─── LEFT COLUMN: Cascade + Charts (scrollable) ─── */}
+            {/* ─── LEFT COLUMN: Charts (scrollable) ─── */}
             <div className="flex-1 min-w-0 space-y-6">
-
-          {/* ─── Treatment Cascade (shared backend calculation) ─── */}
-          <TreatmentCascadeCard
-            data={cascadeData}
-            loading={cascadeLoading}
-            description="Diagnosis-to-outcome progression for the active filters."
-          />
-          {aOutcome && (
-            <p className="text-[9px] -mt-4 flex items-center gap-1" style={{ color: '#94A3B8' }}>
-              <i className="ri-information-line" />
-              Treatment Cascade excludes the Case Status / Outcome filter because outcome determines treatment progression stages.
-            </p>
-          )}
 
           {/* ─── TB Cases Trend (with YoY Comparison) ─── */}
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
@@ -1326,52 +1299,17 @@ export default function Analytics() {
                   <div className="flex items-center gap-3">
                     <div className="w-1 h-8 rounded-full" style={{ background: '#047857' }} />
                     <div>
-                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Case Status / Outcome Distribution</h3>
-                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Distribution of reported TB records by the Outcome/Status values recorded in the source data.</p>
+                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Treatment Outcomes &amp; Case Status</h3>
+                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Final outcomes for the active filters; cases still diagnosed or on treatment shown separately.</p>
                     </div>
                   </div>
                 </div>
                 <div className="px-5 pb-5">
-                  {outcomeData.length > 0 ? (
-                    <div className="flex flex-wrap items-center justify-center gap-6">
-                      <div className="w-[180px] h-[180px] shrink-0">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <PieChart>
-                            <Pie
-                              data={outcomeData}
-                              cx="50%"
-                              cy="50%"
-                              innerRadius={45}
-                              outerRadius={80}
-                              paddingAngle={2}
-                              dataKey="Cases"
-                            >
-                              {outcomeData.map((entry) => (
-                                <Cell key={entry.name} fill={OUTCOME_COLORS[entry.name] || '#94A3B8'} />
-                              ))}
-                            </Pie>
-                            <Tooltip formatter={(value) => value.toLocaleString()} />
-                          </PieChart>
-                        </ResponsiveContainer>
-                      </div>
-                      <div className="space-y-1.5">
-                        {outcomeData.map((entry) => (
-                          <div key={entry.name} className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: OUTCOME_COLORS[entry.name] || '#94A3B8' }} />
-                            <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>
-                              {entry.name?.length > 16 ? entry.name.slice(0, 14) + '...' : entry.name}
-                            </span>
-                            <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{entry.Cases}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center py-16 gap-2">
-                      <i className="ri-pie-chart-2-line text-xl" style={{ color: '#CBD5E1' }} />
-                      <p className="text-xs" style={{ color: '#94A3B8' }}>No outcome data available.</p>
-                    </div>
-                  )}
+                  <OutcomeStatusPanel
+                    outcomes={Object.fromEntries(outcomeData.map((e) => [e.name, e.Cases]))}
+                    diagnosed={statusCounts.diagnosed}
+                    onTreatment={statusCounts.onTreatment}
+                  />
                   <ChartInsight text={outcomeInsight(outcomeData)} />
                 </div>
               </div>

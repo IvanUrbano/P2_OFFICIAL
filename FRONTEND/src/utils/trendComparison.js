@@ -67,12 +67,13 @@ export function parseCaseDate(value) {
  * filter match "Female" cases too, because "female" contains "male".
  */
 export function matchesNonYearFilters(c, filters = {}) {
-  const { barangay, facility, outcome, sex, ageGroup, bacteriological } = filters;
+  const { barangay, facility, status, outcome, sex, ageGroup, bacteriological } = filters;
   const eq = (value, needle) => String(value ?? '').trim().toLowerCase() === needle.trim().toLowerCase();
   if (barangay && c.barangay_name !== barangay) return false;
   if (facility && c.screening_facility !== facility && c.treatment_facility !== facility) return false;
   if (sex && !eq(c.sex, sex)) return false;
   if (outcome && (c.outcome_status || '').trim().toUpperCase() !== outcome.trim().toUpperCase()) return false;
+  if (status && (c.case_status || '').trim().toUpperCase() !== status.trim().toUpperCase()) return false;
   if (bacteriological && !eq(c.bacteriological_status, bacteriological)) return false;
   if (ageGroup && categorizeAge(c.age) !== ageGroup) return false;
   return true;

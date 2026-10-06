@@ -102,11 +102,11 @@ async function rebuildAllAggregations(client) {
     SELECT
       barangay_name,
       DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
-      COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status,
+      treatment_outcome AS outcome_status,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE ${BARANGAY_CASED}
-    GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
+    WHERE ${BARANGAY_CASED} AND treatment_outcome IS NOT NULL
+    GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), treatment_outcome
   `);
   counts.outcomes = outcomeResult.rowCount;
 
@@ -133,8 +133,10 @@ async function rebuildAllAggregations(client) {
           THEN COALESCE(NULLIF(TRIM(treatment_facility), ''), '')
         ELSE COALESCE(screening_facility, '')
       END <> ''
-    GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis),
-             location_classification, screening_facility, treatment_facility
+    -- Group by the facility name chosen above (column 1), not by both facility
+    -- columns: otherwise one screening facility with several treatment facilities
+    -- yields duplicate (facility_name, barangay, month) rows and the rebuild fails.
+    GROUP BY 1, barangay_name, DATE_TRUNC('month', date_of_diagnosis)
   `);
   counts.facilities = facilityResult.rowCount;
 

@@ -17,8 +17,7 @@
  *
  * Returns `successRate: null` (never 0) when the cohort is empty.
  *
- * Takes `pool` as an explicit parameter (like computeTreatmentCascade in
- * treatmentCascade.js) rather than requiring BACKEND/db.js internally, so
+ * Takes `pool` as an explicit parameter rather than requiring BACKEND/db.js internally, so
  * callers can inject a mock pool in tests instead of hitting the real
  * database.
  */
@@ -78,8 +77,8 @@ async function computeTreatmentSuccessRate(pool, { year, barangay, sex, ageGroup
   const result = await pool.query(
     `SELECT
        COUNT(*)::INTEGER AS total_patients,
-       SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
-       SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count
+       SUM(CASE WHEN treatment_outcome = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
+       SUM(CASE WHEN treatment_outcome = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count
      FROM tb_cases
      WHERE ${conditions.join(' AND ')}`,
     params

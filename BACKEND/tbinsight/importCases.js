@@ -83,7 +83,7 @@ async function importCases(rows, sourceFile) {
           row.registration_group ? row.registration_group.trim() : null,
           row.bacteriological_status ? row.bacteriological_status.trim() : null,
           row.date_started_treatment,
-          normalizeOutcome(row.outcome_status),
+          row.outcome_status,
           row.date_of_outcome,
           row.record_created_at,
           sourceFile,
@@ -103,7 +103,8 @@ async function importCases(rows, sourceFile) {
           source_of_patient, anatomical_site,
           registration_group, bacteriological_status,
           date_started_treatment, outcome_status, date_of_outcome,
-          validation_status, itis_case_id, source_type, location_classification
+          validation_status, itis_case_id, source_type, location_classification,
+          source_outcome_status
         ) VALUES (
           $1,
           $2, $3, $4,
@@ -112,7 +113,8 @@ async function importCases(rows, sourceFile) {
           $11, $12,
           $13, $14,
           $15, $16, $17,
-          $18, $19, $20, $21
+          $18, $19, $20, $21,
+          $22
         )`,
         [
           batchId,
@@ -136,6 +138,7 @@ async function importCases(rows, sourceFile) {
           row.itis_case_id ? row.itis_case_id.trim() : null,
           row.source_type ? row.source_type.trim() : null,
           locationClassification,
+          row.outcome_status ?? null,
         ]
       );
 

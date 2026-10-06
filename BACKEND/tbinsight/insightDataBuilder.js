@@ -58,8 +58,13 @@ function applyFilters(conditions, params, paramIdx, filters) {
     idx++;
   }
   if (filters.outcome) {
-    conditions.push(`UPPER(TRIM(c.outcome_status)) = ANY($${idx})`);
+    conditions.push(`c.treatment_outcome = ANY($${idx})`);
     params.push(getOutcomeFilterValues(filters.outcome));
+    idx++;
+  }
+  if (filters.status) {
+    conditions.push(`c.case_status = $${idx}`);
+    params.push(String(filters.status).trim().toUpperCase());
     idx++;
   }
   if (filters.facility) {
@@ -226,11 +231,11 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
     // 7. Outcome distribution
     safe(pool.query(`
       SELECT
-        COALESCE(NULLIF(UPPER(TRIM(c.outcome_status)), ''), 'UNKNOWN') AS outcome_status,
+        COALESCE(c.treatment_outcome, 'UNKNOWN') AS outcome_status,
         COUNT(*)::INTEGER AS total
       FROM tb_cases c
-      ${where}
-      GROUP BY COALESCE(NULLIF(UPPER(TRIM(c.outcome_status)), ''), 'UNKNOWN')
+      ${where} AND c.treatment_outcome IS NOT NULL
+      GROUP BY COALESCE(c.treatment_outcome, 'UNKNOWN')
     `, params), 'outcomes'),
 
     // 8. Total count and date range

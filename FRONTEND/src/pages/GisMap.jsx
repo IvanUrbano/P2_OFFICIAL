@@ -54,10 +54,9 @@ function formatRfFeatureValue(key, value) {
 const OUTCOME_COLORS = {
   'CURED': '#047857',
   'TREATMENT COMPLETED': '#2E6FAF',
-  'ON TREATMENT': '#92400E',
-  'FAILED': '#991B1B',
+  'TREATMENT FAILED': '#991B1B',
   'DIED': '#991B1B',
-  'LOST TO FF-UP': '#6B7280',
+  'LOST TO FOLLOW-UP': '#6B7280',
   'EXCLUDED': '#64748B',
   'NOT EVALUATED': '#94A3B8',
   'DIAGNOSED': '#0369A1',
@@ -405,7 +404,7 @@ export default function GisMap() {
     const merged = { ...geoProps, ...b };
     const riskColor = RISK_COLORS[merged.risk_class] || '#64748B';
     const totalOutcomeCases = outcomes.reduce((s, o) => s + (o.total || 0), 0);
-    const activeCases = outcomes.find(o => o.outcome_status === 'ON TREATMENT')?.total || 0;
+    const onTreatmentCases = barangayDetail?.case_status_counts?.find(s => s.case_status === 'ON TREATMENT')?.total || 0;
     // Treatment Success Rate: the cohort-based figure fetched from
     // GET /api/tb/treatment-success-rate (see barangayTsr) — NOT computed
     // from this barangay's outcomes breakdown, which is diagnosis-date
@@ -426,9 +425,7 @@ export default function GisMap() {
     const outcomeChartData = outcomes
       .map(o => {
         const raw = (o.outcome_status || '').toUpperCase();
-        const display = raw === 'TREATMENT FAILED' ? 'FAILED'
-          : raw === 'LOST TO FOLLOW-UP' ? 'LOST TO FF-UP'
-          : raw;
+        const display = raw;
         return { display, value: o.total };
       })
       .filter(o => o.display && OUTCOME_COLORS[o.display])
@@ -437,7 +434,7 @@ export default function GisMap() {
         value: o.value,
         color: OUTCOME_COLORS[o.display] || '#64748B',
       }));
-    return { merged, riskColor, totalOutcomeCases, activeCases, successRate, trendChartData, demoChartData, outcomeChartData };
+    return { merged, riskColor, totalOutcomeCases, onTreatmentCases, successRate, trendChartData, demoChartData, outcomeChartData };
   }, [selectedBarangayName, barangayDetail, barangayDetailLoading, monthlyByBarangay, data, barangayTsr]);
 
   const hasActiveFilters = filterBarangay || filterRiskLevel || filterYear;
@@ -1398,7 +1395,7 @@ export default function GisMap() {
 
             {/* Content */}
             {!barangayDetailLoading && modalData && (() => {
-              const { merged, riskColor, totalOutcomeCases, activeCases, successRate, trendChartData, demoChartData, outcomeChartData } = modalData;
+              const { merged, riskColor, totalOutcomeCases, onTreatmentCases, successRate, trendChartData, demoChartData, outcomeChartData } = modalData;
 
               // ── Unified View ──
               return (
@@ -1432,8 +1429,8 @@ export default function GisMap() {
                         <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.incidence_per_100k)}</p>
                       </div>
                        <div className="rounded-lg p-3" style={{ background: '#F1F5F9', border: '1px solid #E2E8F0' }}>
-                        <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Active Cases</span>
-                        <p className="text-xl font-extrabold mt-1" style={{ color: '#2563EB' }}>{activeCases}</p>
+                        <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>On Treatment</span>
+                        <p className="text-xl font-extrabold mt-1" style={{ color: '#2563EB' }}>{onTreatmentCases}</p>
                       </div>
                        <div className="rounded-lg p-3" style={{ background: successRate !== '—' && Number(successRate) >= 85 ? '#F1F8F1' : '#FDF8F0', border: `1px solid ${successRate !== '—' && Number(successRate) >= 85 ? '#D4EDDA' : '#F5E6CC'}` }}>
                         <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Success Rate</span>
