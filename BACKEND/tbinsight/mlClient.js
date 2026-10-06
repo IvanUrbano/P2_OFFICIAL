@@ -21,6 +21,7 @@ if (!ML_API_KEY) {
 // Timeout for ML calls. /forecast fits an ARIMA model per barangay (30 fits + backtests), which
 // takes well over a minute on a single core (e.g. Render's free plan).
 const ML_TIMEOUT_MS = Number(process.env.ML_TIMEOUT_MS) || 300_000;
+const ML_HEALTH_TIMEOUT_MS = Number(process.env.ML_HEALTH_TIMEOUT_MS) || 60_000;
 
 /**
  * Generic POST to the ML service
@@ -67,7 +68,9 @@ async function mlPost(path, body) {
  */
 async function healthCheck() {
   try {
-    const res = await fetch(`${ML_BASE}/api/ml/health`, { signal: AbortSignal.timeout(5000) });
+    // Long enough for a scaled-to-zero ML service (Lambda / Render free) to cold-start;
+    // a short timeout made the pipeline fall back to rule-based mode on every first run.
+    const res = await fetch(`${ML_BASE}/api/ml/health`, { signal: AbortSignal.timeout(ML_HEALTH_TIMEOUT_MS) });
     if (!res.ok) return false;
     const data = await res.json();
     return data.status === 'ok';

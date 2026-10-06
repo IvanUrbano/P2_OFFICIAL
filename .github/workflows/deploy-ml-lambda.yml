@@ -1,0 +1,51 @@
+name: Deploy ML service to AWS Lambda
+
+# Builds ML_SERVICE/Dockerfile, pushes it to ECR and points the Lambda function
+# at the new image. Needs repo secrets AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+# (an IAM user limited to this ECR repo + this function).
+on:
+  push:
+    branches: [main]
+    paths: ['ML_SERVICE/**', '.github/workflows/deploy-ml-lambda.yml']
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REPOSITORY: tb-system-ml
+  FUNCTION_NAME: tb-system-ml
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: image
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+        run: |
+          # Lambda rejects multi-manifest (provenance) images
+          docker build --provenance=false --platform linux/amd64 -t "$IMAGE" ML_SERVICE
+          docker push "$IMAGE"
+          echo "uri=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Update Lambda function
+        run: |
+          if aws lambda get-function --function-name "$FUNCTION_NAME" > /dev/null 2>&1; then
+            aws lambda update-function-code --function-name "$FUNCTION_NAME" \
+              --image-uri "${{ steps.image.outputs.uri }}" > /dev/null
+            aws lambda wait function-updated --function-name "$FUNCTION_NAME"
+            echo "Lambda updated to ${{ steps.image.outputs.uri }}"
+          else
+            echo "::notice::Function $FUNCTION_NAME does not exist yet — create it in the console from ${{ steps.image.outputs.uri }}"
+          fi
