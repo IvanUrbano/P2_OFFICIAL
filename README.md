@@ -155,7 +155,9 @@ This repository contains two independent systems with **separate databases**, in
 
 ### Deployment
 - **Vercel** — TBInsight frontend hosting (SPA with rewrites)
-- **Render** — Backend + ML service + Pasig Clone hosting (free tier)
+- **Vercel** — Pasig Clone frontend hosting (proxies `/api` to its Render backend)
+- **Render** — TBInsight backend + Pasig Clone backend (free tier)
+- **AWS Lambda** — ML service (container image, deployed by GitHub Actions)
 - **GitHub Actions** — CI (frontend build on push/PR)
 
 ---
@@ -814,57 +816,63 @@ npm run lint
 ### Architecture
 
 ```
-TBInsight Frontend (Vercel)        TBInsight Backend (Render)         ML Service (Render)
-p2-official.vercel.app          →  p2-official.onrender.com        →  tb-system-ml.onrender.com
+TBInsight Frontend (Vercel)        TBInsight Backend (Render)         ML Service (AWS Lambda)
+p2-official.vercel.app          →  p2-official.onrender.com        →  <id>.lambda-url.us-west-2.on.aws
      │                                 │                                 │
-     │   React 19 SPA                  │   Express 5 API                 │   FastAPI
-     │   Vite 8 Build                  │   PostgreSQL                     │   ARIMA + RF
-     │   Tailwind v4                   │   JWT Auth                       │   scikit-learn
+     │   React 19 SPA                  │   Express 5 API                 │   FastAPI (container image)
+     │   Vite 8 Build                  │   PostgreSQL (Neon)             │   ARIMA + RF
+     │   Tailwind v4                   │   JWT Auth                      │   scikit-learn
 
-Pasig Clone Frontend (Render)     Pasig Clone Backend (Render)
-pasig-clone-frontend.onrender.com →  pasig-clone-backend.onrender.com
+Pasig Clone Frontend (Vercel)     Pasig Clone Backend (Render)
+pasig-clone.vercel.app  ─/api/*→  pasig-clone-backend.onrender.com
      │                                 │
      │   React 18 SPA                  │   Express 4 API
      │   Vite 5 Build                  │   PostgreSQL (pasig_clone_db)
      │   Tailwind v4                   │   JWT + HMAC Auth
 ```
 
+All five deploy from this one repo (`main`); each platform builds only its own root directory.
+
 ### Vercel (TBInsight Frontend)
 
-- **Config**: `FRONTEND/vercel.json` (SPA rewrites)
+- **Project**: `p2-official`, root directory = repo root
 - **Root config**: `vercel.json` (monorepo build)
 - **Build command**: `cd FRONTEND && npm install --no-package-lock && npm run build`
 - **Output**: `FRONTEND/dist/`
+- **Env vars**: `VITE_API_URL=https://p2-official.onrender.com`; optional `VITE_PASIG_CLONE_URL` (defaults to `https://pasig-clone.vercel.app` in production)
+
+### Vercel (Pasig Clone Frontend)
+
+- **Project**: `pasig-clone`, root directory = `PASIG_CLONE/frontend`
+- **Config**: `PASIG_CLONE/frontend/vercel.json` — pins `npm install` / `npm run build` / `dist` (so the repo-root TBInsight `vercel.json` is not applied) and rewrites `/api/*` to `https://pasig-clone-backend.onrender.com/api/*`
+- **Env vars**: none. Leave `VITE_API_URL` **unset**: the app must call `/api` on its own origin so the `sameSite: 'lax'` auth/CSRF cookies stay first-party (calling Render directly breaks login)
 
 ### Render (TBInsight Backend)
 
 - **Config**: root `render.yaml`
-- **Service**: `p2-official` (Node.js, free tier)
+- **Service**: `p2-official` (Node.js, free tier), root directory `BACKEND`
 - **Build**: `npm install`
 - **Start**: `npm start`
 - **Auto-migrations**: Run on startup via `db.js`
-
-### Render (ML Service)
-
-- **Config**: root `render.yaml`
-- **Service**: `tb-system-ml` (Python, free tier)
-- **Build**: `pip install -r requirements.txt`
-- **Start**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+- **ML env vars**: `ML_SERVICE_URL` (the Lambda Function URL, **no trailing slash**), `ML_API_KEY` (same value as the Lambda), `ML_HEALTH_TIMEOUT_MS=120000` (time allowed for a Lambda cold start before the pipeline falls back to rule-based mode)
 
 ### Render (Pasig Clone Backend)
 
-- **Service**: `pasig-clone-backend` (Node.js, free tier)
-- **Build**: `cd PASIG_CLONE/backend && npm install`
-- **Start**: `cd PASIG_CLONE/backend && node server.js`
+- **Service**: `pasig-clone-backend` (Node.js, free tier), root directory `PASIG_CLONE/backend`
+- **Build**: `npm install`
+- **Start**: `node server.js`
+- **Health check path**: `/api/health`
 - **PORT**: Respects Render's `$PORT` env var (falls back to 5001 in development)
-- **Env vars**: `DATABASE_URL` (points to `pasig_clone_db` — separate database), `AUTH_DATABASE_URL` (TBInsight's `neondb`, shared users table), `JWT_SECRET` (must match TBInsight's value — shared login), `WEBHOOK_SECRET` (must match TBInsight's value — set manually, not generated), `TBINSIGHT_WEBHOOK_URL=https://p2-official.onrender.com/api/webhook/pasig-clone`
+- **Env vars**: `NODE_ENV=production` (makes cookies `secure`), `DATABASE_URL` (points to `pasig_clone_db` — separate database), `AUTH_DATABASE_URL` (TBInsight's `neondb`, shared users table), `JWT_SECRET` (must match TBInsight's value — shared login), `WEBHOOK_SECRET` (must match TBInsight's value — set manually, not generated), `TBINSIGHT_WEBHOOK_URL=https://p2-official.onrender.com/api/webhook/pasig-clone`, `FRONTEND_URL=https://pasig-clone.vercel.app`
 
-### Render (Pasig Clone Frontend)
+### AWS Lambda (ML Service)
 
-- **Service**: `pasig-clone-frontend` (Node.js, free tier)
-- **Build**: `cd PASIG_CLONE/frontend && npm install && npm run build`
-- **Start**: `cd PASIG_CLONE/frontend && npm run preview -- --host 0.0.0.0 --port $PORT`
-- **Env vars**: `VITE_API_URL=https://pasig-clone-backend.onrender.com`
+- **Function**: `tb-system-ml` (us-west-2), container image from ECR repo `tb-system-ml`, x86_64, 3008 MB, 10 min timeout
+- **Image**: `ML_SERVICE/Dockerfile` — Python 3.12.10 + the Lambda Web Adapter, so the FastAPI app runs unchanged (`ML_N_JOBS=1`: Lambda has no `/dev/shm`)
+- **Deploy**: `.github/workflows/deploy-ml-lambda.yml` — every push to `main` touching `ML_SERVICE/` builds the image, pushes it to ECR and updates the function. Needs repo secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (IAM user `github-ml-deploy`, limited to this repo + function)
+- **Function URL**: auth type `NONE`; every endpoint except `/api/ml/health` requires the `X-Api-Key` header (`ML_API_KEY` env var on the function)
+- **Cold start**: up to ~1 min after idle; warm requests answer in under a second
+- **Account**: AWS Free plan — access ends when the credits run out or the free period ends (Jan 20, 2027)
 
 ### Continuous Integration (CI)
 

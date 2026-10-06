@@ -9,14 +9,16 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 
-// Load BACKEND/.env by absolute path before requiring anything that touches the
-// DB: db.js calls dotenv.config() with no path, which resolves .env from the
-// process working directory — without this, running the suite from the repo
-// root (instead of BACKEND/) connects with zero env vars and dies with a
-// pg FATAL.
-require('dotenv').config({
-  path: require('path').join(__dirname, '..', '..', '.env'),
-});
+// Stub the DB module before requiring anything that touches it: every test passes
+// its own mock pool, so the real db.js must not open a connection — with one it
+// either exits (no database configured) or keeps the test process alive forever.
+const dbPath = require.resolve('../../db');
+require.cache[dbPath] = {
+  id: dbPath,
+  filename: dbPath,
+  loaded: true,
+  exports: { query: async () => ({ rows: [] }), connect: async () => ({}) },
+};
 
 const {
   buildAnalyticsMetrics,

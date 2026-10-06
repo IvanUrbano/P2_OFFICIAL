@@ -795,6 +795,10 @@ export default function Forecasting() {
     return filteredForecasts[filteredForecasts.length - 1]?.method || null;
   }, [filteredForecasts]);
   const isBaselineTier = forecastTier != null && forecastTier !== 'arima' && forecastTier !== 'insufficient_data';
+  // forecastTier is a raw method name (e.g. 'arima_nonseasonal'), which
+  // formatForecastingStatus doesn't know — normalise it to a status first so
+  // the Model Status card can't read "Not Run" right after a successful run.
+  const forecastTierStatus = isBaselineTier ? 'baseline' : forecastTier;
 
   /** Chart data: historical + forecast combined */
   const forecastChartData = useMemo(() => {
@@ -1476,8 +1480,8 @@ export default function Forecasting() {
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-[11px] font-semibold shrink-0" style={{ color: '#64748B' }}>Forecasting</span>
-                    <span className="text-[11px] font-extrabold text-right" style={{ color: formatForecastingStatus(forecastTier).color }}>
-                      {formatForecastingStatus(forecastTier).label}
+                    <span className="text-[11px] font-extrabold text-right" style={{ color: formatForecastingStatus(forecastTierStatus).color }}>
+                      {formatForecastingStatus(forecastTierStatus).label}
                     </span>
                   </div>
                 </div>
