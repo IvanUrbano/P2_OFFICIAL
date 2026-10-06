@@ -65,21 +65,9 @@ services:
       - key: TBINSIGHT_WEBHOOK_URL
         value: https://p2-official.onrender.com/api/webhook/pasig-clone
       - key: FRONTEND_URL
-        value: https://pasig-clone-frontend.onrender.com
+        value: https://pasig-clone.vercel.app
         sync: false
-
-  # ==================== Pasig Clone Frontend ====================
-  - type: web
-    name: pasig-clone-frontend
-    env: node
-    plan: free
-    rootDir: PASIG_CLONE/frontend
-    buildCommand: npm install && npm run build
-    startCommand: npm run preview -- --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: VITE_API_URL
-        value: https://pasig-clone-backend.onrender.com
-        sync: false
+        # Pasig Clone frontend is on Vercel (PASIG_CLONE/frontend/vercel.json proxies /api here)
 
   # ==================== TBInsight ML Service ====================
   - type: web
