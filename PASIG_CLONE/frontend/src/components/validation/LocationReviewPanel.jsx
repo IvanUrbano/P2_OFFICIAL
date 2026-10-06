@@ -3,6 +3,7 @@ import API from '../../api/axios';
 import SidePanel, { primaryBtn, secondaryBtn } from '../SidePanel';
 import { fmtDate, fullName, Pager, PinHint } from './shared';
 import { useConfirmDialog } from '../ConfirmDialog';
+import { caseIdOf } from '../../utils/caseId';
 
 const isPasigCity = (c) => ['pasig city', 'pasig', ''].includes(String(c ?? '').trim().toLowerCase());
 
@@ -129,7 +130,7 @@ export default function LocationReviewPanel({ group, batch, onClose, onChanged }
           {data.records.map(r => (
             <div key={r.id} className="px-4 py-3 flex flex-col md:flex-row md:items-center gap-3" style={{ borderBottom: '1px solid #F1F5F9' }}>
               <div className="flex-1 min-w-0 text-xs" style={{ color: '#0F2D52' }}>
-                <p className="font-semibold">{fullName(r)} <span className="font-mono font-normal" style={{ color: '#64748B' }}>{r.case_no || ''}</span></p>
+                <p className="font-semibold">{fullName(r)} <span className="font-mono font-normal" style={{ color: '#64748B' }}>{caseIdOf(r) || ''}</span></p>
                 <p className="text-[11px]" style={{ color: '#64748B' }}>
                   {r.sex || '—'}{r.age != null ? `, ${r.age}` : ''} · Dx {fmtDate(r.date_of_diagnosis)} · {r.source_type}
                 </p>

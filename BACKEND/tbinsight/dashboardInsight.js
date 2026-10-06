@@ -34,6 +34,7 @@
 
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
+const { countedCases } = require('./locationScope');
 
 const MONTH_NAMES = [
   '', 'January', 'February', 'March', 'April', 'May', 'June',
@@ -80,6 +81,7 @@ async function buildDashboardMetrics(pool) {
              COUNT(*)::INTEGER AS case_count
       FROM tb_cases
       WHERE date_of_diagnosis IS NOT NULL
+        AND ${countedCases()}
       GROUP BY DATE_TRUNC('month', date_of_diagnosis)
       ORDER BY month DESC
     `), 'trend'),
@@ -92,6 +94,7 @@ async function buildDashboardMetrics(pool) {
              COUNT(DISTINCT DATE_TRUNC('month', date_of_diagnosis))::INTEGER AS months_covered
       FROM tb_cases
       WHERE date_of_diagnosis IS NOT NULL
+        AND ${countedCases()}
       GROUP BY 1
       ORDER BY 1
     `), 'annual'),
@@ -125,12 +128,14 @@ async function buildDashboardMetrics(pool) {
              MIN(date_of_diagnosis) AS earliest_date,
              MAX(date_of_diagnosis) AS latest_date
       FROM tb_cases
+      WHERE ${countedCases()}
     `),
 
     safe(pool.query(`
       SELECT COUNT(*)::INTEGER AS on_treatment
       FROM tb_cases
       WHERE UPPER(TRIM(outcome_status)) = 'ON TREATMENT'
+        AND ${countedCases()}
     `), 'onTreatment'),
   ]);
 

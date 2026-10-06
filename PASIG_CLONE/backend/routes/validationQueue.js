@@ -40,6 +40,7 @@ const {
 } = require('../services/validationQueue');
 const { cleanRecord, PASIG_BARANGAYS } = require('../services/dataCleaner');
 const { validateRecord, getValidBarangays, INSERT_COLUMNS, rowValues, identityRuleFor, currentIssueErrors } = require('../services/validator');
+const { assignCaseIds, normalizeCaseId } = require('../services/caseIds');
 const { createPatient, nextCaseNo } = require('../services/matchResolution');
 const { resyncSyncedCases, logReviews } = require('../services/caseFollowUp');
 
@@ -216,7 +217,7 @@ router.get('/ready', authenticate, authorizeRoles('admin', 'staff'), async (req,
     const [count, rows] = await Promise.all([
       db.pool.query(`SELECT COUNT(*)::int AS n FROM validated_tb_cases v WHERE ${where} AND ${READY}`, params),
       db.pool.query(
-        `SELECT v.id, v.batch_id, v.case_no, p.patient_no, v.last_name, v.first_name, v.middle_name, v.suffix, v.identity_class,
+        `SELECT v.id, v.batch_id, v.case_no, v.source_case_id, v.last_name, v.first_name, v.middle_name, v.suffix, v.identity_class,
                 v.barangay_name, v.date_of_diagnosis, v.outcome_status, v.source_type,
                 v.treatment_facility, fr.name AS treatment_facility_registry, v.location_resolution,
                 ${SENDS_TO_TBINSIGHT} AS sends_to_tbinsight
@@ -346,7 +347,7 @@ router.get('/assignment/location/records', authenticate, authorizeRoles('admin')
     const [count, rows] = await Promise.all([
       db.pool.query(`SELECT COUNT(*)::int AS n FROM validated_tb_cases v WHERE ${where}`, params),
       db.pool.query(
-        `SELECT v.id, v.case_no, p.patient_no, v.last_name, v.first_name, v.middle_name, v.suffix, v.identity_class,
+        `SELECT v.id, v.case_no, v.source_case_id, v.last_name, v.first_name, v.middle_name, v.suffix, v.identity_class,
                 v.sex, v.age, v.date_of_diagnosis, v.barangay_name, v.city, v.source_type,
                 v.treatment_facility, v.screening_facility, b.filename
          FROM validated_tb_cases v
@@ -395,7 +396,7 @@ router.post('/assignment/location/records/:id', authenticate, authorizeRoles('ad
         `UPDATE validated_tb_cases
          SET barangay_id = $2, city = 'Pasig City', location_resolution = NULL,
              location_resolved_by = $3, location_resolved_at = NOW(), updated_by = $3, updated_at = NOW()
-         WHERE id = $1 RETURNING id, case_no, barangay_id, barangay_name`,
+         WHERE id = $1 RETURNING id, case_no, source_case_id, barangay_id, barangay_name`,
         [record.id, barangay.id, req.user.id]
       );
     } else {
@@ -422,7 +423,7 @@ router.post('/assignment/location/records/:id', authenticate, authorizeRoles('ad
       await notifications.notify(await notifications.barangayStaff(barangay.id), {
         type: 'case_assigned', severity: 'info', actorId: req.user.id,
         title: 'TB case assigned to your barangay',
-        message: `Case ${row.case_no || `#${row.id}`} was assigned to ${barangay.name} during validation.`,
+        message: `Case ${row.source_case_id || row.case_no || `#${row.id}`} was assigned to ${barangay.name} during validation.`,
         link: `/records?record=${row.id}`, entityType: 'validated_tb_cases', entityId: row.id,
       });
     }
@@ -818,10 +819,10 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
       }
     }
     const { record: cleaned, notes } = cleanRecord(merged);
-    // Source traceability: keep the file row; the MN source Case ID follows the ITIS no.
+    // Source traceability: keep the file row and the Case ID the file carried (if none,
+    // one is generated below, inside the transaction).
     cleaned.source_record_id = issue.record?.source_record_id ?? null;
-    cleaned.source_case_id = issue.source_type === 'MN' && cleaned.itis_case_id
-      ? String(cleaned.itis_case_id).trim() : null;
+    cleaned.source_case_id = normalizeCaseId(issue.record?.source_case_id ?? issue.record?.file_case_id);
     const validation = validateRecord(cleaned, issue.source_type, await getValidBarangays(), identityRuleFor(issue.identity_class));
     const warnings = [...notes, ...validation.warnings];
 
@@ -851,14 +852,23 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
         [cleaned.last_name, cleaned.first_name, cleaned.date_of_birth]
       )).rows[0] || null;
     }
+    // Same Case ID as an existing case (the file carried one).
     if (!cand && cleaned.source_case_id) {
       cand = (await client.query(
         `SELECT v.case_no, v.date_of_diagnosis::text AS date_of_diagnosis FROM validated_tb_cases v
-         WHERE v.case_no IS NOT NULL AND v.is_archived = false AND v.source_type = 'MN'
-           AND lower(regexp_replace(COALESCE(v.source_case_id, v.itis_case_id), '[[:space:]]', '', 'g'))
-               = lower(regexp_replace($1, '[[:space:]]', '', 'g'))
+         WHERE v.case_no IS NOT NULL AND v.is_archived = false AND upper(v.source_case_id) = $1
          ORDER BY v.date_of_diagnosis DESC NULLS LAST LIMIT 1`,
         [cleaned.source_case_id]
+      )).rows[0] || null;
+    }
+    // Older MN files: same ITIS Lite Case No.
+    if (!cand && issue.source_type === 'MN' && cleaned.itis_case_id) {
+      cand = (await client.query(
+        `SELECT v.case_no, v.date_of_diagnosis::text AS date_of_diagnosis FROM validated_tb_cases v
+         WHERE v.case_no IS NOT NULL AND v.is_archived = false AND v.source_type = 'MN'
+           AND lower(regexp_replace(v.itis_case_id, '[[:space:]]', '', 'g')) = lower(regexp_replace($1, '[[:space:]]', '', 'g'))
+         ORDER BY v.date_of_diagnosis DESC NULLS LAST LIMIT 1`,
+        [String(cleaned.itis_case_id)]
       )).rows[0] || null;
     }
 
@@ -882,6 +892,7 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
       const patient = await createPatient(client, issue.batch_id);
       Object.assign(row, { patient_id: patient.id, case_no: await nextCaseNo(client, cleaned.date_of_diagnosis), match_status: 'none' });
     }
+    await assignCaseIds(client, [row]); // next free Case ID when the file carried none
     const placeholders = INSERT_COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
     const inserted = (await client.query(
       `INSERT INTO validated_tb_cases (${INSERT_COLUMNS.join(', ')}) VALUES (${placeholders}) RETURNING id, case_no`,

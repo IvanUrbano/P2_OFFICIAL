@@ -1,6 +1,7 @@
 const db = require('../db/pasigSchema');
 const { cleanRecord, isBlankRecord, PASIG_BARANGAYS } = require('./dataCleaner');
 const { planIdentities, formatPatientNo, formatCaseNo } = require('./patientIdentity');
+const { assignCaseIds, normalizeCaseId } = require('./caseIds');
 
 const VALID_SEX = ['male', 'female'];
 
@@ -130,7 +131,7 @@ async function validateBatch(batchId) {
     }
     Object.assign(cleaned, sourceRefs({
       batchId, sheetName: record.sheet_name, sourceType: record.source_type,
-      rowNumber: record.row_number, itisCaseId: cleaned.itis_case_id,
+      rowNumber: record.row_number, fileCaseId: cleaned.file_case_id,
     }));
 
     const validation = validateRecord(cleaned, record.source_type, validBarangays, identityRule);
@@ -229,6 +230,10 @@ async function validateBatch(batchId) {
         r.record_status = 'new';
       });
     }
+
+    // Case IDs for rows whose file did not carry one (next free number per facility /
+    // type / year — never repeats across files or batches).
+    await assignCaseIds(client, validRecords);
 
     plan.forEach((p, i) => {
       if (p.kind !== 'pending') return;
@@ -362,13 +367,10 @@ function validateDSTB(rec, validBarangays, opts = {}) {
   return r;
 }
 
-/** MN sheet: no patient name required; ITIS Lite Case No. is kept as the source Case ID. */
+/** MN sheet: no patient name required. Its Case ID comes from the file or is generated
+ *  (services/caseIds.js); the ITIS Lite Case No. is no longer needed. */
 function validateMN(rec, validBarangays, opts = {}) {
-  const r = validateCore(rec, validBarangays, opts);
-  if (!present(rec.itis_case_id)) {
-    r.warnings.push('MN record missing ITIS Case ID (ITIS Lite Case No.) — kept without a source Case ID');
-  }
-  return r;
+  return validateCore(rec, validBarangays, opts);
 }
 
 /** Manual entry: name and date of birth are always required (cannot be switched off). */
@@ -394,14 +396,13 @@ function validateRecord(csvData, sourceType, validBarangays, opts = {}) {
 /**
  * Source traceability for an imported row (never changes existing records):
  *   source_record_id — the file row it came from: "<batch id>:<sheet>:R<row>"
- *                      (the batch names the file; DSTB keeps its generated Case ID)
- *   source_case_id   — MN only: the ITIS Lite Case No., when the file has one
+ *   source_case_id   — the Case ID from the file's "Case ID" column (DSTB and MN); when the
+ *                      file has none it is generated at validation (services/caseIds.js)
  */
-function sourceRefs({ batchId, sheetName, sourceType, rowNumber, itisCaseId }) {
-  const itis = present(itisCaseId) ? String(itisCaseId).trim() : null;
+function sourceRefs({ batchId, sheetName, sourceType, rowNumber, fileCaseId }) {
   return {
     source_record_id: batchId && rowNumber != null ? `${batchId}:${sheetName || sourceType}:R${rowNumber}` : null,
-    source_case_id: sourceType === 'MN' ? itis : null,
+    source_case_id: normalizeCaseId(fileCaseId),
   };
 }
 

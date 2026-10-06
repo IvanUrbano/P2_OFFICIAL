@@ -14,6 +14,7 @@ const { getAvailablePopulationYears, computeYearIncidence, GEOJSON_REFERENCE_YEA
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
 const { getOutcomeFilterValues, normalizeDisplayOutcome } = require('./outcomeNormalization');
+const { pasigResidentOnly, countedCases } = require('./locationScope');
 
 /**
  * Build WHERE clause fragments from filter params.
@@ -122,7 +123,12 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
   const params = [];
   let idx = 1;
   idx = applyFilters(conditions, params, idx, filters);
+  // City-wide scope for trend/sex/age/outcome/total; the two per-barangay
+  // queries below additionally require a Pasig residence, because a Non-Pasig
+  // resident has no Pasig barangay and would otherwise appear as one NULL row.
+  conditions.push(countedCases('c'));
   const where = `WHERE ${conditions.join(' AND ')}`;
+  const whereByBarangay = `WHERE ${conditions.join(' AND ')} AND ${pasigResidentOnly('c')}`;
 
   // Optional metric queries degrade to `null` instead of rejecting: one
   // optional metric failing must NOT 500 the entire NLG response — the
@@ -160,7 +166,7 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
     safe(pool.query(`
       SELECT c.barangay_name, COUNT(*)::INTEGER AS total
       FROM tb_cases c
-      ${where}
+      ${whereByBarangay}
       GROUP BY c.barangay_name
       ORDER BY total DESC
     `, params), 'barangayCounts'),
@@ -172,7 +178,7 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
         DATE_TRUNC('month', c.date_of_diagnosis)::DATE AS month,
         COUNT(*)::INTEGER AS case_count
       FROM tb_cases c
-      ${where}
+      ${whereByBarangay}
       GROUP BY c.barangay_name, DATE_TRUNC('month', c.date_of_diagnosis)
       ORDER BY c.barangay_name, month
     `, params), 'significance'),
@@ -660,17 +666,20 @@ async function buildGisMetrics(pool, filters = {}) {
      FROM barangays b
      LEFT JOIN barangay_risk_scores brs
        ON brs.barangay_name = b.name AND brs.period = $1
-     LEFT JOIN (
-       SELECT barangay_name, COUNT(*)::INTEGER AS total_cases
-       FROM tb_cases GROUP BY barangay_name
-     ) tc ON tc.barangay_name = b.name
-     LEFT JOIN (
-       SELECT barangay_name, COUNT(*)::INTEGER AS year_cases
-       FROM tb_cases
-       WHERE date_of_diagnosis IS NOT NULL
-         AND EXTRACT(YEAR FROM date_of_diagnosis) = $2
-       GROUP BY barangay_name
-     ) yc ON yc.barangay_name = b.name
+      LEFT JOIN (
+        SELECT barangay_name, COUNT(*)::INTEGER AS total_cases
+        FROM tb_cases
+        WHERE ${pasigResidentOnly()}
+        GROUP BY barangay_name
+      ) tc ON tc.barangay_name = b.name
+      LEFT JOIN (
+        SELECT barangay_name, COUNT(*)::INTEGER AS year_cases
+        FROM tb_cases
+        WHERE date_of_diagnosis IS NOT NULL
+          AND EXTRACT(YEAR FROM date_of_diagnosis) = $2
+          AND ${pasigResidentOnly()}
+        GROUP BY barangay_name
+      ) yc ON yc.barangay_name = b.name
      ORDER BY b.name`,
     [latestPeriod, assessmentYear]
   );

@@ -41,8 +41,15 @@ const NEEDS_FACILITY = `(v.match_status <> 'pending' AND (
 const MATCH_PENDING = `v.match_status = 'pending'`;
 const READY = `(v.match_status <> 'pending' AND NOT ${NEEDS_LOCATION} AND NOT ${NEEDS_FACILITY})`;
 
-/** Goes to TBInsight once synced (Pasig barangay) vs kept in PASIG only. */
-const SENDS_TO_TBINSIGHT = `(v.barangay_id IS NOT NULL AND ${PASIG_CITY})`;
+/** A Pasig residence: resolved onto a Pasig barangay in a Pasig city. */
+const SENDS_PASIG_RESIDENCE = `(v.barangay_id IS NOT NULL AND ${PASIG_CITY})`;
+
+/**
+ * Goes to TBInsight once synced vs kept in PASIG only. A Pasig residence goes
+ * through on its own; a Non-Pasig residence only once an admin confirmed it
+ * (TBInsight then admits it when the treatment facility is a Pasig facility).
+ */
+const SENDS_TO_TBINSIGHT = `((${SENDS_PASIG_RESIDENCE}) OR v.location_resolution = 'outside_pasig')`;
 
 const ymd = (v) => {
   if (!v) return null;

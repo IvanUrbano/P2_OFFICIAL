@@ -93,7 +93,7 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
       return res.status(409).json({
         possibleMatch: {
           case_no: candidate.case_no,
-          patient_no: candidate.patient_no,
+          case_id: candidate.source_case_id || candidate.case_no,
           date_of_diagnosis: candidate.date_of_diagnosis ? ymd(candidate.date_of_diagnosis) : null,
           suggestion: sameDx ? 'same_case' : 'new_episode',
           // "Same case" would update the existing case — offered only if it is editable here.

@@ -103,12 +103,13 @@ describe('CSV headers', () => {
 describe('privacy: payload to TBInsight', () => {
   it('carries the IDs but never names or date of birth', () => {
     const out = formatRecord({
-      case_no: 'CS-2025-000001', patient_no: 'PT-000001', batch_id: '550e8400-e29b-41d4-a716-446655440000',
+      case_no: 'CS-2025-000001', patient_no: 'PT-000001', source_case_id: 'ROS-D-2025-00001', batch_id: '550e8400-e29b-41d4-a716-446655440000',
       last_name: 'Dela Cruz', first_name: 'Juan', middle_name: 'Santos', suffix: 'Jr.', date_of_birth: '1990-01-01',
       barangay_name: 'Ugong', age: 35,
     });
     assert.equal(out.case_no, 'CS-2025-000001');
-    assert.equal(out.patient_no, 'PT-000001');
+    assert.equal(out.source_case_id, 'ROS-D-2025-00001', 'the Case ID users see');
+    assert.equal('patient_no' in out, false, 'Patient # is no longer sent');
     assert.equal(out.age, 35);
     for (const k of ['last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth']) {
       assert.equal(k in out, false, `${k} must not be sent`);

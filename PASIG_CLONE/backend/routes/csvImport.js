@@ -602,7 +602,8 @@ router.get('/recent-activity', authenticate, authorizeRoles('admin', 'staff'), a
 const RECORD_SORT_COLUMNS = {
   id: 'v.id',
   patient_no: 'p.patient_no',
-  case: 'v.case_no',
+  // Case ID shown to users (file / generated Case ID; internal case_no for older records)
+  case: 'COALESCE(v.source_case_id, v.case_no)',
   // Names sort only operational records (historical names are never exposed, not even
   // through ordering); everything else falls back to Patient #.
   patient: `CASE WHEN v.identity_class = 'operational' THEN v.last_name END, CASE WHEN v.identity_class = 'operational' THEN v.first_name END, p.patient_no`,
@@ -672,7 +673,7 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
         ? `(v.identity_class = 'operational' AND (v.last_name ILIKE ${s} OR v.first_name ILIKE ${s} OR v.middle_name ILIKE ${s}
            OR (v.last_name || ', ' || v.first_name) ILIKE ${s})) OR `
         : '';
-      filters += ` AND (${nameClauses}v.case_no ILIKE ${s} OR p.patient_no ILIKE ${s}
+      filters += ` AND (${nameClauses}v.source_case_id ILIKE ${s} OR v.case_no ILIKE ${s}
         OR v.barangay_name ILIKE ${s} OR v.treatment_facility ILIKE ${s} OR v.itis_case_id ILIKE ${s})`;
     }
 

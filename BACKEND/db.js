@@ -306,6 +306,30 @@ const initDb = async () => {
       console.error('❌ tb_cases barangay_id authority migration failed (continuing):', caseBrgyAuthorityErr.message);
     }
 
+    // Non-Pasig residents treated in a Pasig facility: free-text residence, optional
+    // barangay, facility_summary rows with no barangay.
+    try {
+      const nonPasigResidentMigPath = path.join(__dirname, 'db', 'migrations', '029_non_pasig_residents.sql');
+      if (fs.existsSync(nonPasigResidentMigPath)) {
+        await execSql(fs.readFileSync(nonPasigResidentMigPath, 'utf8'));
+        console.log('✅ Non-Pasig resident migration completed successfully.');
+      }
+    } catch (nonPasigResidentErr) {
+      console.error('❌ Non-Pasig resident migration failed (continuing):', nonPasigResidentErr.message);
+    }
+
+    // Facility codes (the facility part of the PASIG Case ID) and the treatment
+    // facilities from the 2023-2026 registry files that were not registered (idempotent)
+    try {
+      const facilityCodesMigPath = path.join(__dirname, 'db', 'migrations', '030_facility_codes.sql');
+      if (fs.existsSync(facilityCodesMigPath)) {
+        await execSql(fs.readFileSync(facilityCodesMigPath, 'utf8'));
+        console.log('✅ Facility codes migration completed successfully.');
+      }
+    } catch (facilityCodesErr) {
+      console.error('❌ Facility codes migration failed (continuing):', facilityCodesErr.message);
+    }
+
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,
     // undoing two earlier over-broad attempts, and keep only the Kapasigan Extension ->
     // Bagong Katipunan rename/population fix (idempotent)

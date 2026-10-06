@@ -12,6 +12,7 @@ import RowMenu from '../components/RowMenu';
 import ProgressOverlay from '../components/ProgressOverlay';
 import TablePagination from '../components/TablePagination';
 import { can, accessBasis } from '../utils/permissions';
+import { caseIdOf } from '../utils/caseId';
 
 const EMPTY_FORM = {
   last_name: '', first_name: '', middle_name: '', suffix: '', date_of_birth: '',
@@ -35,7 +36,7 @@ const STATIC_BACT = ['SMEAR POSITIVE','SMEAR NEGATIVE','XPERT MTB/RIF DETECTED',
 const RESOLUTION_LABELS = {
   same_case: { title: 'Same case', desc: 'Update the existing case with this record' },
   new_episode: { title: 'New episode', desc: 'Same patient, new TB case (new Case ID)' },
-  different_person: { title: 'Different person', desc: 'New Patient # and new Case ID' },
+  different_person: { title: 'Different person', desc: 'New case with its own Case ID' },
 };
 
 const inputStyle = { background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52', borderRadius: 4 };
@@ -71,7 +72,6 @@ function computeAge(dob, dx) {
 /* Table columns — same table UI as Health Facilities: navy header, click-to-sort.
    `field` maps to the whitelisted sort keys on GET /records (null = not sortable). */
 const RECORD_COLUMNS = [
-  { label: 'Patient #', field: 'patient_no' },
   { label: 'Case ID', field: 'case' },
   { label: 'Name', field: 'patient' },
   { label: 'Barangay', field: 'barangay' },
@@ -247,7 +247,7 @@ export default function TBRecordsPage() {
     try {
       await API.patch(`/api/data/records/${record.id}/archive`);
       setArchiveTarget(null);
-      setNotice({ type: 'success', text: `${record.case_no || 'Record'} archived.` });
+      setNotice({ type: 'success', text: `${caseIdOf(record) || 'Record'} archived.` });
       fetchRecords();
     } catch (err) {
       setArchiveError(err.response?.data?.error || 'Failed to archive the record.');
@@ -354,7 +354,7 @@ export default function TBRecordsPage() {
   const facilityList = Array.isArray(facilities) ? facilities : [];
 
   const tabs = [
-    { key: 'all', title: 'All Records', desc: 'Cases with Patient # and Case ID', count: counts.all },
+    { key: 'all', title: 'All Records', desc: 'Validated cases with their Case ID', count: counts.all },
     { key: 'referrals', title: 'Incoming Referrals', desc: isAdmin ? 'Referrals between barangays' : 'Cases referred to your barangay', count: referralCount },
   ];
 
@@ -362,7 +362,7 @@ export default function TBRecordsPage() {
     <div className="space-y-5">
       <ProgressOverlay
         open={archiving}
-        title={`Archiving ${archiveTarget?.case_no || 'record'}`}
+        title={`Archiving ${caseIdOf(archiveTarget) || 'record'}`}
         detail="Hiding the record from lists and analysis. It is kept for the record."
         icon="ri-archive-line"
         tone="#D97706"
@@ -411,7 +411,7 @@ export default function TBRecordsPage() {
           <div className="relative max-w-sm">
             <i className="ri-search-line absolute left-3 top-1/2 -translate-y-1/2 text-sm" style={{ color: '#94A3B8' }} />
             <input type="text" value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
-              placeholder={pinStatus.unlocked ? 'Search name, Patient #, Case ID, barangay...' : 'Search Patient #, Case ID, barangay (unlock to search names)'}
+              placeholder={pinStatus.unlocked ? 'Search name, Case ID, barangay...' : 'Search Case ID, barangay (unlock to search names)'}
               className="w-full pl-9 pr-3 py-2 text-xs rounded-lg outline-none" style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52' }} />
           </div>
         </div>
@@ -512,8 +512,7 @@ export default function TBRecordsPage() {
               <tbody>
                 {records.map((r, i) => (
                   <tr key={r.id} className={`hover:bg-blue-50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]'}`} style={{ borderBottom: '1px solid #E2E8F0' }}>
-                    <td className="pl-6 pr-3 py-2.5 text-xs font-mono font-bold whitespace-nowrap" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }}>{r.patient_no || '—'}</td>
-                    <td className="px-3 py-2.5 text-xs font-mono whitespace-nowrap" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }}>{r.case_no || '—'}</td>
+                    <td className="pl-6 pr-3 py-2.5 text-xs font-mono font-bold whitespace-nowrap" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }}>{caseIdOf(r) || '—'}</td>
                     <td className="px-3 py-2.5 text-xs font-semibold whitespace-nowrap" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }}>{fullName(r)}</td>
                     <td className="px-3 py-2.5 text-xs" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>
                       {r.barangay_name || '—'}
@@ -560,7 +559,7 @@ export default function TBRecordsPage() {
                       <div className="inline-flex items-center gap-1">
                         <button
                           type="button"
-                          aria-label={`More actions for ${r.case_no || 'record'}`}
+                          aria-label={`More actions for ${caseIdOf(r) || 'record'}`}
                           aria-haspopup="menu"
                           onClick={(e) => setRowMenu(rowMenu?.record.id === r.id ? null : { record: r, anchor: e.currentTarget })}
                           className="inline-flex items-center justify-center h-6 w-6 rounded"
@@ -594,7 +593,7 @@ export default function TBRecordsPage() {
           <div role="dialog" aria-modal="true" aria-labelledby="archive-dialog-title" className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl" onClick={e => e.stopPropagation()}>
             <h2 id="archive-dialog-title" className="text-sm font-bold" style={{ color: '#0F2D52' }}>Archive record?</h2>
             <p className="mt-2 text-xs leading-relaxed" style={{ color: '#475569' }}>
-              {archiveTarget.case_no || 'This record'} will be removed from active lists and analysis. Its history will be kept.
+              {caseIdOf(archiveTarget) || 'This record'} will be removed from active lists and analysis. Its history will be kept.
             </p>
             {archiveError && <p role="alert" className="mt-3 rounded px-3 py-2 text-xs" style={{ background: '#FEF2F2', color: '#991B1B' }}>{archiveError}</p>}
             <div className="mt-5 flex justify-end gap-2">
@@ -619,7 +618,7 @@ export default function TBRecordsPage() {
             <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ background: '#0F2D52', color: '#ffffff' }}>
               <div>
                 <h2 className="text-sm font-extrabold">Add TB Record</h2>
-                <p className="text-[11px] mt-0.5 opacity-70">Patient # and Case ID are assigned automatically.</p>
+                <p className="text-[11px] mt-0.5 opacity-70">The Case ID is assigned automatically.</p>
               </div>
               <button type="button" onClick={closeForm} aria-label="Close" className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
                 <i className="ri-close-line text-base" />
@@ -644,7 +643,7 @@ export default function TBRecordsPage() {
               <div className="mx-6 mt-4 p-4 rounded-lg text-xs" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
                 <p className="font-bold mb-1" style={{ color: '#92400E' }}>This may be an existing patient</p>
                 <p style={{ color: '#475569' }}>
-                  Same name and date of birth as case <b>{possibleMatch.case_no}</b> (Patient {possibleMatch.patient_no}), diagnosed {possibleMatch.date_of_diagnosis || '—'}
+                  Same name and date of birth as case <b>{possibleMatch.case_id || possibleMatch.case_no}</b>, diagnosed {possibleMatch.date_of_diagnosis || '—'}
                   {possibleMatch.barangay_name ? `, ${possibleMatch.barangay_name}` : ''}{possibleMatch.outcome_status ? `, ${possibleMatch.outcome_status}` : ''}.
                 </p>
                 <div className="flex flex-col gap-1.5 mt-3">

@@ -5,6 +5,7 @@ import { can, accessBasis } from '../utils/permissions';
 import CaseEditForm from './CaseEditForm';
 import { patientName } from '../utils/patientName';
 import { useConfirmDialog } from './ConfirmDialog';
+import { caseIdOf } from '../utils/caseId';
 
 const fmtDate = (v) => (v ? new Date(v).toLocaleDateString() : '—');
 const fmtDateTime = (v) => (v ? new Date(v).toLocaleString() : '—');
@@ -173,7 +174,7 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
         <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ background: '#0F2D52', color: '#ffffff' }}>
           <div>
             <h2 className="text-sm font-extrabold">{r ? fullName(r) : 'TB Record'}</h2>
-            <p className="text-[11px] mt-0.5 opacity-70">{r ? `${r.patient_no || '—'} · ${r.case_no || '—'}` : 'Loading…'}</p>
+            <p className="text-[11px] mt-0.5 opacity-70">{r ? (caseIdOf(r) || '—') : 'Loading…'}</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
             <i className="ri-close-line text-base" />
@@ -225,8 +226,8 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
             <section>
               <p className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: '#64748B' }}>Patient</p>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Patient #" value={r.patient_no} />
-                <Field label="Case ID" value={r.case_no} />
+                <Field label="Case ID" value={caseIdOf(r)} />
+                {r.source_case_id && r.case_no && <Field label="System ref." value={r.case_no} />}
                 <Field label="Date of birth" value={fmtDate(r.date_of_birth)} />
                 <Field label="Age / Sex" value={`${r.age ?? '—'} / ${r.sex || '—'}`} />
                 <Field label="Patient barangay" value={r.barangay_name} />

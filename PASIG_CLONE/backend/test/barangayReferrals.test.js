@@ -108,11 +108,11 @@ function poolQuery(sql, params = []) {
     return { rows };
   }
   // --- history writes (routes/transfers.js + services/caseFollowUp.js) ---
-  if (q.startsWith('SELECT case_no, barangay_id, responsible_barangay_id FROM validated_tb_cases WHERE id = $1')) {
+  if (q.startsWith('SELECT case_no, source_case_id, barangay_id, responsible_barangay_id FROM validated_tb_cases WHERE id = $1')) {
     const c = cases.find(x => x.id === Number(params[0]));
     return { rows: c ? [{ case_no: c.case_no, barangay_id: c.barangay_id, responsible_barangay_id: c.responsible_barangay_id }] : [] };
   }
-  if (q.startsWith('SELECT case_no FROM validated_tb_cases WHERE id = $1')) {
+  if (q.startsWith('SELECT case_no, source_case_id FROM validated_tb_cases WHERE id = $1')) {
     const c = cases.find(x => x.id === Number(params[0]));
     return { rows: c ? [{ case_no: c.case_no }] : [] };
   }

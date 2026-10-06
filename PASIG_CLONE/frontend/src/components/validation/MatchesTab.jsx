@@ -6,6 +6,7 @@ import { primaryBtn, secondaryBtn } from '../SidePanel';
 import { can } from '../../utils/permissions';
 import ProgressOverlay from '../ProgressOverlay';
 import { useConfirmDialog } from '../ConfirmDialog';
+import { caseIdOf } from '../../utils/caseId';
 
 const CATEGORY = {
   duplicate: { label: 'Duplicate', color: '#475569', bg: '#F1F5F9', hint: 'Same patient, same diagnosis date, nothing new.' },
@@ -74,7 +75,7 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
     setNotice(null);
     try {
       await API.post(`/api/data/records/${r.id}/resolve-match`, { resolution });
-      setNotice({ type: 'success', text: `${r.match_candidate_case_no || 'Record'}: ${resolution.replace('_', ' ')} recorded.` });
+      setNotice({ type: 'success', text: `${caseIdOf(r.candidate) || r.match_candidate_case_no || 'Record'}: ${resolution.replace('_', ' ')} recorded.` });
       onChanged?.();
       load();
     } catch (err) {
@@ -146,7 +147,7 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
         {loading ? (
           <p className="text-xs text-center py-10" style={{ color: '#94A3B8' }}>Loading…</p>
         ) : visible.length === 0 ? (
-          <EmptyState icon="ri-user-search-line" title="No Possible Matches" description="Every incoming record has a confirmed Patient # and Case ID." />
+          <EmptyState icon="ri-user-search-line" title="No Possible Matches" description="Every incoming record has a confirmed Case ID." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -186,15 +187,15 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
                       <td className={td} style={{ color: '#0F2D52' }}>
                         {c ? (
                           <>
-                            <span className="font-mono">{c.case_no}</span>
-                            <span className="block text-[10px]" style={{ color: '#64748B' }}>{c.patient_no || ''} · Dx {fmtDate(c.date_of_diagnosis)}</span>
+                            <span className="font-mono">{caseIdOf(c)}</span>
+                            <span className="block text-[10px]" style={{ color: '#64748B' }}>Dx {fmtDate(c.date_of_diagnosis)}</span>
                             <span className="block text-[10px]" style={{ color: '#94A3B8' }}>Outcome: {c.outcome_status || '—'}</span>
                           </>
                         ) : <span style={{ color: '#991B1B' }}>No longer exists</span>}
                       </td>
                       <td className={td}>
                         {r.category === 'new_episode' ? (
-                          <span className="text-[11px]" style={{ color: '#64748B' }}>New case for the same patient (Patient # kept)</span>
+                          <span className="text-[11px]" style={{ color: '#64748B' }}>New case for the same patient</span>
                         ) : r.changes?.length ? (
                           <ul className="space-y-0.5">
                             {r.changes.map(ch => (

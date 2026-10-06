@@ -66,7 +66,7 @@ router.get('/status/:batchId', authenticate, authorizeRoles('admin', 'staff'), a
 router.get('/rejections', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const { rows } = await db.pool.query(
-      `SELECT v.id, v.case_no, v.barangay_name, v.source_type, v.date_of_diagnosis,
+      `SELECT v.id, v.case_no, v.source_case_id, v.barangay_name, v.source_type, v.date_of_diagnosis,
               v.tbinsight_rejection AS reason, v.tbinsight_rejected_at AS rejected_at,
               b.filename
        FROM validated_tb_cases v

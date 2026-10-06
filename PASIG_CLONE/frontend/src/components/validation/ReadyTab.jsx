@@ -4,6 +4,7 @@ import API from '../../api/axios';
 import EmptyState from '../EmptyState';
 import { fmtDate, fullName, Pager, th, thStyle, td } from './shared';
 import { primaryBtn } from '../SidePanel';
+import { caseIdOf } from '../../utils/caseId';
 
 /**
  * Ready — records with no unresolved issue, plus a per-batch readiness list with the
@@ -104,13 +105,12 @@ export default function ReadyTab({ batch, batches, refreshKey, canSync = false }
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr>{['Case ID', 'Patient #', 'Name', 'Barangay', 'Diagnosed', 'Treatment facility', 'Destination'].map(h => <th key={h} className={th} style={thStyle}>{h}</th>)}</tr>
+                  <tr>{['Case ID', 'Name', 'Barangay', 'Diagnosed', 'Treatment facility', 'Destination'].map(h => <th key={h} className={th} style={thStyle}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
                   {data.records.map(r => (
                     <tr key={r.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                      <td className={`${td} font-mono`} style={{ color: '#0F2D52' }}>{r.case_no || '—'}</td>
-                      <td className={`${td} font-mono`} style={{ color: '#475569' }}>{r.patient_no || '—'}</td>
+                      <td className={`${td} font-mono`} style={{ color: '#0F2D52' }}>{caseIdOf(r) || '—'}</td>
                       <td className={td} style={{ color: '#0F2D52' }}>{fullName(r)}</td>
                       <td className={td} style={{ color: '#475569' }}>{r.barangay_name || '—'}</td>
                       <td className={`${td} whitespace-nowrap`} style={{ color: '#475569' }}>{fmtDate(r.date_of_diagnosis)}</td>

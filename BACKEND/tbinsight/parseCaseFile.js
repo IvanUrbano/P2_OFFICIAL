@@ -244,9 +244,20 @@ function validateRow(row, validBarangays) {
   const errors = [];
   const warnings = [];
 
-  // Required: barangay_name
+  // The city decides whether the residence is outside Pasig; an absent city is
+  // treated as Pasig and the barangay decides (see the webhook's admission rule).
+  const cityText = row.city ? String(row.city).trim() : '';
+  const cityOutsidePasig = cityText !== '' && !VALID_CITIES.includes(cityText.toLowerCase());
+
+  // Required: barangay_name — unless the residence is clearly outside Pasig, in which
+  // case a missing barangay is expected and the record is kept only when its treatment
+  // facility is a Pasig facility (that check happens in the webhook, not here).
   if (!row.barangay_name || row.barangay_name.trim() === '') {
-    errors.push('Barangay is required');
+    if (cityOutsidePasig) {
+      warnings.push(`Non-Pasig record: no barangay for city "${row.city}"`);
+    } else {
+      errors.push('Barangay is required');
+    }
   } else if (!validBarangays.has(row.barangay_name.trim().toLowerCase())) {
     const isPasig = row.city && VALID_CITIES.includes(row.city.trim().toLowerCase());
     if (isPasig) {
@@ -276,16 +287,19 @@ function validateRow(row, validBarangays) {
     }
   }
 
-  // City validation (optional, should be Pasig)
-  if (row.city && row.city.trim() !== '') {
-    if (!VALID_CITIES.includes(row.city.trim().toLowerCase())) {
-      warnings.push(`City is "${row.city}", expected "Pasig"`);
-    }
+  // City validation (optional). A non-Pasig city is a Non-Pasig residence, not an
+  // error: the record is kept when its treatment facility is a Pasig facility.
+  if (cityOutsidePasig) {
+    warnings.push(
+      `City is "${row.city}", expected "Pasig" — Non-Pasig residence; kept only when the treatment facility is a Pasig facility`
+    );
   }
 
-  // Facility cross-check (warnings only, never rejections)
+  // Facility cross-check (warnings only, never rejections). Skipped for a Non-Pasig
+  // residence: their Pasig facility is by definition not in their barangay's list, and
+  // the facility never says where they live.
   const barangayKey = row.barangay_name ? row.barangay_name.trim().toLowerCase() : '';
-  const knownFacilities = FACILITY_MAP[barangayKey] || [];
+  const knownFacilities = cityOutsidePasig ? [] : (FACILITY_MAP[barangayKey] || []);
 
   if (row.screening_facility && row.screening_facility.trim() !== '') {
     const facilityLower = row.screening_facility.trim().toLowerCase();

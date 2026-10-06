@@ -203,6 +203,15 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       barangayIdMap.set(Number(row.id), barangay);
     }
 
+    // Registered, active, non-external facilities. A Non-Pasig resident is kept ONLY
+    // when their treatment facility is one of these — the facility decides admission
+    // and the label, never the barangay.
+    const pasigFacilitiesResult = await pool.query(
+      `SELECT id FROM health_facilities
+       WHERE is_external = FALSE AND is_active = TRUE`
+    );
+    const pasigFacilityIds = new Set(pasigFacilitiesResult.rows.map(r => Number(r.id)));
+
     let totalRecords = 0;
     let importedCount = 0;
     let errorCount = 0;
@@ -242,45 +251,86 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
         totalRecords++;
         record.source_type = source_type;
 
+        // Residence exactly as the source file wrote it. It is kept separate from the
+        // treatment facility, and stored as free text for a Non-Pasig resident.
+        const residenceBarangay = String(record.barangay_name ?? '').trim() || null;
+        const residenceCity = String(record.city ?? '').trim() || null;
+        const normalizedCity = String(record.city ?? '').trim().toLowerCase();
+
         // Resolve by ID when supplied; the name lookup is retained for old webhook clients.
-        const bgyLower = String(record.barangay_name || '').trim().toLowerCase();
+        const bgyLower = residenceBarangay ? residenceBarangay.toLowerCase() : '';
         const requestedBarangayId = record.barangay_id == null ? null : Number(record.barangay_id);
         const matchedBarangay = requestedBarangayId == null
           ? barangayNameMap.get(bgyLower)
           : barangayIdMap.get(requestedBarangayId);
-        if (matchedBarangay) {
+
+        // Residence decides whether this is a Pasig case. An explicit city wins,
+        // because barangay names repeat across Metro Manila (e.g. Santa Cruz): a
+        // matching Pasig barangay NAME alone never makes the patient a Pasig case.
+        const cityIsPasig = normalizedCity === 'pasig city' || normalizedCity === 'pasig';
+        const cityIsBlank = normalizedCity === '';
+        const isPasigResident = (cityIsPasig || cityIsBlank) && Boolean(matchedBarangay);
+
+        // The only signal that lets a Non-Pasig residence through: an admin resolved
+        // the record in PASIG TB-IS (Validation -> Needs Assignment -> Outside Pasig).
+        const confirmedOutsidePasig = record.location_resolution === 'outside_pasig';
+
+        const reject = (message) => {
+          errorCount++;
+          errors.push({
+            ...rejectionRef(record),
+            row: record.row_number || totalRecords,
+            source_type,
+            errors: [message],
+          });
+        };
+
+        if (isPasigResident) {
           record.barangay_id = matchedBarangay.id;
           record.barangay_name = matchedBarangay.name;
+        } else if (confirmedOutsidePasig) {
+          // Non-Pasig resident, kept ONLY when the facility that manages them is a
+          // registered Pasig facility. The facility decides admission and the label —
+          // never the barangay: barangay_id and barangay_name stay NULL, and a
+          // residence barangay name that collides with a Pasig one is never resolved
+          // onto a Pasig barangay.
+          const treatmentFacilityId = record.treatment_facility_id == null
+            ? null
+            : Number(record.treatment_facility_id);
+          if (treatmentFacilityId == null || !pasigFacilityIds.has(treatmentFacilityId)) {
+            reject('Non-Pasig residence: the treatment facility is not a Pasig health facility');
+            continue;
+          }
+          record.barangay_id = null;
+          record.barangay_name = null;
         } else {
-          // Barangay not in Pasig — skip this record (already counted in totalRecords above)
-          errorCount++;
-          errors.push({ ...rejectionRef(record), row: record.row_number || totalRecords, source_type, errors: ['Unknown barangay ID or name: not a Pasig City barangay'] });
+          reject(cityIsPasig || cityIsBlank
+            ? 'Unknown barangay ID or name: not a Pasig City barangay'
+            : 'Non-Pasig residence: confirm it in Validation -> Needs Assignment before it can be sent');
           continue;
         }
 
-        const validation = validateRow(record, validBarangays);
+        // validateRow sees the canonical Pasig barangay for a Pasig resident, and the
+        // raw residence text for a Non-Pasig resident (an unknown barangay there is
+        // expected, not an error).
+        const validation = validateRow(
+          isPasigResident ? record : { ...record, barangay_name: residenceBarangay },
+          validBarangays
+        );
 
         if (validation.valid) {
-          const normalizedCity = String(record.city || '').trim().toLowerCase();
-          // An explicit city wins: barangay names repeat across Metro Manila (e.g. Santa Cruz),
-          // so a matching Pasig barangay name alone does not make the patient a Pasig case.
-          // Without a city, fall back to the barangay lookup.
-          let locationClassification;
-          if (normalizedCity === 'pasig city' || normalizedCity === 'pasig') {
-            locationClassification = 'Pasig City';
-          } else if (normalizedCity) {
-            locationClassification = 'Non-Pasig';
-          } else {
-            locationClassification = validBarangays.has(String(record.barangay_name || '').trim().toLowerCase())
-              ? 'Pasig City'
-              : 'Non-Pasig';
-          }
+          const locationClassification = isPasigResident ? 'Pasig City' : 'Non-Pasig Resident';
 
           // Neither itis_case_id (MN) nor the DSTB fingerprint is enforced as
           // a DB uniqueness constraint — see the doc comment on
           // computeDstbFingerprint. Both are lookup keys used only for
           // post-insert possible-duplicate detection below.
-          const dstbFingerprint = source_type === 'DSTB' ? computeDstbFingerprint(record) : null;
+          const dstbFingerprint = source_type === 'DSTB'
+            ? computeDstbFingerprint({
+              ...record,
+              barangay_name: record.barangay_name ?? residenceBarangay,
+            })
+            : null;
 
           // A case re-sent inside a later batch keeps its original PASIG batch, so undoing
           // that original batch still removes it.
@@ -301,7 +351,9 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
             record.rdt_result, record.rdt_release_date, record.outcome_reason,
             dstbFingerprint,
             record.current_responsible_facility_id ?? null,
-            record.case_no || null, record.patient_no || null,
+            record.case_no || null, record.patient_no || null, record.source_case_id || null,
+            isPasigResident ? null : residenceBarangay,
+            isPasigResident ? null : residenceCity,
           ]);
           // NOT incremented here — this only means "passed validation".
           // The real insert count (importedCount, set below) reflects what
@@ -314,7 +366,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       }
     }
 
-    const COLS = 35;
+    const COLS = 38;
     const chunkSize = 100;
     let insertedCount = 0;
     let updatedCount = 0;
@@ -344,15 +396,21 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
           microscopy_result, microscopy_release_date,
           rdt_result, rdt_release_date, outcome_reason,
           dstb_fingerprint, current_responsible_facility_id,
-          case_no, patient_no
+          case_no, patient_no, source_case_id,
+          residence_barangay_name, residence_city
         ) VALUES ${placeholders}
         ON CONFLICT (case_no) WHERE case_no IS NOT NULL DO UPDATE SET
           barangay_id = EXCLUDED.barangay_id,
           barangay_name = EXCLUDED.barangay_name,
+          residence_barangay_name = EXCLUDED.residence_barangay_name,
+          residence_city = EXCLUDED.residence_city,
+          location_classification = EXCLUDED.location_classification,
           outcome_status = EXCLUDED.outcome_status,
           date_of_outcome = EXCLUDED.date_of_outcome,
           date_started_treatment = EXCLUDED.date_started_treatment,
-          treatment_facility = EXCLUDED.treatment_facility
+          treatment_facility = EXCLUDED.treatment_facility,
+          -- the Case ID users see (PASIG); kept when a resend carries none
+          source_case_id = COALESCE(EXCLUDED.source_case_id, tb_cases.source_case_id)
         RETURNING id, dstb_fingerprint, itis_case_id, source_type, (xmax = 0) AS inserted`,
         flatParams
       );
