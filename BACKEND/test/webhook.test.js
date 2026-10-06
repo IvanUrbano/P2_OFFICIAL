@@ -679,8 +679,7 @@ describe('Webhook Endpoint', () => {
     assert.ok(res.body.error.includes('record_count'));
   });
 
-  it('imports non-Pasig record with warning classification', async () => {
-    let insertedLocation = null;
+  it('rejects a Non-Pasig residence that no admin has confirmed', async () => {
     mockQueryFn = async (sql) => {
       if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'santa cruz' }] };
@@ -692,10 +691,9 @@ describe('Webhook Endpoint', () => {
     };
 
     mockConnectFn = async () => ({
-      query: async (sql, params) => {
+      query: async (sql) => {
         if (sql.includes('INSERT INTO tb_cases')) {
-          insertedLocation = params[20]; // location_classification is 21st param
-          return { rows: [{ id: 1, dstb_fingerprint: null, itis_case_id: null, source_type: 'DSTB' }] };
+          throw new Error('a rejected record must never reach the insert');
         }
         return { rows: [] };
       },
@@ -731,8 +729,138 @@ describe('Webhook Endpoint', () => {
 
     assert.equal(res.status, 200);
     assert.equal(res.body.success, true);
+    assert.equal(res.body.importedCount, 0);
+    assert.equal(res.body.errorCount, 1);
+    assert.match(res.body.rejected[0].errors[0], /Validation -> Needs Assignment/);
+  });
+
+  it('imports a confirmed Non-Pasig resident treated at a Pasig facility', async () => {
+    let insertedRow = null;
+    mockQueryFn = async (sql) => {
+      if (sql.includes('SELECT id, name FROM barangays')) {
+        return { rows: [{ name: 'santa cruz' }] };
+      }
+      if (sql.includes('FROM health_facilities')) {
+        return { rows: [{ id: 7 }] };
+      }
+      if (sql.includes('INSERT INTO webhook_logs')) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    };
+
+    mockConnectFn = async () => ({
+      query: async (sql, params) => {
+        if (sql.includes('INSERT INTO tb_cases')) {
+          insertedRow = params;
+          return { rows: [{ id: 1, dstb_fingerprint: null, itis_case_id: null, source_type: 'DSTB' }] };
+        }
+        return { rows: [] };
+      },
+      release: () => {},
+    });
+
+    clearWebhookCache();
+    const webhook = require('../tbinsight/webhook');
+    const app = express();
+    app.use(express.json(RAW_BODY_CAPTURE));
+    app.use('/api/webhook', webhook);
+
+    const payload = buildPayload({
+      sheets: [{
+        sheet_name: 'DSTB',
+        source_type: 'DSTB',
+        record_count: 1,
+        records: [{
+          barangay_name: 'Santa Cruz',
+          city: 'Manila',
+          date_of_diagnosis: '2025-03-15',
+          sex: 'Female',
+          age: 45,
+          source_type: 'DSTB',
+          treatment_facility: 'Pasig City Health Center',
+          treatment_facility_id: 7,
+          location_resolution: 'outside_pasig',
+        }],
+      }],
+    });
+
+    const res = await request(app)
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.success, true);
     assert.equal(res.body.importedCount, 1);
-    assert.equal(insertedLocation, 'Non-Pasig');
+    assert.equal(insertedRow[20], 'Non-Pasig Resident');
+    // Never stamped with a Pasig barangay — barangay_id, barangay_name stay NULL
+    assert.equal(insertedRow[1], null);
+    assert.equal(insertedRow[7], null);
+    // Residence is kept as the source wrote it, in its own free-text columns
+    // (index 35 is source_case_id — the Case ID users see)
+    assert.equal(insertedRow[36], 'Santa Cruz');
+    assert.equal(insertedRow[37], 'Manila');
+  });
+
+  it('rejects a confirmed Non-Pasig resident whose treatment facility is not Pasig', async () => {
+    mockQueryFn = async (sql) => {
+      if (sql.includes('SELECT id, name FROM barangays')) {
+        return { rows: [{ name: 'santa cruz' }] };
+      }
+      if (sql.includes('FROM health_facilities')) {
+        return { rows: [{ id: 7 }] };
+      }
+      if (sql.includes('INSERT INTO webhook_logs')) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    };
+
+    mockConnectFn = async () => ({
+      query: async (sql) => {
+        if (sql.includes('INSERT INTO tb_cases')) {
+          throw new Error('a non-Pasig facility must never admit this record');
+        }
+        return { rows: [] };
+      },
+      release: () => {},
+    });
+
+    clearWebhookCache();
+    const webhook = require('../tbinsight/webhook');
+    const app = express();
+    app.use(express.json(RAW_BODY_CAPTURE));
+    app.use('/api/webhook', webhook);
+
+    const payload = buildPayload({
+      sheets: [{
+        sheet_name: 'DSTB',
+        source_type: 'DSTB',
+        record_count: 1,
+        records: [{
+          barangay_name: 'Santa Cruz',
+          city: 'Manila',
+          date_of_diagnosis: '2025-03-15',
+          sex: 'Female',
+          age: 45,
+          source_type: 'DSTB',
+          treatment_facility: 'Manila Health Center',
+          treatment_facility_id: 999,
+          location_resolution: 'outside_pasig',
+        }],
+      }],
+    });
+
+    const res = await request(app)
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.importedCount, 0);
+    assert.equal(res.body.errorCount, 1);
+    assert.match(res.body.rejected[0].errors[0], /not a Pasig health facility/);
   });
 
   it('rejects Pasig record with invalid barangay', async () => {

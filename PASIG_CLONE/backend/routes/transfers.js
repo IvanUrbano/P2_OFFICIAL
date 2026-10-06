@@ -72,7 +72,7 @@ router.post('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res
     }
 
     const caseResult = await db.pool.query(
-      `SELECT id, case_no, barangay_name, barangay_id, responsible_barangay, responsible_barangay_id,
+      `SELECT id, case_no, source_case_id, barangay_name, barangay_id, responsible_barangay, responsible_barangay_id,
               is_archived, match_status, merged_into_case_no
        FROM validated_tb_cases
        WHERE id = $1 AND is_archived = false AND merged_into_case_no IS NULL`,
@@ -141,7 +141,7 @@ router.post('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res
     await notifications.notifyBarangay(toBarangayId, {
       type: 'referral_received', severity: 'warning', actorId: req.user.id,
       title: `Incoming ${kind} from ${fromBarangay || 'another barangay'}`,
-      message: `Case ${caseRecord.case_no || `#${validated_case_id}`} was sent to ${toBarangay}${reason ? ` — "${reason.slice(0, 140)}"` : ''}. Accept or reject it in Incoming Referrals.`,
+      message: `Case ${caseRecord.source_case_id || caseRecord.case_no || `#${validated_case_id}`} was sent to ${toBarangay}${reason ? ` — "${reason.slice(0, 140)}"` : ''}. Accept or reject it in Incoming Referrals.`,
       link: '/records?view=referrals', entityType: 'case_transfer', entityId: result.rows[0].id,
     });
 
@@ -192,7 +192,7 @@ router.put('/:id/accept', authenticate, authorizeRoles('admin', 'staff'), async 
     }
     // History needs the case as it is BEFORE responsibility moves.
     const caseRow = (await client.query(
-      'SELECT case_no, barangay_id, responsible_barangay_id FROM validated_tb_cases WHERE id = $1',
+      'SELECT case_no, source_case_id, barangay_id, responsible_barangay_id FROM validated_tb_cases WHERE id = $1',
       [transfer.validated_case_id]
     )).rows[0] || {};
     // Responsibility moves. Back to the patient's own barangay = clear the override.
@@ -252,7 +252,7 @@ router.put('/:id/accept', authenticate, authorizeRoles('admin', 'staff'), async 
       [transfer.initiated_by_user_id, ...(await notifications.barangayStaff(transfer.from_barangay_id))], {
         type: 'referral_accepted', severity: 'success', actorId: req.user.id,
         title: `${transfer.to_barangay} accepted a referral`,
-        message: `Case ${caseRow.case_no || `#${transfer.validated_case_id}`} is now managed by ${transfer.to_barangay}. Your barangay keeps view-only access.`,
+        message: `Case ${caseRow.source_case_id || caseRow.case_no || `#${transfer.validated_case_id}`} is now managed by ${transfer.to_barangay}. Your barangay keeps view-only access.`,
         link: `/records?record=${transfer.validated_case_id}`, entityType: 'case_transfer', entityId: id,
       });
 
@@ -302,7 +302,8 @@ router.put('/:id/cancel', authenticate, authorizeRoles('admin', 'staff'), async 
     if (result.rows.length === 0) return res.status(409).json({ error: 'This referral/transfer was already handled.' });
 
     const closed = result.rows[0];
-    const closedCaseNo = ((await db.pool.query('SELECT case_no FROM validated_tb_cases WHERE id = $1', [transfer.validated_case_id])).rows[0] || {}).case_no || null;
+    const closedCase = (await db.pool.query('SELECT case_no, source_case_id FROM validated_tb_cases WHERE id = $1', [transfer.validated_case_id])).rows[0] || {};
+    const closedCaseNo = closedCase.case_no || null;
     await logReviews(db.pool, req.user.id, [{
       validated_case_id: transfer.validated_case_id,
       case_no: closedCaseNo,
@@ -325,7 +326,7 @@ router.put('/:id/cancel', authenticate, authorizeRoles('admin', 'staff'), async 
     });
 
     await notifications.resolveEntity('case_transfer', id, ['referral_received']);
-    const caseLabel = closedCaseNo || `#${transfer.validated_case_id}`;
+    const caseLabel = closedCase.source_case_id || closedCaseNo || `#${transfer.validated_case_id}`;
     if (declined) {
       await notifications.notify(
         [transfer.initiated_by_user_id, ...(await notifications.barangayStaff(transfer.from_barangay_id))], {
@@ -378,7 +379,7 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
 
     const result = await db.pool.query(
       `SELECT ct.*,
-              vtc.case_no, p.patient_no, vtc.last_name, vtc.first_name, vtc.middle_name, vtc.suffix, vtc.identity_class,
+              vtc.case_no, vtc.source_case_id, vtc.last_name, vtc.first_name, vtc.middle_name, vtc.suffix, vtc.identity_class,
               vtc.barangay_name, vtc.barangay_id, vtc.responsible_barangay, vtc.responsible_barangay_id,
               vtc.date_of_diagnosis, vtc.source_type, vtc.outcome_status
        FROM case_transfers ct

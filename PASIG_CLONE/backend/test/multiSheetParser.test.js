@@ -231,10 +231,10 @@ describe('validateRecord', () => {
     assert.ok(result.warnings.some(w => w.includes('Non-Pasig')));
   });
 
-  it('warns about MN record missing ITIS Case ID', () => {
+  it('MN no longer needs an ITIS Lite Case No. (Case ID is generated / from the file)', () => {
     const result = validateRecord({ ...validRecord, itis_case_id: '' }, 'MN', validBarangays);
     assert.equal(result.valid, true);
-    assert.ok(result.warnings.some(w => w.includes('MN record missing ITIS Case ID')));
+    assert.ok(!result.warnings.some(w => w.includes('ITIS')));
   });
 });
 

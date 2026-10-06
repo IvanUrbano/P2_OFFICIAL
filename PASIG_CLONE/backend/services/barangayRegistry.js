@@ -83,20 +83,22 @@ async function syncFacilityRef(authPool, pool) {
               to_jsonb(h)->>'facility_category' AS facility_category,
               COALESCE((to_jsonb(h)->>'is_external')::boolean, FALSE) AS is_external,
               COALESCE((to_jsonb(h)->>'is_reference')::boolean, FALSE) AS is_reference,
-              COALESCE((to_jsonb(h)->>'is_active')::boolean, TRUE) AS is_active
+              COALESCE((to_jsonb(h)->>'is_active')::boolean, TRUE) AS is_active,
+              NULLIF(trim(to_jsonb(h)->>'facility_code'), '') AS facility_code
        FROM health_facilities h`
     );
     if (rows.length > 0) {
       await pool.query(
-        `INSERT INTO facility_ref (id, name, norm_name, barangay_name, ownership, facility_category, is_external, is_reference, is_active, synced_at)
+        `INSERT INTO facility_ref (id, name, norm_name, barangay_name, ownership, facility_category, is_external, is_reference, is_active, facility_code, synced_at)
          SELECT f.id, f.name, norm_facility(f.name), f.barangay_name, f.ownership, f.facility_category,
-                f.is_external, f.is_reference, f.is_active, NOW()
+                f.is_external, f.is_reference, f.is_active, f.facility_code, NOW()
          FROM jsonb_to_recordset($1::jsonb) AS f(id int, name text, barangay_name text, ownership text,
-              facility_category text, is_external boolean, is_reference boolean, is_active boolean)
+              facility_category text, is_external boolean, is_reference boolean, is_active boolean, facility_code text)
          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, norm_name = EXCLUDED.norm_name,
            barangay_name = EXCLUDED.barangay_name, ownership = EXCLUDED.ownership,
            facility_category = EXCLUDED.facility_category, is_external = EXCLUDED.is_external,
-           is_reference = EXCLUDED.is_reference, is_active = EXCLUDED.is_active, synced_at = EXCLUDED.synced_at`,
+           is_reference = EXCLUDED.is_reference, is_active = EXCLUDED.is_active,
+           facility_code = EXCLUDED.facility_code, synced_at = EXCLUDED.synced_at`,
         [JSON.stringify(rows)]
       );
     }

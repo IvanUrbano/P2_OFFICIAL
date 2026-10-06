@@ -25,6 +25,8 @@ function buildColumnMap(rawHeaders, sourceType) {
 
     let field = null;
     if (n.includes('itis') && n.includes('lite')) field = 'itis_case_id';
+    // Case ID carried by the file (<FACILITY>-<D|M>-<YEAR>-<NNNNN>, services/caseIds.js)
+    else if (n === 'case id' || n === 'case_id' || n === 'caseid') field = 'file_case_id';
     // Patient identity (stays in PASIG; never sent to TBInsight)
     else if (n.includes('birth') || n === 'dob' || n === 'birthday') field = 'date_of_birth';
     else if (n.includes('last name') || n.includes('surname') || n.includes('family name') || n === 'lastname') field = 'last_name';

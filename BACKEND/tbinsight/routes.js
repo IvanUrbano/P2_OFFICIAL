@@ -19,6 +19,7 @@ const {
   isApprovedOutcome, getOutcomeFilterValues, foldOutcomeCounts, SUCCESS_OUTCOMES_SQL,
 } = require('./outcomeNormalization');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
+const { pasigResidentOnly, countedCases } = require('./locationScope');
 const {
   getPopulation, getPopulationMap, calculateAnnualizedIncidence,
   getAvailablePopulationYears, getPopulationReferences, getPopulationByYear,
@@ -225,7 +226,7 @@ router.get('/cases', async (req, res) => {
         `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
         `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
         `c.case_no ILIKE $${paramIdx}`,
-        `c.patient_no ILIKE $${paramIdx}`,
+        `c.source_case_id ILIKE $${paramIdx}`,
         `TRIM(c.source_type) ILIKE $${paramIdx}`,
         `TRIM(c.validation_status) ILIKE $${paramIdx}`,
         `TRIM(c.sex) ILIKE $${paramIdx}`,
@@ -235,6 +236,8 @@ router.get('/cases', async (req, res) => {
         `TRIM(c.anatomical_site) ILIKE $${paramIdx}`,
         `TRIM(c.registration_group) ILIKE $${paramIdx}`,
         `TRIM(c.location_classification) ILIKE $${paramIdx}`,
+        `TRIM(c.residence_barangay_name) ILIKE $${paramIdx}`,
+        `TRIM(c.residence_city) ILIKE $${paramIdx}`,
       ];
 
       if (isNumeric) {
@@ -359,8 +362,10 @@ router.get('/cases', async (req, res) => {
         c.itis_case_id,
         c.source_type,
         c.location_classification,
+        c.residence_barangay_name,
+        c.residence_city,
         c.case_no,
-        c.patient_no,
+        c.source_case_id,
         c.current_responsible_facility_id
       FROM tb_cases c
       ${whereClause}
@@ -424,7 +429,10 @@ router.get('/cases/analytics-dataset', async (req, res) => {
         c.treatment_facility,
         c.bacteriological_status,
         c.outcome_status,
-        c.imported_at
+        c.imported_at,
+        c.location_classification,
+        c.residence_barangay_name,
+        c.residence_city
       FROM tb_cases c
       ${whereClause}
       ORDER BY c.date_of_diagnosis DESC`,
@@ -476,7 +484,7 @@ router.get('/cases/export', async (req, res) => {
         `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
         `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
         `c.case_no ILIKE $${paramIdx}`,
-        `c.patient_no ILIKE $${paramIdx}`,
+        `c.source_case_id ILIKE $${paramIdx}`,
         `TRIM(c.source_type) ILIKE $${paramIdx}`,
         `TRIM(c.validation_status) ILIKE $${paramIdx}`,
         `TRIM(c.sex) ILIKE $${paramIdx}`,
@@ -486,6 +494,8 @@ router.get('/cases/export', async (req, res) => {
         `TRIM(c.anatomical_site) ILIKE $${paramIdx}`,
         `TRIM(c.registration_group) ILIKE $${paramIdx}`,
         `TRIM(c.location_classification) ILIKE $${paramIdx}`,
+        `TRIM(c.residence_barangay_name) ILIKE $${paramIdx}`,
+        `TRIM(c.residence_city) ILIKE $${paramIdx}`,
       ];
 
       if (isNumeric) {
@@ -545,7 +555,9 @@ router.get('/cases/export', async (req, res) => {
         c.outcome_status,
         c.date_of_outcome,
         c.validation_status,
-        c.location_classification
+        c.location_classification,
+        c.residence_barangay_name,
+        c.residence_city
       FROM tb_cases c
       ${whereClause}
       ORDER BY c.date_of_diagnosis DESC
@@ -553,7 +565,7 @@ router.get('/cases/export', async (req, res) => {
       params
     );
 
-    const headers = ['Case ID', 'ITIS Case ID', 'Barangay', 'Age', 'Sex', 'Diagnosis Date', 'Screening Date', 'Notification Date', 'Screening Facility', 'Treatment Facility', 'Source', 'Source of Patient', 'Anatomical Site', 'Registration Group', 'Bacteriologic Status', 'Treatment Start Date', 'Status', 'Outcome Date', 'Validation', 'Location'];
+    const headers = ['Case ID', 'ITIS Case ID', 'Barangay', 'Age', 'Sex', 'Diagnosis Date', 'Screening Date', 'Notification Date', 'Screening Facility', 'Treatment Facility', 'Source', 'Source of Patient', 'Anatomical Site', 'Registration Group', 'Bacteriologic Status', 'Treatment Start Date', 'Status', 'Outcome Date', 'Validation', 'Location', 'Residence Barangay', 'Residence City'];
     const csvRows = [headers.join(',')];
 
     for (const row of result.rows) {
@@ -578,6 +590,8 @@ router.get('/cases/export', async (req, res) => {
         row.date_of_outcome ? new Date(row.date_of_outcome).toISOString().split('T')[0] : '',
         row.validation_status || '',
         row.location_classification || '',
+        `"${(row.residence_barangay_name || '').replace(/"/g, '""')}"`,
+        `"${(row.residence_city || '').replace(/"/g, '""')}"`,
       ];
       csvRows.push(values.join(','));
     }
@@ -668,6 +682,12 @@ router.get('/dashboard/summary', async (req, res) => {
       paramIdx++;
     }
 
+    // City-wide KPI scope. Skipped only when the caller explicitly filters on
+    // location_classification, so a deliberate lookup of legacy rows still works.
+    if (!location_classification) {
+      conditions.push(countedCases());
+    }
+
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const result = await pool.query(`
@@ -718,6 +738,7 @@ router.get('/dashboard/metrics', async (req, res) => {
         SUM(CASE WHEN date_of_diagnosis >= (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month')
                   AND date_of_diagnosis < DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER AS prev_month_cases
       FROM tb_cases
+      WHERE ${countedCases()}
     `);
     const row = result.rows[0];
 
@@ -758,7 +779,7 @@ router.get('/dashboard/metrics', async (req, res) => {
 router.get('/dashboard/monthly', async (req, res) => {
   try {
     const { year } = req.query;
-    let filters = 'WHERE date_of_diagnosis IS NOT NULL';
+    let filters = `WHERE date_of_diagnosis IS NOT NULL AND ${pasigResidentOnly()}`;
     const params = [];
     if (year) {
       filters += ` AND EXTRACT(YEAR FROM date_of_diagnosis) = $1`;
@@ -961,6 +982,10 @@ router.get('/dashboard/demographics', async (req, res) => {
     if (year) { conditions.push(`EXTRACT(YEAR FROM date_of_diagnosis) = $${idx}`); params.push(Number(year)); idx++; }
     if (month) { conditions.push(`EXTRACT(MONTH FROM date_of_diagnosis) = $${idx}`); params.push(Number(month)); idx++; }
     if (barangay) { conditions.push(`TRIM(barangay_name) = $${idx}`); params.push(barangay); idx++; }
+    // Barangay-keyed breakdown: Non-Pasig residents carry a NULL barangay_name and
+    // would otherwise surface as one unnamed bar. Their counts belong to the
+    // facility/city view, not to a Pasig barangay.
+    conditions.push(pasigResidentOnly());
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
     const result = await pool.query(`
       SELECT barangay_name, sex,
@@ -1000,6 +1025,7 @@ router.get('/dashboard/outcomes', async (req, res) => {
     if (year) { conditions.push(`EXTRACT(YEAR FROM date_of_diagnosis) = $${idx}`); params.push(Number(year)); idx++; }
     if (month) { conditions.push(`EXTRACT(MONTH FROM date_of_diagnosis) = $${idx}`); params.push(Number(month)); idx++; }
     if (barangay) { conditions.push(`TRIM(barangay_name) = $${idx}`); params.push(barangay); idx++; }
+    conditions.push(pasigResidentOnly());
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
     // Normalize case/whitespace before grouping — matches the UPPER(TRIM(...))
     // pattern used elsewhere (treatmentSuccessRate.js, treatmentCascade.js).
@@ -1178,10 +1204,12 @@ router.get('/gis/geojson', async (req, res) => {
          FROM tb_cases
          WHERE date_of_diagnosis IS NOT NULL
            AND EXTRACT(YEAR FROM date_of_diagnosis) = $1
+           AND ${pasigResidentOnly()}
          GROUP BY barangay_name`
       : `SELECT barangay_name, COUNT(*)::INTEGER as total_cases
          FROM tb_cases
          WHERE date_of_diagnosis IS NOT NULL
+           AND ${pasigResidentOnly()}
          GROUP BY barangay_name`;
     const caseQ = pool.query(
       caseQuery, effectiveCaseYear !== null ? [effectiveCaseYear] : []
@@ -1480,6 +1508,7 @@ router.get('/gis/choropleth', async (req, res) => {
         FROM tb_cases
         WHERE date_of_diagnosis IS NOT NULL
           AND EXTRACT(YEAR FROM date_of_diagnosis) = $1
+          AND ${pasigResidentOnly()}
         GROUP BY barangay_name
       ) tc ON b.name = tc.barangay_name
       ${isRefYear ? '' : `LEFT JOIN barangay_population bp
@@ -1556,6 +1585,7 @@ router.get('/forecasts', async (req, res) => {
           COUNT(*)::INTEGER AS actual_count
         FROM tb_cases
         WHERE date_of_diagnosis IS NOT NULL
+        AND ${pasigResidentOnly()}
     `;
     const fallbackParams = [];
     if (barangay) {
@@ -2283,6 +2313,7 @@ router.get('/forecast/backtest', async (req, res) => {
           COUNT(*)::INTEGER AS case_count
         FROM tb_cases
         WHERE date_of_diagnosis IS NOT NULL
+        AND ${pasigResidentOnly()}
       `;
       if (barangay) {
         query += ` AND barangay_name = $1`;
@@ -2382,8 +2413,11 @@ router.get('/reports/summary', async (req, res) => {
 
     coverage = barangay || 'City-wide';
 
-    // Build base WHERE clause (Pasig City only)
-    const conditions = [`c.date_of_diagnosis >= $1`, `c.date_of_diagnosis <= $2`];
+    // Build base WHERE clause (Pasig City only). City-wide report totals use the
+    // counted scope: legacy 'Non-Pasig' rows are traceability-only and never count,
+    // while 'Non-Pasig Resident' rows are real patients managed by a Pasig facility
+    // and DO count here — they just never enter a barangay breakdown.
+    const conditions = [`c.date_of_diagnosis >= $1`, `c.date_of_diagnosis <= $2`, countedCases('c')];
     const params = [startDate, endDate];
     let paramIdx = 3;
 
@@ -2466,6 +2500,7 @@ router.get('/reports/summary', async (req, res) => {
         FROM tb_cases c
         WHERE date_of_diagnosis >= $1 AND date_of_diagnosis <= $2
         ${barangay ? 'AND TRIM(barangay_name) = $3' : ''}
+        AND ${countedCases('c')}
         GROUP BY month
         ORDER BY month
       `, barangay ? [startDate, endDate, barangay] : [startDate, endDate]),
@@ -2477,6 +2512,7 @@ router.get('/reports/summary', async (req, res) => {
         SELECT TRIM(barangay_name) AS barangay_name, COUNT(*)::INTEGER AS cases
         FROM tb_cases c
         WHERE date_of_diagnosis >= $1 AND date_of_diagnosis <= $2
+          AND ${pasigResidentOnly('c')}
         GROUP BY TRIM(barangay_name)
         ORDER BY cases DESC
       `, [startDate, endDate]),

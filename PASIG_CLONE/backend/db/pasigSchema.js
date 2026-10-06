@@ -180,6 +180,16 @@ async function initSchema() {
       console.error('[pasig-clone] Migration 015 failed (continuing):', err.message);
     }
   }
+
+  const mig016Path = path.join(__dirname, 'migrations', '016_facility_codes.sql');
+  if (fs.existsSync(mig016Path)) {
+    try {
+      await execSql(fs.readFileSync(mig016Path, 'utf8'));
+      console.log('[pasig-clone] Migration 016 (facility codes) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 016 failed (continuing):', err.message);
+    }
+  }
 }
 
 // --- CRUD Helpers ---

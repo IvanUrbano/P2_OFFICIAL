@@ -4,6 +4,7 @@ import { can } from '../utils/permissions';
 import { primaryBtn, secondaryBtn } from './SidePanel';
 import { patientName } from '../utils/patientName';
 import { useConfirmDialog } from './ConfirmDialog';
+import { caseIdOf } from '../utils/caseId';
 
 const fmtDate = (v) => (v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
 const fullName = (r) => patientName(r, { short: true });
@@ -138,9 +139,9 @@ export default function IncomingReferrals({ user, onOpenRecord, onCountChange })
                   <tr key={t.id} style={{ borderBottom: '1px solid #F1F5F9', background: can(t, 'accept') ? '#FFFDF5' : 'transparent' }}>
                     <td className="px-4 py-3 text-xs font-mono">
                       {can(t, 'viewCase') ? (
-                        <button onClick={() => onOpenRecord?.(t.validated_case_id)} className="underline" style={{ color: '#0F2D52' }}>{t.case_no || `#${t.validated_case_id}`}</button>
+                        <button onClick={() => onOpenRecord?.(t.validated_case_id)} className="underline" style={{ color: '#0F2D52' }}>{caseIdOf(t) || `#${t.validated_case_id}`}</button>
                       ) : (
-                        <span style={{ color: '#475569' }} title="Opens after your barangay accepts the referral">{t.case_no || `#${t.validated_case_id}`}</span>
+                        <span style={{ color: '#475569' }} title="Opens after your barangay accepts the referral">{caseIdOf(t) || `#${t.validated_case_id}`}</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs" style={{ color: '#0F2D52' }}>

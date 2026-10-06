@@ -1,11 +1,26 @@
 const pool = require('../db');
+const { pasigResidentOnly, countedCases } = require('./locationScope');
 
-// Which tb_cases rows feed the aggregates (and therefore the dashboard and ML pipeline):
-// every record located in Pasig City, whether or not it is marked Validated (project
-// decision: "Not Validated" notifications are counted). Records classified 'Non-Pasig'
-// (e.g. a Manila patient whose barangay shares a name with a Pasig one) are kept in tb_cases
-// for traceability but never counted.
-const COUNTED_CASES = `COALESCE(location_classification, 'Pasig City') <> 'Non-Pasig'`;
+// Two scopes, see tbinsight/locationScope.js for the rule and its rationale:
+//
+//   BARANGAY_CASED — feeds the four barangay-keyed L3 tables, and therefore every
+//                    per-100k rate, the ARIMA / RF inputs and alert evaluation.
+//                    Pasig residents only. Non-Pasig Resident rows have no barangay,
+//                    so they must never reach a NOT NULL / FK-constrained L3 table.
+//
+//   FACILITY_CASED — feeds facility_summary. City-wide counts and facility workload
+//                    include Non-Pasig residents treated in a Pasig facility; only the
+//                    legacy 'Non-Pasig' value stays uncounted.
+//
+// Records classified 'Non-Pasig' (a Manila patient whose barangay shares a name with a
+// Pasig one, admitted before this rule existed) are kept in tb_cases for traceability
+// but never counted anywhere.
+const BARANGAY_CASED = pasigResidentOnly();
+const FACILITY_CASED = countedCases();
+
+/** Non-Pasig residents are counted under the facility that manages them. */
+const IS_NON_PASIG_RESIDENT = `COALESCE(location_classification, 'Pasig City') = 'Non-Pasig Resident'`;
+
 
 /**
  * Age group mapping: maps age to age bracket
@@ -40,7 +55,7 @@ async function rebuildAllAggregations(client) {
       DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE ${COUNTED_CASES}
+    WHERE ${BARANGAY_CASED}
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
   `);
   counts.monthly = monthlyResult.rowCount;
@@ -65,7 +80,7 @@ async function rebuildAllAggregations(client) {
       END AS age_group,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE ${COUNTED_CASES}
+    WHERE ${BARANGAY_CASED}
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), sex,
       CASE
         WHEN age IS NULL THEN 'Unknown'
@@ -90,23 +105,36 @@ async function rebuildAllAggregations(client) {
       COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN') AS outcome_status,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE ${COUNTED_CASES}
+    WHERE ${BARANGAY_CASED}
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), COALESCE(NULLIF(UPPER(TRIM(outcome_status)), ''), 'UNKNOWN')
   `);
   counts.outcomes = outcomeResult.rowCount;
 
   // 4. Facility summary
+  //    The only L3 table that counts Non-Pasig residents: a Pasig facility did the work.
+  //    They are keyed on their TREATMENT facility (that is what admitted them); Pasig
+  //    residents keep the screening facility, so no existing number moves.
   await client.query('DELETE FROM facility_summary');
   const facilityResult = await client.query(`
     INSERT INTO facility_summary (facility_name, barangay_name, month, case_count)
     SELECT
-      COALESCE(screening_facility, 'Unknown') AS facility_name,
+      CASE
+        WHEN ${IS_NON_PASIG_RESIDENT}
+          THEN COALESCE(NULLIF(TRIM(treatment_facility), ''), 'Unknown')
+        ELSE COALESCE(screening_facility, 'Unknown')
+      END AS facility_name,
       barangay_name,
       DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE ${COUNTED_CASES} AND screening_facility IS NOT NULL AND screening_facility != ''
-    GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), screening_facility
+    WHERE ${FACILITY_CASED}
+      AND CASE
+        WHEN ${IS_NON_PASIG_RESIDENT}
+          THEN COALESCE(NULLIF(TRIM(treatment_facility), ''), '')
+        ELSE COALESCE(screening_facility, '')
+      END <> ''
+    GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis),
+             location_classification, screening_facility, treatment_facility
   `);
   counts.facilities = facilityResult.rowCount;
 
@@ -120,7 +148,7 @@ async function rebuildAllAggregations(client) {
       COALESCE(bacteriological_status, 'Unknown') AS bacteriological_status,
       COUNT(*) AS case_count
     FROM tb_cases
-    WHERE ${COUNTED_CASES}
+    WHERE ${BARANGAY_CASED}
     GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis), COALESCE(bacteriological_status, 'Unknown')
   `);
   counts.bacteriological = bacterioResult.rowCount;

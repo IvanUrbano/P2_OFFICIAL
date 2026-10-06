@@ -4,6 +4,7 @@ import API from '../api/axios';
 import { useTheme } from '../theme';
 import EmptyState from '../components/EmptyState';
 import SkeletonBlock from '../components/SkeletonBlock';
+import { caseIdOf } from '../utils/caseId';
 
 const cardStyle = (t) => ({
   background: t.cardSolid,
@@ -81,7 +82,7 @@ export default function SyncHistoryPage() {
               <tbody>
                 {rejections.map(r => (
                   <tr key={r.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                    <td className="px-4 py-2.5 text-xs font-bold font-mono" style={{ color: '#0F2D52' }}>{r.case_no || `#${r.id}`}</td>
+                    <td className="px-4 py-2.5 text-xs font-bold font-mono" style={{ color: '#0F2D52' }}>{caseIdOf(r) || `#${r.id}`}</td>
                     <td className="px-4 py-2.5 text-xs" style={{ color: '#475569' }}>{r.barangay_name || '—'}</td>
                     <td className="px-4 py-2.5 text-xs" style={{ color: '#475569' }}>{r.source_type || '—'}</td>
                     <td className="px-4 py-2.5 text-xs" style={{ color: '#991B1B' }}>{r.reason}</td>

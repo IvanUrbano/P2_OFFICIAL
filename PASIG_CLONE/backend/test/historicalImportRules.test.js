@@ -75,10 +75,10 @@ describe('DSTB / MN: de-identified historical rows', () => {
     assert.ok(!r.warnings.some(w => w.includes('ITIS')));
   });
 
-  it('MN without ITIS Lite Case No. is accepted with a warning only', () => {
+  it('MN without ITIS Lite Case No. is accepted (ITIS is no longer needed)', () => {
     const r = validateRecord(deid, 'MN', BGY);
     assert.strictEqual(r.valid, true);
-    assert.ok(r.warnings.some(w => w.includes('MN record missing ITIS Case ID')));
+    assert.ok(!r.warnings.some(w => w.includes('ITIS')));
   });
 
   for (const type of ['DSTB', 'MN']) {
@@ -145,9 +145,10 @@ describe('source traceability', () => {
     assert.strictEqual(r.source_case_id, null);
   });
 
-  it('MN: ITIS Lite Case No. becomes source_case_id (trimmed); blank stays null', () => {
-    assert.strictEqual(sourceRefs({ batchId: BATCH, sheetName: 'MN', sourceType: 'MN', rowNumber: 3, itisCaseId: '  PSG-01 ' }).source_case_id, 'PSG-01');
-    assert.strictEqual(sourceRefs({ batchId: BATCH, sheetName: 'MN', sourceType: 'MN', rowNumber: 3, itisCaseId: ' ' }).source_case_id, null);
+  it('the Case ID from the file becomes source_case_id (DSTB and MN, normalized); ITIS is not used', () => {
+    assert.strictEqual(sourceRefs({ batchId: BATCH, sheetName: 'MN', sourceType: 'MN', rowNumber: 3, fileCaseId: ' tmcp-m-2025-00113 ' }).source_case_id, 'TMCP-M-2025-00113');
+    assert.strictEqual(sourceRefs({ batchId: BATCH, sheetName: 'DSTB', sourceType: 'DSTB', rowNumber: 3, fileCaseId: 'ROS-D-2025-00042' }).source_case_id, 'ROS-D-2025-00042');
+    assert.strictEqual(sourceRefs({ batchId: BATCH, sheetName: 'MN', sourceType: 'MN', rowNumber: 3, fileCaseId: ' ', itisCaseId: 'PSG-01' }).source_case_id, null);
   });
 });
 
@@ -158,9 +159,19 @@ describe('matching', () => {
     assert.deepStrictEqual(plan.map(p => p.kind), ['new', 'new']);
   });
 
-  it('MN: the same ITIS no. as an existing case is a possible match (never merged)', () => {
+  it('the same Case ID as an existing case is a possible match (never merged)', () => {
+    for (const type of ['DSTB', 'MN']) {
+      const id = type === 'DSTB' ? 'ROS-D-2023-00007' : 'TMCP-M-2023-00007';
+      const plan = planIdentities([{ ...deid, source_type: type, source_case_id: id }],
+        [{ case_no: 'CS-2023-000001', date_of_diagnosis: '2023-03-04', source_type: type, source_case_id: id }]);
+      assert.strictEqual(plan[0].kind, 'pending', type);
+      assert.strictEqual(plan[0].candidate.case_no, 'CS-2023-000001');
+    }
+  });
+
+  it('older MN files: the same ITIS no. as an existing case is a possible match (never merged)', () => {
     const plan = planIdentities(
-      [{ ...deid, source_type: 'MN', source_case_id: 'psg-0001 ' }],
+      [{ ...deid, source_type: 'MN', itis_case_id: 'psg-0001 ' }],
       [{ case_no: 'CS-2023-000009', date_of_diagnosis: '2023-03-04', source_type: 'MN', itis_case_id: 'PSG-0001' }]
     );
     assert.strictEqual(plan[0].kind, 'pending');
@@ -208,16 +219,17 @@ describe('validateBatch end to end (de-identified DSTB + MN file)', () => {
     assert.ok(/^CS-2023-\d{6}$/.test(dstb7.case_no), 'generated Case ID kept for DSTB');
     assert.notStrictEqual(dstb7.case_no, dstb8.case_no, 'identical DSTB attributes are two separate cases');
     assert.strictEqual(dstb8.match_status, 'none', 'no attribute matching for DSTB');
-    assert.strictEqual(dstb7.source_case_id, null);
+    assert.match(dstb7.source_case_id, /^UNK-D-2023-\d{5}$/);
+    assert.notStrictEqual(dstb7.source_case_id, dstb8.source_case_id, 'every Case ID is unique');
     assert.strictEqual(dstb7.last_name, null);
 
     const mn5 = byRow[`${BATCH}:MN:R5`];
-    assert.strictEqual(mn5.source_case_id, 'PSG-77');
-    assert.strictEqual(mn5.itis_case_id, 'PSG-77', 'ITIS no. still kept in its own field');
+    assert.match(mn5.source_case_id, /^UNK-M-2023-\d{5}$/,'generated Case ID (facility not in the stand-in registry -> UNK)');
+    assert.strictEqual(mn5.itis_case_id, 'PSG-77', 'ITIS no. from an older file is still kept as a reference');
     const mn6 = byRow[`${BATCH}:MN:R6`];
     assert.ok(mn6, 'missing barangay is kept (Needs Assignment)');
     assert.strictEqual(mn6.barangay_name, null);
-    assert.strictEqual(mn6.source_case_id, null);
+    assert.match(mn6.source_case_id, /^UNK-M-2023-\d{5}$/);
   });
 
   it('an MN row whose ITIS no. already exists is held as a possible match', async () => {

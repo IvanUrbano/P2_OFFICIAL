@@ -125,7 +125,14 @@ const ALL_OUTCOME_STATUSES = APPROVED_OUTCOMES;
 const ALL_SEX_OPTIONS = ["Male", "Female"];
 const ALL_VALIDATION_STATUSES = ["Validated", "Not Validated"];
 const ALL_SOURCE_TYPES = ["DSTB", "MN"];
-const ALL_LOCATION_CLASSIFICATIONS = ["Pasig City", "Non-Pasig"];
+const ALL_LOCATION_CLASSIFICATIONS = ["Pasig City", "Non-Pasig", "Non-Pasig Resident"];
+
+// A Non-Pasig resident has no Pasig barangay — their residence arrives as free
+// text and is what the Barangay column/panel shows for those rows.
+const residenceLabel = (record) =>
+  record.residence_barangay_name
+    ? `${record.residence_barangay_name}${record.residence_city ? `, ${record.residence_city}` : ''}`
+    : null;
 
 export default function TBRecords() {
   const [records, setRecords] = useState([]);
@@ -727,9 +734,9 @@ export default function TBRecords() {
                     <tr key={record.id} className="hover:bg-blue-50 transition-colors"
                       style={{ borderBottom: '1px solid #E2E8F0', background: idx % 2 === 0 ? '#ffffff' : '#F8FAFC' }}>
                       <td className="pl-6 pr-3 py-2" style={{ borderRight: '1px solid #E2E8F0' }}>
-                        <span className="font-bold" style={{ color: '#0F2D52' }}>{record.case_no || String(record.id).padStart(4, "0")}</span>
+                        <span className="font-bold" style={{ color: '#0F2D52' }}>{record.source_case_id || record.case_no || String(record.id).padStart(4, "0")}</span>
                       </td>
-                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.barangay_name}</td>
+                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.barangay_name || residenceLabel(record) || '—'}</td>
                       <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.age}</td>
                       <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.sex}</td>
                       <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{formatDate(record.date_of_diagnosis)}</td>
@@ -979,13 +986,12 @@ export default function TBRecords() {
             <div className="px-6 py-5 space-y-6">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Case ID</p>
-                <p className="text-2xl font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{selectedRecord.case_no || String(selectedRecord.id).padStart(4, "0")}</p>
+                <p className="text-2xl font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{selectedRecord.source_case_id || selectedRecord.case_no || String(selectedRecord.id).padStart(4, "0")}</p>
                 <div className="mt-2"><StatusBadge status={selectedRecord.outcome_status} /></div>
               </div>
               <div>
                 <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Case Summary</h3>
                 <div className="space-y-2.5">
-                  <DetailRow label="Patient #" value={selectedRecord.patient_no} />
                   <DetailRow label="ITIS Case ID" value={selectedRecord.itis_case_id} />
                   <DetailRow label="Source Type" value={selectedRecord.source_type} />
                   <DetailRow label="Validation Status" value={selectedRecord.validation_status} />
@@ -998,6 +1004,9 @@ export default function TBRecords() {
                   <DetailRow label="Age" value={selectedRecord.age} />
                   <DetailRow label="Sex" value={selectedRecord.sex} />
                   <DetailRow label="Barangay" value={selectedRecord.barangay_name} />
+                  {residenceLabel(selectedRecord) && (
+                    <DetailRow label="Residence" value={residenceLabel(selectedRecord)} />
+                  )}
                   <DetailRow label="Location Classification" value={selectedRecord.location_classification} />
                   <DetailRow label="Source of Patient" value={selectedRecord.source_of_patient || "Walk-in"} />
                 </div>

@@ -54,12 +54,19 @@ function identityKey(r) {
 }
 
 /**
- * MN matching key: the ITIS Lite Case No. (source Case ID). DSTB rows have none — they are
- * NEVER matched on barangay + date + sex + age (too many different people share those).
+ * Case ID matching key (DSTB and MN): the Case ID carried by the file
+ * (services/caseIds.js). Records are NEVER matched on barangay + date + sex + age (too
+ * many different people share those).
  */
 function sourceCaseKey(r) {
+  const v = String(r.source_case_id ?? '').replace(/\s+/g, '').toLowerCase();
+  return v ? `case-id|${v}` : null;
+}
+
+/** Older MN files (and cases imported from them) still carry the ITIS Lite Case No. */
+function itisKey(r) {
   if (r.source_type !== 'MN') return null;
-  const v = String(r.source_case_id ?? r.itis_case_id ?? '').replace(/\s+/g, '').toLowerCase();
+  const v = String(r.itis_case_id ?? '').replace(/\s+/g, '').toLowerCase();
   return v ? `mn-itis|${v}` : null;
 }
 
@@ -106,7 +113,10 @@ function planIdentities(rows, existingCases) {
     byKey.get(key).push(entry);
   };
   // Keys: name + date of birth (when given), and for MN the ITIS Lite Case No.
-  const keysOf = (r) => [identityKey(r), sourceCaseKey(r)].filter(Boolean);
+  // Keys: name + DOB (when given), the Case ID carried by the file, and for older MN
+  // files the ITIS Lite Case No. Generated Case IDs are assigned after this planning step,
+  // so a row never matches itself.
+  const keysOf = (r) => [identityKey(r), sourceCaseKey(r), itisKey(r)].filter(Boolean);
   for (const c of existingCases) {
     for (const key of keysOf(c)) add(key, { ref: { case_no: c.case_no }, dx: c.date_of_diagnosis });
   }

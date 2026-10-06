@@ -631,11 +631,16 @@ export default function Analytics() {
     return { rows, latestYoy };
   }, [filteredCases]);
 
-  /* ── TB Cases by Barangay ── */
+  /* ── TB Cases by Barangay ──
+   * Only Pasig residents appear here. A Non-Pasig resident treated at a Pasig
+   * facility has no Pasig barangay (barangay_name is NULL) and belongs to no
+   * population denominator, so they are counted in the city-wide totals above
+   * but never folded into a barangay bar or an incidence figure. */
   const barangayData = useMemo(() => {
     const byBarangay = {};
     filteredCases.forEach((c) => {
-      const name = c.barangay_name || 'Unknown';
+      if (!c.barangay_name) return;
+      const name = c.barangay_name;
       if (!byBarangay[name]) byBarangay[name] = 0;
       byBarangay[name]++;
     });

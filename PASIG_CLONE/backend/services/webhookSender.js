@@ -39,6 +39,10 @@ function formatRecord(record) {
     city: record.city,
     screening_facility: record.screening_facility,
     treatment_facility: record.treatment_facility,
+    // Facility admission decides whether TBInsight keeps a Non-Pasig resident;
+    // location_resolution carries the admin's "outside Pasig" confirmation.
+    treatment_facility_id: record.treatment_facility_id ?? null,
+    location_resolution: record.location_resolution ?? null,
     source_of_patient: record.source_of_patient,
     anatomical_site: record.anatomical_site,
     registration_group: record.registration_group,
@@ -62,8 +66,10 @@ function formatRecord(record) {
     outcome_reason: record.outcome_reason ?? null,
     current_responsible_facility_id: record.current_responsible_facility_id ?? null,
     // Identity: IDs only. Names and date of birth are deliberately never sent.
+    // case_no = internal link key (TBInsight updates a case by it); source_case_id = the
+    // Case ID users see (<FACILITY>-<D|M>-<YEAR>-<NNNNN>). Patient # is no longer sent.
     case_no: record.case_no ?? null,
-    patient_no: record.patient_no ?? null,
+    source_case_id: record.source_case_id ?? null,
     // The PASIG batch the case originally came from, so undoing that batch in
     // TBInsight removes it even when it was (re)sent inside a later batch.
     source_batch_id: record.batch_id ?? null,
@@ -160,6 +166,17 @@ function isPasigRecord(record) {
 }
 
 /**
+ * A record TBInsight may receive. Either it is a Pasig residence, or an admin has
+ * confirmed it as an outside-Pasig case in Validation → Needs Assignment — TBInsight
+ * then keeps it only if its treatment facility is a registered Pasig facility.
+ * An unconfirmed non-Pasig residence is never sent.
+ */
+function isSendableRecord(record) {
+  if (isPasigRecord(record)) return true;
+  return record.location_resolution === 'outside_pasig';
+}
+
+/**
  * Send webhook to TBInsight with comprehensive sync tracking
  * @param {string} batchId - Batch ID to sync
  * @param {number} userId - ID of user initiating sync
@@ -202,10 +219,11 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [] } = {}) {
     const resent = resendCaseNos.size > 0 ? (await db.getCasesByCaseNo([...resendCaseNos])).rows : [];
     const candidates = [...ownCases, ...resent];
 
-    // Filter: only send Pasig City records to TBInsight
-    const pasigOnly = candidates.filter(isPasigRecord);
-    const nonPasigCount = candidates.length - pasigOnly.length;
-    const pasigRecords = pasigOnly.filter(r => r.record_status !== 'duplicate');
+    // Filter: Pasig residences, plus Non-Pasig residents an admin confirmed
+    // (they reach TBInsight only with their Pasig treatment facility attached).
+    const sendable = candidates.filter(isSendableRecord);
+    const nonPasigCount = candidates.length - sendable.length;
+    const pasigRecords = sendable.filter(r => r.record_status !== 'duplicate');
 
     const dstbRecords = pasigRecords.filter(r => r.source_type === 'DSTB');
     const mnRecords = pasigRecords.filter(r => r.source_type === 'MN');
@@ -257,7 +275,7 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [] } = {}) {
     await client.query('COMMIT');
     markedSyncing = true;
 
-    console.log(`🔄 Starting webhook sync for batch ${batchId}: ${recordsSent} Pasig records${nonPasigCount > 0 ? `, ${nonPasigCount} non-Pasig excluded` : ''}`);
+    console.log(`🔄 Starting webhook sync for batch ${batchId}: ${recordsSent} record(s)${nonPasigCount > 0 ? `, ${nonPasigCount} unconfirmed non-Pasig excluded` : ''}`);
 
     // ========== Send webhook with retries ==========
     const secret = config.webhook.secret;
