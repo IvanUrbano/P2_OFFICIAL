@@ -132,15 +132,7 @@ function SectionSkeleton({ rows = 3 }) {
   );
 }
 
-/** 'YYYY-MM' from a date value using local date parts; null if unparseable. */
-function localMonthKey(value) {
-  if (!value) return null;
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return null;
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
-/* ─── Model Evaluation results (walk-forward metrics from the ML service) ─── */
+/* ─── Model Performance (saved walk-forward metrics from the ML service) ─── */
 
 function EvalMetric({ label, value }) {
   return (
@@ -151,143 +143,122 @@ function EvalMetric({ label, value }) {
   );
 }
 
-/* Plain-language comparison of a model score against its simple reference,
-   so the evaluation can be read as "better / about the same / worse". */
-function BaselineNote({ children }) {
-  return (
-    <p className="text-[11px] mt-2.5 pt-2.5 leading-relaxed" style={{ color: '#475569', borderTop: '1px solid #E2E8F0' }}>
-      {children}
-    </p>
-  );
+function formatEvaluationMonth(value) {
+  if (!value) return null;
+  const [year, month] = String(value).slice(0, 10).split('-').map(Number);
+  if (!year || !month) return null;
+  return new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 }
 
-function compareLabel(model, reference, lowerIsBetter) {
-  if (model == null || reference == null || reference === 0) return null;
-  const rel = (model - reference) / reference;
-  if (Math.abs(rel) < 0.03) return 'about the same as';
-  const better = lowerIsBetter ? rel < 0 : rel > 0;
-  return better ? 'better than' : 'worse than';
-}
-
-function EvaluationResults({ evaluation }) {
-  const arima = evaluation?.arima || {};
-  const rf = evaluation?.rf || {};
-  const methods = arima.method_counts || {};
-  const arimaTotal = Object.values(methods).reduce((a, b) => a + b, 0);
-  const arimaSteps = methods.arima || 0;
-  const fallbackSteps = arimaTotal - arimaSteps;
-  const fmt = (v, digits = 4) => (v == null ? '\u2014' : Number(v).toFixed(digits));
-  const pct = (v, digits = 1) => (v == null ? '\u2014' : `${(Number(v) * 100).toFixed(digits)}%`);
-  const classes = ['Low', 'Medium', 'High'];
+function ModelPerformance({ record, status, loading, error }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const evaluation = record?.metrics || {};
+  const arima = evaluation.arima || {};
+  const config = record?.config || {};
+  const methods = Object.entries(arima.method_counts || {}).filter(([, count]) => count > 0);
+  const method = config.method || (methods.length
+    ? methods.map(([name]) => name === 'arima' ? 'ARIMA' : name.replaceAll('_', ' ')).join(' + ')
+    : '—');
+  const steps = Array.isArray(arima.steps) ? arima.steps.filter(step => step.month) : [];
+  const stepMonths = steps.map(step => String(step.month).slice(0, 10)).sort();
+  const periodStart = formatEvaluationMonth(config.evaluation_start || stepMonths[0]);
+  const periodEnd = formatEvaluationMonth(config.evaluation_end || stepMonths[stepMonths.length - 1]);
+  const evaluationPeriod = periodStart && periodEnd
+    ? periodStart === periodEnd ? periodStart : `${periodStart}–${periodEnd}`
+    : 'Not recorded in this saved evaluation';
+  const savedAt = record?.trained_at ? new Date(record.trained_at).toLocaleString() : 'date unavailable';
+  const failedAt = status?.failedAt ? new Date(status.failedAt).toLocaleString() : 'date unavailable';
+  const formatCount = value => value == null || !Number.isFinite(Number(value))
+    ? '—'
+    : Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {/* ARIMA */}
-      <div className="rounded-lg p-4" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-        <div className="flex items-center justify-between gap-2 mb-3">
-          <h3 className="text-xs font-extrabold uppercase tracking-wide" style={{ color: '#0F2D52' }}>ARIMA Forecast</h3>
-          <span
-            className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0"
-            style={fallbackSteps === 0
-              ? { background: '#ECFDF5', color: '#047857' }
-              : { background: '#FFFBEB', color: '#B45309' }}
-          >
-            {arimaTotal === 0 ? 'No steps evaluated'
-              : fallbackSteps === 0 ? `All ${arimaTotal} steps: ARIMA`
-              : `${fallbackSteps} of ${arimaTotal} steps used fallback`}
-          </span>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          <EvalMetric label="MAE" value={fmt(arima.mae)} />
-          <EvalMetric label="MAPE" value={arima.mape != null ? `${arima.mape}%` : '\u2014'} />
-          <EvalMetric label="Steps/barangay" value={arima.n_steps ?? '\u2014'} />
-        </div>
-        {fallbackSteps > 0 && (
-          <p className="text-[11px] mt-2.5 leading-relaxed" style={{ color: '#B45309' }}>
-            MAE/MAPE include fallback models:{' '}
-            {Object.entries(methods).filter(([m]) => m !== 'arima').map(([m, c]) => `${m} \u00D7 ${c}`).join(', ')}.
-          </p>
-        )}
-        {arimaTotal > 0 && (
-          <p className="text-[11px] mt-2" style={{ color: '#94A3B8' }}>
-            {arimaSteps} real ARIMA fit{arimaSteps === 1 ? '' : 's'} across barangays · one-step-ahead walk-forward.
-          </p>
-        )}
-        {arima.baseline_mae != null && arima.mae != null && (
-          <BaselineNote>
-            Reference — plain 12-month average on the same steps: MAE {fmt(arima.baseline_mae)}
-            {arima.baseline_mape != null ? ` · MAPE ${arima.baseline_mape}%` : ''}.
-            {' '}ARIMA is <strong>{compareLabel(arima.mae, arima.baseline_mae, true)}</strong> this reference.
-          </BaselineNote>
-        )}
-        {Array.isArray(arima.failed_barangays) && arima.failed_barangays.length > 0 && (
-          <div className="mt-2.5 pt-2.5" style={{ borderTop: '1px solid #FECACA' }}>
-            <p className="text-[11px] font-bold" style={{ color: '#B91C1C' }}>
-              {arima.failed_barangays.length} barangay{arima.failed_barangays.length === 1 ? '' : 's'} could not be evaluated:
-            </p>
-            {arima.failed_barangays.map((f, i) => (
-              <p key={i} className="text-[11px]" style={{ color: '#991B1B' }}>{f.barangay_name}: {f.error}</p>
-            ))}
-          </div>
-        )}
+    <section className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
+      <div className="px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
+        <h2 className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>Model Performance</h2>
       </div>
-
-      {/* Random Forest */}
-      <div className="rounded-lg p-4" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-        <div className="flex items-center justify-between gap-2 mb-3">
-          <h3 className="text-xs font-extrabold uppercase tracking-wide" style={{ color: '#0F2D52' }}>Random Forest</h3>
-          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0" style={{ background: '#EFF6FF', color: '#1E40AF' }}>
-            {rf.n_steps ? `${rf.n_steps} test months` : 'No steps evaluated'}
-          </span>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          <EvalMetric label="Accuracy" value={pct(rf.accuracy)} />
-          <EvalMetric label="F1 (macro)" value={pct(rf.f1_macro)} />
-          <EvalMetric label="Steps" value={rf.n_steps ?? '\u2014'} />
-        </div>
-        <div className="mt-3 space-y-1">
-          {classes.map((cls) => (
-            <div key={cls} className="flex items-center justify-between text-[11px]">
-              <span className="font-semibold" style={{ color: '#64748B' }}>{cls}</span>
-              <span style={{ color: '#334155' }}>
-                Precision {fmt(rf.precision?.[cls])} · Recall {fmt(rf.recall?.[cls])}
-              </span>
+      <div className="px-6 py-4">
+        {loading && !record ? (
+          <p className="text-xs" style={{ color: '#64748B' }}>Loading latest performance results…</p>
+        ) : error && !record ? (
+          <p className="text-xs" style={{ color: '#B91C1C' }}>{error}</p>
+        ) : !record ? (
+          <p className="text-xs" style={{ color: '#64748B' }}>
+            No saved evaluation is available yet. Results will be generated automatically after the next analysis pipeline run.
+            {status?.lastError && <span className="block mt-1" style={{ color: '#B91C1C' }}>The latest automatic evaluation could not be completed; an administrator may need to check the model service.</span>}
+          </p>
+        ) : (
+          <>
+            {error && <p className="text-[10px] mb-2" style={{ color: '#B91C1C' }}>Could not refresh model performance: {error}. Showing the last loaded result.</p>}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <EvalMetric label="MAE" value={arima.mae == null ? '—' : `${Number(arima.mae).toFixed(1)} cases`} />
+              <EvalMetric label="MAPE" value={arima.mape == null ? '—' : `${Number(arima.mape).toFixed(1)}%`} />
+              <EvalMetric label="Method" value={method} />
+              <EvalMetric label="Evaluation Period" value={evaluationPeriod} />
             </div>
-          ))}
-        </div>
-        {rf.baseline_accuracy != null && rf.accuracy != null && (
-          <BaselineNote>
-            Reference — rank the last 12 months' incidence into thirds: accuracy {pct(rf.baseline_accuracy)}
-            {rf.baseline_f1_macro != null ? ` · F1 ${pct(rf.baseline_f1_macro)}` : ''}. Chance is 33.3%.
-            {' '}Random Forest is <strong>{compareLabel(rf.accuracy, rf.baseline_accuracy, false)}</strong> this reference.
-          </BaselineNote>
-        )}
-        {rf.confusion_matrix && (
-          <div className="mt-3">
-            <p className="text-[10px] font-bold mb-1" style={{ color: '#64748B' }}>Confusion matrix (rows = actual)</p>
-            <table className="text-[10px]" style={{ borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th />
-                  {classes.map((c) => (
-                    <th key={c} className="font-semibold" style={{ color: '#94A3B8', padding: '2px 8px', textAlign: 'center' }}>{c}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {classes.map((a) => (
-                  <tr key={a}>
-                    <th className="font-semibold" style={{ color: '#64748B', padding: '2px 8px', textAlign: 'left' }}>{a}</th>
-                    {classes.map((p) => (
-                      <td key={p} style={{ color: '#334155', padding: '2px 8px', textAlign: 'center' }}>
-                        {rf.confusion_matrix[a]?.[p] ?? 0}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+            {status?.running && <p className="text-[10px] mt-2" style={{ color: '#64748B' }}>A newer evaluation is running. Showing saved results from {savedAt}.</p>}
+            {!status?.running && status?.lastError && (
+              <p className="text-[10px] mt-2 leading-relaxed" style={{ color: '#B45309' }}>
+                The latest evaluation failed on {failedAt}. These are previous saved results from {savedAt}.
+              </p>
+            )}
+            {!periodStart && <p className="text-[10px] mt-2" style={{ color: '#64748B' }}>This older saved result did not include its tested months. Run a new evaluation to record the exact period.</p>}
+            <button
+              type="button"
+              onClick={() => setShowDetails(open => !open)}
+              className="inline-flex items-center gap-1 mt-3 text-[11px] font-bold"
+              style={{ color: '#174A7E' }}
+              aria-expanded={showDetails}
+            >
+              <i className={`ri-arrow-${showDetails ? 'down' : 'right'}-s-line`} />
+              {showDetails ? 'Hide Details' : 'View Details'}
+            </button>
+            {showDetails && (
+              <div className="mt-3 pt-3" style={{ borderTop: '1px solid #E2E8F0' }}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px] leading-relaxed">
+                  <p style={{ color: '#475569' }}><strong>MAE</strong><br />Average number of cases by which forecasts differed from actual recorded cases.</p>
+                  <p style={{ color: '#475569' }}><strong>MAPE</strong><br />Average forecast error expressed as a percentage.</p>
+                </div>
+                <h3 className="text-[11px] font-bold mt-4" style={{ color: '#0F2D52' }}>Actual vs Predicted{arima.example_barangay ? ` — ${arima.example_barangay}` : ''}</h3>
+                {steps.length > 0 ? (
+                  <>
+                    <div className="overflow-x-auto mt-3">
+                      <table className="w-full text-[11px] text-left">
+                        <thead style={{ color: '#64748B', background: '#F8FAFC' }}>
+                          <tr>
+                            {['Period', 'Actual', 'Predicted', 'Absolute Error'].map(label => (
+                              <th key={label} className="px-3 py-2 font-semibold">{label}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {steps.map(step => (
+                            <tr key={`${step.month}-${step.test_month}`} style={{ borderTop: '1px solid #F1F5F9', color: '#334155' }}>
+                              <td className="px-3 py-2">{formatEvaluationMonth(step.month)}</td>
+                              <td className="px-3 py-2">{formatCount(step.actual)}</td>
+                              <td className="px-3 py-2">{formatCount(step.predicted)}</td>
+                              <td className="px-3 py-2">{formatCount(Number.isFinite(Number(step.actual)) && Number.isFinite(Number(step.predicted))
+                                ? Math.abs(Number(step.actual) - Number(step.predicted))
+                                : step.error == null ? null : Math.abs(Number(step.error)))}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-[10px] mt-1.5" style={{ color: '#94A3B8' }}>
+                      Rows show one barangay&apos;s walk-forward results; MAE and MAPE summarize all evaluated barangays.
+                    </p>
+                  </>
+                ) : <p className="text-[10px] mt-2" style={{ color: '#64748B' }}>This saved evaluation did not retain monthly Actual vs Predicted rows.</p>}
+                <p className="text-[10px] mt-3 leading-relaxed" style={{ color: '#64748B' }}>
+                  Performance results are based on the historical data available for evaluation and may change as additional validated monthly data become available.
+                </p>
+              </div>
+            )}
+            <p className="text-[10px] mt-2" style={{ color: '#94A3B8' }}>
+              Last evaluated: {savedAt}
+            </p>
+          </>
         )}
       </div>
     </div>

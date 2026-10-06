@@ -1419,6 +1419,13 @@ async function runPipelineTracked(options = {}, trigger = 'manual') {
     } catch (alertErr) {
       console.error('Post-pipeline alert evaluation error:', alertErr.message);
     }
+    if (!options.historyCutoffMonth && ['completed', 'degraded'].includes(results.status)) {
+      const { runModelEvaluation } = require('./modelEvaluation');
+      runModelEvaluation().catch(evaluationErr => {
+        console.error('Automatic model evaluation failed:', evaluationErr.message);
+      });
+    }
+
 
     return results;
   } catch (err) {

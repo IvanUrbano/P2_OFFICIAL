@@ -810,3 +810,27 @@ describe('GET /api/tb/pipeline/status', () => {
     assert.strictEqual(res.body.current_run.lastError, null);
   });
 });
+
+describe('GET /api/tb/evaluation/latest', () => {
+  it('returns the latest saved evaluation and current evaluation status', async () => {
+    const latestEvaluation = {
+      id: 4,
+      run_type: 'evaluation',
+      trained_at: '2026-10-05T08:00:00.000Z',
+      metrics: { arima: { mae: 4.6, mape: 8.2, steps: [{ month: '2025-11-01', actual: 120, predicted: 116, error: 4 }] } },
+      config: { method: 'ARIMA', evaluation_start: '2025-11-01', evaluation_end: '2025-12-01' },
+    };
+    mockQueryFn = async sql => sql.includes("run_type = 'evaluation_failed'")
+      ? { rows: [{ trained_at: '2026-10-06T08:00:00.000Z', error: 'model service unavailable' }] }
+      : { rows: [latestEvaluation] };
+
+    const res = await request(buildApp()).get('/api/tb/evaluation/latest');
+
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.latest_evaluation.metrics.arima.steps[0], latestEvaluation.metrics.arima.steps[0]);
+    assert.strictEqual(res.body.latest_evaluation.config.method, 'ARIMA');
+    assert.strictEqual(res.body.evaluation_status.running, false);
+    assert.strictEqual(res.body.evaluation_status.lastError, 'model service unavailable');
+    assert.strictEqual(res.body.evaluation_status.failedAt, '2026-10-06T08:00:00.000Z');
+  });
+});

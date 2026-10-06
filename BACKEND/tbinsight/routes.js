@@ -27,6 +27,7 @@ const {
   computeYearIncidence,
   GEOJSON_REFERENCE_YEAR,
 } = require('./populationService');
+const { runModelEvaluation, getModelEvaluationStatus } = require('./modelEvaluation');
 
 const router = express.Router();
 
@@ -2186,6 +2187,44 @@ router.get('/pipeline/status', async (req, res) => {
   } catch (err) {
     console.error('Pipeline status error:', err.message);
     res.status(500).json({ error: 'Server error fetching pipeline status.' });
+  }
+});
+
+/**
+ * GET /api/tb/evaluation/latest
+ * Latest saved walk-forward evaluation, including its actual/predicted steps.
+ */
+router.get('/evaluation/latest', async (req, res) => {
+  try {
+    const [result, failureResult] = await Promise.all([pool.query(
+      `SELECT id, model_version, trained_at, training_months, metrics, config
+       FROM model_metadata
+       WHERE run_type = 'evaluation'
+       ORDER BY trained_at DESC
+       LIMIT 1`
+    ), pool.query(
+      `SELECT trained_at, metrics->>'error' AS error
+       FROM model_metadata
+       WHERE run_type = 'evaluation_failed'
+       ORDER BY trained_at DESC
+       LIMIT 1`
+    )]);
+    const latestEvaluation = result.rows[0] || null;
+    const latestFailure = failureResult.rows[0] || null;
+    const failureIsNewer = latestFailure && (!latestEvaluation
+      || new Date(latestFailure.trained_at) > new Date(latestEvaluation.trained_at));
+    const liveStatus = getModelEvaluationStatus();
+    res.json({
+      latest_evaluation: latestEvaluation,
+      evaluation_status: {
+        ...liveStatus,
+        lastError: liveStatus.lastError || (failureIsNewer ? latestFailure.error : null),
+        failedAt: liveStatus.failedAt || (failureIsNewer ? latestFailure.trained_at : null),
+      },
+    });
+  } catch (err) {
+    console.error('Latest model evaluation fetch error:', err.message);
+    res.status(500).json({ error: 'Server error fetching model performance.' });
   }
 });
 
