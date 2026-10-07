@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import { PASIG_CLONE_URL } from '../config/externalSystems';
 import Logo from '../../components/Logo';
+import ModalCloseButton from '../components/ModalCloseButton';
+import { getPrefs } from '../utils/preferences';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -61,7 +63,7 @@ export default function LoginPage() {
       if (res.data.passwordRecentlyChanged) {
         setShowPasswordResetNotice(true);
       } else {
-        navigate('/dashboard');
+        navigate(getPrefs().landingPage);
       }
     } catch (err) {
       const status = err.response?.status;
@@ -219,12 +221,7 @@ export default function LoginPage() {
                 <i className="ri-information-line text-lg" style={{ color: '#0F2D52' }} />
                 <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Password Reset Assistance</h3>
               </div>
-              <button
-                onClick={() => setShowForgotModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded cursor-pointer"
-              >
-                <i className="ri-close-line text-lg" />
-              </button>
+              <ModalCloseButton onClick={() => setShowForgotModal(false)} />
             </div>
 
             <div className="p-5 space-y-3">
@@ -266,12 +263,7 @@ export default function LoginPage() {
                 <i className="ri-shield-keyhole-line text-lg" style={{ color: '#0F2D52' }} />
                 <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Password Recently Reset</h3>
               </div>
-              <button
-                onClick={() => { setShowPasswordResetNotice(false); navigate('/dashboard'); }}
-                className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded cursor-pointer"
-              >
-                <i className="ri-close-line text-lg" />
-              </button>
+              <ModalCloseButton onClick={() => { setShowPasswordResetNotice(false); navigate(getPrefs().landingPage); }} />
             </div>
 
             <div className="p-5 space-y-3">
@@ -288,7 +280,7 @@ export default function LoginPage() {
 
             <div className="px-5 py-3.5 bg-gray-50 border-t border-gray-100 flex justify-end">
               <button
-                onClick={() => { setShowPasswordResetNotice(false); navigate('/dashboard'); }}
+                onClick={() => { setShowPasswordResetNotice(false); navigate(getPrefs().landingPage); }}
                 className="px-5 py-2 font-bold text-[12px] transition-colors cursor-pointer"
                 style={{ background: '#0F2D52', color: '#ffffff', borderRadius: '5px' }}
                 onMouseEnter={(e) => e.currentTarget.style.background = '#174A7E'}

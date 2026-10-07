@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import API from '../api/axios';
 import SkeletonBlock from '../../components/SkeletonBlock';
 import ProgressOverlay from '../components/ProgressOverlay';
+import ModalCloseButton from '../components/ModalCloseButton';
 
 const STATUS_MAP = {
   connected: { bg: '#ECFDF5', text: '#047857', dot: '#10B981' },
@@ -15,15 +16,15 @@ const STATUS_MAP = {
 function SyncStatusBadge({ status }) {
   const s = STATUS_MAP[status] || { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' };
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap" style={{ background: s.bg, color: s.text }}>
-      <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: s.dot }} />
-      {status?.charAt(0).toUpperCase() + status?.slice(1)}
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium" style={{ color: s.text }}>
+      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: s.dot }} />
+      {status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Unknown'}
     </span>
   );
 }
 
-const formatDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
-const formatTime = (d) => d ? new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+const formatDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'Asia/Manila' }) : '—';
+const formatTime = (d) => d ? new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Manila' }) + ' PHT' : '';
 
 export default function DataIntegrationPage() {
   const [status, setStatus] = useState(null);
@@ -71,7 +72,10 @@ export default function DataIntegrationPage() {
     }
   }, [isAdmin]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    const initialFetch = window.setTimeout(fetchData, 0);
+    return () => window.clearTimeout(initialFetch);
+  }, [fetchData]);
 
   const handleRefresh = () => { setRefreshing(true); setError(''); fetchData(); };
 
@@ -97,182 +101,145 @@ export default function DataIntegrationPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-col gap-5">
-        <SkeletonBlock className="h-20 w-full rounded-xl" />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <SkeletonBlock className="h-36 rounded-xl" />
-          <SkeletonBlock className="h-36 rounded-xl" />
-        </div>
-        <SkeletonBlock className="h-28 rounded-xl" />
-        <SkeletonBlock className="h-64 rounded-xl" />
+      <div className="flex flex-col gap-6" aria-label="Loading data integration">
+        <SkeletonBlock className="h-14 w-full rounded-lg" />
+        <SkeletonBlock className="h-32 w-full rounded-lg" />
+        <SkeletonBlock className="h-48 w-full rounded-lg" />
+        <SkeletonBlock className="h-64 w-full rounded-lg" />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
       <ProgressOverlay
         open={undoing}
         title={`Undoing import ${batchToUndo?.batch_id?.slice(0, 8) || ''}`}
         detail="Removing this import's cases and raw rows, then rebuilding the dashboard totals."
-        icon="ri-arrow-go-back-line"
         tone="#DC2626"
         note="Keep this page open until the undo finishes."
       />
 
-      {/* ── Page Header ── */}
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
-        <div className="flex flex-col gap-3 px-6 py-2 sm:flex-row sm:items-center sm:justify-between" style={{ borderBottom: '1px solid #DBEAFE' }}>
+      {/* Page header */}
+      <div className="overflow-hidden rounded-xl bg-white shadow-[0_2px_16px_rgba(15,45,82,0.07),0_1px_3px_rgba(15,45,82,0.04)]">
+        <div className="flex flex-col justify-between gap-3 border-b border-[#DBEAFE] px-6 py-3.5 sm:flex-row sm:items-center">
           <div>
-            <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Data Integration</h1>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Monitor the connection and synchronization of tuberculosis data from PASIG TB-IS.</p>
+            <h1 className="text-lg font-extrabold tracking-tight text-[#0F2D52]">Data Integration</h1>
+            <p className="mt-0.5 text-xs text-[#94A3B8]">Monitor data received from PASIG TB-IS and processed by TBInsight.</p>
           </div>
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="px-4 py-2 text-xs font-semibold rounded flex items-center gap-1.5 transition"
-            style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-            onMouseEnter={(e) => { if (!refreshing) { e.currentTarget.style.background = '#E5E7EB'; e.currentTarget.style.borderColor = '#9CA3AF'; } }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = '#F3F4F6'; e.currentTarget.style.borderColor = '#D1D5DB'; }}
-          >
-            <i className={`ri-refresh-line text-sm ${refreshing ? 'animate-spin' : ''}`} />
-            Refresh Status
+          <button type="button" onClick={handleRefresh} disabled={refreshing}
+            className="inline-flex shrink-0 items-center justify-center gap-1.5 self-start rounded border border-[#0F2D52] bg-[#0F2D52] px-4 py-2 text-xs font-semibold text-white hover:bg-[#174A7E] disabled:cursor-wait disabled:opacity-70 sm:self-auto">
+            <i className={`ri-refresh-line text-xs ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
+            {refreshing ? 'Refreshing...' : 'Refresh'}
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="px-4 py-3 rounded-xl text-xs flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.12)' }}>
-          <i className="ri-error-warning-line" /> {error}
+        <div role="alert" className="flex items-center gap-2 rounded border border-[#FECACA] bg-[#FEF2F2] px-4 py-3 text-sm text-[#991B1B]">
+          <i className="ri-error-warning-line" aria-hidden="true" /> {error}
         </div>
       )}
 
       {notice && (
         <div
-          className="px-4 py-3 rounded-xl text-xs flex items-start gap-2"
+          role="status"
+          className="flex items-start gap-2 rounded border px-4 py-3 text-sm"
           style={notice.type === 'success'
             ? { background: 'rgba(16,185,129,0.06)', color: '#047857', border: '1px solid rgba(16,185,129,0.2)' }
             : { background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.12)' }}
         >
           <i className={notice.type === 'success' ? 'ri-check-line mt-0.5' : 'ri-error-warning-line mt-0.5'} />
           <span className="flex-1">{notice.text}</span>
-          <button onClick={() => setNotice(null)} aria-label="Dismiss"><i className="ri-close-line" /></button>
+          <ModalCloseButton onClick={() => setNotice(null)} label="Dismiss notice" />
         </div>
       )}
 
-      {/* ── Connection + Last Sync ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Connection Status */}
-        <div className="rounded-xl p-5" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-1 h-8 rounded-full" style={{ background: '#3B82F6' }} />
-            <h2 className="text-sm font-bold" style={{ color: '#1E293B' }}>PASIG TB-IS Connection</h2>
-          </div>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-2.5 h-2.5 rounded-full" style={{ background: STATUS_MAP[status?.status]?.dot || '#94A3B8' }} />
-            <span className="text-sm font-bold" style={{ color: '#0F2D52' }}>
-              {status?.status === 'connected' ? 'Connected' : status?.status === 'standby' ? 'Standby' : status?.status === 'waiting' ? 'Waiting for Data' : 'Unknown'}
-            </span>
-          </div>
-          <div className="space-y-2.5">
-            {[
-              { label: 'Source', value: 'PASIG TB-IS' },
-              { label: 'Integration', value: 'REST API / Secure Webhook' },
-              { label: 'Status', value: status?.message || '—' },
-            ].map((row) => (
-              <div key={row.label} className="flex items-center justify-between gap-4">
-                <span className="text-xs" style={{ color: '#94A3B8' }}>{row.label}</span>
-                <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{row.value}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Last Synchronization */}
-        <div className="rounded-xl p-5" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-1 h-8 rounded-full" style={{ background: '#10B981' }} />
-            <h2 className="text-sm font-bold" style={{ color: '#1E293B' }}>Last Synchronization</h2>
-          </div>
-          {status?.lastSync ? (
-            <div className="space-y-3">
-              <div>
-                <p className="text-2xl font-extrabold" style={{ color: '#0F2D52' }}>{formatDate(status.lastSync.receivedAt)}</p>
-                <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{formatTime(status.lastSync.receivedAt)}</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ background: '#ECFDF5', color: '#047857' }}>
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#10B981' }} />
-                  Successful
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-xs" style={{ color: '#94A3B8' }}>Batch</span>
-                <span className="text-xs font-semibold" style={{ color: '#0F2D52' }}>{status.lastSync.batchId?.slice(0, 8) || '—'}</span>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-8">
-              <i className="ri-inbox-line text-2xl mb-2" style={{ color: '#CBD5E1' }} />
-              <p className="text-xs text-center" style={{ color: '#94A3B8' }}>No synchronization has been completed yet.</p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── KPI Cards (shared container with dividers) ── */}
-      <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.12), 0 2px 8px rgba(15, 45, 82, 0.08)' }}>
-        <div className="grid grid-cols-2 lg:grid-cols-4">
+      {/* Integration KPIs */}
+      <section aria-label="Integration metrics" className="overflow-hidden rounded-xl bg-white shadow-[0_4px_24px_rgba(15,45,82,0.12),0_2px_8px_rgba(15,45,82,0.08)]">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
           {[
-            { label: 'Records Received', value: stats?.received || 0, icon: 'ri-download-line', iconColor: '#6B7FA3' },
-            { label: 'Records Accepted', value: stats?.accepted || 0, icon: 'ri-check-line', iconColor: '#6B9E8A' },
-            { label: 'Records Rejected', value: stats?.rejected || 0, icon: 'ri-close-line', iconColor: '#B07070' },
-            { label: 'Failed Batches', value: stats?.failed || 0, icon: 'ri-error-warning-line', iconColor: '#8B7BA3' },
-          ].map((kpi, i) => (
-            <div key={kpi.label} className="flex flex-col px-5 py-5 relative">
-              <div className="flex items-center gap-2">
-                <i className={`${kpi.icon} text-sm`} style={{ color: kpi.iconColor }} />
-                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>{kpi.label}</span>
+            { label: 'Sync batches', value: status?.stats?.totalBatches, icon: 'ri-stack-line', color: '#6B7FA3', note: 'Webhook deliveries' },
+            { label: 'Records received', value: stats?.received, icon: 'ri-download-line', color: '#6B7FA3', note: 'Sent by PASIG TB-IS' },
+            { label: 'Records imported', value: stats?.accepted, icon: 'ri-check-line', color: '#6B9E8A', note: 'Added to TBInsight' },
+            { label: 'Not imported', value: stats?.rejected, icon: 'ri-subtract-line', color: '#B07070', note: 'Rejected or skipped' },
+            { label: 'Failed batches', value: stats?.failed, icon: 'ri-error-warning-line', color: '#B07070', note: 'Delivery or processing failed' },
+          ].map((kpi, index) => (
+            <div key={kpi.label} className="relative flex min-w-0 flex-col px-4 py-4 sm:px-5 sm:py-5">
+              <div className="flex min-h-5 items-start gap-2">
+                <i className={`${kpi.icon} shrink-0 text-sm`} style={{ color: kpi.color }} aria-hidden="true" />
+                <span className="text-[10px] font-bold uppercase leading-tight tracking-wider text-[#64748B]">{kpi.label}</span>
               </div>
-              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{kpi.value.toLocaleString()}</p>
-              {i < 3 && <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />}
+              <div className="my-3 h-px bg-[#E2E8F0]" />
+              <p className="text-2xl font-extrabold tabular-nums text-[#0F2D52] lg:text-3xl">{kpi.value == null ? '—' : Number(kpi.value).toLocaleString()}</p>
+              <span className="mt-1 text-[11px] font-medium text-[#94A3B8]">{kpi.note}</span>
+              {index < 4 && <div className="absolute right-0 top-1/2 hidden h-10 w-px -translate-y-1/2 bg-[#E2E8F0] lg:block" aria-hidden="true" />}
             </div>
           ))}
         </div>
-      </div>
+      </section>
 
-      {/* ── Webhook Integration ── */}
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
-        <div className="px-6 py-4" style={{ background: '#0F2D52' }}>
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold" style={{ color: '#ffffff' }}>Webhook Integration</h2>
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.8)' }}>
-              {webhookLogs.length} log{webhookLogs.length !== 1 ? 's' : ''}
-            </span>
+      {/* Connection overview */}
+      <section className="overflow-hidden rounded-lg border border-[#DCE4ED] bg-white">
+        <div className="bg-[#0F2D52] px-5 py-3.5">
+          <h2 className="text-sm font-semibold text-white">Integration overview</h2>
+        </div>
+        <div className="grid divide-y divide-[#E2E8F0] md:grid-cols-2 md:divide-x md:divide-y-0">
+          <div className="px-5 py-5">
+            <p className="text-xs font-medium uppercase tracking-wide text-[#64748B]">Source connection</p>
+            <div className="mt-3 flex items-center gap-2.5">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: STATUS_MAP[status?.status]?.dot || '#94A3B8' }} aria-hidden="true" />
+              <p className="text-lg font-semibold text-[#0F2D52]">
+                {status?.status === 'connected' ? 'Connected' : status?.status === 'standby' ? 'Standby' : status?.status === 'waiting' ? 'Waiting for data' : 'Status unavailable'}
+              </p>
+            </div>
+            <p className="mt-1 text-sm text-[#64748B]">{status?.message || 'Connection information is unavailable.'}</p>
+            <p className="mt-4 border-t border-[#E2E8F0] pt-3 text-xs text-[#64748B]">PASIG TB-IS · Secure webhook</p>
+          </div>
+          <div className="px-5 py-5">
+            <p className="text-xs font-medium uppercase tracking-wide text-[#64748B]">Last successful sync</p>
+            {status?.lastSync ? (
+              <>
+                <p className="mt-3 text-lg font-semibold text-[#0F2D52]">{formatDate(status.lastSync.receivedAt)}</p>
+                <p className="mt-1 text-sm text-[#64748B]">{formatTime(status.lastSync.receivedAt)}</p>
+                <p className="mt-4 border-t border-[#E2E8F0] pt-3 text-xs text-[#64748B]">
+                  Batch <span className="font-mono font-medium text-[#334155]" title={status.lastSync.batchId}>{status.lastSync.batchId?.slice(0, 8) || '—'}</span>
+                </p>
+              </>
+            ) : <p className="mt-3 text-sm text-[#64748B]">No completed synchronization yet.</p>}
           </div>
         </div>
+      </section>
+
+      {/* Incoming webhook batches */}
+      <section className="overflow-hidden rounded-lg border border-[#DCE4ED] bg-white">
+        <div className="flex items-center justify-between gap-3 px-5 py-4">
+          <div>
+            <h2 className="text-sm font-semibold text-[#0F2D52]">Incoming batches</h2>
+            <p className="mt-0.5 text-xs text-[#64748B]">Webhook deliveries from PASIG TB-IS.</p>
+          </div>
+          <span className="text-xs text-[#64748B]">{webhookLogs.length} shown</span>
+        </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full min-w-[760px] text-left">
             <thead>
-              <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
+              <tr className="bg-[#0F2D52]">
                 {['Date', 'Source', 'Batch ID', 'Received', 'Imported', 'Status', ...(isAdmin ? ['Action'] : [])].map((h) => (
-                  <th key={h} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#64748B' }}>{h}</th>
+                  <th key={h} scope="col" className="whitespace-nowrap px-5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-white">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {webhookLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={isAdmin ? 7 : 6} className="px-5 py-16 text-center">
-                    <i className="ri-webhook-line text-xl mb-2 block" style={{ color: '#CBD5E1' }} />
-                    <p className="text-xs" style={{ color: '#94A3B8' }}>No webhook logs available. Webhooks will appear here once the Pasig Clone system sends data.</p>
+                  <td colSpan={isAdmin ? 7 : 6} className="px-5 py-10 text-center text-sm text-[#64748B]">
+                    No incoming batches yet. Deliveries will appear here when PASIG TB-IS sends data.
                   </td>
                 </tr>
-              ) : webhookLogs.map((log, idx) => (
+              ) : webhookLogs.map((log) => (
                 <tr
                   key={log.id}
-                  style={{ borderBottom: '1px solid #F1F5F9', background: idx % 2 === 0 ? '#ffffff' : '#FAFBFC' }}
+                  className="border-b border-[#E2E8F0] even:bg-[#F8FAFC] hover:bg-[#EDF4FB]"
                 >
                   <td className="px-5 py-3 text-xs" style={{ color: '#94A3B8' }}>
                     <div>{formatDate(log.received_at)}</div>
@@ -288,11 +255,10 @@ export default function DataIntegrationPage() {
                       {log.batch_id && (
                         <button
                           onClick={() => setBatchToUndo(log)}
-                          className="px-3 py-1.5 text-[11px] font-semibold flex items-center gap-1.5 transition"
-                          style={{ background: '#FEF2F2', color: '#991B1B', border: '1px solid #FECACA', borderRadius: 4 }}
+                          className="rounded border border-[#FECACA] bg-white px-2.5 py-1.5 text-xs font-medium text-[#991B1B] hover:bg-[#FEF2F2]"
                           title="Delete this import and everything it added"
                         >
-                          <i className="ri-arrow-go-back-line text-xs" /> Undo import
+                          Undo import
                         </button>
                       )}
                     </td>
@@ -302,26 +268,27 @@ export default function DataIntegrationPage() {
             </tbody>
           </table>
         </div>
-      </div>
+      </section>
 
       {/* ── Undo History (admin) ── */}
       {isAdmin && undoHistory.length > 0 && (
-        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
-          <div className="px-6 py-4" style={{ background: '#0F2D52' }}>
-            <h2 className="text-sm font-bold" style={{ color: '#ffffff' }}>Undo History</h2>
+        <section className="overflow-hidden rounded-lg border border-[#DCE4ED] bg-white">
+          <div className="px-5 py-4">
+            <h2 className="text-sm font-semibold text-[#0F2D52]">Undo history</h2>
+            <p className="mt-0.5 text-xs text-[#64748B]">Imports removed by an administrator.</p>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full min-w-[650px] text-left">
               <thead>
-                <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
+                <tr className="bg-[#0F2D52]">
                   {['Undone', 'By', 'Batch ID', 'Cases Removed', 'Raw Rows Removed'].map((h) => (
-                    <th key={h} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#64748B' }}>{h}</th>
+                    <th key={h} scope="col" className="whitespace-nowrap px-5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-white">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {undoHistory.map((entry, idx) => (
-                  <tr key={entry.id} style={{ borderBottom: '1px solid #F1F5F9', background: idx % 2 === 0 ? '#ffffff' : '#FAFBFC' }}>
+                {undoHistory.map((entry) => (
+                  <tr key={entry.id} className="border-b border-[#E2E8F0] even:bg-[#F8FAFC] hover:bg-[#EDF4FB]">
                     <td className="px-5 py-3 text-xs" style={{ color: '#94A3B8' }}>
                       <div>{formatDate(entry.created_at)}</div>
                       <div className="text-[10px]">{formatTime(entry.created_at)}</div>
@@ -335,45 +302,41 @@ export default function DataIntegrationPage() {
               </tbody>
             </table>
           </div>
-        </div>
+        </section>
       )}
 
-      {/* ── Recent Synchronization Table ── */}
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff' }}>
-        {/* Table Header */}
-        <div className="px-6 py-4" style={{ background: '#0F2D52' }}>
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold" style={{ color: '#ffffff' }}>Recent Synchronization</h2>
-          </div>
+      {/* Synchronization history */}
+      <section className="overflow-hidden rounded-lg border border-[#DCE4ED] bg-white">
+        <div className="px-5 py-4">
+          <h2 className="text-sm font-semibold text-[#0F2D52]">Synchronization history</h2>
+          <p className="mt-0.5 text-xs text-[#64748B]">Select a batch to review its processing details.</p>
         </div>
 
-        {/* Table */}
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full min-w-[700px] text-left">
             <thead>
-              <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
+              <tr className="bg-[#0F2D52]">
                 {['Batch ID', 'Records', 'Accepted', 'Rejected', 'Status', 'Date'].map((h) => (
-                  <th key={h} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#64748B' }}>{h}</th>
+                  <th key={h} scope="col" className="whitespace-nowrap px-5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-white">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {syncHistory.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-16 text-center">
-                    <i className="ri-inbox-line text-xl mb-2 block" style={{ color: '#CBD5E1' }} />
-                    <p className="text-xs" style={{ color: '#94A3B8' }}>No synchronization history available.</p>
+                  <td colSpan={6} className="px-5 py-10 text-center text-sm text-[#64748B]">
+                    No synchronization history yet.
                   </td>
                 </tr>
-              ) : syncHistory.map((batch, idx) => (
+              ) : syncHistory.map((batch) => (
                 <tr
                   key={batch.id}
-                  className="cursor-pointer"
-                  onClick={() => setSelectedSync(batch)}
-                  style={{ borderBottom: '1px solid #F1F5F9', background: idx % 2 === 0 ? '#ffffff' : '#FAFBFC' }}
+                  className="border-b border-[#E2E8F0] even:bg-[#F8FAFC] hover:bg-[#EDF4FB]"
                 >
-                  <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#0F2D52' }}>
-                    {batch.batchId ? batch.batchId.slice(0, 8) : '—'}
+                  <td className="px-5 py-3 text-xs font-semibold text-[#0F2D52]">
+                    <button type="button" onClick={() => setSelectedSync(batch)} className="font-mono text-[#0F2D52] underline-offset-2 hover:underline focus-visible:underline" title={batch.batchId || undefined}>
+                      {batch.batchId ? batch.batchId.slice(0, 8) : 'View batch'}
+                    </button>
                   </td>
                   <td className="px-5 py-3 text-xs" style={{ color: '#64748B' }}>{batch.records.toLocaleString()}</td>
                   <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#047857' }}>{batch.accepted.toLocaleString()}</td>
@@ -387,72 +350,71 @@ export default function DataIntegrationPage() {
             </tbody>
           </table>
         </div>
-      </div>
+      </section>
 
-      {/* ── Data Source Info ── */}
-      <div className="rounded-xl p-5" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-        <div className="flex items-center gap-2 mb-4">
-          <div className="w-1 h-8 rounded-full" style={{ background: '#64748B' }} />
-          <h2 className="text-sm font-bold" style={{ color: '#1E293B' }}>Data Source</h2>
+      {/* Source details */}
+      <section className="overflow-hidden rounded-lg border border-[#DCE4ED] bg-white" aria-labelledby="data-route-title">
+        <div className="border-b border-[#E2E8F0] bg-[#F8FAFC] px-5 py-3">
+          <h2 id="data-route-title" className="text-sm font-semibold text-[#0F2D52]">Data route</h2>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {[
-            { label: 'Source System', value: 'PASIG TB-IS', sub: 'Tuberculosis Information System' },
-            { label: 'Integration Method', value: 'REST API / Secure Webhook', sub: 'HMAC-SHA256 Verification' },
-            { label: 'Destination', value: 'TBInsight PostgreSQL Database', sub: 'TB Records & Analytics' },
-          ].map((item) => (
-            <div key={item.label} className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold" style={{ color: '#0F2D52' }}>{item.label}</p>
-                <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>{item.sub}</p>
-              </div>
-              <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{item.value}</span>
-            </div>
-          ))}
+        <div className="grid items-center gap-2 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1.1fr)_auto_minmax(0,1.3fr)] sm:gap-4">
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-[#64748B]">Source</p>
+            <p className="mt-1 text-sm font-semibold text-[#0F2D52]">PASIG TB-IS</p>
+          </div>
+          <span className="text-sm text-[#94A3B8] max-sm:pl-1 sm:text-lg" aria-hidden="true"><span className="sm:hidden">↓</span><span className="hidden sm:inline">→</span></span>
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-[#64748B]">Transfer</p>
+            <p className="mt-1 text-sm font-semibold text-[#0F2D52]">Verified secure webhook</p>
+          </div>
+          <span className="text-sm text-[#94A3B8] max-sm:pl-1 sm:text-lg" aria-hidden="true"><span className="sm:hidden">↓</span><span className="hidden sm:inline">→</span></span>
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-[#64748B]">Destination</p>
+            <p className="mt-1 text-sm font-semibold text-[#0F2D52]">TBInsight records and analytics</p>
+          </div>
         </div>
-      </div>
+      </section>
 
       {/* ── Undo Import Confirmation ── */}
       {batchToUndo && (
-        <div className="fixed inset-0 z-[1300] flex items-center justify-center" style={{ background: 'rgba(15, 45, 82, 0.35)' }} onClick={() => !undoing && setBatchToUndo(null)}>
-          <div className="relative w-full max-w-md mx-4 rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 20px 60px rgba(15, 45, 82, 0.25)' }} onClick={(e) => e.stopPropagation()}>
-            <div className="px-6 py-4" style={{ background: '#991B1B' }}>
-              <h3 className="text-sm font-bold" style={{ color: '#ffffff' }}>Undo this import?</h3>
+        <div className="fixed inset-0 z-[1300] flex items-center justify-center bg-[#0F2D52]/40 px-4" role="alertdialog" aria-modal="true" aria-labelledby="undo-import-title" onClick={() => !undoing && setBatchToUndo(null)}>
+          <div className="relative w-full max-w-md overflow-hidden rounded-lg border border-[#DCE4ED] bg-white shadow-[0_20px_50px_rgba(15,45,82,0.2)]" onClick={(e) => e.stopPropagation()}>
+            <div className="border-b border-[#E2E8F0] px-6 py-4">
+              <h3 id="undo-import-title" className="text-base font-semibold text-[#0F2D52]">Undo import</h3>
+              <p className="mt-1 text-xs text-[#64748B]">Review the batch before removing its records.</p>
             </div>
-            <div className="px-6 py-5 space-y-3">
-              <div className="flex items-center justify-between gap-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
-                <span className="text-xs" style={{ color: '#94A3B8' }}>Batch</span>
-                <span className="text-xs font-mono font-semibold" style={{ color: '#0F2D52' }}>{batchToUndo.batch_id}</span>
+            <div className="space-y-3 px-6 py-5">
+              <div className="flex items-start justify-between gap-4 border-b border-[#E2E8F0] pb-2">
+                <span className="text-xs text-[#64748B]">Batch</span>
+                <span className="break-all text-right font-mono text-xs font-medium text-[#0F2D52]">{batchToUndo.batch_id}</span>
               </div>
-              <div className="flex items-center justify-between gap-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
-                <span className="text-xs" style={{ color: '#94A3B8' }}>Received</span>
-                <span className="text-xs font-semibold" style={{ color: '#0F2D52' }}>{formatDate(batchToUndo.received_at)} {formatTime(batchToUndo.received_at)}</span>
+              <div className="flex items-center justify-between gap-4 border-b border-[#E2E8F0] pb-2">
+                <span className="text-xs text-[#64748B]">Received</span>
+                <span className="text-right text-xs font-medium text-[#0F2D52]">{formatDate(batchToUndo.received_at)} {formatTime(batchToUndo.received_at)}</span>
               </div>
-              <div className="flex items-center justify-between gap-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
-                <span className="text-xs" style={{ color: '#94A3B8' }}>Records imported</span>
-                <span className="text-xs font-semibold" style={{ color: '#0F2D52' }}>{(batchToUndo.records_imported || 0).toLocaleString()}</span>
+              <div className="flex items-center justify-between gap-4 border-b border-[#E2E8F0] pb-2">
+                <span className="text-xs text-[#64748B]">Records imported</span>
+                <span className="text-xs font-medium text-[#0F2D52]">{(batchToUndo.records_imported || 0).toLocaleString()}</span>
               </div>
-              <p className="text-xs leading-relaxed pt-1" style={{ color: '#64748B' }}>
+              <p className="border-l-2 border-[#B91C1C] pl-3 text-xs leading-relaxed text-[#475569]">
                 This permanently deletes every case and raw row this batch added, removes its log entry, and rebuilds the dashboard totals. It cannot be undone.
                 Forecasts, risk scores and alerts are not recalculated; run the prediction pipeline afterward.
               </p>
             </div>
-            <div className="px-6 py-4 flex gap-3" style={{ borderTop: '1px solid #E2E8F0' }}>
-              <button
+            <div className="flex justify-end gap-2 border-t border-[#E2E8F0] px-6 py-4">
+              <button type="button"
                 onClick={() => setBatchToUndo(null)}
                 disabled={undoing}
-                className="flex-1 py-2.5 text-xs font-semibold"
-                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}
+                className="rounded border border-[#CBD5E1] bg-white px-4 py-2 text-xs font-semibold text-[#334155] hover:bg-[#F8FAFC] disabled:opacity-60"
               >
                 Cancel
               </button>
-              <button
+              <button type="button"
                 onClick={handleUndo}
                 disabled={undoing}
-                className="flex-1 py-2.5 text-xs font-semibold"
-                style={{ background: '#DC2626', color: '#ffffff', borderRadius: 4, opacity: undoing ? 0.7 : 1 }}
+                className="rounded bg-[#B91C1C] px-4 py-2 text-xs font-semibold text-white hover:bg-[#991B1B] disabled:opacity-60"
               >
-                {undoing ? 'Deleting...' : 'Delete import'}
+                {undoing ? 'Removing...' : 'Undo import'}
               </button>
             </div>
           </div>
@@ -461,17 +423,13 @@ export default function DataIntegrationPage() {
 
       {/* ── Sync Detail Modal ── */}
       {selectedSync && (
-        <div className="fixed inset-0 z-[1200] flex items-center justify-center" style={{ background: 'rgba(15, 45, 82, 0.2)' }} onClick={() => setSelectedSync(null)}>
-          <div className="relative w-full max-w-md mx-4 rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 20px 60px rgba(15, 45, 82, 0.25)' }} onClick={(e) => e.stopPropagation()}>
-            {/* Header */}
-            <div className="px-6 py-4 flex items-center justify-between" style={{ background: '#0F2D52' }}>
-              <h3 className="text-sm font-bold" style={{ color: '#ffffff' }}>Synchronization Details</h3>
-              <button onClick={() => setSelectedSync(null)} className="w-8 h-8 rounded flex items-center justify-center transition" style={{ background: 'rgba(255,255,255,0.15)' }}>
-                <i className="ri-close-line text-sm" style={{ color: '#ffffff' }} />
-              </button>
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-[#0F2D52]/35 px-4" role="dialog" aria-modal="true" aria-labelledby="sync-detail-title" onClick={() => setSelectedSync(null)}>
+          <div className="relative w-full max-w-md overflow-hidden rounded-lg border border-[#DCE4ED] bg-white shadow-[0_20px_50px_rgba(15,45,82,0.2)]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-[#E2E8F0] px-6 py-4">
+              <h3 id="sync-detail-title" className="text-base font-semibold text-[#0F2D52]">Synchronization details</h3>
+              <ModalCloseButton onClick={() => setSelectedSync(null)} />
             </div>
-            {/* Content */}
-            <div className="px-6 py-5 space-y-3">
+            <div className="space-y-3 px-6 py-5">
               {[
                 { label: 'Batch ID', value: selectedSync.batchId || '—' },
                 { label: 'Source', value: selectedSync.source || 'PASIG TB-IS' },
@@ -481,26 +439,22 @@ export default function DataIntegrationPage() {
                 { label: 'Rejected', value: selectedSync.rejected.toLocaleString() },
                 { label: 'Status', value: selectedSync.status },
               ].map((row) => (
-                <div key={row.label} className="flex items-center justify-between gap-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
-                  <span className="text-xs" style={{ color: '#94A3B8' }}>{row.label}</span>
-                  <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{row.value}</span>
+                <div key={row.label} className="flex items-start justify-between gap-4 border-b border-[#E2E8F0] pb-2">
+                  <span className="text-xs text-[#64748B]">{row.label}</span>
+                  <span className="break-all text-right text-xs font-medium text-[#0F2D52]">{row.value}</span>
                 </div>
               ))}
               {selectedSync.errorMessage && (
-                <div className="mt-2 p-3 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.1)' }}>
-                  <p className="font-semibold mb-1">Error</p>
+                <div className="mt-2 border-l-2 border-[#B91C1C] bg-[#FEF2F2] px-3 py-2 text-xs text-[#991B1B]">
+                  <p className="mb-1 font-semibold">Processing error</p>
                   <p>{selectedSync.errorMessage}</p>
                 </div>
               )}
             </div>
-            {/* Footer */}
-            <div className="px-6 py-4" style={{ borderTop: '1px solid #E2E8F0' }}>
-              <button
+            <div className="flex justify-end border-t border-[#E2E8F0] px-6 py-4">
+              <button type="button"
                 onClick={() => setSelectedSync(null)}
-                className="w-full py-2.5 text-xs font-semibold rounded transition"
-                style={{ background: '#0F2D52', color: '#ffffff', borderRadius: 4, transition: 'background 0.15s' }}
-                onMouseEnter={(e) => e.currentTarget.style.background = '#174A7E'}
-                onMouseLeave={(e) => e.currentTarget.style.background = '#0F2D52'}
+                className="rounded bg-[#0F2D52] px-4 py-2 text-xs font-semibold text-white hover:bg-[#174A7E]"
               >
                 Close
               </button>

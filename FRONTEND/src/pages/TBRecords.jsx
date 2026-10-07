@@ -5,6 +5,8 @@ import {
 import { describeHistoryEntry, formatHistoryTimestamp, historyActorLabel } from '../utils/caseHistory';
 import API from "../api/axios";
 import SharedFilterSelect from '../components/FilterSelect';
+import ModalCloseButton from '../components/ModalCloseButton';
+import { buildRecordKpis } from '../utils/recordKpis';
 
 /* --- Debounce hook --- */
 function useDebounce(value, delay = 400) {
@@ -33,7 +35,7 @@ const statusColors = {
 };
 
 function StatusBadge({ status, kind = 'outcome' }) {
-  if (!status) return <span className="text-xs text-slate-400">—</span>;
+  if (!status) return <span className="text-[11px] text-slate-400">—</span>;
   // Keep legacy aliases readable when an older API response reaches this view.
   const raw = (status || "PENDING").trim();
   const value = raw === 'PENDING' ? raw : (normalizeRecordOutcome(raw) || raw);
@@ -41,7 +43,7 @@ function StatusBadge({ status, kind = 'outcome' }) {
   const colors = statusColors[value] || { bg: '#F1F5F9', text: '#64748B', dot: '#94A3B8' };
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap"
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold whitespace-nowrap"
       style={{ background: colors.bg, color: colors.text }}
     >
       <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: colors.dot }} />
@@ -86,6 +88,42 @@ const DetailRow = ({ label, value }) => {
     </div>
   );
 };
+
+/* --- One KPI card: label + optional badge, big figure, short note. With `onClick` it is a
+ *     one-click filter for the table (highlighted while that filter is on). --- */
+function KpiCard({ icon, iconColor, label, value, badge, sub, subTitle, subColor = '#94A3B8', active = false, onClick, title, last = false }) {
+  const body = (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <i className={`${icon} text-sm`} style={{ color: iconColor }} />
+          <span className="text-[10px] font-bold uppercase tracking-wider truncate" style={{ color: '#64748B' }}>{label}</span>
+        </div>
+        {badge && (
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap" style={badge.style} title={badge.title}>{badge.text}</span>
+        )}
+      </div>
+      <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
+      <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{value}</p>
+      {sub && <span className="text-[11px] font-medium mt-1" style={{ color: subColor }} title={subTitle}>{sub}</span>}
+      {!last && <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />}
+    </>
+  );
+  const base = 'flex flex-col px-5 py-5 relative text-left';
+  if (!onClick) return <div className={base}>{body}</div>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={title}
+      className={`${base} transition-colors hover:bg-slate-50`}
+      style={active ? { background: '#EEF3F9', boxShadow: 'inset 0 -2px 0 #0F2D52' } : undefined}
+    >
+      {body}
+    </button>
+  );
+}
 
 /* --- Filter select for advanced sidebar; shares the app-wide dropdown UI --- */
 function FilterSelect({ label, value, onChange, options, placeholder }) {
@@ -236,46 +274,43 @@ export default function TBRecords() {
     return params;
   }, [debouncedSearch, selectedBarangay, selectedYear, selectedMonth, selectedOutcomeStatus, selectedCaseStatus, selectedFacility, selectedSex, selectedBacteriologicalStatus, selectedValidationStatus, selectedSourceType, selectedLocationClassification]);
 
-  /* --- Fetch metrics (filter-aware) --- */
+  /* --- Fetch metrics (filter-aware) ---
+   * The cards cover every filter EXCEPT Case Status and Treatment Outcome: those two are what
+   * the status / outcome cards set when clicked, and the rates (fatality, lost to follow-up) need
+   * all evaluated outcomes as their base — filtering to "Died" would make every rate 100%. */
   const fetchMetrics = useCallback(async () => {
     try {
       const params = buildFilterParams();
+      params.delete('outcome');
+      params.delete('status');
       const qs = params.toString();
       const [summaryRes, tsrRes] = await Promise.all([
         API.get(`/api/tb/dashboard/summary${qs ? `?${qs}` : ''}`),
-        // Treatment Success Rate: from GET /api/tb/treatment-success-rate
-        // (the cohort-based methodology — Cured+Completed / patients whose
-        // treatment started in year Y-1). Previously computed here as
-        // successful/total_outcomes from /dashboard/summary — a DIFFERENT,
-        // diagnosis-date-filtered metric that disagreed with the AI-generated
-        // insight text elsewhere in the app under the same label.
+        // Treatment Success Rate: from GET /api/tb/treatment-success-rate (the cohort-based
+        // methodology — Cured + Completed / patients whose treatment started in year Y-1).
         API.get(`/api/tb/treatment-success-rate${qs ? `?${qs}` : ''}`).catch(() => ({ data: null })),
       ]);
-      const s = summaryRes.data.summary;
-      if (!s) return;
-      const prevMonth = s.prev_month_cases || 0;
-      const currentMonth = s.current_month_cases || 0;
-      const caseTrendPct = prevMonth > 0
-        ? Math.round(((currentMonth - prevMonth) / prevMonth) * 100) : 0;
-      // null (never 0) when the treatment-start cohort is empty.
-      const successRate = tsrRes.data?.successRate ?? null;
-      setMetrics({
-        totalCases: s.total_cases || 0,
-        onTreatmentCount: s.on_treatment_count || 0,
-        curedCount: s.cured_count || 0,
-        treatmentCompletedCount: s.treatment_completed_count || 0,
-        diedCount: s.died_count || 0,
-        ltfuCount: s.ltfu_count || 0,
-        successRate,
-        caseTrend: { value: caseTrendPct, direction: caseTrendPct >= 0 ? 'up' : 'down' },
-        activeStatus: (s.on_treatment_count || 0) > 0 ? 'Ongoing' : 'None',
-      });
+      if (!summaryRes.data.summary) return;
+      setMetrics(buildRecordKpis(summaryRes.data.summary, tsrRes.data));
     } catch (err) {
       if (import.meta.env.DEV) console.error("Failed to fetch metrics:", err);
     }
   }, [buildFilterParams]);
 
   useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
+  /* --- KPI cards as one-click filters. Status and outcome never combine (a record with a final
+   *     outcome is no longer On Treatment), so choosing one clears the other. --- */
+  const toggleStatusCard = (status) => {
+    setSelectedCaseStatus((prev) => (String(prev).toUpperCase() === status ? "" : status));
+    setSelectedOutcomeStatus("");
+    setCurrentPage(1);
+  };
+  const toggleOutcomeCard = (outcome) => {
+    setSelectedOutcomeStatus((prev) => (String(prev).toUpperCase() === outcome ? "" : outcome));
+    setSelectedCaseStatus("");
+    setCurrentPage(1);
+  };
+
   /* --- Derived active filter list --- */
   const activeFilters = [
     { key: 'year', label: 'Year', value: selectedYear },
@@ -484,117 +519,75 @@ export default function TBRecords() {
       {exportError && (
         <div role="alert" className="flex items-start justify-between gap-3 px-4 py-3 rounded-lg text-xs" style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B' }}>
           <span>{exportError}</span>
-          <button type="button" onClick={() => setExportError(null)} aria-label="Dismiss export error" className="shrink-0"><i className="ri-close-line" /></button>
+          <ModalCloseButton onClick={() => setExportError(null)} label="Dismiss export error" />
         </div>
       )}
 
-      {/* -- Metric Cards -- */}
+      {/* -- KPI Cards -- */}
       <div>
         <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15, 45, 82, 0.12), 0 2px 8px rgba(15, 45, 82, 0.08)' }}>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
-            {/* 1. Total TB Cases */}
-            <div className="flex flex-col px-5 py-5 relative">
-              <div className="flex items-center gap-2">
-                <i className="ri-file-list-3-line text-sm" style={{ color: '#6B7FA3' }} />
-                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Total TB Cases</span>
-              </div>
-              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
-                {metrics ? metrics.totalCases.toLocaleString() : '---'}
-              </p>
-              <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
-            </div>
-
-            {/* 2. On Treatment */}
-            <div className="flex flex-col px-5 py-5 relative">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <i className="ri-first-aid-kit-line text-sm" style={{ color: '#B8956A' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>On Treatment</span>
-                </div>
-                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FFFBEB', color: '#92400E' }}>
-                  {metrics ? metrics.activeStatus : '---'}
-                </span>
-              </div>
-              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
-                {metrics ? metrics.onTreatmentCount.toLocaleString() : '---'}
-              </p>
-              <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
-            </div>
-
-            {/* 3. Cured */}
-            <div className="flex flex-col px-5 py-5 relative">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <i className="ri-check-double-line text-sm" style={{ color: '#6B9E8A' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Cured</span>
-                </div>
-                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#ECFDF5', color: '#047857' }}>
-                  {metrics ? (metrics.successRate == null ? 'N/A' : `${metrics.successRate}%`) : '---'}
-                </span>
-              </div>
-              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
-                {metrics ? metrics.curedCount.toLocaleString() : '---'}
-              </p>
-              <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
-            </div>
-
-            {/* 4. Died */}
-            <div className="flex flex-col px-5 py-5 relative">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <i className="ri-emotion-sad-line text-sm" style={{ color: '#B07070' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Died</span>
-                </div>
-                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEF2F2', color: '#991B1B' }}>
-                  {metrics && metrics.totalCases > 0 ? `${Math.round((metrics.diedCount / metrics.totalCases) * 100)}%` : '---'}
-                </span>
-              </div>
-              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
-                {metrics ? metrics.diedCount.toLocaleString() : '---'}
-              </p>
-              <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
-            </div>
-
-            {/* 5. Lost to Follow-up */}
-            <div className="flex flex-col px-5 py-5 relative">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <i className="ri-user-unfollow-line text-sm" style={{ color: '#8B7BA3' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Lost to Follow-up</span>
-                </div>
-                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#F3F4F6', color: '#374151' }}>
-                  {metrics && metrics.totalCases > 0 ? `${Math.round((metrics.ltfuCount / metrics.totalCases) * 100)}%` : '---'}
-                </span>
-              </div>
-              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
-                {metrics ? metrics.ltfuCount.toLocaleString() : '---'}
-              </p>
-              <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
-            </div>
-
-            {/* 6. Treatment Completed */}
-            <div className="flex flex-col px-5 py-5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <i className="ri-checkbox-circle-line text-sm" style={{ color: '#6B7FA3' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Completed</span>
-                </div>
-                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#EFF6FF', color: '#1E40AF' }}>
-                  {metrics && metrics.totalCases > 0 ? `${Math.round((metrics.treatmentCompletedCount / metrics.totalCases) * 100)}%` : '---'}
-                </span>
-              </div>
-              <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-              <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
-                {metrics ? metrics.treatmentCompletedCount.toLocaleString() : '---'}
-              </p>
-            </div>
+            <KpiCard
+              icon="ri-file-list-3-line" iconColor="#6B7FA3" label="Total TB Cases"
+              value={metrics ? metrics.total.toLocaleString() : '---'}
+              sub={activeFilters.some((f) => f.key !== 'status' && f.key !== 'outcome') || debouncedSearch ? 'Matching your filters' : 'All records'}
+            />
+            <KpiCard
+              icon="ri-first-aid-kit-line" iconColor="#B8956A" label="On Treatment"
+              value={metrics ? metrics.onTreatment.toLocaleString() : '---'}
+              badge={metrics && metrics.onTreatmentShare != null ? { text: `${metrics.onTreatmentShare}%`, title: 'Share of all records', style: { background: '#FFFBEB', color: '#92400E' } } : null}
+              sub="Currently in treatment"
+              active={String(selectedCaseStatus).toUpperCase() === 'ON TREATMENT'}
+              onClick={() => toggleStatusCard('ON TREATMENT')}
+              title="Show only records that are On Treatment"
+            />
+            <KpiCard
+              icon="ri-time-line" iconColor="#B07070" label="Not Yet Started"
+              value={metrics ? metrics.diagnosed.toLocaleString() : '---'}
+              sub={metrics && metrics.diagnosedOverdue > 0 ? `${metrics.diagnosedOverdue.toLocaleString()} diagnosed 30+ days ago` : 'Diagnosed, no treatment start'}
+              subColor={metrics && metrics.diagnosedOverdue > 0 ? '#B91C1C' : '#94A3B8'}
+              subTitle="Diagnosed with no treatment start recorded. The count in red is those diagnosed 30 or more days ago, which need follow-up."
+              active={String(selectedCaseStatus).toUpperCase() === 'DIAGNOSED'}
+              onClick={() => toggleStatusCard('DIAGNOSED')}
+              title="Show only records that are Diagnosed and have not started treatment"
+            />
+            <KpiCard
+              icon="ri-checkbox-circle-line" iconColor="#6B9E8A" label="Treatment Success Rate"
+              value={metrics ? (metrics.successRate == null ? 'N/A' : `${metrics.successRate}%`) : '---'}
+              sub={metrics
+                ? (metrics.successRate == null
+                  ? 'No previous-year treatment cohort'
+                  : `${metrics.cohortTotal.toLocaleString()} patients${metrics.cohortYear ? ` (${metrics.cohortYear} cohort)` : ''}`)
+                : ''}
+              subTitle="Cured or Treatment Completed, among patients whose treatment started in the previous year."
+            />
+            <KpiCard
+              icon="ri-user-unfollow-line" iconColor="#8B7BA3" label="Lost to Follow-up"
+              value={metrics ? metrics.ltfu.toLocaleString() : '---'}
+              badge={metrics && metrics.ltfuRate != null ? { text: `${metrics.ltfuRate}%`, title: 'Share of evaluated outcomes', style: { background: '#F3F4F6', color: '#374151' } } : null}
+              sub="Of evaluated outcomes"
+              subTitle="Lost to follow-up divided by records with a final outcome (Cured, Completed, Failed, Lost to Follow-up, Died). Records still on treatment are not counted."
+              active={String(selectedOutcomeStatus).toUpperCase() === 'LOST TO FOLLOW-UP'}
+              onClick={() => toggleOutcomeCard('LOST TO FOLLOW-UP')}
+              title="Show only records that were Lost to Follow-up"
+            />
+            <KpiCard
+              icon="ri-heart-pulse-line" iconColor="#B07070" label="Case Fatality Rate"
+              value={metrics ? (metrics.fatalityRate == null ? 'N/A' : `${metrics.fatalityRate}%`) : '---'}
+              sub={metrics ? (metrics.fatalityRate == null ? 'No evaluated outcomes' : `${metrics.died.toLocaleString()} deaths / ${metrics.evaluated.toLocaleString()} evaluated`) : ''}
+              subTitle="Deaths divided by records with a final outcome (Cured, Completed, Failed, Lost to Follow-up, Died). Records still on treatment are not counted."
+              active={String(selectedOutcomeStatus).toUpperCase() === 'DIED'}
+              onClick={() => toggleOutcomeCard('DIED')}
+              title="Show only records with the outcome Died"
+              last
+            />
           </div>
         </div>
+        {(selectedCaseStatus || selectedOutcomeStatus) && (
+          <p className="mt-2 px-1 text-[11px]" style={{ color: '#94A3B8' }}>
+            The cards cover all records matching your other filters. The table below is narrowed to {formatChipValue(selectedCaseStatus ? 'status' : 'outcome', selectedCaseStatus || selectedOutcomeStatus)}.
+          </p>
+        )}
       </div>
 
       {/* -- Table Card -- */}
@@ -686,7 +679,7 @@ export default function TBRecords() {
 
           {/* -- Table (scrollable) -- */}
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
-            <table className="w-full text-left text-sm" style={{ borderCollapse: 'collapse' }}>
+            <table className="w-full text-left text-[11px]" style={{ borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: '#0F2D52' }}>
                   {[
@@ -771,19 +764,19 @@ export default function TBRecords() {
                           ? <span className="font-bold" style={{ color: '#0F2D52' }}>{record.source_case_id}</span>
                           : <span className="italic" style={{ color: '#94A3B8' }}>No Case ID</span>}
                       </td>
-                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.barangay_name || residenceLabel(record) || '—'}</td>
-                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.age}</td>
-                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.sex}</td>
-                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{formatDate(record.date_of_diagnosis)}</td>
-                      <td className="px-3 py-2 text-sm max-w-[200px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }} title={record.screening_facility}>{record.screening_facility}</td>
-                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>
+                      <td className="px-3 py-2" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.barangay_name || residenceLabel(record) || '—'}</td>
+                      <td className="px-3 py-2" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.age}</td>
+                      <td className="px-3 py-2" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.sex}</td>
+                      <td className="px-3 py-2" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{formatDate(record.date_of_diagnosis)}</td>
+                      <td className="px-3 py-2 max-w-[200px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }} title={record.screening_facility}>{record.screening_facility}</td>
+                      <td className="px-3 py-2" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>
                         {record.source_type ? (
                           <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: record.source_type === 'DSTB' ? '#EFF6FF' : '#F0FDF4', color: record.source_type === 'DSTB' ? '#1E40AF' : '#166534' }}>
                             {record.source_type}
                           </span>
                         ) : '—'}
                       </td>
-                      <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.bacteriological_status ? record.bacteriological_status.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
+                      <td className="px-3 py-2" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.bacteriological_status ? record.bacteriological_status.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
                       <td className="px-3 py-2" style={{ borderRight: '1px solid #E2E8F0' }}>
                         <StatusBadge status={record.case_status} kind="status" />
                       </td>
@@ -791,8 +784,8 @@ export default function TBRecords() {
                         {record.treatment_outcome
                           ? <StatusBadge status={record.treatment_outcome} />
                           : record.case_status
-                            ? <span className="text-xs text-slate-400 cursor-help" title={record.case_status === 'DIAGNOSED' ? 'Diagnosed, not yet on treatment — no final outcome yet' : 'Still on treatment — no final outcome yet'}>—</span>
-                            : <span className="text-xs text-slate-400">—</span>}
+                            ? <span className="text-[11px] text-slate-400 cursor-help" title={record.case_status === 'DIAGNOSED' ? 'Diagnosed, not yet on treatment — no final outcome yet' : 'Still on treatment — no final outcome yet'}>—</span>
+                            : <span className="text-[11px] text-slate-400">—</span>}
                       </td>
                       <td className="px-3 py-2 text-center">
                         <button aria-label="View record" onClick={() => setSelectedRecord(record)}
@@ -894,13 +887,7 @@ export default function TBRecords() {
             <div className="sticky top-0 z-10" style={{ background: '#0F2D52' }}>
               <div className="flex items-center justify-between px-6 py-4">
                 <h2 className="text-sm font-extrabold tracking-tight" style={{ color: '#ffffff' }}>FILTERS</h2>
-                <button onClick={() => setShowAdvancedFilters(false)} aria-label="Close filters"
-                  className="inline-flex h-8 w-8 items-center justify-center shrink-0"
-                  style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
-                  <i className="ri-close-line text-base" />
-                </button>
+                <ModalCloseButton onClick={() => setShowAdvancedFilters(false)} label="Close filters" light />
               </div>
             </div>
             <div className="px-6 py-5 space-y-5">
@@ -1021,13 +1008,7 @@ export default function TBRecords() {
             <div className="sticky top-0 z-10" style={{ background: '#0F2D52' }}>
               <div className="flex items-center justify-between px-6 py-4">
                 <h2 className="text-base font-extrabold tracking-tight" style={{ color: '#ffffff' }}>RECORD DETAILS</h2>
-                <button onClick={() => setSelectedRecord(null)} aria-label="Close modal"
-                  className="inline-flex h-8 w-8 items-center justify-center shrink-0"
-                  style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
-                  <i className="ri-close-line text-base" />
-                </button>
+                <ModalCloseButton onClick={() => setSelectedRecord(null)} label="Close modal" light />
               </div>
             </div>
             <div className="px-6 py-5 space-y-6">

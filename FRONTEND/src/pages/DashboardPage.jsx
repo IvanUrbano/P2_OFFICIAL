@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Cell, Area, AreaChart,
+  Cell, Line, LineChart,
   CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie,
 } from 'recharts';
@@ -10,23 +10,19 @@ import 'leaflet/dist/leaflet.css';
 import API from '../api/axios';
 import DashboardWelcomeInsightsSection from '../components/DashboardWelcomeInsightsSection';
 import OutcomeStatusPanel from '../components/OutcomeStatusPanel';
+import RecommendedFilters from '../components/RecommendedFilters';
 import ChartInsight from '../components/ChartInsight';
 import { trendInsight, riskInsight, shareInsight, outcomeInsight, forecastInsight } from '../utils/chartInsights';
 import { getDashboardInsight } from '../services/insightService';
+import {
+  dataYears, barangayNames, scopeByBarangay, scopeMonthly, filterQuery, recommendFilters,
+} from '../utils/dashboardFilters';
+import { summarizeForecast, topBarangayRanking } from '../utils/dashboardForecast';
 import {
   APPROVED_OUTCOMES, OUTCOME_COLORS, normalizeDisplayOutcome,
 } from '../utils/outcomeStatus';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
-
-const RISK_COLORS = {
-  Low: '#10B981',
-  Moderate: '#F59E0B',
-  Medium: '#F59E0B',
-  High: '#EF4444',
-  'No Data': '#94A3B8',
-  'No Assessment': '#94A3B8',
-};
 
 // Outcome categories, order and colours come from the single shared frontend
 // contract (src/utils/outcomeStatus.js), which mirrors the backend's
@@ -42,8 +38,6 @@ const GIS_RISK_COLORS = {
 
 const PASIG_BOUNDS = L.latLngBounds([14.48, 121.02], [14.64, 121.13]);
 
-const RISK_PRIORITY = { High: 3, Medium: 2, Moderate: 2, Low: 1, 'No Data': 0 };
-
 /* Alert severities that warrant the critical treatment. `severity` in the
  * alerts table is lowercase and rule-derived ('danger' | 'high' | 'warning' |
  * 'info'); 'danger' is the most severe band the alert rules emit, so it
@@ -51,23 +45,36 @@ const RISK_PRIORITY = { High: 3, Medium: 2, Moderate: 2, Low: 1, 'No Data': 0 };
  * CRITICAL/HIGH were matched. */
 const CRITICAL_SEVERITIES = new Set(['CRITICAL', 'DANGER', 'HIGH']);
 
-function riskStyle(feature) {
+const normName = (s) => String(s ?? '').trim().toLowerCase();
+
+// `highlight` is the set of barangays the dashboard filter is scoped to (null = no filter):
+// everything else is faded so the selected barangays stand out.
+function riskStyle(feature, highlight = null) {
   const risk = feature.properties?.risk_class || 'No Data';
+  const dimmed = highlight && !highlight.has(normName(feature.properties?.name));
   return {
     fillColor: GIS_RISK_COLORS[risk] || GIS_RISK_COLORS['No Data'],
-    weight: 0.5,
+    weight: highlight && !dimmed ? 1.5 : 0.5,
     opacity: 0.9,
-    color: 'rgba(255,255,255,0.3)',
-    fillOpacity: 0.55,
+    color: highlight && !dimmed ? '#ffffff' : 'rgba(255,255,255,0.3)',
+    fillOpacity: dimmed ? 0.12 : 0.55,
   };
 }
 
 /* ─── Mini GIS Map ─── */
-function MiniGisMap({ refreshKey }) {
+function MiniGisMap({ refreshKey, highlight = null }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const dataRef = useRef(null);
   const labelsRef = useRef(null);
+  const geoRef = useRef(null);
+  const highlightRef = useRef(highlight);
+
+  // Re-style the existing layer when the filter changes (no refetch, no map rebuild).
+  useEffect(() => {
+    highlightRef.current = highlight;
+    if (geoRef.current) geoRef.current.setStyle((f) => riskStyle(f, highlight));
+  }, [highlight]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -153,7 +160,7 @@ function MiniGisMap({ refreshKey }) {
           ).addTo(map);
         }
 
-        L.geoJSON(res.data, { style: riskStyle, interactive: false }).addTo(map);
+        geoRef.current = L.geoJSON(res.data, { style: (f) => riskStyle(f, highlightRef.current), interactive: false }).addTo(map);
         map.fitBounds(PASIG_BOUNDS, { padding: [20, 20] });
         buildLabels(res.data.features);
       } catch {
@@ -176,6 +183,7 @@ function MiniGisMap({ refreshKey }) {
       mapRef.current = null;
       dataRef.current = null;
       labelsRef.current = null;
+      geoRef.current = null;
     };
   }, [refreshKey]);
 
@@ -193,15 +201,15 @@ function MiniGisMap({ refreshKey }) {
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="px-3 py-2.5 rounded-lg text-xs shadow-lg" style={{ background: '#ffffff', border: '1px solid #E2E8F0', minWidth: 120 }}>
-      {label && <div className="text-[10px] font-semibold mb-1.5 pb-1" style={{ color: '#64748B', borderBottom: '1px solid #F1F5F9' }}>{label}</div>}
+    <div className="min-w-[120px] border border-[#CBD5E1] bg-white px-3 py-2 text-xs shadow-sm">
+      {label && <div className="mb-1.5 border-b border-[#E2E8F0] pb-1 text-[11px] font-semibold text-[#334155]">{label}</div>}
       {payload.map((entry, i) => (
         <div key={i} className="flex items-center justify-between gap-4 py-0.5">
           <div className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: entry.color || entry.stroke }} />
-            <span style={{ color: '#64748B' }}>{entry.name}</span>
+            <span className="h-2 w-2 shrink-0" style={{ background: entry.color || entry.stroke }} />
+            <span className="text-[#475569]">{entry.name}</span>
           </div>
-          <span className="font-bold" style={{ color: '#1E293B' }}>{entry.value?.toLocaleString()}</span>
+          <span className="font-semibold tabular-nums text-[#0F2D52]">{entry.value?.toLocaleString()}</span>
         </div>
       ))}
     </div>
@@ -209,44 +217,44 @@ function ChartTooltip({ active, payload, label }) {
 }
 
 function RiskBadge({ risk }) {
-  const bg = RISK_COLORS[risk] || '#94A3B8';
-  // The level is always spelled out in text as well as encoded in the fill,
+  const color = { High: '#991B1B', Moderate: '#92400E', Medium: '#92400E', Low: '#047857' }[risk] || '#64748B';
+  // The level is spelled out in text as well as indicated by the dot,
   // so the classification is never communicated by colour alone.
   return (
     <span
-      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold text-white"
-      style={{ backgroundColor: bg }}
+      className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] font-medium"
+      style={{ color }}
       title={`Risk classification: ${risk}`}
     >
+      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} aria-hidden="true" />
       {risk}
     </span>
   );
 }
 
-function SectionCard({ title, iconColor, description, action, actionTo, insight, children }) {
+function SectionCard({ title, description, action, actionTo, insight, children }) {
   const navigate = useNavigate();
   return (
-    <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-      <div className="flex items-center justify-between px-5 py-4">
-        <div className="flex items-center gap-3">
-          <div className="w-1 h-8 rounded-full" style={{ background: iconColor || '#0F2D52' }} />
-          <div>
-            <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>{title}</h3>
-            {description && <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>{description}</p>}
-          </div>
+    <section className="flex flex-col overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
+      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[#E2E8F0] px-5 py-4">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-[#0F2D52]">{title}</h3>
+          {description && <p className="mt-1 text-xs leading-snug text-[#64748B]">{description}</p>}
         </div>
-        {action && (
-          <button
-            onClick={() => actionTo && navigate(actionTo)}
-            className="flex items-center gap-1 text-[11px] font-semibold transition hover:underline"
-            style={{ color: '#0F2D52', transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-          >
-            {action} <i className="ri-arrow-right-s-line text-sm" />
-          </button>
-        )}
       </div>
-      <div className="px-5 pb-5">{children}<ChartInsight text={insight} /></div>
-    </div>
+      <div className="flex-1 px-5 py-5">{children}<ChartInsight text={insight} plain /></div>
+      {action && (
+        <div className="border-t border-[#E2E8F0] px-5 py-3">
+          <button
+            type="button"
+            onClick={() => actionTo && navigate(actionTo)}
+            className="cursor-pointer text-[12px] font-semibold text-[#047857] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#047857]"
+          >
+            {action} &rarr;
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -254,9 +262,9 @@ import SkeletonBlock from '../../components/SkeletonBlock';
 
 function SkeletonCard() {
   return (
-    <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-      <div className="px-5 py-4"><SkeletonBlock className="h-4 w-32" /></div>
-      <div className="px-5 pb-5"><SkeletonBlock className="h-48 w-full" /></div>
+    <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
+      <div className="border-b border-[#E2E8F0] px-5 py-4"><SkeletonBlock className="h-4 w-32" /></div>
+      <div className="px-5 py-5"><SkeletonBlock className="h-48 w-full" /></div>
     </div>
   );
 }
@@ -293,8 +301,6 @@ function useAnimatedNumber(target, duration = 600, decimals = 0) {
 /* ─── Main Dashboard Component ──────────────────────────────────────── */
 
 export default function DashboardPage() {
-  const navigate = useNavigate();
-
   /* ── User ── */
   const [user] = useState(() => {
     try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
@@ -303,19 +309,21 @@ export default function DashboardPage() {
   /* ── State ── */
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [monthlyData, setMonthlyData] = useState([]);
-  const [outcomesData, setOutcomesData] = useState([]);
+  // *All = what the server returned. The names without the suffix (monthlyData, riskData, ...)
+  // are derived below and already scoped by the Recommended Filters, so every card and KPI
+  // that reads them follows the filter without being changed.
+  const [monthlyAll, setMonthlyAll] = useState([]);
+  const [outcomesAll, setOutcomesAll] = useState([]);
   const [tsrData, setTsrData] = useState(null);
   const [cfrData, setCfrData] = useState(null);
-  const [forecastsData, setForecastsData] = useState([]);
-  const [alertsData, setAlertsData] = useState([]);
+  const [forecastsAll, setForecastsAll] = useState([]);
+  const [alertsAll, setAlertsAll] = useState([]);
   // Total unresolved alerts from pagination.total — the displayed rows are a
   // capped slice, so their length is not the unresolved count.
   const [alertsTotal, setAlertsTotal] = useState(null);
-  const [riskData, setRiskData] = useState([]);
-  const [riskYear, setRiskYear] = useState(null);
+  const [riskAll, setRiskAll] = useState([]);
   const [pipelineStatus, setPipelineStatus] = useState(null);
-  const [demographicsData, setDemographicsData] = useState([]);
+  const [demographicsAll, setDemographicsAll] = useState([]);
   const [statusSummary, setStatusSummary] = useState(null); // diagnosed / on treatment counts
   // Freshness metadata from GET /api/tb/data-freshness: Last Synced and Last
   // Model Run are distinct timestamps and are kept distinct.
@@ -366,84 +374,179 @@ export default function DashboardPage() {
    * failed, so each card can say so instead of implying zero. */
   const [failed, setFailed] = useState({});
 
-  const loadAll = useCallback(async () => {
-    setError(null);
-    // Settle every request independently; nothing here can reject.
-    const get = (url) => API.get(url).then(
-      (res) => ({ ok: true, data: res.data }),
-      (err) => {
-        if (import.meta.env.DEV) console.error(`Dashboard fetch failed: ${url}`, err);
-        return { ok: false, data: null };
-      }
-    );
+  /* ── Recommended filters ──
+   * filters = { year: '2025' | '', scope: null | { mode: 'preset'|'manual', key, label, barangays } }.
+   * Figures that the server computes (status counts, success rate, fatality rate, outcomes,
+   * demographics, year-specific risk) are re-requested when the filter changes; everything
+   * that is already barangay-by-month on the page is scoped on the client. */
+  const [filters, setFilters] = useState({ year: '', scope: null });
+  const filtersRef = useRef(filters);
+  useEffect(() => { filtersRef.current = filters; }, [filters]);
+  const scopeNames = filters.scope ? filters.scope.barangays : null;
+  const filterKey = JSON.stringify([filters.year, scopeNames]);
+  const filtersActive = Boolean(filters.year || filters.scope);
 
-    const [monthlyRes, outcomesRes, forecastsRes, alertsRes, riskRes,
-      pipelineRes, demoRes, statusRes, tsrRes, cfrRes, freshRes] =
-      await Promise.all([
-        get('/api/tb/dashboard/monthly'),
-        get('/api/tb/dashboard/outcomes'),
-        get('/api/tb/forecasts'),
-        // Recent Alerts shows unresolved ALERTS only — not notifications
-        // (e.g. "Forecast Generated") and not already-resolved alerts. The
-        // response's pagination.total is the true unresolved count; the
-        // returned rows are just the newest few that are displayed.
-        get('/api/tb/alerts?type=alert&status=unread&limit=5'),
-        get('/api/tb/gis/choropleth'),
-        get('/api/tb/pipeline/status'),
-        get('/api/tb/dashboard/demographics'),
-        // Case status counts (Diagnosed / On Treatment) for the outcomes panel
-        get('/api/tb/dashboard/summary'),
-        // Unfiltered (no year/barangay) — the Dashboard is an overview page —
-        // which defaults to the current-year Y-1 cohort.
-        get('/api/tb/treatment-success-rate'),
-        get('/api/tb/case-fatality-rate'),
-        get('/api/tb/data-freshness'),
-      ]);
+  const [riskForYear, setRiskForYear] = useState(null);   // { year, rows } — risk snapshot of the chosen year
+  const [scopedKey, setScopedKey] = useState(null);       // filter set the server figures currently belong to
+  const scopedSeq = useRef(0);
+  const requestedKey = useRef(null);
+  const baseRiskFailed = useRef(false);
 
-    setFailed({
-      monthly: !monthlyRes.ok,
+  const settle = useCallback((url) => API.get(url).then(
+    (res) => ({ ok: true, data: res.data }),
+    (err) => {
+      if (import.meta.env.DEV) console.error(`Dashboard fetch failed: ${url}`, err);
+      return { ok: false, data: null };
+    }
+  ), []);
+
+  // Server-side figures for one filter set. A newer filter change supersedes an older
+  // request, so a slow response can never overwrite the view the user is now looking at.
+  const loadScoped = useCallback(async (f) => {
+    const seq = ++scopedSeq.current;
+    const names = f.scope ? f.scope.barangays : null;
+    const key = JSON.stringify([f.year, names]);
+    requestedKey.current = key;
+    const yearOnly = filterQuery({ year: f.year }, { withBarangays: false });
+    const full = filterQuery({ year: f.year, barangays: names });
+
+    const [outcomesRes, demoRes, statusRes, tsrRes, cfrRes, riskRes] = await Promise.all([
+      settle(`/api/tb/dashboard/outcomes${yearOnly}`),
+      settle(`/api/tb/dashboard/demographics${yearOnly}`),
+      // Case status counts (Diagnosed / On Treatment) for the outcomes panel
+      settle(`/api/tb/dashboard/summary${full}`),
+      // Cohort-based success rate: a chosen year Y reports the Y-1 treatment cohort.
+      settle(`/api/tb/treatment-success-rate${full}`),
+      settle(`/api/tb/case-fatality-rate${full}`),
+      f.year ? settle(`/api/tb/gis/choropleth${yearOnly}`) : Promise.resolve(null),
+    ]);
+    if (seq !== scopedSeq.current) return null;
+
+    setFailed((prev) => ({
+      ...prev,
       outcomes: !outcomesRes.ok,
-      forecasts: !forecastsRes.ok,
-      alerts: !alertsRes.ok,
-      risk: !riskRes.ok,
-      pipeline: !pipelineRes.ok,
       demographics: !demoRes.ok,
       status: !statusRes.ok,
       tsr: !tsrRes.ok,
       cfr: !cfrRes.ok,
-      freshness: !freshRes.ok,
-    });
-
-    setMonthlyData(monthlyRes.data?.monthly || []);
-    setOutcomesData(outcomesRes.data?.outcomes || []);
-    setForecastsData(forecastsRes.data?.forecasts || []);
-    setAlertsData(alertsRes.data?.alerts || []);
-    setAlertsTotal(alertsRes.data?.pagination?.total ?? null);
-    setRiskData(riskRes.data?.choropleth || []);
-    setRiskYear(riskRes.data?.assessment_year ?? riskRes.data?.year ?? null);
-    setPipelineStatus(pipelineRes.data?.latest_run || null);
-    setDemographicsData(demoRes.data?.demographics || []);
+      risk: riskRes ? !riskRes.ok : baseRiskFailed.current,
+    }));
+    setOutcomesAll(outcomesRes.data?.outcomes || []);
+    setDemographicsAll(demoRes.data?.demographics || []);
     setStatusSummary(statusRes.data?.summary || null);
     setTsrData(tsrRes.data || null);
     setCfrData(cfrRes.data || null);
+    setRiskForYear(riskRes ? { year: f.year, rows: riskRes.data?.choropleth || [] } : null);
+    setScopedKey(key);
+    return [outcomesRes, demoRes, statusRes, tsrRes, cfrRes].some((r) => r.ok);
+  }, [settle]);
+
+  const loadAll = useCallback(async () => {
+    setError(null);
+    // Settle every request independently; nothing here can reject.
+    const [monthlyRes, forecastsRes, alertsRes, riskRes, pipelineRes, freshRes, scopedOk] =
+      await Promise.all([
+        settle('/api/tb/dashboard/monthly'),
+        settle('/api/tb/forecasts'),
+        // Recent Alerts shows unresolved ALERTS only — not notifications
+        // (e.g. "Forecast Generated") and not already-resolved alerts. The
+        // response's pagination.total is the true unresolved count; the
+        // rows are the newest ones (enough to scope by barangay on the client).
+        settle('/api/tb/alerts?type=alert&status=unread&limit=100'),
+        settle('/api/tb/gis/choropleth'),
+        settle('/api/tb/pipeline/status'),
+        settle('/api/tb/data-freshness'),
+        loadScoped(filtersRef.current),
+      ]);
+
+    baseRiskFailed.current = !riskRes.ok;
+    setFailed((prev) => ({
+      ...prev,
+      monthly: !monthlyRes.ok,
+      forecasts: !forecastsRes.ok,
+      alerts: !alertsRes.ok,
+      risk: filtersRef.current.year ? prev.risk : !riskRes.ok,
+      pipeline: !pipelineRes.ok,
+      freshness: !freshRes.ok,
+    }));
+
+    setMonthlyAll(monthlyRes.data?.monthly || []);
+    setForecastsAll(forecastsRes.data?.forecasts || []);
+    setAlertsAll(alertsRes.data?.alerts || []);
+    setAlertsTotal(alertsRes.data?.pagination?.total ?? null);
+    setRiskAll(riskRes.data?.choropleth || []);
+    setPipelineStatus(pipelineRes.data?.latest_run || null);
     setFreshness(freshRes.data || null);
 
     // Only a total outage is a page-level error: if nothing at all loaded
     // there is genuinely nothing to show. A partial failure keeps the page
-    // and degrades the affected cards individually.
-    const anyOk = [monthlyRes, outcomesRes, forecastsRes, riskRes,
-      alertsRes, demoRes, statusRes, tsrRes, cfrRes, freshRes].some((r) => r.ok);
+    // and degrades the affected cards individually. (scopedOk is null when a newer
+    // filter change superseded the request — not an outage.)
+    const anyOk = [monthlyRes, forecastsRes, riskRes, alertsRes, freshRes].some((r) => r.ok)
+      || scopedOk !== false;
     if (!anyOk) {
       setError('Dashboard data could not be retrieved. Please try again.');
     }
     setLoading(false);
-  }, []);
+  }, [settle, loadScoped]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     loadAll();
     handleGenerateDashboardInsight();
   }, [loadAll, handleGenerateDashboardInsight]);
+
+  // A filter change re-requests only the server-side figures. The first run is skipped:
+  // loadAll already requested them for the starting filter.
+  useEffect(() => {
+    if (requestedKey.current === filterKey) return;
+    loadScoped(filtersRef.current);
+  }, [filterKey, loadScoped]);
+
+  /* ── Scoped views of the data (what the cards and KPIs below actually read) ── */
+  const monthlyData = useMemo(
+    () => scopeMonthly(monthlyAll, { year: filters.year, barangays: scopeNames }),
+    [monthlyAll, filters.year, scopeNames]
+  );
+  const riskSource = filters.year && riskForYear?.year === filters.year ? riskForYear.rows : riskAll;
+  const riskData = useMemo(() => scopeByBarangay(riskSource, scopeNames, 'name'), [riskSource, scopeNames]);
+  const forecastsData = useMemo(() => scopeByBarangay(forecastsAll, scopeNames), [forecastsAll, scopeNames]);
+  const outcomesData = useMemo(() => scopeByBarangay(outcomesAll, scopeNames), [outcomesAll, scopeNames]);
+  const demographicsData = useMemo(() => scopeByBarangay(demographicsAll, scopeNames), [demographicsAll, scopeNames]);
+  const alertsData = useMemo(() => scopeByBarangay(alertsAll, scopeNames), [alertsAll, scopeNames]);
+  const highlightSet = useMemo(
+    () => (scopeNames ? new Set(scopeNames.map(normName)) : null),
+    [scopeNames]
+  );
+
+  // Suggestions come from the UNFILTERED data so they do not change as filters are applied.
+  const recommendations = useMemo(
+    () => recommendFilters({ monthly: monthlyAll, risk: riskAll, forecasts: forecastsAll }),
+    [monthlyAll, riskAll, forecastsAll]
+  );
+  const yearOptions = useMemo(() => dataYears(monthlyAll), [monthlyAll]);
+  const barangayOptions = useMemo(() => barangayNames(monthlyAll, riskAll), [monthlyAll, riskAll]);
+  const updatingFilters = scopedKey !== null && scopedKey !== filterKey;
+
+  const toggleRecommendation = useCallback((rec) => {
+    setFilters((f) => (rec.kind === 'year'
+      ? { ...f, year: f.year === rec.year ? '' : rec.year }
+      : {
+        ...f,
+        scope: f.scope?.key === rec.key
+          ? null
+          : { mode: 'preset', key: rec.key, label: rec.label, barangays: rec.barangays },
+      }));
+  }, []);
+  const changeYear = useCallback((year) => setFilters((f) => ({ ...f, year })), []);
+  const changeBarangay = useCallback((name) => {
+    if (name === '__group__') return;
+    setFilters((f) => ({
+      ...f,
+      scope: name ? { mode: 'manual', key: 'manual', label: name, barangays: [name] } : null,
+    }));
+  }, []);
+  const clearFilters = useCallback(() => setFilters({ year: '', scope: null }), []);
 
   /* ── Refresh handler ──
    * Refresh means exactly one thing: refetch the Dashboard's data (all GETs).
@@ -520,91 +623,15 @@ export default function DashboardPage() {
     return riskData.filter((r) => (r.risk_class || '').toLowerCase() === 'high').length;
   }, [riskData, hasRiskData]);
 
-  /* ── City-wide classification breakdown ──
-   * /gis/choropleth LEFT JOINs every reference barangay and COALESCEs a
-   * missing classification to 'No Data', so `totalBarangays` is the real
-   * number of barangays in the snapshot — not a hardcoded 30 — while
-   * `noAssessmentCount` keeps saying plainly how many were never assessed.
-   * Canonical classes are High/Medium/Low; 'Medium' is shown as "Moderate"
-   * here exactly as on the GIS page. */
-  const riskCounts = useMemo(() => {
-    const counts = { high: 0, moderate: 0, low: 0, noData: 0 };
-    riskData.forEach((r) => {
-      const rc = (r.risk_class || '').trim().toLowerCase();
-      if (rc === 'high') counts.high += 1;
-      else if (rc === 'medium' || rc === 'moderate') counts.moderate += 1;
-      else if (rc === 'low') counts.low += 1;
-      else counts.noData += 1;
-    });
-    return counts;
-  }, [riskData]);
-  const totalBarangays = riskData.length || 30;
-  const noAssessmentCount = riskCounts.noData;
+  const totalBarangays = scopeNames ? scopeNames.length : (riskData.length || 30);
 
   /* ── 5. Forecasted Cases ── */
-  const forecastSummary = useMemo(() => {
-    if (!forecastsData.length) return { total: 0, period: '', growthRate: 0, riskLevel: 'N/A', tier: null, tierLabel: null, periodCount: 0 };
-    const latestPeriod = forecastsData.reduce((max, r) => (r.period > max ? r.period : max), '');
-    if (!latestPeriod) return { total: 0, period: '', growthRate: 0, riskLevel: 'N/A', tier: null, tierLabel: null, periodCount: 0 };
-    const latest = forecastsData.filter((r) => r.period === latestPeriod);
-    // Sum the raw per-barangay values and round ONCE, matching the Dashboard
-    // NLG (dashboardInsight.js). Rounding each barangay first and then summing
-    // accumulates the per-row rounding error, which made this KPI disagree
-    // with the forecast figure in the insight text on the same page (427 vs
-    // 429 on the live dataset).
-    const total = Math.round(latest.reduce((s, r) => s + Number(r.forecasted_count || 0), 0));
-
-    // Growth rate: first forecast value vs historical monthly average (aligned with Forecasting page)
-    const byMonth = {};
-    monthlyData.forEach((r) => {
-      if (!byMonth[r.month]) byMonth[r.month] = 0;
-      byMonth[r.month] += Number(r.case_count || 0);
-    });
-    const historicalMonths = Object.keys(byMonth).length || 1;
-    const historicalTotal = Object.values(byMonth).reduce((s, v) => s + v, 0);
-    const monthlyAvg = historicalTotal / historicalMonths;
-    const firstForecast = latest.length > 0 ? latest.reduce((s, r) => s + Number(r.forecasted_count || 0), 0) : 0;
-    const baseline = monthlyAvg || 1;
-    const growthRate = ((firstForecast - baseline) / baseline) * 100;
-
-    // Predominant Random Forest risk class among the barangays in this
-    // forecast period. This is NOT produced by the forecast: risk_class on a
-    // model_predictions row is a denormalized copy of the RF classification
-    // in barangay_risk_scores (see storeResults in scoring.js). It is
-    // labelled explicitly as an RF class in the card so the forecast is never
-    // read as having assigned it. Barangays with no classification are
-    // counted as such instead of defaulting to 'Low'.
-    const riskCounts = {};
-    latest.forEach((r) => {
-      const rc = r.risk_class || 'No Data';
-      riskCounts[rc] = (riskCounts[rc] || 0) + 1;
-    });
-    let majorityRisk = 'No Data';
-    let maxCount = 0;
-    for (const [cls, cnt] of Object.entries(riskCounts)) {
-      if (cnt > maxCount) { maxCount = cnt; majorityRisk = cls; }
-    }
-
-    // Forecast tier, from the per-row `method` the pipeline persisted. The
-    // established convention (same as the Forecasting page): 'arima' is an
-    // ARIMA Forecast, 'insufficient_data' means no forecast was produced, and
-    // anything else is a Baseline Forecast — never relabelled ARIMA.
-    const methods = [...new Set(latest.map((r) => r.method).filter(Boolean))];
-    const usable = latest.filter((r) => r.method !== 'insufficient_data');
-    const tier = methods.length === 0
-      ? null
-      : usable.length === 0
-        ? 'insufficient_data'
-        : usable.some((r) => r.method && r.method !== 'arima') ? 'baseline' : 'arima';
-    const tierLabel = tier === 'insufficient_data'
-      ? 'Insufficient Historical Data'
-      : tier === 'baseline' ? 'Baseline Forecast'
-      : tier === 'arima' ? 'ARIMA Forecast' : null;
-
-    const periodCount = new Set(forecastsData.map((r) => r.period).filter(Boolean)).size;
-    const periodLabel = new Date(latestPeriod).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-    return { total, period: periodLabel, growthRate, riskLevel: majorityRisk, tier, tierLabel, periodCount };
-  }, [forecastsData, monthlyData]);
+  // Latest month with recorded cases (unfiltered): the forecast month is the first one after it.
+  const anchorMonth = useMemo(() => monthlyAll.reduce((max, r) => (r.month > max ? r.month : max), ''), [monthlyAll]);
+  const forecastSummary = useMemo(() => summarizeForecast(forecastsData, monthlyData, anchorMonth), [forecastsData, monthlyData, anchorMonth]);
+  const forecastAvailable = Boolean(forecastSummary.period && forecastSummary.tier !== 'insufficient_data');
+  // The overall insight panel always describes the whole city, whatever filter is applied.
+  const forecastSummaryCity = useMemo(() => summarizeForecast(forecastsAll, monthlyAll, anchorMonth), [forecastsAll, monthlyAll, anchorMonth]);
 
   /* ── Forecast mini chart data (actual vs projected) ── */
   const forecastChartData = useMemo(() => {
@@ -692,6 +719,13 @@ export default function DashboardPage() {
       return '';
     }
   }, [monthOverMonth.month]);
+
+  const cityMonitoringPeriod = useMemo(() => {
+    const months = monthlyAll.map((r) => r.month).filter(Boolean).sort();
+    const last = months[months.length - 1];
+    if (!last) return '';
+    try { return new Date(last).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); } catch { return ''; }
+  }, [monthlyAll]);
 
   const sexData = useMemo(() => {
     const totals = { Male: 0, Female: 0 };
@@ -801,32 +835,7 @@ export default function DashboardPage() {
    *
    * Barangays with no classification are shown as "No Assessment", never as
    * Low Risk, and sort last. */
-  const topBarangays = useMemo(() => {
-    if (!monthlyData.length && !riskData.length) return [];
-    const byBarangay = {};
-    monthlyData.forEach((r) => {
-      if (!r.barangay_name) return;
-      if (!byBarangay[r.barangay_name]) byBarangay[r.barangay_name] = { name: r.barangay_name, cases: 0 };
-      byBarangay[r.barangay_name].cases += Number(r.case_count || 0);
-    });
-    riskData.forEach((r) => {
-      if (!byBarangay[r.name]) byBarangay[r.name] = { name: r.name, cases: 0 };
-      const cls = r.risk_class && (r.risk_class || '').toLowerCase() !== 'no data'
-        ? r.risk_class
-        : null;
-      byBarangay[r.name].risk = cls;
-      byBarangay[r.name].score = Number(r.risk_score || 0);
-    });
-    return Object.values(byBarangay)
-      .sort((a, b) => {
-        const rpA = RISK_PRIORITY[a.risk] ?? 0;
-        const rpB = RISK_PRIORITY[b.risk] ?? 0;
-        if (rpB !== rpA) return rpB - rpA;
-        return (b.score || b.cases) - (a.score || a.cases);
-      })
-      .slice(0, 5)
-      .map((b, i) => ({ rank: i + 1, ...b }));
-  }, [monthlyData, riskData]);
+  const topBarangays = useMemo(() => topBarangayRanking(monthlyData, riskData, 5), [monthlyData, riskData]);
 
   /* ── Treatment Outcomes chart data ── */
   const outcomeChart = useMemo(() => {
@@ -890,9 +899,13 @@ export default function DashboardPage() {
         message: a.message || '',
         barangay: a.barangay_name || '',
         time: timeLabel,
+        createdAt: a.created_at || null,
       };
     });
   }, [alertsData, now]);
+
+  // Unresolved alerts inside the current filter (all of them when no barangay filter is on).
+  const alertsCount = scopeNames ? alertsData.length : alertsTotal;
 
   /* ── Freshness timestamps ──
    * Last Synced and Last Model Run are DIFFERENT things and are kept apart.
@@ -1003,14 +1016,18 @@ export default function DashboardPage() {
 
 
       {/* ─── Empty State ─── */}
-      {totalCases.total === 0 && forecastsData.length === 0 && alertsData.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-24 gap-4">
-          <div className="w-20 h-20 rounded-2xl flex items-center justify-center" style={{ background: '#F1F5F9' }}>
-            <i className="ri-database-2-line text-4xl" style={{ color: '#CBD5E1' }} />
-          </div>
+      {monthlyAll.length === 0 && forecastsAll.length === 0 && alertsAll.length === 0 ? (
+        <div className="flex flex-col items-center justify-center border border-[#E2E8F0] bg-white px-6 py-20 text-center">
           <div className="text-center">
-            <p className="text-sm font-semibold" style={{ color: '#475569' }}>No Data Available</p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>No TB records found in the database. Import TB records to populate the dashboard.</p>
+            <p className="text-sm font-semibold text-[#0F2D52]">{failed.monthly && failed.forecasts && failed.alerts ? 'Dashboard data could not be loaded' : 'No dashboard data yet'}</p>
+            <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-[#64748B]">
+              {failed.monthly && failed.forecasts && failed.alerts
+                ? 'Please try loading the dashboard again.'
+                : 'Import TB records to see trends, risk classifications, forecasts, and alerts here.'}
+            </p>
+            {failed.monthly && failed.forecasts && failed.alerts && (
+              <button type="button" onClick={handleRefresh} className="mt-4 text-xs font-semibold text-[#0F2D52] hover:underline">Retry</button>
+            )}
           </div>
         </div>
       ) : (
@@ -1029,7 +1046,7 @@ export default function DashboardPage() {
                   {failed.monthly ? 'Unavailable' : animatedTotalCases.toLocaleString()}
                 </p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
-                  {failed.monthly ? 'Could not be loaded' : `${totalCases.months} months recorded (all-time)`}
+                  {failed.monthly ? 'Could not be loaded' : `${totalCases.months} months recorded${filtersActive ? ' in this view' : ' (all-time)'}`}
                 </span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
@@ -1106,11 +1123,7 @@ export default function DashboardPage() {
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
-              {/* ── City Risk Classification ──
-                  The old "{high}/{assessed}" figure read as an unexplained
-                  ratio ("10 / 24"). The count is now spelled out in words and
-                  the snapshot's full class breakdown is shown alongside it, so
-                  High/Moderate/Low can be read together. */}
+              {/* City Risk Classification */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-alarm-warning-line text-sm" style={{ color: '#C4886A' }} />
@@ -1131,25 +1144,6 @@ export default function DashboardPage() {
                       ? 'No risk assessment available yet'
                       : `of ${totalBarangays} barangays classified as High Risk`}
                 </span>
-                {!failed.risk && highRiskCount != null && (
-                  <div className="mt-2 pt-2 space-y-1" style={{ borderTop: '1px solid #F1F5F9' }}>
-                    <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: '#64748B' }}>
-                      Assessment Period: <span style={{ color: '#0F2D52' }}>{riskYear ?? 'N/A'}</span>
-                    </p>
-                    <p className="text-[11px] font-medium leading-snug" style={{ color: '#475569' }}>
-                      High Risk: <strong style={{ color: '#EF4444' }}>{riskCounts.high}</strong>
-                      <span style={{ color: '#CBD5E1' }}> · </span>
-                      Moderate Risk: <strong style={{ color: '#F97316' }}>{riskCounts.moderate}</strong>
-                      <span style={{ color: '#CBD5E1' }}> · </span>
-                      Low Risk: <strong style={{ color: '#B45309' }}>{riskCounts.low}</strong>
-                    </p>
-                    {noAssessmentCount > 0 && (
-                      <p className="text-[10px] font-medium" style={{ color: '#B07070' }}>
-                        {noAssessmentCount} not assessed
-                      </p>
-                    )}
-                  </div>
-                )}
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
@@ -1165,7 +1159,7 @@ export default function DashboardPage() {
                     ? 'N/A'
                     : animatedForecasted.toLocaleString()}
                 </p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }} title={forecastSummary.methodNote || undefined}>
                   {failed.forecasts
                     ? 'Forecast could not be loaded'
                     : forecastSummary.tier === 'insufficient_data'
@@ -1177,6 +1171,24 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+
+          {/* ─── Recommended Filters ─── */}
+          <RecommendedFilters
+            recommendations={recommendations}
+            filters={filters}
+            yearOptions={yearOptions}
+            barangayOptions={barangayOptions}
+            view={{
+              cases: totalCases.total,
+              barangays: new Set(monthlyData.map((r) => r.barangay_name)).size,
+              totalBarangays: barangayOptions.length || 30,
+            }}
+            updating={updatingFilters}
+            onToggle={toggleRecommendation}
+            onYearChange={changeYear}
+            onBarangayChange={changeBarangay}
+            onClear={clearFilters}
+          />
 
           {/* ─── Welcome + NLG Overall Insights Section ─── */}
           <DashboardWelcomeInsightsSection
@@ -1194,81 +1206,71 @@ export default function DashboardPage() {
             insightLoading={dashboardInsightLoading}
             insightError={dashboardInsightError}
             onRetryInsight={handleGenerateDashboardInsight}
-            monitoringPeriod={monitoringPeriodLabel}
-            forecastSummary={forecastSummary}
+            monitoringPeriod={cityMonitoringPeriod}
+            forecastSummary={forecastSummaryCity}
           />
 
           {/* ─── 4. TB Cases Trend + 5. Barangay Risk Overview ─── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* TB Cases Trend */}
             <SectionCard
-              title="TB Cases Trend"
+              title="TB case trend"
               insight={trendInsight(trendChartData, { valueKey: 'cases' })}
-              iconColor="#6B7FA3"
               description="Monthly tuberculosis cases based on recorded TB data."
-              action="View Analytics"
+              action="View analytics"
               actionTo="/analytics"
             >
               {failed.monthly ? (
-                <div className="flex flex-col items-center justify-center py-16 gap-3">
-                  <i className="ri-cloud-off-line text-2xl" style={{ color: '#B07070' }} />
-                  <p className="text-xs" style={{ color: '#B07070' }}>Trend data could not be loaded.</p>
-                </div>
+                <p className="py-14 text-center text-xs text-[#991B1B]">Trend data could not be loaded.</p>
               ) : trendChartData.length > 0 ? (
-                <div className="w-full" style={{ height: 300 }}>
+                <div className="w-full">
+                  <div className="h-[260px] w-full" role="img" aria-label="Monthly reported TB cases line chart">
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={trendChartData} margin={{ top: 10, right: 15, left: -10, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#2563EB" stopOpacity={0.08} />
-                          <stop offset="100%" stopColor="#2563EB" stopOpacity={0.01} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
-                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={6} />
-                      <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={40} tickMargin={4} />
+                    <LineChart data={trendChartData} margin={{ top: 10, right: 15, left: 0, bottom: 0 }}>
+                      <CartesianGrid vertical={false} stroke="#E8EDF2" />
+                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748B' }} axisLine={false} tickLine={false} tickMargin={8} minTickGap={18} />
+                      <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#64748B' }} axisLine={false} tickLine={false} width={42} tickMargin={4} />
                       <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#E2E8F0', strokeWidth: 1 }} />
-                      <Area type="monotone" dataKey="cases" stroke="#2563EB" strokeWidth={2.5} fill="url(#trendGrad)" dot={{ fill: '#2563EB', r: 3.5, strokeWidth: 2, stroke: '#ffffff' }} activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }} name="Cases" connectNulls={false} />
-                    </AreaChart>
+                      <Line type="monotone" dataKey="cases" stroke="#2E6FAF" strokeWidth={2} dot={{ r: 2.5, fill: '#2E6FAF', strokeWidth: 0 }} activeDot={{ r: 4, strokeWidth: 2, stroke: '#ffffff' }} name="Cases" connectNulls={false} isAnimationActive={false} />
+                    </LineChart>
                   </ResponsiveContainer>
+                  </div>
                   {missingMonthCount > 0 && (
-                    <p className="text-[10px] mt-1" style={{ color: '#94A3B8' }}>
+                    <p className="mt-2 text-[11px] text-[#64748B]">
                       {missingMonthCount} month{missingMonthCount === 1 ? '' : 's'} in this span
                       have no reported records and are shown as a gap, not as zero cases.
                     </p>
                   )}
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-16 gap-3">
-                  <i className="ri-line-chart-line text-2xl" style={{ color: '#CBD5E1' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>No trend data available.</p>
-                </div>
+                <p className="py-14 text-center text-xs text-[#64748B]">No trend data is available for this view.</p>
               )}
             </SectionCard>
 
             {/* Barangay Risk Overview — GIS Map */}
             <SectionCard
-              title="Barangay Risk Overview"
+              title="Barangay risk overview"
               insight={riskInsight(riskData)}
-              iconColor="#EF4444"
               description="Current risk classification across Pasig City barangays."
-              action="View GIS Hotspots"
+              action="View GIS map"
               actionTo="/gis-map"
             >
-              <div className="relative rounded-lg overflow-hidden">
-                <MiniGisMap refreshKey={refreshCount} />
+              <div className="relative overflow-hidden border border-[#E2E8F0]">
+                <MiniGisMap refreshKey={refreshCount} highlight={highlightSet} />
               </div>
               {/* Risk legend */}
-              <div className="flex items-center justify-center gap-4 mt-3">
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-[#64748B]">
+                <span className="font-medium text-[#475569]">Risk level:</span>
                 {[
                   { level: 'Low', color: GIS_RISK_COLORS.Low },
                   { level: 'Moderate', color: GIS_RISK_COLORS.Medium },
                   { level: 'High', color: GIS_RISK_COLORS.High },
+                  { level: 'No assessment', color: GIS_RISK_COLORS['No Data'] },
                 ].map((r) => (
-                  <div key={r.level} className="flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: '#64748B' }}>
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: r.color }} />
+                  <span key={r.level} className="inline-flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5" style={{ background: r.color }} aria-hidden="true" />
                     {r.level}
-                  </div>
+                  </span>
                 ))}
               </div>
             </SectionCard>
@@ -1278,36 +1280,32 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Top High-Risk Barangays */}
             <SectionCard
-              title="Top High-Risk Barangays"
+              title="Priority barangays"
               insight={topBarangays[0]
-                ? `${topBarangays[0].name} ranks first (${topBarangays[0].risk ? `${topBarangays[0].risk} risk` : 'no risk assessment yet'}, ${Number(topBarangays[0].cases || 0).toLocaleString('en-US')} recorded cases). Barangays are ordered by risk level first, then by case burden.`
+                ? `${topBarangays[0].name} ranks first (${topBarangays[0].risk ? `${topBarangays[0].risk} risk` : 'no risk assessment yet'}, ${Number(topBarangays[0].cases || 0).toLocaleString('en-US')} recorded cases). Barangays are ordered by risk level first, then by recorded cases.`
                 : null}
-              iconColor="#6B7280"
-              description="Barangays with the highest recorded TB burden and risk classification."
-              action="View GIS Hotspots"
+              description="Ordered by risk level, then by recorded TB cases."
+              action="View GIS map"
               actionTo="/gis-map"
             >
               {failed.risk && failed.monthly ? (
-                <div className="flex flex-col items-center justify-center py-16 gap-2">
-                  <i className="ri-cloud-off-line text-xl" style={{ color: '#B07070' }} />
-                  <p className="text-xs" style={{ color: '#B07070' }}>Barangay risk data could not be loaded.</p>
-                </div>
+                <p className="py-14 text-center text-xs text-[#991B1B]">Barangay risk data could not be loaded.</p>
               ) : topBarangays.length > 0 ? (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm" style={{ minWidth: 380 }}>
                     <thead>
-                      <tr style={{ borderBottom: '1px solid #E2E8F0', background: '#0F2D52' }}>
+                      <tr className="bg-[#0F2D52]">
                         {['Rank', 'Barangay', 'TB Cases', 'Risk Level'].map((h) => (
-                          <th key={h} className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#ffffff' }}>{h}</th>
+                          <th key={h} scope="col" className={`px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-white ${h === 'TB Cases' ? 'text-right' : 'text-left'}`}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {topBarangays.map((row, i) => (
-                        <tr key={row.name} style={{ borderBottom: '1px solid #F1F5F9', background: i % 2 === 0 ? '#ffffff' : '#FAFBFC' }}>
-                          <td className="px-4 py-3 text-xs font-bold" style={{ color: '#0F2D52' }}>{row.rank}</td>
-                          <td className="px-4 py-3 text-xs font-semibold" style={{ color: '#1E293B' }}>{row.name}</td>
-                          <td className="px-4 py-3 text-xs font-bold tabular-nums" style={{ color: '#1E293B' }}>{row.cases.toLocaleString()}</td>
+                      {topBarangays.map((row) => (
+                        <tr key={row.name} className="border-b border-[#E8EDF2] last:border-0">
+                          <td className="px-4 py-3 text-xs tabular-nums text-[#64748B]">{row.rank}</td>
+                          <td className="px-4 py-3 text-xs font-medium text-[#0F2D52]">{row.name}</td>
+                          <td className="px-4 py-3 text-right text-xs tabular-nums text-[#334155]">{row.cases.toLocaleString()}</td>
                           <td className="px-4 py-3"><RiskBadge risk={row.risk || 'No Assessment'} /></td>
                         </tr>
                       ))}
@@ -1315,25 +1313,18 @@ export default function DashboardPage() {
                   </table>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-16 gap-2">
-                  <i className="ri-list-ordered text-xl" style={{ color: '#CBD5E1' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>No barangay risk data available.</p>
-                </div>
+                <p className="py-14 text-center text-xs text-[#64748B]">No barangay risk data is available for this view.</p>
               )}
             </SectionCard>
 
             {/* Age Group Distribution */}
             <SectionCard
-              title="Demographics — Age Distribution"
+              title="Age distribution"
               insight={shareInsight(ageData, { nameKey: 'age_group', valueKey: 'total', noun: 'age group' })}
-              iconColor="#6B7280"
               description="TB cases by age group."
             >
               {failed.demographics ? (
-                <div className="flex flex-col items-center justify-center py-16 gap-2">
-                  <i className="ri-cloud-off-line text-xl" style={{ color: '#B07070' }} />
-                  <p className="text-xs" style={{ color: '#B07070' }}>Demographic data could not be loaded.</p>
-                </div>
+                <p className="py-14 text-center text-xs text-[#991B1B]">Age data could not be loaded.</p>
               ) : ageData.length > 0 ? (
                 <div className="space-y-3 pt-1">
                   {(() => {
@@ -1342,21 +1333,18 @@ export default function DashboardPage() {
                       const pct = ((item.total / maxTotal) * 100).toFixed(0);
                       return (
                         <div key={item.age_group} className="flex items-center gap-3">
-                          <span className="text-[11px] font-semibold w-10 shrink-0" style={{ color: '#64748B' }}>{item.age_group}</span>
-                          <div className="flex-1 h-5 rounded-md" style={{ background: '#E2E8F0' }}>
-                            <div className="h-full rounded-md transition-all" style={{ width: `${pct}%`, background: '#6B7280' }} />
+                          <span className="w-12 shrink-0 text-[11px] font-medium text-[#475569]">{item.age_group}</span>
+                          <div className="h-3 flex-1 bg-[#E8EDF2]" role="img" aria-label={`${item.age_group}: ${item.total.toLocaleString()} cases`}>
+                            <div className="h-full rounded-r-md bg-[#2E6FAF]" style={{ width: `${pct}%` }} />
                           </div>
-                          <span className="text-[11px] font-bold w-10 text-right shrink-0" style={{ color: '#0F2D52' }}>{item.total.toLocaleString()}</span>
+                          <span className="w-12 shrink-0 text-right text-[11px] font-semibold tabular-nums text-[#0F2D52]">{item.total.toLocaleString()}</span>
                         </div>
                       );
                     });
                   })()}
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-16 gap-2">
-                  <i className="ri-group-line text-xl" style={{ color: '#CBD5E1' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>No age data available.</p>
-                </div>
+                <p className="py-14 text-center text-xs text-[#64748B]">No age data is available for this view.</p>
               )}
             </SectionCard>
           </div>
@@ -1365,19 +1353,15 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Sex Distribution */}
             <SectionCard
-              title="Demographics — Sex Distribution"
+              title="Sex distribution"
               insight={shareInsight(Object.entries(sexData).map(([name, value]) => ({ name, value })), { noun: 'sex' })}
-              iconColor="#3B82F6"
               description="Male vs female TB case distribution."
             >
               {failed.demographics ? (
-                <div className="flex flex-col items-center justify-center py-16 gap-2">
-                  <i className="ri-cloud-off-line text-xl" style={{ color: '#B07070' }} />
-                  <p className="text-xs" style={{ color: '#B07070' }}>Demographic data could not be loaded.</p>
-                </div>
+                <p className="py-14 text-center text-xs text-[#991B1B]">Sex distribution could not be loaded.</p>
               ) : (sexData.Male + sexData.Female) > 0 ? (
-                <div className="flex items-center justify-center gap-6">
-                  <div className="w-[160px] h-[160px]">
+                <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-4">
+                  <div className="relative h-[160px] w-[160px] shrink-0" role="img" aria-label={`Male: ${sexData.Male.toLocaleString()} cases; Female: ${sexData.Female.toLocaleString()} cases`}>
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
@@ -1389,49 +1373,55 @@ export default function DashboardPage() {
                           cy="50%"
                           innerRadius={40}
                           outerRadius={70}
-                          paddingAngle={3}
+                          paddingAngle={1}
                           dataKey="value"
+                          isAnimationActive={false}
                         >
-                          <Cell fill="#3B82F6" />
-                           <Cell fill="#B48EAD" />
+                          <Cell fill="#2E6FAF" />
+                          <Cell fill="#94A3B8" />
                         </Pie>
                         <Tooltip formatter={(value) => value.toLocaleString()} />
                       </PieChart>
                     </ResponsiveContainer>
+                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                      <span className="text-lg font-semibold tabular-nums text-[#0F2D52]">{(sexData.Male + sexData.Female).toLocaleString()}</span>
+                      <span className="text-[10px] text-[#64748B]">cases</span>
+                    </div>
                   </div>
-                  <div className="space-y-2">
+                  <div className="min-w-[170px] space-y-2">
                     {[
-                      { label: 'Male', value: sexData.Male, color: '#3B82F6' },
-                       { label: 'Female', value: sexData.Female, color: '#B48EAD' },
+                      { label: 'Male', value: sexData.Male, color: '#2E6FAF' },
+                      { label: 'Female', value: sexData.Female, color: '#94A3B8' },
                     ].map((item) => {
                       const total = sexData.Male + sexData.Female;
                       const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : 0;
                       return (
-                        <div key={item.label} className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: item.color }} />
-                          <span className="text-xs font-semibold" style={{ color: '#475569' }}>{item.label}</span>
-                          <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>{item.value.toLocaleString()}</span>
-                          <span className="text-[10px]" style={{ color: '#94A3B8' }}>({pct}%)</span>
+                        <div key={item.label} className="flex items-center gap-2 text-xs">
+                          <span className="h-2.5 w-2.5 shrink-0" style={{ background: item.color }} aria-hidden="true" />
+                          <span className="flex-1 text-[#475569]">{item.label}</span>
+                          <span className="font-semibold tabular-nums text-[#0F2D52]">{item.value.toLocaleString()}</span>
+                          <span className="w-11 text-right tabular-nums text-[#64748B]">{pct}%</span>
                         </div>
                       );
                     })}
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-16 gap-2">
-                  <i className="ri-men-line text-xl" style={{ color: '#CBD5E1' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>No demographic data available.</p>
-                </div>
+                <p className="py-14 text-center text-xs text-[#64748B]">No sex distribution data is available for this view.</p>
               )}
             </SectionCard>
 
             {/* Treatment Outcomes */}
             <SectionCard
-              title="Treatment Outcomes & Case Status"
-              insight={outcomeInsight(outcomeChartData, { nameKey: 'outcome', valueKey: 'count' })}
-              iconColor="#10B981"
+              title="Treatment outcomes and case status"
+              insight={outcomeInsight(outcomeChartData, {
+                nameKey: 'outcome',
+                valueKey: 'count',
+                scope: filtersActive ? 'recorded outcomes in this view' : 'recorded outcomes across all years',
+                note: 'The Treatment Success Rate above is measured on a single treatment-start year, so the two figures differ.',
+              })}
               description="Final treatment outcomes, with cases still diagnosed or on treatment shown separately."
-              action="View Analytics"
+              action="View analytics"
               actionTo="/analytics"
             >
               {failed.outcomes ? (
@@ -1444,6 +1434,7 @@ export default function DashboardPage() {
                   outcomes={Object.fromEntries(outcomeChartData.map((e) => [e.outcome, e.count]))}
                   diagnosed={statusSummary?.diagnosed_count || 0}
                   onTreatment={statusSummary?.on_treatment_count || 0}
+                  plain
                 />
               )}
               {outcomeChart.excluded > 0 && (
@@ -1459,168 +1450,103 @@ export default function DashboardPage() {
           {/* ─── 8. Forecasting Summary + Recent Alerts ─── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Forecasting Summary */}
-            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-              {/* Header */}
-              <div className="flex items-center justify-between px-5 py-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-1 h-8 rounded-full" style={{ background: '#0D9488' }} />
-                  <div>
-                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Forecasting Summary</h3>
-                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>
-                      {forecastSummary.period
-                        ? `Forecasted TB cases for ${forecastSummary.period}${
-                            forecastSummary.periodCount > 1 ? ` (latest of ${forecastSummary.periodCount} forecast periods)` : ''
-                          }`
-                        : 'Forecasted TB cases for the next forecast period'}
-                    </p>
+            <SectionCard
+              title="Forecast summary"
+              description={forecastAvailable ? `Next forecast period: ${forecastSummary.period}` : forecastSummary.tier === 'insufficient_data' ? 'Insufficient case history for a forecast.' : 'No forecast is available yet.'}
+              action="View forecast"
+              actionTo="/forecasting"
+            >
+              {failed.forecasts ? (
+                <p className="py-14 text-center text-xs text-[#991B1B]">Forecast data could not be loaded.</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[#E2E8F0] pb-4">
+                    <div>
+                      <p className="text-[11px] text-[#64748B]">Forecasted TB cases</p>
+                      <p className="mt-1 text-2xl font-semibold tabular-nums text-[#0F2D52]">{forecastAvailable ? forecastSummary.total.toLocaleString() : 'N/A'}</p>
+                    </div>
+                    {forecastSummary.periodCount > 1 && <p className="text-[11px] text-[#64748B]">First of {forecastSummary.periodCount} forecast months</p>}
                   </div>
-                </div>
-                <button
-                  onClick={() => navigate('/forecasting')}
-                  className="flex items-center gap-1 text-[11px] font-semibold transition hover:underline"
-                  style={{ color: '#0F2D52' }}
-                >
-                  View Full Forecast <i className="ri-arrow-right-s-line text-sm" />
-                </button>
-              </div>
-
-              {/* Content — same wrapper as SectionCard */}
-              <div className="px-5 pb-5">
-                {/* Key-value list */}
-                <div>
-                  {[
-                    { label: 'Forecasted Cases', value: forecastSummary.period ? forecastSummary.total.toLocaleString() : 'N/A', valueColor: '#0F2D52' },
-                    { label: 'Forecast Method', value: forecastSummary.tierLabel || 'N/A', valueColor: '#0F2D52' },
-                    { label: 'Growth Rate vs Historical Monthly Average', value: forecastSummary.period ? `${forecastSummary.growthRate >= 0 ? '+' : ''}${forecastSummary.growthRate.toFixed(1)}%` : 'N/A', valueColor: forecastSummary.growthRate >= 0 ? '#EF4444' : '#10B981' },
-                    // Labelled as the Random Forest class, because that is what it is:
-                    // a copy of the RF classification, not an output of the forecast.
-                    { label: 'Predominant RF Risk Class', value: forecastSummary.riskLevel === 'No Data' ? 'No Assessment' : forecastSummary.riskLevel, valueColor: RISK_COLORS[forecastSummary.riskLevel] || '#64748B' },
-                    { label: 'Forecast Period', value: forecastSummary.period || 'N/A', valueColor: '#0F2D52' },
-                  ].map((item, i, arr) => (
-                    <div
-                      key={item.label}
-                      className="flex items-center justify-between py-3.5"
-                      style={{ borderBottom: i < arr.length - 1 ? '1px solid #F1F5F9' : 'none' }}
-                    >
-                      <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>{item.label}</span>
-                      <span className="text-[13px] font-bold" style={{ color: item.valueColor }}>{item.value}</span>
+                  <dl className="grid grid-cols-1 gap-x-5 gap-y-3 py-4 sm:grid-cols-2">
+                    <div>
+                      <dt className="text-[11px] text-[#64748B]">Method</dt>
+                      <dd className="mt-0.5 text-xs font-medium text-[#0F2D52]">{forecastSummary.tierLabel || 'N/A'}</dd>
                     </div>
-                  ))}
-                </div>
-
-                {/* Mini trend chart */}
-                {forecastChartData.length > 1 && (
-                  <div className="mt-3">
-                    <div className="w-full" style={{ height: 140 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={forecastChartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-                          <defs>
-                            <linearGradient id="fcActualGrad" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor="#2563EB" stopOpacity={0.1} />
-                              <stop offset="100%" stopColor="#2563EB" stopOpacity={0} />
-                            </linearGradient>
-                            <linearGradient id="fcProjGrad" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor="#0D9488" stopOpacity={0.1} />
-                              <stop offset="100%" stopColor="#0D9488" stopOpacity={0} />
-                            </linearGradient>
-                          </defs>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
-                          <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
-                          <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={35} tickMargin={2} />
-                          <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#E2E8F0', strokeWidth: 1 }} />
-                          <Area type="monotone" dataKey="actual" stroke="#2563EB" strokeWidth={2} fill="url(#fcActualGrad)" dot={false} name="Actual" connectNulls={false} />
-                          <Area type="monotone" dataKey="projected" stroke="#0D9488" strokeWidth={2} strokeDasharray="5 3" fill="url(#fcProjGrad)" dot={false} name="Forecasted" connectNulls={false} />
-                        </AreaChart>
-                      </ResponsiveContainer>
+                    <div>
+                      <dt className="text-[11px] text-[#64748B]">Change vs monthly average</dt>
+                      <dd className="mt-0.5 text-xs font-medium tabular-nums" style={{ color: forecastAvailable ? (forecastSummary.growthRate > 0 ? '#991B1B' : '#047857') : '#0F2D52' }}>
+                        {forecastAvailable ? `${forecastSummary.growthRate >= 0 ? '+' : ''}${forecastSummary.growthRate.toFixed(1)}%` : 'N/A'}
+                      </dd>
                     </div>
-                    {/* Legend */}
-                    <div className="flex items-center justify-center gap-4 mt-1">
-                      <div className="flex items-center gap-1.5 text-[10px] font-medium" style={{ color: '#64748B' }}>
-                        <span className="w-3 h-0.5 rounded" style={{ background: '#2563EB' }} />
-                        Actual
+                    <div>
+                      <dt className="text-[11px] text-[#64748B]">Predominant barangay risk (RF)</dt>
+                      <dd className="mt-0.5 text-xs font-medium text-[#0F2D52]">{forecastSummary.riskLevel === 'No Data' ? 'No assessment' : forecastSummary.riskLevel}</dd>
+                    </div>
+                  </dl>
+                  {forecastSummary.methodNote && <p className="mb-3 text-[11px] leading-relaxed text-[#64748B]">{forecastSummary.methodNote}</p>}
+                  {forecastAvailable && forecastChartData.length > 1 && (
+                    <div className="border-t border-[#E2E8F0] pt-4">
+                      <p className="text-[11px] font-medium text-[#475569]">Reported and forecasted cases</p>
+                      <div className="mt-2 h-[170px] w-full" role="img" aria-label="Reported and forecasted TB cases line chart">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={forecastChartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                            <CartesianGrid vertical={false} stroke="#E8EDF2" />
+                            <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#64748B' }} axisLine={false} tickLine={false} tickMargin={6} minTickGap={14} />
+                            <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: '#64748B' }} axisLine={false} tickLine={false} width={40} tickMargin={4} />
+                            <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#E2E8F0', strokeWidth: 1 }} />
+                            <Line type="monotone" dataKey="actual" stroke="#2E6FAF" strokeWidth={2} dot={false} activeDot={{ r: 4 }} name="Reported" connectNulls={false} isAnimationActive={false} />
+                            <Line type="monotone" dataKey="projected" stroke="#0D9488" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#0D9488', strokeWidth: 0 }} activeDot={{ r: 4 }} name="Forecasted" connectNulls={false} isAnimationActive={false} />
+                          </LineChart>
+                        </ResponsiveContainer>
                       </div>
-                      <div className="flex items-center gap-1.5 text-[10px] font-medium" style={{ color: '#64748B' }}>
-                        <span className="w-3 h-[2px] rounded" style={{ background: 'repeating-linear-gradient(to right, #0D9488 0px, #0D9488 3px, transparent 3px, transparent 5px)' }} />
-                        Forecasted
+                      <div className="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-[#64748B]">
+                        <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 bg-[#2E6FAF]" aria-hidden="true" />Reported</span>
+                        <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 border-t-2 border-dashed border-[#0D9488]" aria-hidden="true" />Forecasted</span>
                       </div>
+                      <ChartInsight text={forecastInsight(forecastChartData, { actualKey: 'actual', forecastKey: 'projected', methodLabel: forecastSummary.tierLabel })} plain />
                     </div>
-                    <ChartInsight text={forecastInsight(forecastChartData, { actualKey: 'actual', forecastKey: 'projected', methodLabel: forecastSummary.tierLabel })} />
-                  </div>
-                )}
-              </div>
-            </div>
+                  )}
+                </>
+              )}
+            </SectionCard>
 
             {/* Recent Alerts */}
             <SectionCard
-              title="Recent Alerts"
-              iconColor="#EF4444"
+              title="Recent alerts"
               description={
                 failed.alerts
                   ? 'Alerts could not be loaded'
-                  : alertsTotal == null
+                  : alertsCount == null
                     ? 'Unresolved alerts'
-                    : `${alertsTotal} unresolved alert${alertsTotal !== 1 ? 's' : ''}${
-                        alertsTotal > recentAlerts.length ? ` — showing the latest ${recentAlerts.length}` : ''
-                      }`
+                    : `${alertsCount} unresolved alert${alertsCount !== 1 ? 's' : ''}${
+                        scopeNames && alertsTotal > alertsAll.length ? ` among the latest ${alertsAll.length}` : ''
+                      }${alertsCount > recentAlerts.length ? ` — showing the latest ${recentAlerts.length}` : ''}`
               }
-              action="View All Alerts"
+              action="View all alerts"
               actionTo="/alert"
             >
               {failed.alerts ? (
-                <div className="flex flex-col items-center justify-center py-16 gap-2">
-                  <i className="ri-cloud-off-line text-xl" style={{ color: '#B07070' }} />
-                  <p className="text-xs" style={{ color: '#B07070' }}>Alerts could not be loaded.</p>
-                </div>
+                <p className="py-14 text-center text-xs text-[#991B1B]">Alerts could not be loaded.</p>
               ) : recentAlerts.length > 0 ? (
-                <div>
-                  {recentAlerts.map((alert, idx) => {
-                    const isCritical = alert.isCritical;
-                    const badgeBg = isCritical ? 'rgba(153,27,27,0.08)' : 'rgba(146,64,14,0.08)';
-                    const badgeColor = isCritical ? '#991B1B' : '#92400E';
-                    return (
-                      <div
-                        key={alert.id || idx}
-                        className="flex items-center gap-4 py-3.5"
-                        style={{
-                          borderBottom: idx < recentAlerts.length - 1 ? '1px solid #F1F5F9' : 'none',
-                        }}
-                      >
-                        {/* Time */}
-                        <span className="text-[11px] font-semibold w-16 shrink-0 text-center" style={{ color: '#94A3B8' }}>
-                          {alert.time}
-                        </span>
-
-                        {/* Content */}
-                        <div className="flex-1 min-w-0">
-                          <span className="text-[12px] font-bold" style={{ color: '#1E293B' }}>
-                            {alert.barangay || alert.title}
-                          </span>
-                          {alert.message && (
-                            <span className="text-[12px] font-medium" style={{ color: '#64748B' }}> {alert.message}</span>
-                          )}
-                        </div>
-
-                        {/* Severity badge */}
-                        <span
-                          className="text-[10px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded shrink-0 inline-flex items-center gap-1"
-                          style={{ background: badgeBg, color: badgeColor }}
-                          title={`Severity: ${alert.severity}`}
-                        >
-                          <i
-                            className={isCritical ? 'ri-error-warning-fill' : 'ri-information-fill'}
-                            aria-hidden="true"
-                          />
-                          {alert.severity}
+                <ul className="divide-y divide-[#E8EDF2]">
+                  {recentAlerts.map((alert, idx) => (
+                    <li key={alert.id || idx} className="py-3 first:pt-0 last:pb-0">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-xs font-semibold leading-snug text-[#0F2D52]">{alert.title}</p>
+                        <time dateTime={alert.createdAt || undefined} className="shrink-0 text-[11px] text-[#64748B]">{alert.time}</time>
+                      </div>
+                      {alert.message && <p className="mt-1 text-xs leading-relaxed text-[#475569]">{alert.message}</p>}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                        {alert.barangay && <span className="text-[#64748B]">{alert.barangay}</span>}
+                        <span className="font-medium" style={{ color: alert.isCritical ? '#991B1B' : ['WARNING', 'MEDIUM'].includes(alert.severity) ? '#92400E' : '#64748B' }}>
+                          Severity: {alert.severity.charAt(0) + alert.severity.slice(1).toLowerCase()}
                         </span>
                       </div>
-                    );
-                  })}
-                </div>
+                    </li>
+                  ))}
+                </ul>
               ) : (
-                <div className="flex flex-col items-center justify-center py-16 gap-2">
-                  <i className="ri-alarm-line text-xl" style={{ color: '#CBD5E1' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>No alerts at this time.</p>
-                </div>
+                <p className="py-14 text-center text-xs text-[#64748B]">No unresolved alerts at this time.</p>
               )}
             </SectionCard>
           </div>

@@ -4,6 +4,7 @@ import API from '../api/axios';
 import timeAgo from '../utils/timeAgo';
 import { MODULE_LABELS, MODULE_ROUTES } from '../utils/alertConstants';
 import FilterSelect from '../components/FilterSelect';
+import ModalCloseButton from '../components/ModalCloseButton';
 import SkeletonBlock from '../../components/SkeletonBlock';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
@@ -26,6 +27,42 @@ const STATUS_STYLES = {
   unread: { label: 'Unread', color: '#0F2D52', bg: '#EFF6FF' },
   read: { label: 'Read', color: '#64748B', bg: '#F1F5F9' },
   resolved: { label: 'Resolved', color: '#047857', bg: '#ECFDF5' },
+};
+
+const alertTypeLabel = (value) => value
+  ? String(value).replace(/_/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase())
+  : null;
+
+const formatAlertPeriod = (value) => {
+  if (!value) return null;
+  if (/^\d{4}$/.test(String(value))) return String(value);
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? String(value)
+    : date.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'Asia/Manila' });
+};
+
+const formatAlertDateTime = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? String(value)
+    : `${date.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Manila' })} PHT`;
+};
+
+const affectedBarangays = (alert) => Array.isArray(alert?.metadata?.affected_barangays)
+  ? alert.metadata.affected_barangays.filter(Boolean)
+  : [];
+
+const alertCoverage = (alert, compact = false) => {
+  if (alert.barangay_name) return alert.barangay_name;
+  const names = affectedBarangays(alert);
+  if (names.length === 1) return names[0];
+  if (names.length > 1) return compact ? `${names[0]} +${names.length - 1} more` : `${names.length} barangays`;
+  if (['high_risk_hotspot', 'case_increase', 'forecast_exceeds_threshold'].includes(alert.alert_type)) return 'Affected barangays';
+  if (alert.type === 'notification') return 'Systemwide';
+  if (alert.alert_type === 'low_treatment_success') return 'Citywide';
+  return 'Not specified';
 };
 
 /* ─── Helper Components ──────────────────────────────────────────────── */
@@ -56,16 +93,23 @@ export default function Alert() {
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [resolveConfirm, setResolveConfirm] = useState(null);
+  const [resolveError, setResolveError] = useState('');
   const [evaluating, setEvaluating] = useState(false);
   const [resolvingId, setResolvingId] = useState(null);
   const [barangays, setBarangays] = useState([]);
   const abortRef = useRef(null);
+  const resolveCancelRef = useRef(null);
 
   /* ── Admin check ── */
   const isAdmin = useMemo(() => {
     const s = localStorage.getItem('user');
     return s ? JSON.parse(s)?.role === 'admin' : false;
   }, []);
+
+  const barangayOptions = useMemo(() => [...new Set([
+    ...barangays,
+    ...alerts.flatMap(alert => [alert.barangay_name, ...affectedBarangays(alert)]).filter(Boolean),
+  ])].sort((a, b) => a.localeCompare(b)), [barangays, alerts]);
 
   const handleTypeChange = useCallback((newType) => {
     setFilterType(newType);
@@ -105,9 +149,12 @@ export default function Alert() {
   }, [page, filterType, filterSeverity, filterStatus, filterBarangay, filterSource, filterDate]);
 
   useEffect(() => {
-    fetchAlerts();
+    const initialFetch = window.setTimeout(fetchAlerts, 0);
     window.addEventListener('focus', fetchAlerts);
-    return () => window.removeEventListener('focus', fetchAlerts);
+    return () => {
+      window.clearTimeout(initialFetch);
+      window.removeEventListener('focus', fetchAlerts);
+    };
   }, [fetchAlerts]);
 
   useEffect(() => {
@@ -123,15 +170,19 @@ export default function Alert() {
 
   useEffect(() => {
     if (!selectedAlert && !resolveConfirm) return;
+    if (resolveConfirm && resolvingId !== resolveConfirm.id) resolveCancelRef.current?.focus();
     const onKey = (e) => {
       if (e.key === 'Escape') {
-        if (resolveConfirm) setResolveConfirm(null);
-        else setSelectedAlert(null);
+        if (resolveConfirm) {
+          if (resolvingId !== resolveConfirm.id) setResolveConfirm(null);
+        } else {
+          setSelectedAlert(null);
+        }
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedAlert, resolveConfirm]);
+  }, [selectedAlert, resolveConfirm, resolvingId]);
 
   // Auto-evaluate alerts if stale (>24h since last evaluation)
   useEffect(() => {
@@ -207,6 +258,7 @@ export default function Alert() {
 
   const handleResolve = async (id) => {
     setResolvingId(id);
+    setResolveError('');
     try {
       const target = alerts.find(a => a.id === id) || selectedAlert;
       await API.put(`/api/tb/alerts/${id}/resolve`, { resolved_by: 'user' });
@@ -221,7 +273,7 @@ export default function Alert() {
       }
       setResolveConfirm(null);
     } catch {
-      // ignore
+      setResolveError('The alert could not be resolved. Please try again.');
     } finally {
       setResolvingId(null);
     }
@@ -325,7 +377,7 @@ export default function Alert() {
 
             <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 160 }}>
               <option value="">All Barangays</option>
-              {barangays.map(b => <option key={b} value={b}>{b}</option>)}
+              {barangayOptions.map(b => <option key={b} value={b}>{b}</option>)}
             </FilterSelect>
 
             <FilterSelect label="Source" value={filterSource} onChange={setFilterSource}>
@@ -487,59 +539,58 @@ export default function Alert() {
 
       {/* ─── Alert Table ─── */}
       {!loading && !error && alerts.length > 0 && (
-        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+        <div className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[920px] border-collapse text-left text-[11px]">
               <thead>
-                <tr style={{ background: '#0F2D52' }}>
-                  {['Severity', 'Title', 'Type', 'Source', 'Barangay', 'Date', 'Status', 'Action'].map(h => (
-                    <th key={h} className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#ffffff' }}>{h}</th>
+                <tr className="bg-[#0F2D52]">
+                  {['Severity', 'Title', 'Type', 'Source', 'Barangay / Scope', 'Date', 'Status', 'Action'].map((h, idx) => (
+                    <th key={h} scope="col" className={`${idx === 0 ? 'pl-6 pr-3' : 'px-3'} border-b border-[#1E40AF] py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap text-white ${idx < 7 ? 'border-r border-[#1E40AF]' : ''}`}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {alerts.map((a) => {
+                {alerts.map((a, idx) => {
                   const sev = SEVERITY_STYLES[a.severity] || SEVERITY_STYLES.info;
                   const statusStyle = STATUS_STYLES[a.status] || STATUS_STYLES.unread;
                   return (
-                    <tr key={a.id} style={{ borderBottom: '1px solid #F1F5F9', background: a.status === 'unread' ? 'rgba(15,45,82,0.02)' : '#ffffff' }}>
-                      <td className="px-4 py-3">
+                    <tr key={a.id} className={`border-b border-[#E2E8F0] transition-colors hover:bg-[#EDF4FB] ${a.status === 'unread' ? 'bg-[#EFF6FF]' : idx % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]'}`}>
+                      <td className="border-r border-[#E2E8F0] py-2 pl-6 pr-3">
                         <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: sev.textBg, color: sev.textColor }}>
                           <span className="w-1.5 h-1.5 rounded-full" style={{ background: sev.color }} />
                           {sev.label}
                         </span>
                       </td>
-                      <td className="px-4 py-3">
-                        <span className="text-xs font-semibold" style={{ color: '#0F2D52' }}>{a.title || a.alert_type || 'Alert'}</span>
-                        {a.message && <p className="text-[11px] mt-0.5 max-w-xs truncate" style={{ color: '#64748B' }}>{a.message}</p>}
+                      <td className="max-w-[300px] border-r border-[#E2E8F0] px-3 py-2">
+                        <span className="block truncate font-semibold text-[#0F2D52]" title={a.title || a.alert_type || 'Alert'}>{a.title || a.alert_type || 'Alert'}</span>
+                        {a.message && <p className="mt-0.5 truncate text-[#64748B]" title={a.message}>{a.message}</p>}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="border-r border-[#E2E8F0] px-3 py-2">
                         <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: a.type === 'notification' ? 'rgba(59,130,246,0.1)' : 'rgba(239,68,68,0.08)', color: a.type === 'notification' ? '#2563EB' : '#EF4444' }}>
                           {a.type === 'notification' ? 'Notification' : 'Alert'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-[11px] font-medium" style={{ color: '#64748B' }}>
+                      <td className="border-r border-[#E2E8F0] px-3 py-2 text-[#334155]">
                         {MODULE_LABELS[a.source_module] || a.source_module || '\u2014'}
                       </td>
-                      <td className="px-4 py-3 text-[11px] font-medium" style={{ color: '#64748B' }}>
-                        {a.barangay_name || '\u2014'}
+                      <td className="border-r border-[#E2E8F0] px-3 py-2 text-[#334155]">
+                        <span title={affectedBarangays(a).join(', ') || undefined}>{alertCoverage(a, true)}</span>
                       </td>
-                      <td className="px-4 py-3 text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+                      <td className="whitespace-nowrap border-r border-[#E2E8F0] px-3 py-2 text-[#64748B]" title={a.created_at ? new Date(a.created_at).toLocaleString() : undefined}>
                         {timeAgo(a.created_at)}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="border-r border-[#E2E8F0] px-3 py-2">
                         <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: statusStyle.bg, color: statusStyle.color }}>
                           {statusStyle.label}
                         </span>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-2 text-center">
                         <button
-                          aria-label="View alert"
+                          type="button"
+                          aria-label={`View ${a.type === 'notification' ? 'notification' : 'alert'}: ${a.title || a.alert_type || 'Details'}`}
+                          title="View details"
                           onClick={() => handleViewDetail(a)}
-                          className="inline-flex items-center justify-center h-6 w-6 text-sm"
-                          style={{ color: '#64748B', borderRadius: 4, transition: 'color 0.15s' }}
-                          onMouseEnter={e => { e.currentTarget.style.color = '#0F2D52'; }}
-                          onMouseLeave={e => { e.currentTarget.style.color = '#64748B'; }}
+                          className="inline-flex h-6 w-6 items-center justify-center rounded text-sm text-[#64748B] transition-colors hover:bg-[#E2E8F0] hover:text-[#0F2D52] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]"
                         >
                           <i className="ri-eye-line" />
                         </button>
@@ -553,29 +604,55 @@ export default function Alert() {
 
           {/* Pagination */}
           {pagination.totalPages > 1 && (
-            <div className="flex items-center justify-between px-4 py-3" style={{ borderTop: '1px solid #F1F5F9' }}>
-              <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
-                Showing {(page - 1) * 20 + 1}\u2013{Math.min(page * 20, pagination.total)} of {pagination.total}
+            <div className="flex flex-col gap-3 border-t border-[#E2E8F0] px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-xs font-semibold text-[#64748B]">
+                Showing {(page - 1) * 20 + 1}\u2013{Math.min(page * 20, pagination.total)} of {pagination.total} alerts and notifications
               </span>
               <div className="flex items-center gap-1.5">
                 <button
+                  type="button"
+                  aria-label="Previous page"
                   onClick={() => setPage(p => Math.max(1, p - 1))}
                   disabled={page === 1}
-                  className="px-2.5 py-1 text-[11px] font-semibold rounded"
-                  style={{ background: page === 1 ? '#F3F4F6' : '#0F2D52', color: page === 1 ? '#CBD5E1' : '#ffffff', cursor: page === 1 ? 'not-allowed' : 'pointer' }}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded border border-[#D1D5DB] bg-[#F3F4F6] text-xs font-medium text-[#374151] hover:bg-[#E5E7EB] disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Prev
+                  ‹
                 </button>
-                <span className="text-[11px] font-medium px-2" style={{ color: '#64748B' }}>
-                  {page} / {pagination.totalPages}
-                </span>
+                {(() => {
+                  const totalPages = pagination.totalPages;
+                  const pages = [];
+                  if (totalPages <= 7) {
+                    for (let pageNum = 1; pageNum <= totalPages; pageNum++) pages.push(pageNum);
+                  } else {
+                    pages.push(1);
+                    if (page > 3) pages.push('...');
+                    for (let pageNum = Math.max(2, page - 1); pageNum <= Math.min(totalPages - 1, page + 1); pageNum++) pages.push(pageNum);
+                    if (page < totalPages - 2) pages.push('...');
+                    pages.push(totalPages);
+                  }
+                  return pages.map((pageNum, index) => pageNum === '...' ? (
+                    <span key={`ellipsis-${index}`} className="inline-flex h-8 w-8 items-center justify-center text-xs text-[#94A3B8]">...</span>
+                  ) : (
+                    <button
+                      key={pageNum}
+                      type="button"
+                      onClick={() => setPage(pageNum)}
+                      aria-label={`Page ${pageNum}`}
+                      aria-current={pageNum === page ? 'page' : undefined}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded border text-xs font-semibold ${pageNum === page ? 'border-[#0F2D52] bg-[#0F2D52] text-white' : 'border-[#D1D5DB] bg-[#F3F4F6] text-[#374151] hover:bg-[#E5E7EB]'}`}
+                    >
+                      {pageNum}
+                    </button>
+                  ));
+                })()}
                 <button
+                  type="button"
+                  aria-label="Next page"
                   onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
                   disabled={page >= pagination.totalPages}
-                  className="px-2.5 py-1 text-[11px] font-semibold rounded"
-                  style={{ background: page >= pagination.totalPages ? '#F3F4F6' : '#0F2D52', color: page >= pagination.totalPages ? '#CBD5E1' : '#ffffff', cursor: page >= pagination.totalPages ? 'not-allowed' : 'pointer' }}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded border border-[#D1D5DB] bg-[#F3F4F6] text-xs font-medium text-[#374151] hover:bg-[#E5E7EB] disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Next
+                  ›
                 </button>
               </div>
             </div>
@@ -588,8 +665,11 @@ export default function Alert() {
         <div className="fixed inset-0 z-[1100] flex justify-end" onClick={() => setSelectedAlert(null)}>
           <div className="absolute inset-0" style={{ background: 'rgba(15,23,42,0.2)', backdropFilter: 'blur(4px)' }} />
           <div
-            className="relative w-full max-w-lg overflow-y-auto"
-            style={{ background: '#ffffff', animation: 'slide-in-right 0.3s ease-out both', boxShadow: '-8px 0 30px rgba(0,0,0,0.12)' }}
+            className="relative flex h-full w-full max-w-[680px] flex-col bg-white"
+            role="dialog"
+            aria-modal="true"
+            aria-label={selectedAlert?.title || 'Alert details'}
+            style={{ animation: 'slide-in-right 0.3s ease-out both', boxShadow: '-8px 0 30px rgba(0,0,0,0.12)' }}
             onClick={e => e.stopPropagation()}
           >
             {detailLoading ? (
@@ -602,66 +682,67 @@ export default function Alert() {
             ) : selectedAlert && (
               <>
                 {/* Header */}
-                <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4" style={{ background: '#0F2D52' }}>
-                  <div>
-                    <p className="text-sm font-bold" style={{ color: '#ffffff' }}>{selectedAlert.title || selectedAlert.alert_type}</p>
-                    <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.6)' }}>Alert Detail</p>
+                <div className="flex shrink-0 items-start justify-between gap-4 bg-[#0F2D52] px-6 py-5">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-[#B8CDE2]">{selectedAlert.type === 'notification' ? 'Notification' : 'Alert'} details</p>
+                    <h2 className="mt-1 text-lg font-semibold leading-snug text-white">{selectedAlert.title || alertTypeLabel(selectedAlert.alert_type) || 'Alert'}</h2>
                   </div>
-                  <button onClick={() => setSelectedAlert(null)} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
-                    <i className="ri-close-line text-base" />
-                  </button>
+                  <ModalCloseButton onClick={() => setSelectedAlert(null)} light />
                 </div>
 
-                <div className="p-6 space-y-5">
-                  {/* Status Badges */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ background: (SEVERITY_STYLES[selectedAlert.severity] || SEVERITY_STYLES.info).textBg, color: (SEVERITY_STYLES[selectedAlert.severity] || SEVERITY_STYLES.info).textColor }}>
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: (SEVERITY_STYLES[selectedAlert.severity] || SEVERITY_STYLES.info).color }} />
-                      {(SEVERITY_STYLES[selectedAlert.severity] || SEVERITY_STYLES.info).label}
+                <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-[#E2E8F0] pb-4 text-xs">
+                    <span className="inline-flex items-center gap-2 font-semibold" style={{ color: (SEVERITY_STYLES[selectedAlert.severity] || SEVERITY_STYLES.info).textColor }}>
+                      <span className="h-2 w-2 rounded-sm" style={{ background: (SEVERITY_STYLES[selectedAlert.severity] || SEVERITY_STYLES.info).color }} aria-hidden="true" />
+                      {(SEVERITY_STYLES[selectedAlert.severity] || SEVERITY_STYLES.info).label} severity
                     </span>
-                    <span className="inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ background: selectedAlert.type === 'notification' ? 'rgba(59,130,246,0.1)' : 'rgba(239,68,68,0.08)', color: selectedAlert.type === 'notification' ? '#2563EB' : '#EF4444' }}>
-                      {selectedAlert.type === 'notification' ? 'Notification' : 'Alert'}
-                    </span>
-                    <span className="inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ background: (STATUS_STYLES[selectedAlert.status] || STATUS_STYLES.unread).bg, color: (STATUS_STYLES[selectedAlert.status] || STATUS_STYLES.unread).color }}>
-                      {(STATUS_STYLES[selectedAlert.status] || STATUS_STYLES.unread).label}
-                    </span>
+                    <span className="text-[#64748B]">Status: <strong className="font-semibold text-[#334155]">{(STATUS_STYLES[selectedAlert.status] || STATUS_STYLES.unread).label}</strong></span>
                   </div>
 
                   {/* Detail Fields */}
-                  <div className="space-y-3">
+                  <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
                     {[
-                      { label: 'Source Module', value: MODULE_LABELS[selectedAlert.source_module] || selectedAlert.source_module },
-                      { label: 'Barangay', value: selectedAlert.barangay_name },
-                      { label: 'Date & Time', value: selectedAlert.created_at ? new Date(selectedAlert.created_at).toLocaleString() : 'N/A' },
-                      { label: 'Period', value: selectedAlert.period },
-                      { label: 'Alert Type', value: selectedAlert.alert_type },
+                      { label: 'Source', value: MODULE_LABELS[selectedAlert.source_module] || selectedAlert.source_module },
+                      { label: 'Coverage', value: alertCoverage(selectedAlert) },
+                      { label: 'Date and time', value: formatAlertDateTime(selectedAlert.created_at) },
+                      { label: 'Period', value: formatAlertPeriod(selectedAlert.period) },
+                      { label: 'Category', value: alertTypeLabel(selectedAlert.alert_type) },
                     ].filter(f => f.value).map(field => (
-                      <div key={field.label} className="flex items-start gap-3">
-                        <span className="text-[11px] font-semibold w-28 shrink-0 pt-0.5" style={{ color: '#94A3B8' }}>{field.label}</span>
-                        <span className="text-xs font-medium" style={{ color: '#0F2D52' }}>{field.value}</span>
+                      <div key={field.label}>
+                        <dt className="text-xs text-[#64748B]">{field.label}</dt>
+                        <dd className="mt-1 text-sm font-medium text-[#0F2D52]">{field.value}</dd>
                       </div>
                     ))}
-                  </div>
+                  </dl>
+
+                  {affectedBarangays(selectedAlert).length > 1 && (
+                    <section className="border-t border-[#E2E8F0] pt-4">
+                      <h3 className="text-xs font-semibold text-[#64748B]">Affected barangays</h3>
+                      <p className="mt-2 text-sm leading-6 text-[#334155]">{affectedBarangays(selectedAlert).join(', ')}</p>
+                    </section>
+                  )}
 
                   {/* Description */}
-                  <div>
-                    <p className="text-[11px] font-semibold mb-1.5" style={{ color: '#94A3B8' }}>Description</p>
-                    <p className="text-xs leading-relaxed" style={{ color: '#334155' }}>{selectedAlert.message}</p>
-                  </div>
+                  {selectedAlert.message && (
+                    <section className="border-t border-[#E2E8F0] pt-5">
+                      <h3 className="text-sm font-semibold text-[#0F2D52]">What happened</h3>
+                      <p className="mt-2 whitespace-pre-line text-sm leading-6 text-[#475569]">{selectedAlert.message}</p>
+                    </section>
+                  )}
 
                   {/* Recommendation */}
                   {selectedAlert.recommendation && (
-                    <div>
-                      <p className="text-[11px] font-semibold mb-1.5" style={{ color: '#94A3B8' }}>Recommended Action</p>
-                      <p className="text-xs leading-relaxed" style={{ color: '#334155' }}>{selectedAlert.recommendation}</p>
-                    </div>
+                    <section className="border-l-[3px] border-[#0F2D52] bg-[#F7FAFD] px-4 py-3">
+                      <h3 className="text-sm font-semibold text-[#0F2D52]">Recommended action</h3>
+                      <p className="mt-1 text-sm leading-6 text-[#475569]">{selectedAlert.recommendation}</p>
+                    </section>
                   )}
 
                   {/* Resolved info */}
                   {selectedAlert.status === 'resolved' && (
-                     <div className="rounded-lg p-3" style={{ background: '#ECFDF5', border: '1px solid #D4EDDA' }}>
-                       <p className="text-[11px] font-semibold" style={{ color: '#047857' }}>
-                        Resolved {selectedAlert.resolved_at ? `on ${new Date(selectedAlert.resolved_at).toLocaleString()}` : ''}
+                     <div className="border-t border-[#E2E8F0] pt-4 text-sm text-[#047857]">
+                       <p className="font-medium">
+                        Resolved {selectedAlert.resolved_at ? `on ${formatAlertDateTime(selectedAlert.resolved_at)}` : ''}
                         {selectedAlert.resolved_by ? ` by ${selectedAlert.resolved_by}` : ''}
                       </p>
                     </div>
@@ -669,9 +750,10 @@ export default function Alert() {
                 </div>
 
                 {/* Action Buttons */}
-                <div className="sticky bottom-0 px-6 py-4 flex items-center gap-2 flex-wrap" style={{ borderTop: '1px solid #E2E8F0', background: '#ffffff' }}>
+                <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-[#E2E8F0] bg-white px-6 py-4">
                   {selectedAlert.status !== 'resolved' && selectedAlert.barangay_name && (
                     <button
+                      type="button"
                       onClick={() => {
                         const params = new URLSearchParams({
                           alert_id: selectedAlert.id,
@@ -681,49 +763,42 @@ export default function Alert() {
                         navigate(`/interventions?${params.toString()}`);
                         setSelectedAlert(null);
                       }}
-                      className="px-3 py-1.5 text-xs font-semibold"
-                      style={{ background: '#14B8A6', color: '#ffffff', border: '1px solid #14B8A6', borderRadius: 4, transition: 'background 0.15s' }}
-                      onMouseEnter={e => { e.currentTarget.style.background = '#0D9488'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = '#14B8A6'; }}
+                      className="rounded border border-[#0F766E] bg-white px-3 py-2 text-xs font-semibold text-[#0F766E] hover:bg-[#F0FDFA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F766E]"
                     >
-                      <i className="ri-first-aid-kit-line mr-1" />Create Intervention
+                      Create intervention
                     </button>
                   )}
                   {selectedAlert.source_module && MODULE_ROUTES[selectedAlert.source_module] && (
                     <button
+                      type="button"
                       onClick={() => { navigate(MODULE_ROUTES[selectedAlert.source_module]); setSelectedAlert(null); }}
-                      className="px-3 py-1.5 text-xs font-semibold"
-                      style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s' }}
-                      onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}
+                      className="rounded border border-[#CBD5E1] bg-white px-3 py-2 text-xs font-semibold text-[#0F2D52] hover:bg-[#F8FAFC] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]"
                     >
-                      View Related Module
+                      Open {MODULE_LABELS[selectedAlert.source_module] || 'related page'} <span aria-hidden="true">→</span>
                     </button>
                   )}
                   {selectedAlert.status === 'unread' && (
                     <button
+                      type="button"
                       onClick={async () => {
                         await API.put(`/api/tb/alerts/${selectedAlert.id}/read`);
                         setSelectedAlert(prev => ({ ...prev, status: 'read', read_at: new Date().toISOString() }));
                         setAlerts(prev => prev.map(a => a.id === selectedAlert.id ? { ...a, status: 'read' } : a));
                       }}
-                      className="px-3 py-1.5 text-xs font-medium"
-                      style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}
+                      className="rounded border border-[#CBD5E1] bg-white px-3 py-2 text-xs font-semibold text-[#334155] hover:bg-[#F8FAFC] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]"
                     >
-                      Mark as Read
+                      Mark as read
                     </button>
                   )}
                   {selectedAlert.type === 'alert' && selectedAlert.status !== 'resolved' && (
                     <button
-                      onClick={() => setResolveConfirm(selectedAlert)}
+                      type="button"
+                      onClick={() => { setResolveError(''); setResolveConfirm(selectedAlert); }}
                       disabled={resolvingId === selectedAlert.id}
-                      className="px-3 py-1.5 text-xs font-semibold"
-                       style={{ background: '#047857', color: '#ffffff', border: '1px solid #047857', borderRadius: 4, transition: 'background 0.15s', opacity: resolvingId === selectedAlert.id ? 0.6 : 1, cursor: resolvingId === selectedAlert.id ? 'not-allowed' : 'pointer' }}
-                      onMouseEnter={e => { if (!resolvingId) e.currentTarget.style.background = '#065F46'; }}
-                       onMouseLeave={e => { e.currentTarget.style.background = '#047857'; }}
+                      className="rounded bg-[#047857] px-3 py-2 text-xs font-semibold text-white hover:bg-[#065F46] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#047857]"
                     >
                       {resolvingId === selectedAlert.id ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
-                      Resolve Alert
+                      Resolve alert
                     </button>
                   )}
                 </div>
@@ -735,43 +810,36 @@ export default function Alert() {
 
       {/* ─── Resolve Confirmation Modal ─── */}
       {resolveConfirm && (
-        <div className="fixed inset-0 z-[1200] flex items-center justify-center" onClick={() => setResolveConfirm(null)}>
-          <div className="absolute inset-0" style={{ background: 'rgba(15,23,42,0.3)', backdropFilter: 'blur(4px)' }} />
-          <div
-            className="relative w-full max-w-sm rounded-xl p-6"
-            style={{ background: '#ffffff', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3 mb-4">
-               <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: '#FFFBEB' }}>
-                 <i className="ri-question-line text-lg" style={{ color: '#92400E' }} />
-              </div>
-              <div>
-                <p className="text-sm font-bold" style={{ color: '#0F2D52' }}>Resolve Alert?</p>
-                <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>This action will mark the alert as resolved.</p>
-              </div>
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center px-4" role="alertdialog" aria-modal="true" aria-labelledby="resolve-alert-title" aria-describedby="resolve-alert-description">
+          <div className="absolute inset-0 bg-[#0F2D52]/35" onClick={() => !resolvingId && setResolveConfirm(null)} />
+          <div className="relative w-full max-w-[440px] overflow-hidden rounded-lg border border-[#DCE4ED] bg-white shadow-[0_20px_50px_rgba(15,45,82,0.2)]">
+            <div className="border-b border-[#E2E8F0] px-6 py-4">
+              <h2 id="resolve-alert-title" className="text-base font-semibold text-[#0F2D52]">Resolve alert</h2>
             </div>
-            <p className="text-xs mb-5" style={{ color: '#64748B' }}>
-              Are you sure you want to resolve <span className="font-semibold" style={{ color: '#0F2D52' }}>"{resolveConfirm.title || resolveConfirm.alert_type}"</span>?
-            </p>
-            <div className="flex items-center gap-2 justify-end">
-              <button
+            <div id="resolve-alert-description" className="px-6 py-5">
+              <p className="text-sm leading-relaxed text-[#475569]">Mark this alert as resolved?</p>
+              <div className="mt-4 border-l-2 border-[#C5D3E2] pl-3">
+                <p className="text-sm font-semibold text-[#0F2D52]">{resolveConfirm.title || alertTypeLabel(resolveConfirm.alert_type) || 'Alert'}</p>
+                {resolveConfirm.barangay_name && <p className="mt-0.5 text-xs text-[#64748B]">{resolveConfirm.barangay_name}</p>}
+              </div>
+              <p className="mt-4 text-xs text-[#64748B]">Its status will change to Resolved.</p>
+              {resolveError && <p className="mt-3 text-xs font-medium text-[#B91C1C]" role="alert">{resolveError}</p>}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[#E2E8F0] px-6 py-4">
+              <button ref={resolveCancelRef} type="button"
                 onClick={() => setResolveConfirm(null)}
-                className="px-3 py-1.5 text-xs font-medium"
-                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}
+                disabled={resolvingId === resolveConfirm.id}
+                className="rounded border border-[#CBD5E1] bg-white px-4 py-2 text-xs font-semibold text-[#334155] hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]"
               >
                 Cancel
               </button>
-              <button
+              <button type="button"
                 onClick={() => handleResolve(resolveConfirm.id)}
                 disabled={resolvingId === resolveConfirm.id}
-                className="px-4 py-1.5 text-xs font-semibold"
-                       style={{ background: '#047857', color: '#ffffff', border: '1px solid #047857', borderRadius: 4, transition: 'background 0.15s', opacity: resolvingId === resolveConfirm.id ? 0.6 : 1, cursor: resolvingId === resolveConfirm.id ? 'not-allowed' : 'pointer' }}
-                onMouseEnter={e => { if (!resolvingId) e.currentTarget.style.background = '#065F46'; }}
-                 onMouseLeave={e => { e.currentTarget.style.background = '#047857'; }}
+                className="rounded bg-[#047857] px-4 py-2 text-xs font-semibold text-white hover:bg-[#065F46] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#047857]"
               >
                 {resolvingId === resolveConfirm.id ? <i className="ri-loader-4-line animate-spin mr-1" /> : null}
-                Yes, Resolve
+                {resolvingId === resolveConfirm.id ? 'Resolving...' : 'Resolve alert'}
               </button>
             </div>
           </div>

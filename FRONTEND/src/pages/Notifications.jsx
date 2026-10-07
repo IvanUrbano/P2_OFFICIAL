@@ -4,6 +4,7 @@ import API from '../api/axios';
 import timeAgo from '../utils/timeAgo';
 import { MODULE_LABELS, MODULE_ROUTES } from '../utils/alertConstants';
 import FilterSelect from '../components/FilterSelect';
+import ModalCloseButton from '../components/ModalCloseButton';
 import SkeletonBlock from '../../components/SkeletonBlock';
 
 export default function Notifications() {
@@ -313,9 +314,7 @@ export default function Notifications() {
                     <p className="text-sm font-bold" style={{ color: '#ffffff' }}>{selectedNotif.title || 'Notification'}</p>
                     <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.6)' }}>Notification Detail</p>
                   </div>
-                  <button onClick={() => setSelectedNotif(null)} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
-                    <i className="ri-close-line text-base" />
-                  </button>
+                  <ModalCloseButton onClick={() => setSelectedNotif(null)} light />
                 </div>
 
                 <div className="p-6 space-y-5">

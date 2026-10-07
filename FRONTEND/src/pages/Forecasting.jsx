@@ -4,12 +4,13 @@ import {
   Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 import API from '../api/axios';
-import AiInsightPanel from '../components/AiInsightPanel';
+import AnalyticsInsightPanel from '../components/AnalyticsInsightPanel';
 import ChartInsight from '../components/ChartInsight';
-import { forecastInsight, accuracyInsight } from '../utils/chartInsights';
+import { forecastInsight, accuracyInsight, monthByMonthForecastInsight } from '../utils/chartInsights';
 import FilterSelect from '../components/FilterSelect';
 import ProgressOverlay from '../components/ProgressOverlay';
 import { getForecastingInsight } from '../services/insightService';
+import { buildEvaluationView } from '../utils/modelEvaluationView';
 import { forecastMonthKey as localMonthKey, aggregateForecastHistory, calculateForecastGrowth } from '../utils/forecastSeries';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
@@ -76,7 +77,7 @@ function ForecastTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
   return (
     <div
-      className="px-3 py-2.5 rounded-lg text-xs shadow-lg"
+      className="border border-[#E2E8F0] bg-white px-3 py-2 text-xs shadow-sm"
       style={{
         background: '#ffffff',
         border: '1px solid #E2E8F0',
@@ -117,14 +118,14 @@ function SectionSkeleton({ rows = 3 }) {
       {Array.from({ length: rows }).map((_, i) => (
         <div
           key={i}
-          className="rounded-xl overflow-hidden"
+          className="overflow-hidden rounded-lg"
           style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}
         >
           <div className="px-5 py-3.5" style={{ borderBottom: '1px solid #F1F5F9' }}>
             <div className="h-3 w-32 rounded" style={{ background: '#E2E8F0' }} />
           </div>
           <div className="p-5">
-            <div className="h-48 w-full rounded-lg" style={{ background: '#F1F5F9' }} />
+            <div className="h-48 w-full" style={{ background: '#F1F5F9' }} />
           </div>
         </div>
       ))}
@@ -134,38 +135,30 @@ function SectionSkeleton({ rows = 3 }) {
 
 function ModelOverview() {
   return (
-    <section className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }} aria-labelledby="model-overview-heading">
-      <div className="grid grid-cols-1 md:grid-cols-3">
-        <div className="px-5 py-3.5 md:border-r" style={{ borderColor: '#F1F5F9' }}>
-          <h2 id="model-overview-heading" className="text-sm font-bold" style={{ color: '#1E293B' }}>
-            About the Models
-          </h2>
-          <p className="text-xs mt-1 leading-relaxed" style={{ color: '#64748B' }}>
-            Historical monthly TB cases inform two distinct outputs for planning.
-          </p>
+    <details className="group border-t border-[#E2E8F0] bg-white">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-3 text-xs font-semibold text-[#0F2D52] marker:hidden hover:bg-[#F8FAFC] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#0F2D52] [&::-webkit-details-marker]:hidden">
+        <span>How are forecasts and GIS risk levels produced?</span>
+        <i className="ri-arrow-down-s-line text-base transition-transform group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="grid gap-4 border-t border-[#E8EDF2] px-6 py-4 sm:grid-cols-2">
+        <div>
+          <h2 className="text-xs font-semibold text-[#0F2D52]">ARIMA forecasting</h2>
+          <p className="mt-1 text-xs leading-relaxed text-[#475569]">Uses past monthly TB cases to estimate future monthly case counts for each barangay. When there is too little history, a simpler baseline estimate may be shown instead.</p>
         </div>
-        <div className="px-5 py-3.5 border-t md:border-t-0 md:border-r" style={{ borderColor: '#F1F5F9' }}>
-          <h3 className="text-xs font-bold" style={{ color: '#0F2D52' }}>ARIMA Forecasting</h3>
-          <p className="text-xs mt-1 leading-relaxed" style={{ color: '#475569' }}>
-            Estimates future monthly TB case counts for each barangay.
-          </p>
-        </div>
-        <div className="px-5 py-3.5 border-t md:border-t-0" style={{ borderColor: '#F1F5F9' }}>
-          <h3 className="text-xs font-bold" style={{ color: '#0F2D52' }}>Random Forest — GIS Hotspots</h3>
-          <p className="text-xs mt-1 leading-relaxed" style={{ color: '#475569' }}>
-            Classifies each barangay as Low, Moderate, or High Risk on the GIS map.
-          </p>
+        <div>
+          <h2 className="text-xs font-semibold text-[#0F2D52]">Random Forest risk assessment</h2>
+          <p className="mt-1 text-xs leading-relaxed text-[#475569]">Classifies barangays as Low, Moderate, or High Risk. View those classifications on the GIS map; they are separate from the case forecasts below.</p>
         </div>
       </div>
-    </section>
+    </details>
   );
 }
 
-/* ─── Model Performance (saved walk-forward metrics from the ML service) ─── */
+/* ─── Model Evaluation (saved walk-forward metrics from the ML service) ─── */
 
 function EvalMetric({ label, value }) {
   return (
-    <div className="rounded-lg px-3 py-2" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+    <div className="px-3 py-2">
       <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#94A3B8' }}>{label}</div>
       <div className="text-sm font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{value}</div>
     </div>
@@ -179,117 +172,151 @@ function formatEvaluationMonth(value) {
   return new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 }
 
-function ModelPerformance({ record, status, loading, error }) {
-  const [showDetails, setShowDetails] = useState(false);
-  const evaluation = record?.metrics || {};
-  const arima = evaluation.arima || {};
-  const config = record?.config || {};
-  const methods = Object.entries(arima.method_counts || {}).filter(([, count]) => count > 0);
-  const method = config.method || (methods.length
-    ? methods.map(([name]) => name === 'arima' ? 'ARIMA' : name.replaceAll('_', ' ')).join(' + ')
-    : '—');
-  const steps = Array.isArray(arima.steps) ? arima.steps.filter(step => step.month) : [];
-  const stepMonths = steps.map(step => String(step.month).slice(0, 10)).sort();
-  const periodStart = formatEvaluationMonth(config.evaluation_start || stepMonths[0]);
-  const periodEnd = formatEvaluationMonth(config.evaluation_end || stepMonths[stepMonths.length - 1]);
-  const evaluationPeriod = periodStart && periodEnd
-    ? periodStart === periodEnd ? periodStart : `${periodStart}–${periodEnd}`
-    : 'Not recorded in this saved evaluation';
+/**
+ * Model evaluation: hidden until "View Model Evaluation" is pressed. It only READS the saved evaluation
+ * (GET /api/tb/evaluation/latest) — viewing never reruns ARIMA, the Random Forest or the evaluation.
+ * The figures follow the page's active Year/Period and Barangay filters (utils/modelEvaluationView.js):
+ * "All barangays" is the overall evaluation, not one barangay.
+ */
+function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, filters }) {
+  const view = useMemo(
+    () => buildEvaluationView(record, filters),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [record, filters.startYear, filters.endYear, filters.barangay]
+  );
   const savedAt = record?.trained_at ? new Date(record.trained_at).toLocaleString() : 'date unavailable';
   const failedAt = status?.failedAt ? new Date(status.failedAt).toLocaleString() : 'date unavailable';
   const formatCount = value => value == null || !Number.isFinite(Number(value))
     ? '—'
-    : Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    : Number(value).toLocaleString(undefined, { maximumFractionDigits: 1 });
+  const periodStart = formatEvaluationMonth(view.periodStart);
+  const periodEnd = formatEvaluationMonth(view.periodEnd);
+  const evaluationPeriod = periodStart && periodEnd
+    ? periodStart === periodEnd ? periodStart : `${periodStart}–${periodEnd}`
+    : 'Not recorded in this saved evaluation';
 
   return (
-    <section className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
-      <div className="px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
-        <h2 className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>Model Performance</h2>
+    <section className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
+      <div className="flex flex-col justify-between gap-3 px-5 py-4 sm:flex-row sm:items-center" style={{ borderBottom: open ? '1px solid #E2E8F0' : 'none' }}>
+        <div>
+          <h2 className="text-sm font-semibold text-[#0F2D52]">How accurate were past forecasts?</h2>
+          <p className="mt-0.5 text-[11px] text-[#64748B]">Compare saved predictions with cases reported later. Opening this section does not rerun the model.</p>
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          className="shrink-0 px-4 py-2 text-xs font-semibold"
+          style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s' }}
+          onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = '#ffffff'; }}
+        >
+          <i className={`${open ? 'ri-eye-off-line' : 'ri-bar-chart-2-line'} mr-1`} />
+          {open ? 'Hide evaluation' : 'View evaluation'}
+        </button>
       </div>
-      <div className="px-6 py-4">
-        {loading && !record ? (
-          <p className="text-xs" style={{ color: '#64748B' }}>Loading latest performance results…</p>
-        ) : error && !record ? (
-          <p className="text-xs" style={{ color: '#B91C1C' }}>{error}</p>
-        ) : !record ? (
-          <p className="text-xs" style={{ color: '#64748B' }}>
-            No saved evaluation is available yet. Results will be generated automatically after the next analysis pipeline run.
-            {status?.lastError && <span className="block mt-1" style={{ color: '#B91C1C' }}>The latest automatic evaluation could not be completed; an administrator may need to check the model service.</span>}
-          </p>
-        ) : (
-          <>
-            {error && <p className="text-[10px] mb-2" style={{ color: '#B91C1C' }}>Could not refresh model performance: {error}. Showing the last loaded result.</p>}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <EvalMetric label="MAE" value={arima.mae == null ? '—' : `${Number(arima.mae).toFixed(1)} cases`} />
-              <EvalMetric label="MAPE" value={arima.mape == null ? '—' : `${Number(arima.mape).toFixed(1)}%`} />
-              <EvalMetric label="Method" value={method} />
-              <EvalMetric label="Evaluation Period" value={evaluationPeriod} />
-            </div>
-            {status?.running && <p className="text-[10px] mt-2" style={{ color: '#64748B' }}>A newer evaluation is running. Showing saved results from {savedAt}.</p>}
-            {!status?.running && status?.lastError && (
-              <p className="text-[10px] mt-2 leading-relaxed" style={{ color: '#B45309' }}>
-                The latest evaluation failed on {failedAt}. These are previous saved results from {savedAt}.
-              </p>
-            )}
-            {!periodStart && <p className="text-[10px] mt-2" style={{ color: '#64748B' }}>This older saved result did not include its tested months. Run a new evaluation to record the exact period.</p>}
-            <button
-              type="button"
-              onClick={() => setShowDetails(open => !open)}
-              className="inline-flex items-center gap-1 mt-3 text-[11px] font-bold"
-              style={{ color: '#174A7E' }}
-              aria-expanded={showDetails}
-            >
-              <i className={`ri-arrow-${showDetails ? 'down' : 'right'}-s-line`} />
-              {showDetails ? 'Hide Details' : 'View Details'}
-            </button>
-            {showDetails && (
-              <div className="mt-3 pt-3" style={{ borderTop: '1px solid #E2E8F0' }}>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px] leading-relaxed">
-                  <p style={{ color: '#475569' }}><strong>MAE</strong><br />Average number of cases by which forecasts differed from actual recorded cases.</p>
-                  <p style={{ color: '#475569' }}><strong>MAPE</strong><br />Average forecast error expressed as a percentage.</p>
-                </div>
-                <h3 className="text-[11px] font-bold mt-4" style={{ color: '#0F2D52' }}>Actual vs Predicted{arima.example_barangay ? ` — ${arima.example_barangay}` : ''}</h3>
-                {steps.length > 0 ? (
-                  <>
-                    <div className="overflow-x-auto mt-3">
-                      <table className="w-full text-[11px] text-left">
-                        <thead style={{ color: '#64748B', background: '#F8FAFC' }}>
-                          <tr>
-                            {['Period', 'Actual', 'Predicted', 'Absolute Error'].map(label => (
-                              <th key={label} className="px-3 py-2 font-semibold">{label}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {steps.map(step => (
-                            <tr key={`${step.month}-${step.test_month}`} style={{ borderTop: '1px solid #F1F5F9', color: '#334155' }}>
-                              <td className="px-3 py-2">{formatEvaluationMonth(step.month)}</td>
-                              <td className="px-3 py-2">{formatCount(step.actual)}</td>
-                              <td className="px-3 py-2">{formatCount(step.predicted)}</td>
-                              <td className="px-3 py-2">{formatCount(Number.isFinite(Number(step.actual)) && Number.isFinite(Number(step.predicted))
-                                ? Math.abs(Number(step.actual) - Number(step.predicted))
-                                : step.error == null ? null : Math.abs(Number(step.error)))}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    <p className="text-[10px] mt-1.5" style={{ color: '#94A3B8' }}>
-                      Rows show one barangay&apos;s walk-forward results; MAE and MAPE summarize all evaluated barangays.
-                    </p>
-                  </>
-                ) : <p className="text-[10px] mt-2" style={{ color: '#64748B' }}>This saved evaluation did not retain monthly Actual vs Predicted rows.</p>}
-                <p className="text-[10px] mt-3 leading-relaxed" style={{ color: '#64748B' }}>
-                  Performance results are based on the historical data available for evaluation and may change as additional validated monthly data become available.
-                </p>
-              </div>
-            )}
-            <p className="text-[10px] mt-2" style={{ color: '#94A3B8' }}>
-              Last evaluated: {savedAt}
+
+      {open && (
+        <div className="px-5 py-4">
+          {loading && !record ? (
+            <p className="text-xs" style={{ color: '#64748B' }}>Loading the saved evaluation…</p>
+          ) : error && !record ? (
+            <p className="text-xs" style={{ color: '#B91C1C' }}>{error}</p>
+          ) : !record || view.state === 'none' ? (
+            <p className="text-xs" style={{ color: '#64748B' }}>
+              No saved evaluation is available yet. Results will be generated automatically after the next analysis pipeline run.
+              {status?.lastError && <span className="block mt-1" style={{ color: '#B91C1C' }}>The latest automatic evaluation could not be completed; an administrator may need to check the model service.</span>}
             </p>
-          </>
-        )}
-      </div>
+          ) : (
+            <>
+              {error && <p className="text-[10px] mb-2" style={{ color: '#B91C1C' }}>Could not refresh the saved evaluation: {error}. Showing the last loaded result.</p>}
+              <p className="text-[11px] mb-3" style={{ color: '#64748B' }}>
+                Showing <strong style={{ color: '#0F2D52' }}>{view.scopeLabel}</strong> · <strong style={{ color: '#0F2D52' }}>{view.rangeLabel}</strong>
+              </p>
+
+              {view.state === 'barangay_unavailable' && (
+                <p className="text-xs leading-relaxed" style={{ color: '#92400E' }}>
+                  {view.hasPerBarangay
+                    ? `There is no saved evaluation for ${view.scopeLabel}: barangays whose history is too short to test are not evaluated.`
+                    : `This saved evaluation kept monthly results for ${view.savedFor || 'one barangay'} only. Results for every barangay are saved the next time the evaluation runs, which happens automatically after each analysis pipeline run. Choose All Barangays to see the overall evaluation.`}
+                </p>
+              )}
+
+              {view.state === 'no_steps_in_range' && (
+                <p className="text-xs leading-relaxed" style={{ color: '#92400E' }}>
+                  No evaluated months fall in {view.rangeLabel}. This evaluation tested {formatEvaluationMonth(view.evaluatedStart)}–{formatEvaluationMonth(view.evaluatedEnd)}. Widen the Year/Period filter to see results.
+                </p>
+              )}
+
+              {view.state === 'ready' && (
+                <>
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-0">
+                    <EvalMetric label="Average error" value={view.mae == null ? '—' : `${Number(view.mae).toFixed(1)} cases`} />
+                    <EvalMetric label="Average % error" value={view.mape == null ? '—' : `${Number(view.mape).toFixed(1)}%`} />
+                    <EvalMetric label="Method" value={view.method} />
+                    <EvalMetric label="Months tested" value={evaluationPeriod} />
+                  </div>
+                  <p className="mt-3 text-[11px] leading-relaxed text-[#475569]">These values show how far earlier predictions were from reported cases. Smaller errors mean the predictions were closer.</p>
+
+                  <h3 className="text-[11px] font-bold mt-4" style={{ color: '#0F2D52' }}>Past predictions compared with reported cases — {view.rowsLabel}</h3>
+                  {view.rows.length > 0 ? (
+                    <>
+                      <div className="overflow-x-auto mt-3">
+                        <table className="w-full text-[11px] text-left">
+                          <thead style={{ color: '#64748B', background: '#F8FAFC' }}>
+                            <tr>
+                              {['Month', 'Reported', 'Predicted', 'Difference'].map(label => (
+                                <th key={label} className="px-3 py-2 font-semibold">{label}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {view.rows.map(row => (
+                              <tr key={row.month} style={{ borderTop: '1px solid #F1F5F9', color: '#334155' }}>
+                                <td className="px-3 py-2">{formatEvaluationMonth(row.month)}</td>
+                                <td className="px-3 py-2">{formatCount(row.actual)}</td>
+                                <td className="px-3 py-2">{formatCount(row.predicted)}</td>
+                                <td className="px-3 py-2">{formatCount(row.error)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <p className="text-[10px] mt-1.5" style={{ color: '#94A3B8' }}>
+                        {view.scope === 'overall'
+                          ? `Each row adds up the actual and predicted cases of the ${view.barangaysEvaluated} barangays tested that month. MAE and MAPE above are the average of each barangay's own error.`
+                          : 'Each row is a month the model predicted from the records before it, then compared with the cases actually recorded.'}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-[10px] mt-2 leading-relaxed" style={{ color: '#64748B' }}>
+                      A month-by-month comparison for all barangays was not saved with this evaluation. It will be saved the next time the evaluation runs, which happens automatically after each analysis pipeline run.
+                      {view.exampleBarangay ? ` Choose ${view.exampleBarangay} to see the months that were saved.` : ''}
+                    </p>
+                  )}
+
+                  {view.notes.includes('yearFilterNotApplied') && (
+                    <p className="text-[10px] mt-2 leading-relaxed" style={{ color: '#92400E' }}>
+                      The Year/Period filter cannot narrow this saved evaluation, so it shows the whole evaluation period.
+                    </p>
+                  )}
+                </>
+              )}
+
+              {status?.running && <p className="text-[10px] mt-3" style={{ color: '#64748B' }}>A newer evaluation is running. Showing saved results from {savedAt}.</p>}
+              {!status?.running && status?.lastError && (
+                <p className="text-[10px] mt-3 leading-relaxed" style={{ color: '#B45309' }}>
+                  The latest evaluation failed on {failedAt}. These are previous saved results from {savedAt}.
+                </p>
+              )}
+              <p className="text-[10px] mt-3 leading-relaxed" style={{ color: '#64748B' }}>
+                Results are based on the historical data available at the time of the evaluation and may change as more validated monthly data become available.
+              </p>
+              <p className="text-[10px] mt-1" style={{ color: '#94A3B8' }}>Last evaluated: {savedAt}</p>
+            </>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -344,10 +371,21 @@ export default function Forecasting() {
 
   const isBusy = viewStatus === 'loading' || viewStatus === 'checking' || pipelineRunStatus === 'loading';
 
+  // The Year/Period and Barangay the Model Evaluation follows: the filters applied by View Forecast,
+  // or — before anything has been applied — what is currently selected. Empty barangay = All Barangays.
+  const evaluationStartYear = appliedStartYear || startYear;
+  const evaluationEndYear = appliedStartYear ? appliedEndYear : endYear;
+  const evaluationBarangay = (appliedStartYear ? appliedBarangay : selectedBarangay) || '';
+  const evaluationFilters = useMemo(
+    () => ({ startYear: evaluationStartYear, endYear: evaluationEndYear, barangay: evaluationBarangay }),
+    [evaluationStartYear, evaluationEndYear, evaluationBarangay]
+  );
+
   /* ── Automatically updated model performance ── */
   const [modelEvaluation, setModelEvaluation] = useState(null);
   const [evaluationStatus, setEvaluationStatus] = useState(null);
-  const [performanceLoading, setPerformanceLoading] = useState(true);
+  const [evaluationOpen, setEvaluationOpen] = useState(false);
+  const [performanceLoading, setPerformanceLoading] = useState(false);
   const [performanceError, setPerformanceError] = useState(null);
   const isAdmin = (() => {
     try { return JSON.parse(localStorage.getItem('user') || '{}')?.role === 'admin'; } catch { return false; }
@@ -410,16 +448,23 @@ export default function Forecasting() {
 
   useEffect(() => {
     loadAll();
-    loadModelPerformance();
     window.addEventListener('focus', loadAll);
     return () => window.removeEventListener('focus', loadAll);
-  }, [loadAll, loadModelPerformance]);
+  }, [loadAll]);
+
+  // Hidden by default: the saved evaluation is only read when "View Model Evaluation" is pressed
+  // (and re-read while a newer evaluation is running and the panel is open). Reading it never
+  // reruns the model.
+  const toggleEvaluation = useCallback(() => {
+    if (!evaluationOpen) loadModelPerformance();
+    setEvaluationOpen(open => !open);
+  }, [evaluationOpen, loadModelPerformance]);
 
   useEffect(() => {
-    if (!evaluationStatus?.running) return undefined;
+    if (!evaluationOpen || !evaluationStatus?.running) return undefined;
     const interval = window.setInterval(loadModelPerformance, 5000);
     return () => window.clearInterval(interval);
-  }, [evaluationStatus?.running, loadModelPerformance]);
+  }, [evaluationOpen, evaluationStatus?.running, loadModelPerformance]);
 
   /* ────────── Run Forecast ────────── */
 
@@ -925,7 +970,7 @@ export default function Forecasting() {
 
   /** Global min/max across all CI ranges for a shared bar scale */
   const ciGlobalScale = useMemo(() => {
-    const forecastRows = sortedForecastTable.filter((r) => !r.isHistorical && r.forecasted != null && r.ci_lower > 0 && r.ci_upper > 0);
+    const forecastRows = sortedForecastTable.filter((r) => !r.isHistorical && r.forecasted != null && r.ci_lower != null && r.ci_upper != null && r.ci_lower <= r.ci_upper);
     if (!forecastRows.length) return { min: 0, max: 1 };
     const mins = forecastRows.map((r) => r.ci_lower);
     const maxs = forecastRows.map((r) => r.ci_upper);
@@ -978,12 +1023,12 @@ export default function Forecasting() {
 
   const TABLE_COLUMNS = useMemo(
     () => [
-      { key: 'periodLabel', label: 'PERIOD' },
-      { key: 'actual', label: 'ACTUAL' },
+      { key: 'periodLabel', label: 'MONTH' },
+      { key: 'actual', label: 'REPORTED' },
       { key: 'forecasted', label: 'FORECAST' },
-      { key: 'confidence', label: 'CONFIDENCE RANGE (95% CI)' },
-      { key: 'growthRate', label: 'GROWTH' },
-      { key: 'method', label: 'MODEL' },
+      { key: 'confidence', label: '95% RANGE' },
+      { key: 'growthRate', label: 'CHANGE' },
+      { key: 'method', label: 'METHOD' },
     ],
     []
   );
@@ -1037,48 +1082,15 @@ export default function Forecasting() {
         open={pipelineRunStatus === 'loading'}
         title="Running the prediction pipeline"
         detail="Fitting an ARIMA forecast for each barangay, classifying risk with the Random Forest, and updating alerts."
-        icon="ri-line-chart-line"
         note="This usually takes a few minutes. Keep this page open until it finishes."
       />
-      {viewStatus === 'success' && (
-        <div className="rounded-xl px-5 py-3 text-xs" style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', color: '#1E3A5F' }}>
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
-          <div>
-            <span className="font-semibold" style={{ color: '#0F2D52' }}>Historical Data Period</span>
-            <span>{basisStart && basisEnd ? `${basisStart} – ${basisEnd}` : 'N/A'}</span>
-          </div>
-          <div>
-            <span className="font-semibold" style={{ color: '#0F2D52' }}>Latest Actual Data</span>
-            <span>{latestActualMonth ? monthLabel(latestActualMonth) : 'N/A'}</span>
-          </div>
-          <div>
-            <span className="font-semibold" style={{ color: '#0F2D52' }}>Forecast Period</span>
-            <span>{forecastStart && forecastEnd ? `${forecastStart} – ${forecastEnd}` : 'N/A'}</span>
-          </div>
-          <div>
-            <span className="font-semibold" style={{ color: '#0F2D52' }}>Forecast Horizon</span>
-            <span>{forecastHorizon > 0 ? `${forecastHorizon} month${forecastHorizon === 1 ? '' : 's'}` : '—'}</span>
-          </div>
-          <div>
-            <span className="font-semibold" style={{ color: '#0F2D52' }}>Forecast Method</span>
-            <span>{forecastMethodLabel ?? forecastTierMethodLabel(forecastTier) ?? '—'}</span>
-          </div>
-          </div>
-          {latestActualMonth && filteredForecasts.length > 0 && filteredForecasts[filteredForecasts.length - 1].period <= latestActualMonth && (
-            <p className="mt-2" style={{ color: '#92400E' }}>
-              Actual data now extends through or beyond this saved forecast. Run the analysis pipeline to generate a forecast after the latest actual month.
-            </p>
-          )}
-        </div>
-      )}
-
       {/* ─── Header + Forecast Settings ─── */}
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
+      <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
         {/* Header row */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
+        <div className="flex flex-col justify-between gap-3 border-b border-[#E2E8F0] px-6 py-4 sm:flex-row sm:items-center">
           <div className="shrink-0">
-            <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>TB Forecasting</h1>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Generate tuberculosis case forecasts using historical TB records to support monitoring and planning across Pasig City.</p>
+            <h1 className="text-lg font-semibold tracking-tight text-[#0F2D52]">TB forecasting</h1>
+            <p className="mt-1 text-xs text-[#64748B]">Review projected TB cases from historical records for Pasig City.</p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             {lastUpdated && (
@@ -1176,17 +1188,44 @@ export default function Forecasting() {
             )}
           </div>
         </div>
+        <ModelOverview />
       </div>
 
-      <ModelOverview />
+      {viewStatus === 'success' && (
+        <section className="rounded-lg border border-[#E2E8F0] bg-white px-5 py-4" aria-label="Forecast coverage">
+          <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div>
+              <p className="text-[11px] font-semibold text-[#64748B]">Records used</p>
+              <p className="mt-1 text-xs font-medium text-[#0F2D52]">{basisStart && basisEnd ? `${basisStart} – ${basisEnd}` : 'Unavailable'}</p>
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold text-[#64748B]">Latest reported month</p>
+              <p className="mt-1 text-xs font-medium text-[#0F2D52]">{latestActualMonth ? monthLabel(latestActualMonth) : 'Unavailable'}</p>
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold text-[#64748B]">Forecast months</p>
+              <p className="mt-1 text-xs font-medium text-[#0F2D52]">{forecastStart && forecastEnd ? `${forecastStart} – ${forecastEnd}` : 'Unavailable'}{forecastHorizon > 0 ? ` · ${forecastHorizon} month${forecastHorizon === 1 ? '' : 's'}` : ''}</p>
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold text-[#64748B]">Forecast method</p>
+              <p className="mt-1 text-xs font-medium text-[#0F2D52]">{forecastMethodLabel ?? forecastTierMethodLabel(forecastTier) ?? 'Unavailable'}</p>
+            </div>
+          </div>
+          {latestActualMonth && filteredForecasts.length > 0 && filteredForecasts[filteredForecasts.length - 1].period <= latestActualMonth && (
+            <p className="mt-3 border-t border-[#E2E8F0] pt-3 text-xs text-[#92400E]">
+              Newer cases are now available than this saved forecast. Run the analysis pipeline to update it.
+            </p>
+          )}
+        </section>
+      )}
 
       {/* ─── Run Analysis Pipeline result (admin) ─── */}
       {isAdmin && pipelineRunStatus !== 'idle' && (
-        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
-          <div className="px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
-            <h2 className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>Run Analysis Pipeline</h2>
+        <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
+          <div className="border-b border-[#E2E8F0] px-5 py-4">
+            <h2 className="text-sm font-semibold text-[#0F2D52]">Analysis pipeline</h2>
           </div>
-          <div className="px-6 py-4">
+          <div className="px-5 py-4">
             {pipelineRunStatus === 'loading' ? (
               <div className="flex items-center gap-2 text-xs font-medium" style={{ color: '#64748B' }}>
                 <i className="ri-loader-4-line animate-spin" />
@@ -1265,13 +1304,6 @@ export default function Forecasting() {
         </div>
       )}
 
-      <ModelPerformance
-        record={modelEvaluation}
-        status={evaluationStatus}
-        loading={performanceLoading}
-        error={performanceError}
-      />
-
       {/* ─── Content States ───
           Five distinct states, never conflated: idle (nothing requested),
           loading/checking, error (the GET itself failed — never silently
@@ -1282,13 +1314,7 @@ export default function Forecasting() {
           per-period banner shown inside the success view below), success. */}
       {viewStatus === 'idle' ? (
         /* ─── 9. IDLE STATE ─── */
-        <div className="flex flex-col items-center justify-center py-24 gap-4" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
-          <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center"
-            style={{ background: '#F1F5F9' }}
-          >
-            <i className="ri-line-chart-line text-3xl" style={{ color: '#CBD5E1' }} />
-          </div>
+        <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-[#E2E8F0] bg-white px-5 py-16">
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>
               No Forecast Loaded
@@ -1305,13 +1331,7 @@ export default function Forecasting() {
       ) : viewStatus === 'error' ? (
         /* ─── 11. REQUEST-FAILED STATE — distinct from "no data" and from
             the model's own "Insufficient Historical Data" tier. ─── */
-        <div className="flex flex-col items-center justify-center py-24 gap-4" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
-          <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center"
-            style={{ background: '#FEF2F2' }}
-          >
-            <i className="ri-error-warning-line text-3xl" style={{ color: '#EF4444' }} />
-          </div>
+        <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-[#E2E8F0] bg-white px-5 py-16">
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>
               Couldn't Load Forecast
@@ -1334,13 +1354,7 @@ export default function Forecasting() {
             succeeded; there is simply nothing computed yet. Never worded as
             "Insufficient Historical Data", which is a specific per-period
             model-tier concept shown elsewhere once data exists. ─── */
-        <div className="flex flex-col items-center justify-center py-24 gap-4" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
-          <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center"
-            style={{ background: '#F1F5F9' }}
-          >
-            <i className="ri-inbox-line text-3xl" style={{ color: '#CBD5E1' }} />
-          </div>
+        <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-[#E2E8F0] bg-white px-5 py-16">
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>
               No Forecast Available
@@ -1352,18 +1366,18 @@ export default function Forecasting() {
           </div>
         </div>
       ) : (
-        <div className="flex gap-6">
+        <div className="flex flex-col gap-6 xl:flex-row">
           {/* ─── LEFT COLUMN: KPI Cards + Charts (scrollable) ─── */}
           <div className="flex-1 min-w-0 space-y-6">
 
           {/* ─── 3. METRIC CARDS ─── */}
-          <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15,45,82,0.12), 0 2px 8px rgba(15,45,82,0.08)' }}>
+          <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
             <div className="grid grid-cols-2 lg:grid-cols-4">
               {/* Historical Cases */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-database-2-line text-sm" style={{ color: '#6B7FA3' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Historical Cases</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Reported cases</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{historicalCases != null ? historicalCases.toLocaleString() : 'N/A'}</p>
@@ -1375,11 +1389,11 @@ export default function Forecasting() {
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-line-chart-line text-sm" style={{ color: '#6B9E9E' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Forecasted Cases</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Projected cases</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{totalForecasted != null ? Math.round(totalForecasted).toLocaleString() : 'N/A'}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{appliedMonths}-month horizon</span>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Next {appliedMonths} month{Number(appliedMonths) === 1 ? '' : 's'}</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
@@ -1387,7 +1401,7 @@ export default function Forecasting() {
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-percent-line text-sm" style={{ color: growthRate == null || growthRate >= 0 ? '#B07070' : '#6B9E8A' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Expected Growth Rate</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Expected change</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <div className="flex items-end gap-2">
@@ -1396,7 +1410,7 @@ export default function Forecasting() {
                   </p>
                 </div>
                 <span className="text-[11px] font-medium mt-1" style={{ color: growthRate >= 0 ? '#B07070' : '#6B9E8A' }}>
-                  {growthRate == null ? growth.reason : `${growthRate >= 0 ? 'Rising' : 'Falling'} vs ${growth.baseline.toFixed(1)} cases/month baseline`}
+                  {growthRate == null ? growth.reason : `${growthRate > 0 ? 'Above' : growthRate < 0 ? 'Below' : 'Same as'} recent average of ${growth.baseline.toFixed(1)} cases/month`}
                 </span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
@@ -1409,18 +1423,18 @@ export default function Forecasting() {
               <div className="flex flex-col px-5 py-5" title="Random Forest risk classification is shown on the GIS page, not here — this page tracks ARIMA forecasting only.">
                 <div className="flex items-center gap-2">
                   <i className="ri-cpu-line text-sm" style={{ color: '#8B7BA3' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Model Status</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Analysis status</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <div className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-semibold" style={{ color: '#64748B' }}>Random Forest</span>
+                    <span className="text-[11px] font-semibold" style={{ color: '#64748B' }}>GIS risk</span>
                     <span className="text-[11px] font-extrabold" style={{ color: MODEL_STATUS_COLORS[pipelineStatus?.rf_status] || '#94A3B8' }}>
                       {formatModelStatus(pipelineStatus?.rf_status)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-[11px] font-semibold shrink-0" style={{ color: '#64748B' }}>Forecasting</span>
+                    <span className="text-[11px] font-semibold shrink-0" style={{ color: '#64748B' }}>Case forecast</span>
                     <span className="text-[11px] font-extrabold text-right" style={{ color: formatForecastingStatus(pipelineStatus?.arima_status).color }}>
                       {formatForecastingStatus(pipelineStatus?.arima_status).label}
                     </span>
@@ -1431,13 +1445,12 @@ export default function Forecasting() {
           </div>
 
           {/* ─── 4. MAIN FORECAST GRAPH ─── */}
-          <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-            <div className="flex items-center justify-between px-5 py-4">
+          <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E2E8F0] px-5 py-4">
               <div className="flex items-center gap-3">
-                <div className="w-1 h-8 rounded-full" style={{ background: '#0D9488' }} />
                 <div>
-                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Historical vs Forecasted TB Cases</h3>
-                  <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Comparison of historical tuberculosis cases and projected cases for the selected forecast period.</p>
+                  <h3 className="text-sm font-semibold text-[#0F2D52]">Historical and forecasted TB cases</h3>
+                  <p className="mt-1 text-xs text-[#64748B]">Reported cases and projected cases for the selected period.</p>
                   {forecastTier === 'insufficient_data' && (
                     <p className="text-[10px] mt-0.5 font-medium" style={{ color: '#B91C1C' }}>
                       Insufficient Historical Data — no forecast is shown for the selected scope.
@@ -1445,21 +1458,27 @@ export default function Forecasting() {
                   )}
                   {isBaselineTier && (
                     <p className="text-[10px] mt-0.5 font-medium" style={{ color: '#D97706' }}>
-                      Baseline Forecast (not ARIMA) — fewer than 24 months of history for the selected scope.
+                      A simpler baseline estimate is shown because the full forecasting model was unavailable for this selection.
                     </p>
                   )}
                 </div>
               </div>
               {/* Inline legend */}
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-1.5">
                   <span className="w-6 h-[3px] rounded-full" style={{ background: '#0F2D52' }} />
                   <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Actual</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="w-4 h-0 border-t-2" style={{ borderColor: '#0D9488', borderStyle: 'dashed' }} />
+                  <span className="w-4 h-0 border-t-2" style={{ borderColor: '#6B9E8A', borderStyle: 'dashed' }} />
                   <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Forecast</span>
                 </div>
+                {forecastChartData.some((row) => row.ci_upper != null) && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="h-2 w-4 bg-[#DCEBE5]" aria-hidden="true" />
+                    <span className="text-[11px] text-[#64748B]">95% range</span>
+                  </div>
+                )}
                 {showCompare && compareBarangay && (
                   <div className="flex items-center gap-1.5">
                     <span className="w-4 h-0 border-t-2" style={{ borderColor: '#F59E0B', borderStyle: 'dashed' }} />
@@ -1470,26 +1489,20 @@ export default function Forecasting() {
             </div>
             <div className="px-5 pb-5">
               {forecastChartData.length > 0 ? (
-                <div className="w-full" style={{ height: 360 }}>
+                <div className="h-[320px] w-full" role="img" aria-label="Historical and forecasted TB cases line chart">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={forecastChartData} margin={{ top: 20, right: 25, left: 5, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="ciGradForecast" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#0D9488" stopOpacity={0.12} />
-                          <stop offset="100%" stopColor="#0D9488" stopOpacity={0.02} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                      <CartesianGrid vertical={false} stroke="#E8EDF2" />
                       <XAxis
                         dataKey="label"
                         tick={{ fontSize: 10, fill: '#94A3B8' }}
-                        axisLine={{ stroke: '#E2E8F0' }}
+                        axisLine={false}
                         tickLine={false}
                         tickMargin={8}
                       />
                       <YAxis
                         tick={{ fontSize: 10, fill: '#94A3B8' }}
-                        axisLine={{ stroke: '#E2E8F0' }}
+                        axisLine={false}
                         tickLine={false}
                         tickMargin={4}
                         width={40}
@@ -1501,7 +1514,8 @@ export default function Forecasting() {
                         type="monotone"
                         dataKey="ci_upper"
                         stroke="none"
-                        fill="url(#ciGradForecast)"
+                        fill="#6B9E8A"
+                        fillOpacity={0.13}
                         isAnimationActive={false}
                         name="CI Upper"
                       />
@@ -1519,7 +1533,7 @@ export default function Forecasting() {
                         type="monotone"
                         dataKey="Actual"
                         stroke="#0F2D52"
-                        strokeWidth={2.5}
+                        strokeWidth={2}
                         dot={{ fill: '#0F2D52', r: 3, strokeWidth: 0 }}
                         activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }}
                         connectNulls={false}
@@ -1530,10 +1544,10 @@ export default function Forecasting() {
                       <Line
                         type="monotone"
                         dataKey="Forecast"
-                        stroke="#0D9488"
-                        strokeWidth={2.5}
+                        stroke="#6B9E8A"
+                        strokeWidth={2}
                         strokeDasharray="8 4"
-                        dot={{ fill: '#0D9488', r: 4, strokeWidth: 2, stroke: '#ffffff' }}
+                        dot={{ fill: '#6B9E8A', r: 3, strokeWidth: 1, stroke: '#ffffff' }}
                         activeDot={{ r: 6, strokeWidth: 2, stroke: '#ffffff' }}
                         connectNulls={false}
                         name="Forecasted Cases"
@@ -1574,57 +1588,53 @@ export default function Forecasting() {
                   </ResponsiveContainer>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-16 gap-3">
-                  <i className="ri-line-chart-line text-2xl" style={{ color: '#CBD5E1' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>No forecast chart data available.</p>
-                </div>
+                <p className="py-12 text-center text-xs text-[#64748B]">No forecast chart data available.</p>
               )}
-              <ChartInsight text={forecastInsight(forecastChartData, { methodLabel: forecastMethodLabel })} />
+              <ChartInsight text={forecastInsight(forecastChartData, { methodLabel: forecastMethodLabel })} plain />
             </div>
           </div>
 
           {/* ─── 5. ACTUAL VS PREDICTED GRAPH ─── */}
-            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-              <div className="flex items-center justify-between px-5 py-4">
+            <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E2E8F0] px-5 py-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-1 h-8 rounded-full" style={{ background: '#2563EB' }} />
                   <div>
-                    <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Actual vs Predicted Cases</h3>
-                    <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Comparison of observed TB cases and model-predicted values across historical periods.</p>
+                    <h3 className="text-sm font-semibold text-[#0F2D52]">Actual and predicted cases</h3>
+                    <p className="mt-1 text-xs text-[#64748B]">See how earlier predictions compared with cases reported later.</p>
                     {!pipelineStatus && (
                       <p className="text-[10px] mt-0.5 font-medium" style={{ color: '#D97706' }}>
-                        Using seasonal naive baseline — run pipeline for ML predictions.
+                        Showing a simple seasonal comparison until saved model results are available.
                       </p>
                     )}
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <div className="flex items-center gap-1.5">
-                    <span className="w-6 h-[3px] rounded-full" style={{ background: '#2563EB' }} />
+                    <span className="w-6 h-[3px]" style={{ background: '#0F2D52' }} />
                     <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Actual</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="w-6 h-[3px] rounded-full" style={{ background: '#14B8A6' }} />
+                    <span className="w-6 h-[3px] rounded-full" style={{ background: '#6B9E8A' }} />
                     <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Predicted</span>
                   </div>
                 </div>
               </div>
               <div className="px-5 pb-5">
                 {avpChartData.length > 0 ? (
-                  <div className="w-full" style={{ height: 340 }}>
+                  <div className="h-[300px] w-full" role="img" aria-label="Actual and predicted TB cases line chart">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={avpChartData} margin={{ top: 20, right: 25, left: 5, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
+                        <CartesianGrid vertical={false} stroke="#E8EDF2" />
                         <XAxis
                           dataKey="label"
                           tick={{ fontSize: 10, fill: '#94A3B8' }}
-                          axisLine={{ stroke: '#E2E8F0' }}
+                          axisLine={false}
                           tickLine={false}
                           tickMargin={8}
                         />
                         <YAxis
                           tick={{ fontSize: 10, fill: '#94A3B8' }}
-                          axisLine={{ stroke: '#E2E8F0' }}
+                          axisLine={false}
                           tickLine={false}
                           tickMargin={4}
                           width={40}
@@ -1633,18 +1643,18 @@ export default function Forecasting() {
                         <Line
                           type="monotone"
                           dataKey="Actual"
-                          stroke="#2563EB"
-                          strokeWidth={2.5}
-                          dot={{ fill: '#2563EB', r: 3, strokeWidth: 0 }}
+                          stroke="#0F2D52"
+                          strokeWidth={2}
+                          dot={{ fill: '#0F2D52', r: 2.5, strokeWidth: 0 }}
                           activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }}
                           name="Actual Cases"
                         />
                         <Line
                           type="monotone"
                           dataKey="Predicted"
-                          stroke="#14B8A6"
-                          strokeWidth={2.5}
-                          dot={{ fill: '#14B8A6', r: 3, strokeWidth: 0 }}
+                          stroke="#6B9E8A"
+                          strokeWidth={2}
+                          dot={{ fill: '#6B9E8A', r: 2.5, strokeWidth: 0 }}
                           activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }}
                           name="Predicted Cases"
                         />
@@ -1652,22 +1662,17 @@ export default function Forecasting() {
                     </ResponsiveContainer>
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center justify-center py-16 gap-3">
-                    <i className="ri-scales-line text-2xl" style={{ color: '#CBD5E1' }} />
-                    <p className="text-xs" style={{ color: '#94A3B8' }}>No comparison data available.</p>
-                  </div>
+                  <p className="py-12 text-center text-xs text-[#64748B]">No comparison data available.</p>
                 )}
-                <ChartInsight text={accuracyInsight(avpChartData)} />
+                <ChartInsight text={accuracyInsight(avpChartData)} plain />
               </div>
             </div>
 
             {/* ─── 6. FORECAST DETAILS TABLE ─── */}
-            <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-              <div className="px-5 py-4">
-                <div className="flex items-center gap-2">
-                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#6B7280' }}>Data</span>
-                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Forecast Details</h3>
-                </div>
+            <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
+              <div className="border-b border-[#E2E8F0] px-5 py-4">
+                <h3 className="text-sm font-semibold text-[#0F2D52]">Month-by-month forecast</h3>
+                <p className="mt-1 text-xs text-[#64748B]">Each row is a forecast month. The 95% range shows uncertainty around the estimate; a dash means no value is available.</p>
               </div>
               <div className="px-5 pb-5">
                 {sortedForecastTable.length > 0 ? (
@@ -1693,7 +1698,7 @@ export default function Forecasting() {
                     <tbody>
                       {sortedForecastTable.map((row, i) => {
                         const gr = row.growthRate != null ? Number(row.growthRate) : null;
-                        const modelLabel = row.isInsufficient ? 'Insufficient Data' : row.isBaseline ? 'Baseline Forecast' : row.method === 'arima' ? 'ARIMA' : null;
+                        const modelLabel = row.isInsufficient ? 'Too little history' : row.isBaseline ? 'Baseline estimate' : row.method === 'arima' ? 'ARIMA' : null;
                         const modelColor = row.isInsufficient
                           ? MODEL_STATUS_COLORS.insufficient_data
                           : row.isBaseline
@@ -1701,7 +1706,7 @@ export default function Forecasting() {
                             : MODEL_STATUS_COLORS.success;
 
                         // Historical periods: show actual only. Forecast periods: show forecast + CI only.
-                        const hasCI = row.ci_lower > 0 && row.ci_upper > 0;
+                        const hasCI = row.ci_lower != null && row.ci_upper != null && row.ci_lower <= row.ci_upper;
                         const showCI = !row.isHistorical && row.forecasted != null && hasCI;
                         const { min: gMin, max: gMax } = ciGlobalScale;
                         const gRange = gMax - gMin || 1;
@@ -1718,21 +1723,21 @@ export default function Forecasting() {
                             }}
                             className="hover:bg-blue-50/40 transition-colors"
                           >
-                            <td className="px-5 py-4 text-xs font-bold" style={{ color: '#1E293B' }}>
+                            <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#1E293B' }}>
                               {row.periodLabel}
                               {row.isHistorical && (
                                 <span className="ml-2 text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded" style={{ background: '#E2E8F0', color: '#64748B' }}>Actual</span>
                               )}
                             </td>
-                            <td className="px-5 py-4 text-xs font-medium" style={{ color: '#1E293B' }}>
+                            <td className="px-5 py-3 text-xs font-medium" style={{ color: '#1E293B' }}>
                               {row.actual != null ? row.actual.toLocaleString() : '\u2014'}
                             </td>
-                            <td className="px-5 py-4 text-xs font-medium" style={{ color: row.isInsufficient ? '#B91C1C' : '#1E293B' }}>
+                            <td className="px-5 py-3 text-xs font-medium" style={{ color: row.isInsufficient ? '#B91C1C' : '#1E293B' }}>
                               {row.isInsufficient
                                 ? 'Insufficient Historical Data'
                                 : !row.isHistorical && row.forecasted != null ? row.forecasted.toLocaleString() : '\u2014'}
                             </td>
-                            <td className="px-5 py-4">
+                            <td className="px-5 py-3">
                               {showCI ? (
                                 <div className="flex items-center gap-3 min-w-[160px]">
                                   <span className="text-[11px] font-medium tabular-nums" style={{ color: '#94A3B8', minWidth: 28 }}>
@@ -1744,14 +1749,14 @@ export default function Forecasting() {
                                     <div
                                       className="absolute top-0 h-full rounded-full"
                                       style={{
-                                         background: '#C4B5C0',
+                                        background: '#C8DDD7',
                                         left: `${barLeft}%`,
                                         width: `${Math.max(2, barWidth)}%`,
                                       }}
                                     />
                                     <div
                                       className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full border-2 border-white"
-                                       style={{ background: '#6B7280', left: `${forecastPos}%`, transform: 'translate(-50%, -50%)' }}
+                                      style={{ background: '#6B9E8A', left: `${forecastPos}%`, transform: 'translate(-50%, -50%)' }}
                                     />
                                   </div>
                                   <span className="text-[11px] font-medium tabular-nums" style={{ color: '#94A3B8', minWidth: 28 }}>
@@ -1764,10 +1769,10 @@ export default function Forecasting() {
                                 <span className="text-[11px]" style={{ color: '#94A3B8' }}>{"\u2014"}</span>
                               )}
                             </td>
-                            <td className="px-5 py-4 text-xs font-bold" style={{ color: gr != null ? (gr >= 0 ? '#EF4444' : '#10B981') : '#94A3B8' }}>
+                            <td className="px-5 py-3 text-xs font-semibold" style={{ color: gr != null ? (gr >= 0 ? '#EF4444' : '#10B981') : '#94A3B8' }}>
                               {!row.isHistorical && gr != null ? `${gr >= 0 ? '+' : ''}${gr.toFixed(1)}%` : '\u2014'}
                             </td>
-                            <td className="px-5 py-4">
+                            <td className="px-5 py-3">
                               {!row.isHistorical && modelLabel ? (
                                 <div className="flex items-center gap-2">
                                   <span className="w-2 h-2 rounded-full shrink-0" style={{ background: modelColor }} />
@@ -1784,20 +1789,21 @@ export default function Forecasting() {
                   </table>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-12 gap-2">
-                  <i className="ri-file-list-3-line text-xl" style={{ color: '#CBD5E1' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>No forecast detail data available.</p>
-                </div>
+                <p className="py-12 text-center text-xs text-[#64748B]">No forecast detail data available.</p>
               )}
+              <ChartInsight text={monthByMonthForecastInsight(forecastTableRows)} plain />
             </div>
           </div>
           </div>
 
-          {/* ─── RIGHT COLUMN: Sticky NLG Insight Panel ─── */}
-          <div className="w-[420px] shrink-0 hidden lg:block">
-            <div className="sticky top-4">
-              <AiInsightPanel
-                type="forecasting"
+          {/* Forecast interpretation remains available on smaller screens. */}
+          <div className="w-full shrink-0 xl:w-[340px]">
+            <div className="xl:sticky xl:top-4">
+              <AnalyticsInsightPanel
+                title="Forecast interpretation"
+                description="The main result and what it means."
+                titleId="forecast-interpretation-title"
+                compact
                 data={insightData}
                 loading={insightLoading}
                 error={insightError}
@@ -1808,6 +1814,16 @@ export default function Forecasting() {
           </div>
         </div>
       )}
+
+      <ModelEvaluationPanel
+        open={evaluationOpen}
+        onToggle={toggleEvaluation}
+        record={modelEvaluation}
+        status={evaluationStatus}
+        loading={performanceLoading}
+        error={performanceError}
+        filters={evaluationFilters}
+      />
     </div>
   );
 }

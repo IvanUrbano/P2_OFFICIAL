@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import API from '../api/axios';
 import FilterSelect from '../components/FilterSelect';
+import ModalCloseButton from '../components/ModalCloseButton';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
@@ -114,16 +115,19 @@ export default function InterventionPlanning() {
         : recommendation?.toLowerCase().includes('medic') ? 'medicine_allocation'
         : recommendation?.toLowerCase().includes('follow') ? 'follow_up'
         : 'screening';
-      setForm(f => ({
-        ...f,
-        barangay_name: barangay || f.barangay_name,
-        intervention_type: typeGuess,
-        related_alert_id: alertId ? Number(alertId) : null,
-        title: recommendation ? recommendation.slice(0, 80) : f.title,
-        description: recommendation || f.description,
-      }));
-      setShowCreateModal(true);
-      setSearchParams({}, { replace: true });
+      const prefill = window.setTimeout(() => {
+        setForm(f => ({
+          ...f,
+          barangay_name: barangay || f.barangay_name,
+          intervention_type: typeGuess,
+          related_alert_id: alertId ? Number(alertId) : null,
+          title: recommendation ? recommendation.slice(0, 80) : f.title,
+          description: recommendation || f.description,
+        }));
+        setShowCreateModal(true);
+        setSearchParams({}, { replace: true });
+      }, 0);
+      return () => window.clearTimeout(prefill);
     }
   }, [searchParams, setSearchParams]);
 
@@ -164,9 +168,12 @@ export default function InterventionPlanning() {
   }, [page, filterStatus, filterPriority, filterBarangay, filterType, debouncedSearch]);
 
   useEffect(() => {
-    fetchInterventions();
+    const initialFetch = window.setTimeout(fetchInterventions, 0);
     window.addEventListener('focus', fetchInterventions);
-    return () => window.removeEventListener('focus', fetchInterventions);
+    return () => {
+      window.clearTimeout(initialFetch);
+      window.removeEventListener('focus', fetchInterventions);
+    };
   }, [fetchInterventions]);
 
   /* ── Handlers ── */
@@ -287,11 +294,6 @@ export default function InterventionPlanning() {
     setShowEditModal(true);
   };
 
-  const storedUser = (() => {
-    const s = localStorage.getItem('user');
-    return s ? JSON.parse(s) : null;
-  })();
-
   const getTypeInfo = (key) => INTERVENTION_TYPES.find(t => t.key === key) || INTERVENTION_TYPES[0];
 
   /* ────────── Render ────────── */
@@ -301,7 +303,7 @@ export default function InterventionPlanning() {
       {actionError && (
         <div role="alert" className="flex items-start justify-between gap-3 px-4 py-3 rounded-lg text-xs" style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B' }}>
           <span>{actionError}</span>
-          <button type="button" onClick={() => setActionError(null)} aria-label="Dismiss error" className="shrink-0"><i className="ri-close-line" /></button>
+          <ModalCloseButton onClick={() => setActionError(null)} label="Dismiss error" />
         </div>
       )}
 
@@ -614,10 +616,10 @@ export default function InterventionPlanning() {
       {/* ─── Detail Side Panel ─── */}
       {(selectedIntervention || detailLoading) && (
         <div className="fixed inset-0 z-[1100] flex justify-end" onClick={() => setSelectedIntervention(null)}>
-          <div className="absolute inset-0" style={{ background: 'rgba(15,23,42,0.2)', backdropFilter: 'blur(4px)' }} />
+          <div className="absolute inset-0 bg-[#0F2D52]/35" />
           <div
-            className="relative w-full max-w-lg flex flex-col"
-            style={{ background: '#ffffff', animation: 'slide-in-right 0.3s ease-out both', boxShadow: '-8px 0 30px rgba(0,0,0,0.12)' }}
+            className="relative flex h-full w-full max-w-lg flex-col overflow-hidden bg-white shadow-[-8px_0_30px_rgba(0,0,0,0.12)]"
+            style={{ animation: 'slide-in-right 0.3s ease-out both' }}
             onClick={e => e.stopPropagation()}
           >
             {detailLoading ? (
@@ -630,31 +632,29 @@ export default function InterventionPlanning() {
             ) : selectedIntervention && (
               <>
                 {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ background: '#0F2D52' }}>
-                  <div>
-                    <p className="text-sm font-bold" style={{ color: '#ffffff' }}>{selectedIntervention.title}</p>
-                    <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.6)' }}>Intervention Detail</p>
+                <div className="flex shrink-0 items-start justify-between gap-4 bg-[#0F2D52] px-6 py-5">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-[#B8CDE2]">Intervention details</p>
+                    <h2 className="mt-1 break-words text-lg font-semibold leading-snug text-white">{selectedIntervention.title}</h2>
                   </div>
-                  <button onClick={() => setSelectedIntervention(null)} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
-                    <i className="ri-close-line text-base" />
-                  </button>
+                  <ModalCloseButton onClick={() => setSelectedIntervention(null)} light />
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-6 space-y-5">
-                  {/* Badges */}
-                  <div className="flex items-center gap-2 flex-wrap">
+                <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
+                  {/* Priority and progress */}
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-[#E2E8F0] pb-4">
                     {(() => {
                       const pri = PRIORITY_STYLES[selectedIntervention.priority] || PRIORITY_STYLES.medium;
                       const sts = STATUS_STYLES[selectedIntervention.status] || STATUS_STYLES.pending;
                       const overdue = isOverdue(selectedIntervention.target_date, selectedIntervention.status);
                       return (
                         <>
-                          <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ background: pri.bg, color: pri.textColor }}>
-                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: pri.color }} />
-                            {pri.label} Priority
+                          <span className="inline-flex items-center gap-2 text-xs font-semibold" style={{ color: pri.textColor }}>
+                            <span className="h-2 w-2 rounded-sm" style={{ background: pri.color }} aria-hidden="true" />
+                            {pri.label} priority
                           </span>
-                          <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ background: sts.bg, color: sts.color }}>
-                            <i className={`${sts.icon} text-[10px]`} />
+                          <span className="inline-flex items-center gap-2 text-xs font-semibold" style={{ color: overdue && selectedIntervention.status !== 'completed' ? '#B45309' : sts.color }}>
+                            <span className="h-2 w-2 rounded-sm" style={{ background: overdue && selectedIntervention.status !== 'completed' ? '#D97706' : sts.color }} aria-hidden="true" />
                             {overdue && selectedIntervention.status !== 'completed' ? 'Overdue' : sts.label}
                           </span>
                         </>
@@ -662,90 +662,81 @@ export default function InterventionPlanning() {
                     })()}
                   </div>
 
-                  {/* Detail Fields */}
-                  <div className="space-y-3">
-                    {[
-                      { label: 'Type', value: getTypeInfo(selectedIntervention.intervention_type).label },
-                      { label: 'Barangay', value: selectedIntervention.barangay_name },
-                      { label: 'Assigned To', value: selectedIntervention.assigned_to },
-                      { label: 'Team', value: selectedIntervention.team },
-                      { label: 'Target Date', value: formatDate(selectedIntervention.target_date) },
-                      { label: 'Created', value: formatDate(selectedIntervention.created_at) },
-                      { label: 'Completed', value: selectedIntervention.completed_at ? formatDate(selectedIntervention.completed_at) : null },
-                    ].filter(f => f.value).map(field => (
-                      <div key={field.label} className="flex items-start gap-3">
-                        <span className="text-[11px] font-semibold w-28 shrink-0 pt-0.5" style={{ color: '#94A3B8' }}>{field.label}</span>
-                        <span className="text-xs font-medium" style={{ color: '#0F2D52' }}>{field.value}</span>
-                      </div>
-                    ))}
-                  </div>
+                  {/* The location and deadline are the first details to act on. */}
+                  <dl className="grid grid-cols-2 gap-x-6 gap-y-4 border-b border-[#E2E8F0] pb-5">
+                    <div>
+                      <dt className="text-xs text-[#64748B]">Barangay</dt>
+                      <dd className="mt-1 text-sm font-semibold text-[#0F2D52]">{selectedIntervention.barangay_name || 'Not specified'}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-[#64748B]">Target date</dt>
+                      <dd className={`mt-1 text-sm font-semibold ${isOverdue(selectedIntervention.target_date, selectedIntervention.status) ? 'text-[#B45309]' : 'text-[#0F2D52]'}`}>{selectedIntervention.target_date ? formatDate(selectedIntervention.target_date) : 'Not set'}</dd>
+                    </div>
+                  </dl>
+
+                  <section>
+                    <h3 className="text-sm font-semibold text-[#0F2D52]">Plan details</h3>
+                    <dl className="mt-3 grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                      {[
+                        { label: 'Type', value: getTypeInfo(selectedIntervention.intervention_type).label },
+                        { label: 'Assigned to', value: selectedIntervention.assigned_to || 'Unassigned' },
+                        { label: 'Team', value: selectedIntervention.team || 'Not assigned' },
+                        { label: 'Created', value: formatDate(selectedIntervention.created_at) },
+                        { label: 'Completed', value: selectedIntervention.completed_at ? formatDate(selectedIntervention.completed_at) : null },
+                      ].filter(field => field.value).map(field => (
+                        <div key={field.label}>
+                          <dt className="text-xs text-[#64748B]">{field.label}</dt>
+                          <dd className="mt-1 text-sm font-medium text-[#334155]">{field.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </section>
 
                   {/* Description */}
-                  {selectedIntervention.description && (
-                    <div>
-                      <p className="text-[11px] font-semibold mb-1.5" style={{ color: '#94A3B8' }}>Description</p>
-                      <p className="text-xs leading-relaxed" style={{ color: '#334155' }}>{selectedIntervention.description}</p>
-                    </div>
-                  )}
+                  <section className="border-t border-[#E2E8F0] pt-5">
+                    <h3 className="text-sm font-semibold text-[#0F2D52]">Description</h3>
+                    <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-[#475569]">{selectedIntervention.description || 'No description added.'}</p>
+                  </section>
 
                   {/* Linked Alert */}
                   {selectedIntervention.related_alert_id && (
-                     <div className="rounded-lg p-3 flex items-center gap-3" style={{ background: '#F1F5F9', border: '1px solid #E2E8F0' }}>
-                      <i className="ri-alarm-warning-line text-lg" style={{ color: '#2563EB' }} />
-                      <div>
-                        <p className="text-[11px] font-bold" style={{ color: '#1E40AF' }}>Linked to Alert #{selectedIntervention.related_alert_id}</p>
-                        <p className="text-[10px] mt-0.5" style={{ color: '#3B82F6' }}>This intervention was created from a system alert.</p>
-                      </div>
-                    </div>
+                    <p className="border-l-2 border-[#0F2D52] pl-3 text-xs text-[#475569]">Created from alert <span className="font-semibold text-[#0F2D52]">#{selectedIntervention.related_alert_id}</span></p>
                   )}
                 </div>
 
                 {/* Action Buttons */}
-                <div className="shrink-0 px-6 py-4 flex items-center gap-2 flex-wrap" style={{ borderTop: '1px solid #E2E8F0', background: '#ffffff' }}>
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-[#E2E8F0] bg-white px-6 py-4">
                   {selectedIntervention.status === 'pending' && (
-                    <button
+                    <button type="button"
                       onClick={() => handleStatusUpdate(selectedIntervention.id, 'in_progress')}
-                      className="px-3 py-1.5 text-xs font-semibold"
-                      style={{ background: '#2563EB', color: '#ffffff', border: '1px solid #2563EB', borderRadius: 4, transition: 'background 0.15s' }}
-                      onMouseEnter={e => { e.currentTarget.style.background = '#1D4ED8'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = '#2563EB'; }}
+                      className="rounded bg-[#0F2D52] px-3 py-2 text-xs font-semibold text-white hover:bg-[#174A7E]"
                     >
-                      <i className="ri-play-line mr-1" />
-                      Start
+                      Start intervention
                     </button>
                   )}
                   {selectedIntervention.status === 'in_progress' && (
-                    <button
+                    <button type="button"
                       onClick={() => handleStatusUpdate(selectedIntervention.id, 'completed')}
-                      className="px-3 py-1.5 text-xs font-semibold"
-                       style={{ background: '#047857', color: '#ffffff', border: '1px solid #047857', borderRadius: 4, transition: 'background 0.15s' }}
-                      onMouseEnter={e => { e.currentTarget.style.background = '#047857'; }}
-                       onMouseLeave={e => { e.currentTarget.style.background = '#047857'; }}
+                      className="rounded bg-[#047857] px-3 py-2 text-xs font-semibold text-white hover:bg-[#065F46]"
                     >
-                      <i className="ri-check-line mr-1" />
-                      Complete
+                      Mark complete
                     </button>
                   )}
-                  <button
+                  <button type="button"
                     onClick={openEditModal}
-                    className="px-3 py-1.5 text-xs font-medium"
-                    style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}
+                    className="rounded border border-[#CBD5E1] bg-white px-3 py-2 text-xs font-semibold text-[#0F2D52] hover:bg-[#F8FAFC]"
                   >
-                    <i className="ri-edit-line mr-1" />
                     Edit
                   </button>
-                  <button
-                    onClick={() => setDeleteConfirm(selectedIntervention)}
-                    className="px-3 py-1.5 text-xs font-medium"
-                     style={{ background: '#FEF2F2', color: '#991B1B', border: '1px solid #FECACA', borderRadius: 4 }}
+                  <button type="button"
+                    onClick={() => { setActionError(null); setDeleteConfirm(selectedIntervention); }}
+                    className="rounded border border-[#FECACA] bg-white px-3 py-2 text-xs font-semibold text-[#991B1B] hover:bg-[#FEF2F2]"
                   >
-                    <i className="ri-delete-bin-line mr-1" />
                     Delete
                   </button>
-                  <button
+                  <button type="button"
                     onClick={() => setSelectedIntervention(null)}
-                    className="ml-auto px-3 py-1.5 text-xs font-medium"
-                    style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}
+                    className="rounded border border-[#CBD5E1] bg-white px-3 py-2 text-xs font-semibold text-[#475569] hover:bg-[#F8FAFC]"
                   >
                     Close
                   </button>
@@ -771,9 +762,7 @@ export default function InterventionPlanning() {
                 <p className="text-sm font-bold" style={{ color: '#ffffff' }}>{showEditModal ? 'Edit Intervention' : 'New Intervention'}</p>
                 <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.6)' }}>{showEditModal ? 'Update intervention details' : 'Create a new TB intervention'}</p>
               </div>
-              <button onClick={() => { setShowCreateModal(false); setShowEditModal(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
-                <i className="ri-close-line text-base" />
-              </button>
+              <ModalCloseButton onClick={() => { setShowCreateModal(false); setShowEditModal(false); }} light />
             </div>
 
             {/* Form Fields */}
@@ -904,7 +893,7 @@ export default function InterventionPlanning() {
             </div>
 
             {/* Panel Footer */}
-            <div className="shrink-0 px-6 py-4 flex items-center gap-2" style={{ borderTop: '1px solid #E2E8F0', background: '#ffffff' }}>
+            <div className="shrink-0 px-6 py-4 flex items-center justify-end gap-2" style={{ borderTop: '1px solid #E2E8F0', background: '#ffffff' }}>
               <button
                 onClick={showEditModal ? handleUpdate : handleCreate}
                 className="px-4 py-2 text-xs font-semibold"
@@ -931,42 +920,35 @@ export default function InterventionPlanning() {
 
       {/* ─── Delete Confirmation Modal ─── */}
       {deleteConfirm && (
-        <div className="fixed inset-0 z-[1200] flex items-center justify-center" onClick={() => setDeleteConfirm(null)}>
-          <div className="absolute inset-0" style={{ background: 'rgba(15,23,42,0.3)', backdropFilter: 'blur(4px)' }} />
-          <div
-            className="relative w-full max-w-sm rounded-xl p-6"
-            style={{ background: '#ffffff', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3 mb-4">
-               <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: '#FEF2F2' }}>
-                 <i className="ri-delete-bin-line text-lg" style={{ color: '#991B1B' }} />
-              </div>
-              <div>
-                <p className="text-sm font-bold" style={{ color: '#0F2D52' }}>Delete Intervention?</p>
-                <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>This action cannot be undone.</p>
-              </div>
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center px-4" role="alertdialog" aria-modal="true" aria-labelledby="delete-intervention-title" aria-describedby="delete-intervention-description">
+          <div className="absolute inset-0 bg-[#0F2D52]/35" onClick={() => { if (!deleting) setDeleteConfirm(null); }} />
+          <div className="relative w-full max-w-[440px] overflow-hidden rounded-lg border border-[#DCE4ED] bg-white shadow-[0_20px_50px_rgba(15,45,82,0.2)]">
+            <div className="border-b border-[#E2E8F0] px-6 py-4">
+              <h2 id="delete-intervention-title" className="text-base font-semibold text-[#0F2D52]">Delete intervention</h2>
             </div>
-            <p className="text-xs mb-5" style={{ color: '#64748B' }}>
-              Are you sure you want to delete <span className="font-semibold" style={{ color: '#0F2D52' }}>"{deleteConfirm.title}"</span>?
-            </p>
-            <div className="flex items-center gap-2 justify-end">
-              <button
+            <div id="delete-intervention-description" className="px-6 py-5">
+              <p className="text-sm leading-relaxed text-[#475569]">Remove this intervention from the plan?</p>
+              <div className="mt-4 border-l-2 border-[#C5D3E2] pl-3">
+                <p className="break-words text-sm font-semibold text-[#0F2D52]">{deleteConfirm.title}</p>
+                {deleteConfirm.barangay_name && <p className="mt-0.5 text-xs text-[#64748B]">{deleteConfirm.barangay_name}</p>}
+              </div>
+              <p className="mt-4 text-xs text-[#64748B]">This action cannot be undone.</p>
+              {actionError && <p className="mt-3 text-xs font-medium text-[#B91C1C]" role="alert">{actionError}</p>}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[#E2E8F0] px-6 py-4">
+              <button type="button" autoFocus
                 onClick={() => setDeleteConfirm(null)}
-                className="px-3 py-1.5 text-xs font-medium"
-                style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}
+                disabled={deleting}
+                className="rounded border border-[#CBD5E1] bg-white px-4 py-2 text-xs font-semibold text-[#334155] hover:bg-[#F8FAFC] disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]"
               >
                 Cancel
               </button>
-              <button
+              <button type="button"
                 onClick={() => handleDelete(deleteConfirm.id)}
                 disabled={deleting}
-                className="px-4 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-70"
-                 style={{ background: '#991B1B', color: '#ffffff', border: '1px solid #991B1B', borderRadius: 4, transition: 'background 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#B91C1C'; }}
-                 onMouseLeave={e => { e.currentTarget.style.background = '#991B1B'; }}
+                className="rounded bg-[#B91C1C] px-4 py-2 text-xs font-semibold text-white hover:bg-[#991B1B] disabled:cursor-wait disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#B91C1C]"
               >
-                {deleting ? <><i className="ri-loader-4-line animate-spin" /> Deleting…</> : 'Yes, Delete'}
+                {deleting ? 'Deleting...' : 'Delete intervention'}
               </button>
             </div>
           </div>

@@ -1,23 +1,6 @@
 import { useState, useMemo } from 'react';
 import renderFormattedText from '../utils/renderFormattedText.jsx';
 
-function ChartLineIcon({ className = "w-4 h-4" }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="#2E6FAF"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M3 3v18h18" />
-      <path d="M7 16l4-4 3 3 5-6" />
-    </svg>
-  );
-}
-
 /**
  * Dashboard welcome header + NLG overview panel.
  *
@@ -84,6 +67,16 @@ export default function DashboardWelcomeInsightsSection({
   // from the Pasig TB Information System; it does not integrate directly with
   // DOH ITIS, and must not claim to.
   const dataSourceLabel = dataSource || 'PASIG TB-IS';
+  const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
+  const assignedBarangay = user?.barangay?.name || user?.barangay_name || user?.facility?.barangay_name || null;
+  const assignedFacility = user?.facility?.name || user?.facility_name || null;
+  const accountScope = isAdmin
+    ? 'Admin · City-wide'
+    : assignedBarangay
+      ? `Staff · Brgy. ${assignedBarangay}`
+      : assignedFacility
+        ? `Staff · ${assignedFacility}`
+        : 'Staff · No area assigned';
 
   // Forecast outlook — reflects the real forecastSummary computed from the
   // persisted forecast rows, and names the method that actually produced it.
@@ -109,26 +102,27 @@ export default function DashboardWelcomeInsightsSection({
     return [
     {
       id: 'caseActivity',
-      icon: <ChartLineIcon />,
-      title: 'REPORTED CASE TREND',
+      title: 'Reported case trend',
       text: sectionText('caseActivity') || 'No case-trend interpretation is available for the current data.',
     },
     {
       id: 'riskSituation',
-      icon: <ChartLineIcon />,
-      title: 'RISK SITUATION',
+      title: 'Risk situation',
       text: sectionText('riskSituation') || 'No Random Forest risk classification is available yet.',
     },
     {
+      id: 'mapInterpretation',
+      title: 'Map interpretation',
+      text: sectionText('mapInterpretation') || 'No map interpretation is available for the current risk assessment.',
+    },
+    {
       id: 'treatmentPerformance',
-      icon: <ChartLineIcon />,
-      title: 'TREATMENT PERFORMANCE',
+      title: 'Treatment performance',
       text: sectionText('treatmentPerformance') || 'Treatment indicators are unavailable for the current data.',
     },
     {
       id: 'forecastSignal',
-      icon: <ChartLineIcon />,
-      title: 'FORECAST SIGNAL',
+      title: 'Forecast signal',
       text: sectionText('forecastSignal') || forecastOutlookText,
     },
     ];
@@ -145,317 +139,117 @@ export default function DashboardWelcomeInsightsSection({
   };
 
   return (
-    <div className="flex flex-col md:flex-row gap-5 items-stretch">
-      {/* ─── 1. LEFT SIDE: WELCOME + DATA CONTEXT (65–70% on desktop, 55–60% on tablet) ─── */}
-      <div
-        className="w-full md:w-[58%] lg:w-[67%] rounded-2xl p-6 flex flex-col justify-between"
-        style={{
-          background: 'linear-gradient(135deg, #0F2D52 0%, #173E6D 100%)',
-          border: '1px solid rgba(255, 255, 255, 0.12)',
-          boxShadow: '0 4px 24px rgba(15, 45, 82, 0.18), 0 2px 8px rgba(15, 45, 82, 0.1)',
-        }}
-      >
-        {/* Main Greeting */}
-        <div>
-          <h2
-            className="text-2xl sm:text-[26px] font-bold tracking-tight leading-tight"
-            style={{ color: '#FFFFFF' }}
-          >
-            Welcome back, {user?.username || 'User'}
-          </h2>
-          <p className="text-xs sm:text-[13px] mt-1.5 font-normal" style={{ color: '#CBD5E1' }}>
-            Here's your latest tuberculosis monitoring overview for Pasig City.
-          </p>
-        </div>
-
-        {/* Today's Focus - Highlighted NLG Interpretation */}
-        <div
-          className="my-4 p-3.5 sm:p-4 rounded-xl"
-          style={{
-            background: 'rgba(255, 255, 255, 0.07)',
-            border: '1px solid rgba(255, 255, 255, 0.14)',
-            borderLeft: '3px solid #38BDF8',
-          }}
-        >
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <span className="text-xs font-bold" style={{ color: '#38BDF8' }}>✦</span>
-            <span
-              className="text-[10px] font-extrabold uppercase tracking-wider"
-              style={{ color: '#FFFFFF' }}
-            >
-              TODAY'S FOCUS
-            </span>
+    <div className="grid grid-cols-1 gap-5 md:grid-cols-12">
+      {/* Welcome and data context */}
+      <section className="flex min-w-0 w-full flex-col rounded-lg border border-[#0F2D52] bg-[#0F2D52] px-5 py-5 sm:px-6 md:col-span-7 lg:col-span-8">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="break-words text-xl font-semibold tracking-tight text-white sm:text-2xl">
+              Welcome back, {user?.username || 'User'}
+            </h2>
+            <p className="mt-1 text-xs text-[#CBD5E1] sm:text-[13px]">Pasig City tuberculosis monitoring overview</p>
+            <p className="mt-2 text-xs text-[#E2E8F0]">
+              <span className="text-[#CBD5E1]">Account scope:</span> <span className="font-semibold text-white">{accountScope}</span>
+            </p>
           </div>
-
-          <p className="text-xs sm:text-[13px] leading-relaxed" style={{ color: '#E2E8F0' }}>
-            {insightData?.summary
-              ? renderFormattedText(insightData.summary)
-              : insightLoading
-                ? 'Generating interpretation…'
-                : insightError
-                  ? 'The overview interpretation could not be generated. The metrics and charts below are unaffected.'
-                  : 'Review TB case activity, risk classifications, and forecasts below for the latest monitoring update.'}
-          </p>
-
-          <div className="mt-2.5 flex items-center gap-1.5 text-[10px]" style={{ color: '#94A3B8' }}>
-            <i className="ri-sparkling-line text-[11px]" style={{ color: '#38BDF8' }} />
-            <span>
-              {insightData?.summary
-                ? 'NLG-generated insight from calculated TBInsight results'
-                : insightError
-                  ? 'NLG-generated insight unavailable'
-                  : 'Awaiting NLG-generated insight'}
-            </span>
-          </div>
-        </div>
-
-        {/* Data Context Metadata Area */}
-        <div
-          className="pt-3 flex flex-col sm:flex-row sm:items-end justify-between gap-4"
-          style={{ borderTop: '1px solid rgba(255, 255, 255, 0.12)' }}
-        >
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 flex-1">
-            {/* DATA SOURCE */}
-            <div>
-              <span
-                className="text-[10px] font-bold uppercase tracking-wider block"
-                style={{ color: '#94A3B8' }}
-              >
-                DATA SOURCE
-              </span>
-              <p className="text-xs sm:text-[13px] font-semibold mt-1" style={{ color: '#FFFFFF' }}>
-                {dataSourceLabel}
-              </p>
-            </div>
-
-            {/* MONITORING PERIOD — latest month actually covered by the data */}
-            <div>
-              <span
-                className="text-[10px] font-bold uppercase tracking-wider block"
-                style={{ color: '#94A3B8' }}
-              >
-                MONITORING PERIOD
-              </span>
-              <p className="text-xs sm:text-[13px] font-semibold mt-1" style={{ color: '#FFFFFF' }}>
-                {monitoringPeriodLabel}
-              </p>
-            </div>
-
-            {/* LAST DATA SYNC — most recent SUCCESSFUL transfer/import of TB
-                data into TBInsight. Never the model-run timestamp, and never
-                changed by opening or refreshing the Dashboard. */}
-            <div>
-              <span
-                className="text-[10px] font-bold uppercase tracking-wider block"
-                style={{ color: '#94A3B8' }}
-              >
-                LAST DATA SYNC
-              </span>
-              <p className="text-xs sm:text-[13px] font-semibold mt-1" style={{ color: '#FFFFFF' }}>
-                {freshnessUnavailable ? 'Unavailable' : formattedLastSynced}
-              </p>
-              {!freshnessUnavailable && lastSyncedRelative && (
-                <span className="text-[11px] font-medium block" style={{ color: '#94A3B8' }}>
-                  {lastSyncedRelative}
-                  {/* State the provenance when the value is NOT a successful
-                      webhook sync, so an import timestamp is never read as a
-                      confirmed transfer from PASIG TB-IS. */}
-                  {syncSource === 'import' ? ' · from file import (no webhook sync logged)' : ''}
-                  {syncSource === 'webhook' ? ' · webhook sync' : ''}
-                </span>
-              )}
-            </div>
-
-            {/* LAST MODEL RUN — latest analytics/model pipeline execution */}
-            <div>
-              <span
-                className="text-[10px] font-bold uppercase tracking-wider block"
-                style={{ color: '#94A3B8' }}
-              >
-                LAST MODEL RUN
-              </span>
-              <p className="text-xs sm:text-[13px] font-semibold mt-1" style={{ color: '#FFFFFF' }}>
-                {formattedLastModelRun}
-              </p>
-              {lastModelRunRelative && (
-                <span className="text-[11px] font-medium block" style={{ color: '#94A3B8' }}>
-                  {lastModelRunRelative}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Refresh Action */}
           <button
             type="button"
             onClick={onRefresh}
             disabled={refreshing}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition shrink-0 self-start sm:self-end disabled:opacity-60 disabled:cursor-not-allowed"
-            style={{
-              background: 'rgba(255, 255, 255, 0.08)',
-              color: '#FFFFFF',
-              border: '1px solid rgba(255, 255, 255, 0.22)',
-              cursor: refreshing ? 'not-allowed' : 'pointer',
-            }}
-            onMouseEnter={(e) => {
-              if (!refreshing) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.16)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
-            }}
+            className="shrink-0 border border-white/40 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
             title="Refresh dashboard data"
           >
-            <i className={`ri-refresh-line text-sm ${refreshing ? 'animate-spin' : ''}`} />
-            {refreshing ? 'Refreshing...' : 'Refresh Data'}
+            {refreshing ? 'Refreshing…' : 'Refresh data'}
           </button>
         </div>
-      </div>
 
-      {/* ─── 2. RIGHT SIDE: OVERALL TB INSIGHTS (30–35% on desktop, 40–45% on tablet) ─── */}
-      <div
-        className="w-full md:w-[42%] lg:w-[33%] bg-white rounded-2xl p-5 sm:p-6 flex flex-col justify-between"
-        style={{
-          border: '1px solid #E2E8F0',
-          boxShadow: '0 4px 20px rgba(15, 45, 82, 0.06), 0 1px 3px rgba(15, 45, 82, 0.03)',
-        }}
-      >
-        {/* Header */}
-        <div
-          className="flex items-start justify-between gap-2 pb-3"
-          style={{ borderBottom: '1px solid #F1F5F9' }}
-        >
-          <div>
-            <h3
-              className="text-xs font-extrabold uppercase tracking-wider flex items-center gap-1.5"
-              style={{ color: '#0F2D52' }}
-            >
-              <span style={{ color: '#2E6FAF' }}>✦</span> OVERALL TB INSIGHTS
-            </h3>
-            <p className="text-[11px] mt-0.5 leading-tight" style={{ color: '#64748B' }}>
-              Template-based NLG summary of calculated TBInsight results
-            </p>
-          </div>
-          <span
-            className="text-[11px] font-bold px-2 py-0.5 rounded-full shrink-0"
-            style={{ background: '#F1F5F9', color: '#64748B' }}
-          >
-            {activeSlide + 1} / {slides.length}
-          </span>
+        <div className="mt-5 border-t border-white/20 pt-4">
+          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-[#CBD5E1]">Latest overview</h3>
+          <p className="mt-2 text-[13px] leading-relaxed text-white">
+            {insightData?.summary
+              ? renderFormattedText(insightData.summary)
+              : insightLoading
+                ? 'Loading the latest overview…'
+                : insightError
+                  ? 'The overview is unavailable. Dashboard metrics and charts are still available below.'
+                  : 'Review the case activity, risk classifications, and forecasts below.'}
+          </p>
         </div>
 
-        {/* Dynamic Body: Loading, Error, or Carousel Slide */}
+        <dl className="mt-5 grid grid-cols-1 gap-x-5 gap-y-4 border-t border-white/20 pt-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="min-w-0">
+            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#CBD5E1]">Data source</dt>
+            <dd className="mt-1 text-xs font-medium text-white">{dataSourceLabel}</dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#CBD5E1]">Monitoring period</dt>
+            <dd className="mt-1 text-xs font-medium text-white">{monitoringPeriodLabel}</dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#CBD5E1]">Last data sync</dt>
+            <dd className="mt-1 text-xs font-medium leading-snug text-white">{freshnessUnavailable ? 'Unavailable' : formattedLastSynced}</dd>
+            {!freshnessUnavailable && lastSyncedRelative && (
+              <dd className="mt-0.5 text-[10px] leading-snug text-[#CBD5E1]">
+                {lastSyncedRelative}
+                {syncSource === 'import' ? ' · file import' : ''}
+                {syncSource === 'webhook' ? ' · webhook sync' : ''}
+              </dd>
+            )}
+          </div>
+          <div className="min-w-0">
+            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#CBD5E1]">Last model run</dt>
+            <dd className="mt-1 text-xs font-medium leading-snug text-white">{formattedLastModelRun}</dd>
+            {lastModelRunRelative && <dd className="mt-0.5 text-[10px] text-[#CBD5E1]">{lastModelRunRelative}</dd>}
+          </div>
+        </dl>
+      </section>
+
+      {/* The welcome panel determines the desktop row height; insight text scrolls inside it. */}
+      <div className="relative min-w-0 md:col-span-5 lg:col-span-4">
+        <section className="flex h-[360px] min-w-0 flex-col overflow-hidden rounded-lg border border-[#E2E8F0] bg-white px-5 py-5 sm:px-6 md:absolute md:inset-0 md:h-auto" aria-label="Overall TB insights">
+          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[#E2E8F0] pb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-[#0F2D52]">Overall TB insights</h3>
+              <p className="mt-0.5 text-[11px] text-[#64748B]">Current data summary</p>
+            </div>
+            <span className="shrink-0 text-[11px] text-[#64748B]" aria-label={`Insight ${activeSlide + 1} of ${slides.length}`}>
+              {activeSlide + 1} of {slides.length}
+            </span>
+          </div>
+
+        {/* Insight content */}
         {insightLoading ? (
-          <div className="flex-1 flex flex-col items-center justify-center py-6 text-center">
-            <div
-              className="w-6 h-6 rounded-full animate-spin mb-2"
-              style={{ border: '2.5px solid #E2E8F0', borderTopColor: '#0F2D52' }}
-            />
-            <p className="text-xs font-bold" style={{ color: '#0F2D52' }}>
-              Generating interpretation...
-            </p>
-            <p className="text-[11px] mt-0.5" style={{ color: '#64748B' }}>
-              Interpreting the latest model results
-            </p>
+          <div className="min-h-0 flex-1 py-5" role="status">
+            <p className="text-xs text-[#64748B]">Loading insights…</p>
           </div>
         ) : insightError ? (
-          <div className="flex-1 flex flex-col items-center justify-center py-6 text-center">
-            <div
-              className="w-8 h-8 rounded-full flex items-center justify-center mb-2"
-              style={{ background: '#FEF2F2', color: '#EF4444' }}
-            >
-              <i className="ri-error-warning-line text-base" />
-            </div>
-            <p className="text-xs font-bold" style={{ color: '#991B1B' }}>
-              ⚠ Unable to generate interpretation
-            </p>
-            <p className="text-[11px] mt-0.5" style={{ color: '#64748B' }}>
-              The dashboard results are still available.
-            </p>
+          <div className="min-h-0 flex-1 py-5" role="alert">
+            <p className="text-xs font-semibold text-[#991B1B]">Insights are unavailable.</p>
+            <p className="mt-1 text-xs text-[#64748B]">The dashboard metrics are still available.</p>
             <button
               onClick={onRetryInsight}
               type="button"
-              className="mt-3 px-3 py-1.5 text-xs font-semibold rounded text-white transition"
-              style={{ background: '#0F2D52' }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = '#174A7E'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = '#0F2D52'; }}
+              className="mt-3 text-xs font-semibold text-[#0F2D52] hover:underline"
             >
               Retry
             </button>
           </div>
         ) : (
-          <div className="py-4 flex-1 flex flex-col justify-center min-h-[105px]">
-            <div
-              key={activeSlide}
-              className="transition-all duration-300 ease-in-out"
-              style={{ opacity: 1 }}
-            >
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className="flex items-center justify-center shrink-0 w-5 h-5 leading-none">{currentSlide.icon}</span>
-                <h4
-                  className="text-xs font-bold uppercase tracking-wider"
-                  style={{ color: '#0F2D52' }}
-                >
-                  {currentSlide.title}
-                </h4>
-              </div>
-              <p className="text-xs leading-relaxed" style={{ color: '#334155' }}>
-                {renderFormattedText(currentSlide.text)}
-              </p>
-            </div>
+          <div key={activeSlide} className="min-h-0 flex-1 overflow-y-auto py-4" tabIndex={0} aria-label={`${currentSlide.title} insight`}>
+            <h4 className="text-[13px] font-semibold text-[#0F2D52]">{currentSlide.title}</h4>
+            <p className="mt-2 text-xs leading-relaxed text-[#334155]">{renderFormattedText(currentSlide.text)}</p>
           </div>
         )}
 
-        {/* Carousel Navigation */}
-        <div className="flex items-center justify-between pt-2 pb-3">
-          <button
-            onClick={prevSlide}
-            type="button"
-            aria-label="Previous insight"
-            className="w-7 h-7 rounded-full flex items-center justify-center transition active:scale-95"
-            style={{ border: '1px solid #E2E8F0', color: '#0F2D52', background: '#ffffff' }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = '#F8FAFC'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = '#ffffff'; }}
-          >
-            <i className="ri-arrow-left-s-line text-sm" />
-          </button>
-
-          <div className="flex items-center gap-1.5">
-            {slides.map((_, idx) => (
-              <button
-                key={idx}
-                onClick={() => setActiveSlide(idx)}
-                type="button"
-                aria-label={`Go to slide ${idx + 1}`}
-                className={`h-2 rounded-full transition-all duration-200 ${activeSlide === idx ? 'w-4' : 'w-2'
-                  }`}
-                style={{
-                  background: activeSlide === idx ? '#0F2D52' : '#CBD5E1',
-                }}
-              />
-            ))}
-          </div>
-
-          <button
-            onClick={nextSlide}
-            type="button"
-            aria-label="Next insight"
-            className="w-7 h-7 rounded-full flex items-center justify-center transition active:scale-95"
-            style={{ border: '1px solid #E2E8F0', color: '#0F2D52', background: '#ffffff' }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = '#F8FAFC'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = '#ffffff'; }}
-          >
-            <i className="ri-arrow-right-s-line text-sm" />
-          </button>
-        </div>
-
-        {/* Footer */}
-        <div
-          className="pt-2 flex flex-col gap-0.5 text-[10px]"
-          style={{ borderTop: '1px solid #F1F5F9', color: '#94A3B8' }}
-        >
-          <span>Based on: {monitoringPeriodLabel} • Pasig City</span>
-          <span>NLG-generated from calculated TBInsight results</span>
-        </div>
+          <nav className="flex shrink-0 items-center justify-between border-t border-[#E2E8F0] pt-3" aria-label="Insight navigation">
+            <button type="button" onClick={prevSlide} aria-label="Previous insight" title="Previous insight" className="flex h-8 w-8 items-center justify-center text-[#0F2D52] hover:text-[#2E6FAF] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]">
+              <i className="ri-arrow-left-line text-base" aria-hidden="true" />
+            </button>
+            <button type="button" onClick={nextSlide} aria-label="Next insight" title="Next insight" className="flex h-8 w-8 items-center justify-center text-[#0F2D52] hover:text-[#2E6FAF] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]">
+              <i className="ri-arrow-right-line text-base" aria-hidden="true" />
+            </button>
+          </nav>
+        </section>
       </div>
     </div>
   );
