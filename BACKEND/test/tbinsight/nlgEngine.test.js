@@ -67,21 +67,21 @@ describe('generateAnalyticsInsight', () => {
     const result = generateAnalyticsInsight(baseMetrics);
     const keyTrend = result.sections[0];
     assert.strictEqual(keyTrend.id, 'keyTrend');
-    assert.ok(keyTrend.text.includes('increased'));
+    assert.ok(keyTrend.text.includes('more'));
     assert.ok(keyTrend.text.includes('18.4%'));
   });
 
   it('generates decreasing trend text when changePercent < -5', () => {
     const metrics = { ...baseMetrics, trend: { ...baseMetrics.trend, direction: 'decreasing', changePercent: -12.5 } };
     const result = generateAnalyticsInsight(metrics);
-    assert.ok(result.sections[0].text.includes('decreased'));
+    assert.ok(result.sections[0].text.includes('fewer'));
     assert.ok(result.sections[0].text.includes('12.5%'));
   });
 
   it('generates stable trend text when changePercent between -5 and 5', () => {
     const metrics = { ...baseMetrics, trend: { ...baseMetrics.trend, direction: 'stable', changePercent: 2.1 } };
     const result = generateAnalyticsInsight(metrics);
-    assert.ok(result.sections[0].text.includes('relatively stable'));
+    assert.ok(result.sections[0].text.includes('about the same'));
   });
 
   it('generates highest/lowest with different barangays', () => {
@@ -113,13 +113,13 @@ describe('generateAnalyticsInsight', () => {
     const section = result.sections[2];
     assert.strictEqual(section.id, 'significantChanges');
     assert.ok(section.text.includes('Manggahan'));
-    assert.ok(section.text.includes('increase'));
+    assert.ok(section.text.includes('more cases'));
   });
 
   it('generates no-significant-changes text when empty', () => {
     const metrics = { ...baseMetrics, significantChanges: [] };
     const result = generateAnalyticsInsight(metrics);
-    assert.ok(result.sections[2].text.includes('No barangay showed'));
+    assert.ok(result.sections[2].text.includes('No barangay had'));
   });
 
   it('generates risk findings with count and names', () => {
@@ -187,10 +187,10 @@ describe('generateAnalyticsInsight', () => {
     assert.ok(result.meta.basedOn.includes('All Barangays'));
   });
 
-  it('risk findings attributes classification to the Random Forest model', () => {
+  it('risk findings uses the latest assessment with its scope caveat', () => {
     const result = generateAnalyticsInsight(baseMetrics);
     const section = result.sections.find((s) => s.id === 'riskFindings');
-    assert.ok(section.text.includes('Random Forest risk model classified'));
+    assert.ok(section.text.includes('barangays are **High Risk**'));
     assert.ok(section.text.includes('latest barangay-level'));
   });
 
@@ -296,14 +296,14 @@ describe('generateForecastingInsight', () => {
     const result = generateForecastingInsight(baseMetrics);
     const section = result.sections[0];
     assert.strictEqual(section.id, 'forecastDirection');
-    assert.ok(section.text.includes('increase'));
+    assert.ok(section.text.includes('more TB cases'));
     assert.ok(section.text.includes('3 months'));
   });
 
   it('generates decreasing forecast direction', () => {
     const metrics = { ...baseMetrics, direction: { trend: 'decreasing', growthRate: -10 } };
     const result = generateForecastingInsight(metrics);
-    assert.ok(result.sections[0].text.includes('decrease'));
+    assert.ok(result.sections[0].text.includes('fewer TB cases'));
   });
 
   it('generates stable forecast direction', () => {
@@ -329,7 +329,7 @@ describe('generateForecastingInsight', () => {
   it('reports a genuine persisted zero forecast as zero cases', () => {
     const metrics = { ...baseMetrics, predictedCases: { total: 0, monthlyAvg: 0, horizon: 1, available: true } };
     const result = generateForecastingInsight(metrics);
-    assert.ok(result.sections[1].text.includes('**0** total cases'));
+    assert.ok(result.sections[1].text.includes('**0** cases'));
   });
 
   it('generates peak period text', () => {
@@ -350,13 +350,13 @@ describe('generateForecastingInsight', () => {
     const result = generateForecastingInsight(baseMetrics);
     const section = result.sections[3];
     assert.strictEqual(section.id, 'growthRate');
-    assert.ok(section.text.includes('+12.5%'));
+    assert.ok(section.text.includes('12.5% above'));
   });
 
   it('generates negative growth rate text', () => {
     const metrics = { ...baseMetrics, direction: { trend: 'decreasing', growthRate: -8.3 } };
     const result = generateForecastingInsight(metrics);
-    assert.ok(result.sections[3].text.includes('-8.3%'));
+    assert.ok(result.sections[3].text.includes('8.3% below'));
     assert.ok(result.sections[3].text.includes('declining'));
   });
 
@@ -369,7 +369,7 @@ describe('generateForecastingInsight', () => {
   it('explains an unavailable baseline while retaining an existing forecast', () => {
     const metrics = { ...baseMetrics, direction: { trend: 'unavailable', growthRate: null } };
     const result = generateForecastingInsight(metrics);
-    assert.ok(result.sections[0].text.includes('no positive monthly baseline'));
+    assert.ok(result.sections[0].text.includes('past monthly average is zero'));
     assert.ok(result.sections[3].text.includes('unavailable'));
     assert.ok(!result.sections[3].text.includes('no significant change'));
   });
@@ -392,22 +392,24 @@ describe('generateForecastingInsight', () => {
     const metrics = { ...baseMetrics, confidence: { avgRelativeCIWidth: 0.2, interpretation: 'narrow' } };
     const result = generateForecastingInsight(metrics);
     assert.ok(result.sections[5].text.includes('narrow'));
-    assert.ok(result.sections[5].text.includes('high forecast certainty'));
+    assert.ok(result.sections[5].text.includes('Actual case counts may still differ'));
   });
 
   it('generates wide confidence text', () => {
     const metrics = { ...baseMetrics, confidence: { avgRelativeCIWidth: 0.8, interpretation: 'wide' } };
     const result = generateForecastingInsight(metrics);
     assert.ok(result.sections[5].text.includes('wide'));
-    assert.ok(result.sections[5].text.includes('significant forecast uncertainty'));
+    assert.ok(result.sections[5].text.includes('actual case counts could differ considerably'));
   });
 
-  it('generates overall summary with elevated activity', () => {
+  it('keeps the forecast overview focused on projected cases', () => {
     const result = generateForecastingInsight(baseMetrics);
     const section = result.sections[6];
     assert.strictEqual(section.id, 'overallSummary');
-    assert.ok(section.text.includes('elevated'));
-    assert.ok(section.text.includes('4 barangay(s)'));
+    assert.ok(section.text.includes('more TB cases than the average'));
+    assert.ok(section.text.includes('228 cases'));
+    assert.ok(section.text.includes('November 2026'));
+    assert.ok(!section.text.includes('High Risk'));
   });
 
   it('builds basedOn with barangay filter', () => {
@@ -505,11 +507,25 @@ describe('generateGisInsight', () => {
     assert.ok(text.includes('per 100,000 population'));
   });
 
+  it('top hotspots are ranked by incidence, never by legacy risk score, and note part-year data', () => {
+    const m = { ...baseMetrics, coverage: { ...baseMetrics.coverage, caseYear: 2026, latestCaseMonth: 9 } };
+    const t = generateGisInsight(m).sections.find((x) => x.id === 'topHotspots').text;
+    assert.match(t, /Ranked by cases per 100,000 population in 2026 \(so far in 2026, January to September\)/);
+    assert.ok(!/score/i.test(t));
+  });
+
+  it('labels case concentration and trend scope', () => {
+    const m = { ...baseMetrics, concentration: { ...baseMetrics.concentration, scope: 'all' } };
+    const r = generateGisInsight(m);
+    assert.match(r.sections.find((x) => x.id === 'caseConcentration').text, /across all years/);
+    assert.match(r.sections.find((x) => x.id === 'trendDistribution').text, /long-term/);
+  });
+
   it('case concentration reports top 5 share', () => {
     const result = generateGisInsight(baseMetrics);
     const text = sectionId(result, 'caseConcentration').text;
     assert.ok(text.includes('**62%**'));
-    assert.ok(text.includes('5 barangays'));
+    assert.ok(text.includes('five barangays'));
     assert.ok(text.includes('San Jose'));
   });
 
@@ -518,7 +534,7 @@ describe('generateGisInsight', () => {
     const text = sectionId(result, 'casesVsRiskPatterns').text;
     assert.ok(text.includes('**2**'));
     assert.ok(text.includes('**1**'));
-    assert.ok(text.includes('population-adjusted incidence, trend, recent monthly cases and the risk in bordering barangays'));
+    assert.ok(text.includes('cases relative to population, recent trends, recent monthly cases, and neighboring barangays'));
     assert.ok(text.includes('Oranbo'));
   });
 
@@ -526,7 +542,7 @@ describe('generateGisInsight', () => {
     const metrics = { ...baseMetrics, incidence: { available: false, periodYear: 2025 } };
     const result = generateGisInsight(metrics);
     const text = sectionId(result, 'casesVsRiskPatterns').text;
-    assert.ok(text.includes('draws on indicators beyond raw case volume'));
+    assert.ok(text.includes('measures beyond the total case count'));
     assert.ok(!text.includes('population-adjusted incidence'));
   });
 

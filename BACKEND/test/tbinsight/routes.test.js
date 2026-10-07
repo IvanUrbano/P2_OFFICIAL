@@ -139,6 +139,33 @@ describe('GET /api/tb/alerts/filter-options', () => {
   });
 });
 
+describe('GET /api/tb/alerts', () => {
+  it('matches a barangay in a summary alert coverage list', async () => {
+    mockQueryFn = async (sql, params) => {
+      assert.ok(sql.includes("metadata->'affected_barangays'"));
+      assert.strictEqual(params[0], 'Pinagbuhatan');
+      if (sql.includes('COUNT(*)')) return { rows: [{ total: 1 }] };
+      return { rows: [{ id: 3, alert_type: 'high_risk_hotspot', metadata: { affected_barangays: ['Pinagbuhatan'] } }] };
+    };
+    const res = await request(buildApp()).get('/api/tb/alerts?barangay=Pinagbuhatan');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.pagination.total, 1);
+    assert.strictEqual(res.body.alerts[0].id, 3);
+  });
+});
+
+describe('GET /api/tb/alerts/stale-check', () => {
+  it('requests re-evaluation when an existing summary lacks coverage', async () => {
+    mockQueryFn = async sql => {
+      assert.ok(sql.includes("metadata->'affected_barangays' IS NULL"));
+      return { rows: [{ last_alert_created: new Date().toISOString(), missing_coverage: true }] };
+    };
+    const res = await request(buildApp()).get('/api/tb/alerts/stale-check');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.isStale, true);
+  });
+});
+
 describe('GET /api/tb/barangays', () => {
   it('returns barangay list with count', async () => {
     mockQueryFn = async () => ({

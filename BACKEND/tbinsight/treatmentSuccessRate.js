@@ -22,18 +22,24 @@
  * database.
  */
 
+const { barangayCondition } = require('./barangayFilter');
+
 /**
  * @param {object} pool - pg Pool (or a mock exposing the same `query` shape)
  * @param {object} [opts]
  * @param {number|string} [opts.year] - Reporting year Y; cohort is Y-1.
  *   Defaults to the current calendar year if omitted.
- * @param {string} [opts.barangay] - Optional barangay_name filter.
+ * @param {string|string[]} [opts.barangay] - Optional barangay_name filter (one name or a list).
  * @param {string} [opts.sex] - Optional sex filter.
  * @param {string} [opts.ageGroup] - Optional age group filter.
  * @param {string} [opts.facility] - Optional treatment_facility filter.
  * @param {string} [opts.bacteriological] - Optional bacteriological_status filter.
  * @returns {Promise<{successRate: number|null, cohortYear: number,
- *   cohortTotal: number, cohortCured: number, cohortCompleted: number}>}
+ *   cohortTotal: number, cohortCured: number, cohortCompleted: number,
+ *   cohortLtfu: number, cohortDied: number, cohortFailed: number, ltfuRate: number|null}>}
+ *   The same cohort also yields its lost-to-follow-up / died / failed counts, so the success rate and
+ *   the lost-to-follow-up rate always describe the same patients. `ltfuRate` is lost to follow-up
+ *   over the WHOLE cohort (like the success rate), null when the cohort is empty.
  */
 async function computeTreatmentSuccessRate(pool, { year, barangay, sex, ageGroup, facility, bacteriological } = {}) {
   const reportingYear = year ? Number(year) : new Date().getFullYear();
@@ -43,9 +49,10 @@ async function computeTreatmentSuccessRate(pool, { year, barangay, sex, ageGroup
   const params = [cohortYear];
   let idx = 2;
 
-  if (barangay) {
-    conditions.push(`TRIM(barangay_name) = $${idx}`);
-    params.push(barangay);
+  const brgy = barangayCondition('barangay_name', `$${idx}`, barangay);
+  if (brgy) {
+    conditions.push(brgy.sql);
+    params.push(brgy.value);
     idx++;
   }
   if (sex) {
@@ -78,7 +85,10 @@ async function computeTreatmentSuccessRate(pool, { year, barangay, sex, ageGroup
     `SELECT
        COUNT(*)::INTEGER AS total_patients,
        SUM(CASE WHEN treatment_outcome = 'CURED' THEN 1 ELSE 0 END)::INTEGER AS cured_count,
-       SUM(CASE WHEN treatment_outcome = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count
+       SUM(CASE WHEN treatment_outcome = 'TREATMENT COMPLETED' THEN 1 ELSE 0 END)::INTEGER AS completed_count,
+       SUM(CASE WHEN treatment_outcome = 'LOST TO FOLLOW-UP' THEN 1 ELSE 0 END)::INTEGER AS ltfu_count,
+       SUM(CASE WHEN treatment_outcome = 'DIED' THEN 1 ELSE 0 END)::INTEGER AS died_count,
+       SUM(CASE WHEN treatment_outcome = 'TREATMENT FAILED' THEN 1 ELSE 0 END)::INTEGER AS failed_count
      FROM tb_cases
      WHERE ${conditions.join(' AND ')}`,
     params
@@ -92,7 +102,13 @@ async function computeTreatmentSuccessRate(pool, { year, barangay, sex, ageGroup
     ? Math.round(((cohortCured + cohortCompleted) / cohortTotal) * 1000) / 10
     : null;
 
-  return { successRate, cohortYear, cohortTotal, cohortCured, cohortCompleted };
+  const cohortLtfu = row.ltfu_count || 0;
+  const ltfuRate = cohortTotal > 0 ? Math.round((cohortLtfu / cohortTotal) * 1000) / 10 : null;
+
+  return {
+    successRate, cohortYear, cohortTotal, cohortCured, cohortCompleted,
+    cohortLtfu, cohortDied: row.died_count || 0, cohortFailed: row.failed_count || 0, ltfuRate,
+  };
 }
 
 module.exports = { computeTreatmentSuccessRate };

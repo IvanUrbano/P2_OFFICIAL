@@ -35,6 +35,7 @@
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
 const { countedCases } = require('./locationScope');
+const { loadAdjacency } = require('./barangayAdjacency');
 
 const MONTH_NAMES = [
   '', 'January', 'February', 'March', 'April', 'May', 'June',
@@ -87,11 +88,20 @@ async function buildDashboardMetrics(pool) {
     `), 'trend'),
 
     // Per-year counts WITH month coverage, so an incomplete reporting year is
-    // identified from the data rather than assumed.
+    // identified from the data rather than assumed. `last_month` is the last month of
+    // the year that has data; `ytd_cases` counts only the months up to the month the
+    // newest record falls in, so a year still in progress can be compared with the
+    // SAME months of the year before instead of with its full 12 months.
     safe(pool.query(`
       SELECT EXTRACT(YEAR FROM date_of_diagnosis)::INTEGER AS year,
              COUNT(*)::INTEGER AS case_count,
-             COUNT(DISTINCT DATE_TRUNC('month', date_of_diagnosis))::INTEGER AS months_covered
+             COUNT(DISTINCT DATE_TRUNC('month', date_of_diagnosis))::INTEGER AS months_covered,
+             MAX(EXTRACT(MONTH FROM date_of_diagnosis))::INTEGER AS last_month,
+             COUNT(*) FILTER (
+               WHERE EXTRACT(MONTH FROM date_of_diagnosis) <=
+                 (SELECT EXTRACT(MONTH FROM MAX(date_of_diagnosis))::INTEGER FROM tb_cases
+                  WHERE date_of_diagnosis IS NOT NULL AND ${countedCases()})
+             )::INTEGER AS ytd_cases
       FROM tb_cases
       WHERE date_of_diagnosis IS NOT NULL
         AND ${countedCases()}
@@ -110,13 +120,20 @@ async function buildDashboardMetrics(pool) {
       WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)
     `), 'risk'),
 
-    // Persisted forecast rows for the latest forecast period only.
+    // Persisted forecast rows for ONE period: the first forecast month after the latest
+    // recorded case (the "next month"), so every forecast figure on the Dashboard talks
+    // about the same month. Falls back to the newest period when none lies ahead.
     safe(pool.query(`
       SELECT barangay_name, forecasted_count, method,
              EXTRACT(YEAR FROM period)::INTEGER AS period_year,
              EXTRACT(MONTH FROM period)::INTEGER AS period_month
       FROM model_predictions
-      WHERE period = (SELECT MAX(period) FROM model_predictions)
+      WHERE period = COALESCE(
+        (SELECT MIN(period) FROM model_predictions
+          WHERE period > (SELECT MAX(date_of_diagnosis) FROM tb_cases
+                           WHERE date_of_diagnosis IS NOT NULL AND ${countedCases()})),
+        (SELECT MAX(period) FROM model_predictions)
+      )
     `), 'forecast'),
 
     // Required: overall totals. A failure here is a genuine database error
@@ -167,16 +184,41 @@ async function buildDashboardMetrics(pool) {
   // percentage measured against an isolated record, and never 0.
   let annual = null;
   if (yearlyRes) {
-    const years = yearlyRes.rows.map((r) => ({
-      year: Number(r.year),
-      cases: Number(r.case_count),
-      monthsCovered: Number(r.months_covered),
-      complete: Number(r.months_covered) >= MIN_MONTHS_FOR_COMPLETE_YEAR,
-    }));
-    const complete = years.filter((y) => y.complete);
+    const years = yearlyRes.rows.map((r) => {
+      const monthsCovered = Number(r.months_covered);
+      return {
+        year: Number(r.year),
+        cases: Number(r.case_count),
+        monthsCovered,
+        // Last month that has data; a year with all 12 months is complete by definition.
+        lastMonth: r.last_month != null ? Number(r.last_month) : (monthsCovered >= 12 ? 12 : null),
+        ytdCases: r.ytd_cases != null ? Number(r.ytd_cases) : null,
+        complete: monthsCovered >= MIN_MONTHS_FOR_COMPLETE_YEAR,
+      };
+    });
+    const usable = years.filter((y) => y.complete);
     const incompleteYears = years.filter((y) => !y.complete).map((y) => y.year);
+    // A usable year whose data stops before December is still in progress. Comparing its
+    // partial total with a full previous year would read as a large drop that is not real,
+    // so full-year comparisons use only years that run to December.
+    const latestUsable = usable.length > 0 ? usable[usable.length - 1] : null;
+    const inProgress = latestUsable && latestUsable.lastMonth != null && latestUsable.lastMonth < 12
+      ? latestUsable : null;
+    const complete = usable.filter((y) => y !== inProgress);
     const latest = complete.length > 0 ? complete[complete.length - 1] : null;
     const prior = complete.length > 1 ? complete[complete.length - 2] : null;
+
+    // Year to date: the in-progress year against the same months of the year before.
+    let yearToDate = null;
+    if (inProgress) {
+      const prev = years.find((y) => y.year === inProgress.year - 1 && y.complete);
+      yearToDate = { year: inProgress.year, throughMonth: inProgress.lastMonth, cases: inProgress.cases };
+      if (prev && prev.ytdCases > 0) {
+        yearToDate.priorYear = prev.year;
+        yearToDate.priorCases = prev.ytdCases;
+        yearToDate.changePercent = Math.round(((inProgress.cases - prev.ytdCases) / prev.ytdCases) * 1000) / 10;
+      }
+    }
 
     let yoyChangePercent = null;
     let yoyUnavailableReason = null;
@@ -201,6 +243,8 @@ async function buildDashboardMetrics(pool) {
       previousYearCases: prior ? prior.cases : null,
       yoyChangePercent,
       yoyUnavailableReason,
+      inProgressYear: inProgress ? inProgress.year : null,
+      yearToDate,
     };
   }
 
@@ -226,8 +270,10 @@ async function buildDashboardMetrics(pool) {
         counts.noData++;
       }
     }
+    // The snapshot's own year is the assessment year (the GIS API reports it the same
+    // way). It used to subtract 1, which labelled an October 2026 snapshot "2025".
     const periodYear = riskRes.rows[0]?.period_year;
-    counts.assessmentYear = periodYear ? Number(periodYear) - 1 : null;
+    counts.assessmentYear = periodYear ? Number(periodYear) : null;
     counts.modelTypes = [...new Set(riskRes.rows.map((r) => r.model_type).filter(Boolean))];
     if (counts.assessed > 0) {
       riskCounts = counts;
@@ -236,6 +282,40 @@ async function buildDashboardMetrics(pool) {
       // Nothing was classified — "no assessment exists" is not "zero High
       // Risk barangays", so the metric is reported unavailable instead.
       unavailable.push('risk');
+    }
+  }
+
+  // --- Map pattern: connected groups of High Risk barangays (shared borders) ---
+  let mapPattern = null;
+  if (highRiskBarangays && highRiskBarangays.length > 0) {
+    try {
+      const adj = await loadAdjacency(pool);
+      if (adj) {
+        const high = new Set(highRiskBarangays);
+        const seen = new Set();
+        const groups = [];
+        for (const start of highRiskBarangays) {
+          if (seen.has(start)) continue;
+          const group = [];
+          const stack = [start];
+          seen.add(start);
+          while (stack.length) {
+            const cur = stack.pop();
+            group.push(cur);
+            for (const nb of adj[cur] || []) {
+              if (high.has(nb) && !seen.has(nb)) { seen.add(nb); stack.push(nb); }
+            }
+          }
+          groups.push(group.sort());
+        }
+        groups.sort((a, b) => b.length - a.length || a[0].localeCompare(b[0]));
+        mapPattern = {
+          clusters: groups.filter((g) => g.length > 1),
+          isolated: groups.filter((g) => g.length === 1).map((g) => g[0]).sort(),
+        };
+      }
+    } catch (err) {
+      console.error('Dashboard metric failed (map):', err.message);
     }
   }
 
@@ -260,33 +340,41 @@ async function buildDashboardMetrics(pool) {
     unavailable.push('treatment');
   }
 
-  // --- Forecast (persisted model_predictions, latest period) ---
-  // The tier label follows the established convention already used by the
-  // Forecasting page: method 'arima' is an ARIMA Forecast, the
-  // 'insufficient_data' marker means no forecast was produced for that
-  // barangay, and ANY other method is a Baseline Forecast. A baseline result
-  // is never relabelled ARIMA.
+  // --- Forecast (persisted model_predictions, one period) ---
+  // Tier follows what the rows actually say: 'arima' is ARIMA, 'insufficient_data' means
+  // no forecast was produced for that barangay, and any other method is a fallback used
+  // when a barangay's case history is too sparse for ARIMA. The forecast as a whole is
+  // labelled by its coverage:
+  //   arima    every usable barangay is ARIMA
+  //   mixed    ARIMA for most barangays, a fallback for the sparse ones (stays an ARIMA Forecast
+  //            and names the exceptions — one sparse barangay must not relabel the whole city)
+  //   baseline no usable barangay is ARIMA
   let forecast = null;
   if (forecastRes && forecastRes.rows.length > 0) {
     const rows = forecastRes.rows;
     const methods = [...new Set(rows.map((r) => r.method).filter(Boolean))];
     const usable = rows.filter((r) => r.method !== 'insufficient_data');
-    const anyFallback = usable.some((r) => r.method && r.method !== 'arima');
+    const arimaRows = usable.filter((r) => r.method === 'arima');
+    const fallbackRows = usable.filter((r) => r.method && r.method !== 'arima');
+    const sum = (list) => list.reduce((t, r) => t + Number(r.forecasted_count || 0), 0);
     const tier = usable.length === 0
       ? 'insufficient_data'
-      : anyFallback ? 'baseline' : 'arima';
+      : fallbackRows.length === 0 ? 'arima'
+        : arimaRows.length === 0 ? 'baseline' : 'mixed';
     forecast = {
       periodYear: rows[0].period_year ? Number(rows[0].period_year) : null,
       periodMonth: rows[0].period_month ? Number(rows[0].period_month) : null,
-      total: usable.length === 0
-        ? null
-        : Math.round(usable.reduce((s, r) => s + Number(r.forecasted_count || 0), 0)),
+      total: usable.length === 0 ? null : Math.round(sum(usable)),
       barangays: usable.length,
       methods,
       tier,
       tierLabel: tier === 'insufficient_data'
         ? 'Insufficient Historical Data'
         : tier === 'baseline' ? 'Baseline Forecast' : 'ARIMA Forecast',
+      arimaBarangays: arimaRows.length,
+      fallbackBarangays: fallbackRows.map((r) => r.barangay_name).sort(),
+      fallbackMethods: [...new Set(fallbackRows.map((r) => r.method))],
+      fallbackTotal: Math.round(sum(fallbackRows) * 10) / 10,
     };
   } else if (forecastRes) {
     unavailable.push('forecast');
@@ -306,6 +394,7 @@ async function buildDashboardMetrics(pool) {
     annual,
     riskCounts,
     highRiskBarangays,
+    mapPattern,
     treatment,
     forecast,
     unavailable,
@@ -336,10 +425,20 @@ function buildCaseActivity(m) {
   }
   if (m.annual) {
     const a = m.annual;
+    const ytd = a.yearToDate;
+    // A year still in progress is compared with the SAME months of the year before,
+    // never with that year's full total.
+    if (ytd && ytd.changePercent != null) {
+      const pct = Math.abs(ytd.changePercent);
+      const how = pct < 1 ? 'about the same as' : `${pct}% ${ytd.changePercent > 0 ? 'higher than' : 'lower than'}`;
+      parts.push(`Year to date (January–${MONTH_NAMES[ytd.throughMonth]}), **${ytd.year}** recorded **${ytd.cases.toLocaleString()}** cases — **${how}** the same months of ${ytd.priorYear} (${ytd.priorCases.toLocaleString()} cases).`);
+    } else if (ytd) {
+      parts.push(`**${ytd.year}** has **${ytd.cases.toLocaleString()}** cases recorded through ${MONTH_NAMES[ytd.throughMonth]}; the same months of the previous year are not available for comparison.`);
+    }
     if (a.yoyChangePercent != null && a.latestCompleteYear != null) {
       const dir = a.yoyChangePercent > 0 ? 'higher than' : a.yoyChangePercent < 0 ? 'lower than' : 'level with';
       parts.push(`Across full reporting years, **${a.latestCompleteYear}** recorded **${a.latestYearCases.toLocaleString()}** cases — **${Math.abs(a.yoyChangePercent)}% ${dir}** ${a.previousYear} (${a.previousYearCases.toLocaleString()} cases).`);
-    } else if (a.yoyUnavailableReason) {
+    } else if (a.yoyUnavailableReason && !ytd) {
       parts.push(`A year-over-year comparison is not available because ${a.yoyUnavailableReason}.`);
     }
   }
@@ -371,6 +470,35 @@ function buildRiskSituation(m) {
     text += ` **${r.noData}** barangay(s) have no classification in this snapshot and are reported as No Assessment rather than Low Risk.`;
   }
   return { id: 'riskSituation', title: 'Risk Situation', text };
+}
+
+function buildMapInterpretation(m) {
+  if (!m.riskCounts) return null;
+  const r = m.riskCounts;
+  const year = r.assessmentYear ? `${r.assessmentYear} ` : '';
+  if (r.high === 0) {
+    return {
+      id: 'mapInterpretation',
+      title: 'Map Interpretation',
+      text: `No barangay is classified High Risk in the latest ${year}map, so there is no High Risk area to interpret. **${r.medium}** are Medium and **${r.low}** are Low.`,
+    };
+  }
+  const p = m.mapPattern;
+  if (!p) return null; // border data unavailable: no spatial claim is made
+  const join = (a) => a.join(', ');
+  const parts = [];
+  if (p.clusters.length === 0) {
+    parts.push(`The **${r.high}** High Risk barangays on the ${year}map are scattered: none shares a border with another High Risk barangay (${join(p.isolated)}).`);
+  } else {
+    const [big, ...rest] = p.clusters;
+    parts.push(`On the ${year}map, **${big.length}** of the **${r.high}** High Risk barangays are connected along shared borders, forming the largest High Risk area: ${join(big)}.`);
+    rest.forEach((g) => parts.push(`A second connected group: ${join(g)}.`));
+    if (p.isolated.length > 0) {
+      parts.push(`${p.isolated.length === 1 ? '**1** is' : `**${p.isolated.length}** are`} High Risk without a High Risk neighbour: ${join(p.isolated)}.`);
+    }
+  }
+  parts.push('Adjacency is based on shared barangay boundaries; it describes where High Risk areas sit, not why.');
+  return { id: 'mapInterpretation', title: 'Map Interpretation', text: parts.join(' ') };
 }
 
 function buildTreatmentPerformance(m) {
@@ -410,9 +538,13 @@ function buildForecastSignal(m) {
   }
   const label = forecastPeriodLabel(f);
   const periodText = label ? ` for **${label}**` : '';
-  let text = `The latest **${f.tierLabel}** projects **${f.total.toLocaleString()}** cases${periodText} across ${f.barangays} barangay(s).`;
-  if (f.tier === 'baseline') {
-    text += ' This is a Baseline Forecast, not ARIMA — at least one barangay had fewer than 24 monthly observations.';
+  let text = `The **${f.tierLabel}** projects **${f.total.toLocaleString()}** cases${periodText} across ${f.barangays} barangay(s).`;
+  if (f.tier === 'mixed') {
+    const names = f.fallbackBarangays.join(', ');
+    const methods = f.fallbackMethods.map((x) => String(x).replace(/_/g, ' ')).join(' / ');
+    text += ` ${f.arimaBarangays} barangay(s) use ARIMA; ${f.fallbackBarangays.length} (${names}) use ${methods} because their case history is too sparse for ARIMA, adding ${f.fallbackTotal.toLocaleString()} of the projected cases.`;
+  } else if (f.tier === 'baseline') {
+    text += ' This is a Baseline Forecast, not ARIMA: every barangay\'s case history was too sparse for ARIMA.';
   }
   return { id: 'forecastSignal', title: 'Forecast Signal', text };
 }
@@ -427,29 +559,28 @@ function buildOverallSummary(m) {
   const parts = [];
   if (m.trend) {
     if (m.trend.direction === 'increasing') {
-      parts.push(`reported TB cases increased by ${Math.abs(m.trend.changePercent)}% over the most recent 3-month period`);
+      parts.push(`Reported TB cases rose ${Math.abs(m.trend.changePercent)}% in the last 3 months compared with the 3 months before.`);
     } else if (m.trend.direction === 'decreasing') {
-      parts.push(`reported TB cases decreased by ${Math.abs(m.trend.changePercent)}% over the most recent 3-month period`);
+      parts.push(`Reported TB cases fell ${Math.abs(m.trend.changePercent)}% in the last 3 months compared with the 3 months before.`);
     } else {
-      parts.push('reported TB cases remained stable over the most recent 3-month period');
+      parts.push('Reported TB cases were about the same in the last 3 months as in the 3 months before.');
     }
   }
   if (m.riskCounts) {
     parts.push(m.riskCounts.high > 0
-      ? `${m.riskCounts.high} of ${m.riskCounts.assessed} assessed barangays are classified High Risk by the Random Forest model`
-      : `no barangays are currently classified High Risk by the Random Forest model`);
+      ? `${m.riskCounts.high} of ${m.riskCounts.assessed} assessed barangays are High Risk in the latest assessment.`
+      : 'No barangays are High Risk in the latest assessment.');
   }
   if (m.treatment?.successRate != null) {
-    parts.push(`the Treatment Success Rate is ${m.treatment.successRate}% for the ${m.treatment.cohortYear} cohort`);
+    parts.push(`Treatment success was ${m.treatment.successRate}%${m.treatment.cohortYear ? ` for the ${m.treatment.cohortYear} treatment cohort` : ' for the treatment cohort'}.`);
   }
   if (m.treatment?.fatalityRate != null) {
-    parts.push(`and the Case Fatality Rate among evaluated terminal outcomes is ${m.treatment.fatalityRate}%`);
+    parts.push(`The case fatality rate was ${m.treatment.fatalityRate}% among patients with an evaluated final outcome.`);
   }
   if (parts.length === 0) {
     return 'No overview could be generated yet: none of the underlying metrics are available for the current data.';
   }
-  const text = parts.join(', ') + '.';
-  return text.charAt(0).toUpperCase() + text.slice(1);
+  return parts.join(' ');
 }
 
 /**
@@ -481,6 +612,7 @@ function generateDashboardInsight(metrics) {
   const builders = [
     () => buildCaseActivity(metrics),
     () => buildRiskSituation(metrics),
+    () => buildMapInterpretation(metrics),
     () => buildTreatmentPerformance(metrics),
     () => buildForecastSignal(metrics),
   ];
@@ -502,9 +634,14 @@ function generateDashboardInsight(metrics) {
     summary = null;
   }
 
-  const coverage = metrics.annual?.incompleteYears?.length
-    ? ` • Incomplete reporting year(s): ${metrics.annual.incompleteYears.join(', ')}`
-    : '';
+  const coverage = [
+    metrics.annual?.incompleteYears?.length
+      ? ` • Incomplete reporting year(s): ${metrics.annual.incompleteYears.join(', ')}`
+      : '',
+    metrics.annual?.yearToDate
+      ? ` • ${metrics.annual.yearToDate.year} is year to date (through ${MONTH_NAMES[metrics.annual.yearToDate.throughMonth]})`
+      : '',
+  ].join('');
 
   return {
     type: 'dashboard',

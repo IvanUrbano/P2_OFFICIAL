@@ -198,7 +198,7 @@ describe('analytics NLG — single-barangay risk findings', () => {
     const r = generateAnalyticsInsight(fullMetrics(), { barangay: 'Bagong Ilog' });
     const risk = r.sections.find((s) => s.id === 'riskFindings');
     assert.ok(risk, 'riskFindings expected');
-    assert.ok(risk.text.includes('The Random Forest risk model classifies **Bagong Ilog** as **High Risk**.'),
+    assert.ok(risk.text.includes('The latest assessment places **Bagong Ilog** in the **High Risk** group.'),
       `got: "${risk.text}"`);
     assert.ok(risk.text.includes('latest barangay-level assessment rather than the current filter selection'),
       'assessment-scope caveat must be retained');
@@ -208,7 +208,7 @@ describe('analytics NLG — single-barangay risk findings', () => {
   it('uses the barangay’s actual class (Low) verbatim', () => {
     const r = generateAnalyticsInsight(fullMetrics(), { barangay: 'Oranbo' });
     const risk = r.sections.find((s) => s.id === 'riskFindings');
-    assert.ok(risk.text.includes('**Oranbo** as **Low Risk**'), `got: "${risk.text}"`);
+    assert.ok(risk.text.includes('**Oranbo** in the **Low Risk** group'), `got: "${risk.text}"`);
   });
 
   it('omits Risk Findings when the selected barangay has no classification', () => {
@@ -229,7 +229,7 @@ describe('analytics NLG — single-barangay risk findings', () => {
     const risk = r.sections.find((s) => s.id === 'riskFindings');
     assert.ok(risk, 'riskFindings expected');
     // Aggregate form, not the single-barangay sentence.
-    assert.ok(risk.text.includes('classified **4**'), `got: "${risk.text}"`);
+    assert.ok(risk.text.includes('**4** of'), `got: "${risk.text}"`);
     assert.ok(!risk.text.includes('classifies **Bagong Ilog**'), 'must not claim a per-barangay class');
   });
 

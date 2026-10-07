@@ -64,6 +64,10 @@ describe('modelEvaluation', () => {
           method_counts: { arima: 1 },
           example_barangay: 'Dela Paz',
           steps: [{ test_month: 2, actual: 105, predicted: 100, error: 5, method: 'arima' }],
+          per_barangay: [{
+            barangay_name: 'Dela Paz', mae: 5, mape: 4.76, n_steps: 1, method_counts: { arima: 1 },
+            steps: [{ train_size: 1, test_month: 2, actual: 105, predicted: 100, error: 5, method: 'arima' }],
+          }],
         },
         rf: { accuracy: 0.8, steps: [{ large: 'detail intentionally not persisted' }] },
       }),
@@ -90,6 +94,14 @@ describe('modelEvaluation', () => {
       assert.strictEqual(savedMetrics.arima.steps[0].month, '2025-12-01');
       assert.strictEqual(savedMetrics.arima.example_barangay, 'Dela Paz');
       assert.strictEqual(savedMetrics.rf.steps, undefined);
+      // Each barangay's own result is saved with dated months (compact: no train size / error), so the
+      // Forecasting page can filter by barangay or year without rerunning anything.
+      assert.strictEqual(savedMetrics.arima.per_barangay.length, 1);
+      assert.strictEqual(savedMetrics.arima.per_barangay[0].barangay_name, 'Dela Paz');
+      assert.strictEqual(savedMetrics.arima.per_barangay[0].mae, 5);
+      assert.deepStrictEqual(savedMetrics.arima.per_barangay[0].steps, [
+        { month: '2025-12-01', actual: 105, predicted: 100, method: 'arima' },
+      ]);
       assert.strictEqual(savedConfig.method, 'ARIMA');
       assert.strictEqual(savedConfig.evaluation_start, '2025-12-01');
       assert.strictEqual(savedConfig.evaluation_end, '2025-12-01');
