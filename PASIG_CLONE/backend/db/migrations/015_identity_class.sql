@@ -3,8 +3,8 @@
 -- identity_class on import_batches, validated_tb_cases and validation_issues:
 --   historical  — every record that exists today, and every record created while
 --                 patient-name display is not approved (PATIENT_NAMES_ENABLED unset).
---                 Names/DOB stay stored exactly as they are but are NEVER returned by
---                 the API: TB Records shows "De-identified".
+--                 Names/DOB stay stored exactly as they are and are returned only after
+--                 the user unlocks the Records PIN; otherwise TB Records shows "De-identified".
 --   operational — records created after deployment/client approval
 --                 (PATIENT_NAMES_ENABLED=true when the batch was created). Names may be
 --                 shown to users who can view the case and have unlocked the Records PIN.

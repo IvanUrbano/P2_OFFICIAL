@@ -1,3 +1,5 @@
+import ModalCloseButton from './ModalCloseButton';
+
 /* Right-side panel — same look as TBInsight's side panels (navy header, slide-in,
    buttons right under the content). Renders a <form> when onSubmit is given. */
 export const primaryBtn = { background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 };
@@ -22,9 +24,7 @@ export default function SidePanel({ title, subtitle, badge, onClose, onSubmit, f
             </div>
             {subtitle && <p className="text-[11px] mt-0.5 truncate" style={{ color: 'rgba(255,255,255,0.6)' }}>{subtitle}</p>}
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8 }}>
-            <i className="ri-close-line text-base" />
-          </button>
+          <ModalCloseButton onClick={onClose} light />
         </div>
         {/* With footerDivider the content stretches (flex-1) so the footer sits pinned
             at the panel bottom — and pb-6 keeps clear air between the last detail and

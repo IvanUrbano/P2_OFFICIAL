@@ -1,24 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import API from '../api/axios';
-import { useTheme } from '../theme';
-import EmptyState from '../components/EmptyState';
 import ProgressOverlay from '../components/ProgressOverlay';
-
-const cardStyle = (t) => ({
-  background: t.cardSolid,
-  border: `1px solid ${t.border}`,
-  borderRadius: '12px',
-  boxShadow: '0 4px 16px rgba(15,23,42,0.04)',
-});
+import ModalCloseButton from '../components/ModalCloseButton';
 
 export default function SyncPage() {
-  const { t } = useTheme();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const batchId = searchParams.get('batchId');
   const [sending, setSending] = useState(false);
-  const [syncStartedAt, setSyncStartedAt] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
@@ -36,7 +26,6 @@ export default function SyncPage() {
     const poll = async () => {
       try {
         const { data } = await API.get(`/api/webhook/status/${batchId}`);
-        setSyncStartedAt(data.startedAt);
         if (data.syncStatus === 'syncing') {
           pollRef.current = setTimeout(poll, 2000);
           return;
@@ -75,7 +64,6 @@ export default function SyncPage() {
     if (!batchId) return;
     setShowConfirm(false);
     setSending(true);
-    setSyncStartedAt(null);
     setError('');
     setResult(null);
     try {
@@ -92,35 +80,42 @@ export default function SyncPage() {
   };
 
   return (
-    <div className="space-y-6">
-      {/* Card Header */}
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
-        <div className="px-6 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
+    <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
+      <div className="px-6 py-4" style={{ borderBottom: '1px solid #E2E8F0' }}>
           <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Sync to TBInsight</h1>
           <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Synchronize validated tuberculosis records with TBInsight.</p>
-        </div>
       </div>
 
-      {/* Connection Status */}
-      <div className="rounded-xl p-5" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
-        <div className="flex items-center justify-between">
+      <div className="px-5 py-4" style={{ borderBottom: '1px solid #E2E8F0' }}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-3 h-3 rounded-full animate-pulse" style={{ background: '#10B981' }} />
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: '#10B981' }} />
             <div>
-              <p className="text-xs font-bold" style={{ color: '#0F2D52' }}>TBInsight Endpoint Connection</p>
-              <p className="text-[11px] mt-0.5" style={{ color: '#64748B' }}>Connected via Secure Webhook Integration (/api/webhook/receiver)</p>
+              <p className="text-xs font-semibold" style={{ color: '#0F2D52' }}>TBInsight connection</p>
+              <p className="text-[11px] mt-0.5" style={{ color: '#64748B' }}>Validated records are sent securely to TBInsight.</p>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold" style={{ background: 'rgba(16,185,129,0.1)', color: '#10B981' }}>
-            Active & Ready
-          </span>
+          <span className="text-xs font-medium" style={{ color: '#047857' }}>Active</span>
         </div>
       </div>
 
       {!batchId && !result && (
-        <div className="rounded-xl p-6" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
-          <EmptyState icon="ri-server-line" title="No Batch Selected" description="Import and validate a batch first, then sync it to TBInsight."
-            action={<button onClick={() => navigate('/import')} className="px-4 py-2 text-xs font-bold rounded-lg cursor-pointer" style={{ background: '#0F2D52', color: '#fff' }}>Go to Import</button>} />
+        <div className="p-5">
+          <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold" style={{ color: '#0F2D52' }}>No batch selected</h2>
+              <p className="mt-1 text-xs leading-5" style={{ color: '#64748B' }}>
+                Import and validate a batch before sending its records to TBInsight.
+              </p>
+            </div>
+            <button
+              onClick={() => navigate('/import')}
+              className="px-4 py-2 text-xs font-semibold cursor-pointer"
+              style={{ background: '#0F2D52', color: '#ffffff' }}
+            >
+              Go to Import
+            </button>
+          </div>
         </div>
       )}
 
@@ -129,35 +124,37 @@ export default function SyncPage() {
         open={sending}
         title="Syncing to TBInsight"
         detail="Sending validated records and waiting for TBInsight to import them. This can take a few minutes if TBInsight was idle."
-        icon="ri-server-line"
         tone="#06B6D4"
-        startedAt={syncStartedAt}
         note="You can leave this page — the sync keeps running, and you'll get a notification when it finishes."
+        borderless
       />
 
       {batchId && !result && !sending && (
-        <div className="rounded-xl p-6" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
-          <h3 className="text-sm font-bold mb-1" style={{ color: '#0F2D52' }}>Ready to Synchronize</h3>
-          <p className="text-xs mb-4" style={{ color: '#64748B' }}>Batch Reference ID: <span className="font-mono text-gray-700">{batchId}</span></p>
+        <div className="p-5">
+          <h2 className="text-sm font-semibold" style={{ color: '#0F2D52' }}>Ready to sync</h2>
+          <p className="mt-1 text-xs" style={{ color: '#64748B' }}>Only validated records in this batch will be sent.</p>
+          <p className="mt-3 text-xs" style={{ color: '#64748B' }}>
+            Batch ID: <span className="font-mono" style={{ color: '#334155' }}>{batchId}</span>
+          </p>
           <button
             onClick={() => setShowConfirm(true)}
             disabled={sending}
-            className="px-5 py-2.5 text-xs font-bold rounded-lg disabled:opacity-40 transition-colors cursor-pointer"
-            style={{ background: '#10B981', color: '#ffffff', boxShadow: '0 4px 14px rgba(16,185,129,0.25)' }}
+            className="mt-4 px-4 py-2 text-xs font-semibold disabled:opacity-40 cursor-pointer"
+            style={{ background: '#0F2D52', color: '#ffffff' }}
           >
-            {sending ? 'Syncing Records...' : 'Sync Validated Records'}
+            {sending ? 'Syncing records…' : 'Sync validated records'}
           </button>
         </div>
       )}
 
       {error && !sending && (
-        <div className="rounded-xl p-6" style={{ background: '#ffffff', border: '1px solid #FCA5A5', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
-          <div className="flex items-center gap-3 mb-2">
-            <i className="ri-error-warning-line text-xl" style={{ color: '#EF4444' }} />
-            <h3 className="text-sm font-bold" style={{ color: '#991B1B' }}>Synchronization Failed</h3>
+        <div className="p-5">
+          <div className="mb-2 flex items-center gap-2">
+            <i className="ri-error-warning-line text-base" style={{ color: '#B91C1C' }} />
+            <h2 className="text-sm font-semibold" style={{ color: '#991B1B' }}>Synchronization failed</h2>
           </div>
-          <p className="text-xs mb-4" style={{ color: '#7F1D1D' }}>{error}</p>
-          <button onClick={handleSync} className="px-4 py-2 text-xs font-bold rounded-lg cursor-pointer" style={{ background: '#0F2D52', color: '#ffffff' }}>Retry Sync</button>
+          <p className="text-xs leading-5" style={{ color: '#7F1D1D' }}>{error}</p>
+          <button onClick={handleSync} className="mt-4 px-4 py-2 text-xs font-semibold cursor-pointer" style={{ background: '#0F2D52', color: '#ffffff' }}>Retry sync</button>
         </div>
       )}
 
@@ -171,64 +168,62 @@ export default function SyncPage() {
           { label: 'Rejected', value: result.recordsRejected, color: rejected > 0 ? '#DC2626' : '#64748B' },
         ];
         return (
-        <div className="rounded-xl p-6" style={{ background: '#ffffff', border: `1px solid ${rejected > 0 ? '#FCD34D' : '#E2E8F0'}`, boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
-          <div className="flex items-center gap-3 mb-4 pb-3" style={{ borderBottom: '1px solid #F1F5F9' }}>
-            <i className={`${rejected > 0 ? 'ri-error-warning-line' : 'ri-check-double-line'} text-xl`} style={{ color: rejected > 0 ? '#D97706' : '#10B981' }} />
-            <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>
+        <div className="p-5">
+          <div className="mb-3 flex items-center gap-2">
+            <i className={`${rejected > 0 ? 'ri-error-warning-line' : 'ri-check-line'} text-base`} style={{ color: rejected > 0 ? '#B45309' : '#047857' }} />
+            <h2 className="text-sm font-semibold" style={{ color: '#0F2D52' }}>
               {result.inProgress ? 'Sync In Progress' : result.alreadySynced ? 'Already Synced' : rejected > 0 ? 'Synchronization Complete — Some Records Rejected' : 'Synchronization Complete'}
-            </h3>
+            </h2>
           </div>
-          <p className="text-xs mb-3" style={{ color: '#0F2D52' }}>{result.message || '—'}</p>
+          <p className="mb-4 text-xs leading-5" style={{ color: '#475569' }}>{result.message || '—'}</p>
           {hasCounts && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <dl className="grid grid-cols-2 gap-x-6 sm:grid-cols-4" style={{ borderTop: '1px solid #E2E8F0', borderBottom: '1px solid #E2E8F0' }}>
               {stats.map(s => (
-                <div key={s.label} className="p-3.5 rounded-lg" style={{ background: '#F8FAFC', border: '1px solid #F1F5F9' }}>
-                  <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>{s.label}</p>
-                  <p className="text-lg font-extrabold mt-1" style={{ color: s.color }}>{s.value ?? '—'}</p>
+                <div key={s.label} className="py-3">
+                  <dt className="text-[11px]" style={{ color: '#64748B' }}>{s.label}</dt>
+                  <dd className="mt-1 text-base font-semibold" style={{ color: s.color }}>{s.value ?? '—'}</dd>
                 </div>
               ))}
-            </div>
+            </dl>
           )}
           {rejected > 0 && result.rejectedSamples?.length > 0 && (
-            <div className="mt-4 rounded-lg p-3.5" style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
-              <p className="text-[11px] font-bold mb-2" style={{ color: '#991B1B' }}>
+            <div className="mt-4 border-l-2 pl-3" style={{ borderColor: '#D97706' }}>
+              <p className="mb-2 text-xs font-semibold" style={{ color: '#92400E' }}>
                 Rejected by TBInsight{rejected > result.rejectedSamples.length ? ` (showing first ${result.rejectedSamples.length} of ${rejected})` : ''}
               </p>
               <ul className="space-y-1">
                 {result.rejectedSamples.map((e, i) => (
-                  <li key={i} className="text-[11px]" style={{ color: '#7F1D1D' }}>
+                  <li key={i} className="text-xs leading-5" style={{ color: '#78350F' }}>
                     <span className="font-mono">{e.source_type}{e.row != null ? ` row ${e.row}` : ''}</span>: {(e.errors || []).join('; ')}
                   </li>
                 ))}
               </ul>
             </div>
           )}
-          <button onClick={() => navigate('/sync-history')} className="mt-4 px-4 py-2 text-xs font-bold rounded-lg cursor-pointer" style={{ border: '1px solid #CBD5E1', background: '#ffffff', color: '#0F2D52' }}>View Sync History &rarr;</button>
+          <button onClick={() => navigate('/sync-history')} className="mt-4 px-4 py-2 text-xs font-semibold cursor-pointer" style={{ border: '1px solid #CBD5E1', background: '#ffffff', color: '#0F2D52' }}>View sync history</button>
         </div>
         );
       })()}
 
       {/* Confirmation Modal */}
       {showConfirm && (
-        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => setShowConfirm(false)}>
-          <div className="bg-white border border-gray-200 shadow-xl w-full max-w-[380px] mx-4 overflow-hidden" style={{ borderRadius: '5px' }} onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100" style={{ background: '#FAFCFF' }}>
-              <div className="flex items-center gap-2">
-                <i className="ri-server-line text-lg" style={{ color: '#0F2D52' }} />
-                <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Confirm Synchronization</h3>
-              </div>
-              <button onClick={() => setShowConfirm(false)} className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded cursor-pointer">
-                <i className="ri-close-line text-lg" />
-              </button>
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/35" onClick={() => setShowConfirm(false)}>
+          <div className="mx-4 w-full max-w-[400px] overflow-hidden border border-gray-200 bg-white shadow-lg" style={{ borderRadius: 5 }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4" style={{ background: '#0F2D52' }}>
+              <h3 className="text-sm font-semibold text-white">Confirm sync</h3>
+              <ModalCloseButton onClick={() => setShowConfirm(false)} light />
             </div>
-            <div className="p-5">
-              <p className="text-xs leading-relaxed text-gray-600">
-                You are about to transmit validated TB records to the central TBInsight database. Only validated records will be processed.
+            <div className="px-5 py-4">
+              <p className="text-xs leading-5" style={{ color: '#475569' }}>
+                Send the validated records in this batch to TBInsight?
+              </p>
+              <p className="mt-2 text-[11px] leading-5" style={{ color: '#64748B' }}>
+                Only validated records will be sent. This may take a few minutes.
               </p>
             </div>
-            <div className="px-5 py-3.5 bg-gray-50 border-t border-gray-100 flex justify-end gap-2">
-              <button onClick={() => setShowConfirm(false)} className="px-4 py-2 text-xs font-bold rounded-md cursor-pointer border border-gray-300 text-gray-600 bg-white">Cancel</button>
-              <button onClick={handleSync} className="px-4 py-2 text-xs font-bold text-white bg-[#10B981] rounded-md cursor-pointer hover:bg-[#059669]">Confirm Sync</button>
+            <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-3">
+              <button onClick={() => setShowConfirm(false)} className="px-4 py-2 text-xs font-medium cursor-pointer" style={{ border: '1px solid #CBD5E1', color: '#475569', background: '#ffffff' }}>Cancel</button>
+              <button onClick={handleSync} className="px-4 py-2 text-xs font-semibold text-white cursor-pointer" style={{ background: '#0F2D52' }}>Confirm sync</button>
             </div>
           </div>
         </div>

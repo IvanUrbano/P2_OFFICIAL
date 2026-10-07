@@ -15,8 +15,8 @@ module.exports = {
   },
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5174',
   // Patient-name display for OPERATIONAL records (created after deployment/client
-  // approval). Off until approved: every record is then de-identified in the API.
-  // Historical records are de-identified regardless (services/pinService.js).
+  // approval). Historical names require the user's Records PIN; operational names
+  // require both this approval and the PIN (services/pinService.js).
   patientNames: {
     enabled: String(process.env.PATIENT_NAMES_ENABLED || '').toLowerCase() === 'true',
   },

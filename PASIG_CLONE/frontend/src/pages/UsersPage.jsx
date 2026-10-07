@@ -6,6 +6,7 @@ import EmptyState from '../components/EmptyState';
 import SkeletonBlock from '../components/SkeletonBlock';
 import FilterSelect from '../components/FilterSelect';
 import RowMenu from '../components/RowMenu';
+import ModalCloseButton from '../components/ModalCloseButton';
 
 const cardStyle = (t) => ({
   background: t.cardSolid,
@@ -46,29 +47,31 @@ const lockText = (u) => (u.manually_locked
   : `Locked after repeated wrong passwords, until ${formatDateTime(u.locked_until)}`);
 
 /* ─── Right-side panel, same look as TBInsight's side panels ─── */
-function SidePanel({ title, subtitle, onClose, onSubmit, footer, children }) {
+function SidePanel({ title, subtitle, onClose, onSubmit, footer, footerBottom = false, bottomRight = false, children }) {
   const Shell = onSubmit ? 'form' : 'div';
   return (
-    <div className="fixed inset-0 z-[1200] flex justify-end" onClick={onClose}>
-      <div className="absolute inset-0" style={{ background: 'rgba(15,23,42,0.2)', backdropFilter: 'blur(4px)' }} />
+    <div className={`fixed inset-0 z-[1200] flex ${bottomRight ? 'items-end justify-end p-4 sm:p-6' : 'justify-end'}`} onClick={onClose}>
+      <div className="absolute inset-0" style={{ background: 'rgba(15,23,42,0.28)' }} />
       <Shell
-        className="relative w-full max-w-lg h-full flex flex-col"
-        style={{ background: '#ffffff', animation: 'slide-in-right 0.3s ease-out both', boxShadow: '-8px 0 30px rgba(0,0,0,0.12)' }}
+        className={`relative flex w-full max-w-lg flex-col ${bottomRight ? 'h-[min(780px,calc(100vh-2rem))] max-h-[calc(100vh-2rem)]' : 'h-full'}`}
+        style={{ background: '#ffffff', border: '1px solid #E2E8F0', borderRadius: 5, boxShadow: '0 12px 36px rgba(15,23,42,0.18)', animation: bottomRight ? 'none' : 'slide-in-right 0.3s ease-out both' }}
         onClick={(e) => e.stopPropagation()}
         onSubmit={onSubmit}
       >
-        <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ background: '#0F2D52' }}>
+        <div className="flex shrink-0 items-center justify-between px-6 py-4" style={{ background: '#0F2D52' }}>
           <div className="min-w-0">
             <p className="text-sm font-bold truncate" style={{ color: '#ffffff' }}>{title}</p>
             {subtitle && <p className="text-[11px] mt-0.5 truncate" style={{ color: 'rgba(255,255,255,0.6)' }}>{subtitle}</p>}
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
-            <i className="ri-close-line text-base" />
-          </button>
+          <ModalCloseButton onClick={onClose} light />
         </div>
         {/* Not flex-1: the buttons follow the content instead of being pushed to the bottom. */}
-        <div className="min-h-0 overflow-y-auto p-6 pb-0 space-y-4">{children}</div>
-        {footer && <div className="shrink-0 px-6 pt-5 pb-6 flex items-center gap-2" style={{ background: '#ffffff' }}>{footer}</div>}
+        <div className={`min-h-0 overflow-y-auto p-6 pb-4 space-y-4 ${footerBottom ? 'flex-1' : ''}`}>{children}</div>
+        {footer && (
+          <div className={`shrink-0 px-6 py-4 flex items-center gap-2 ${footerBottom ? 'mt-auto justify-end border-t border-gray-200' : ''}`} style={{ background: '#ffffff' }}>
+            {footer}
+          </div>
+        )}
       </Shell>
     </div>
   );
@@ -343,12 +346,12 @@ export default function UsersPage() {
     <div className="space-y-5">
       {/* Card Header */}
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
+        <div className="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <div>
             <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Users</h1>
             <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Manage authorized Pasig TB-IS accounts. Staff see records from their assigned barangay; admins have city-wide access.</p>
           </div>
-          <button onClick={() => { setShowCreate(true); setFormError(''); }} className="px-4 py-2 text-xs font-semibold shrink-0 flex items-center gap-2" style={{ background: '#0F2D52', color: '#ffffff', borderRadius: 4, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}>
+          <button onClick={() => { setShowCreate(true); setFormError(''); }} className="flex shrink-0 items-center gap-2 self-start px-4 py-2 text-xs font-semibold sm:self-auto" style={primaryBtn}>
             <i className="ri-add-line" />
             Create User
           </button>
@@ -412,9 +415,9 @@ export default function UsersPage() {
 
       {error && <div className="px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.12)' }}>{error}</div>}
       {notice && (
-        <div className="px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-3" style={{ background: 'rgba(16,185,129,0.06)', color: '#047857', border: '1px solid rgba(16,185,129,0.18)' }}>
+        <div className="px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-3" style={{ background: '#F1F5F1', color: '#526A56', border: '1px solid #DCE6DC' }}>
           <span>{notice}</span>
-          <button onClick={() => setNotice('')} aria-label="Dismiss" style={{ color: '#047857' }}><i className="ri-close-line" /></button>
+          <button onClick={() => setNotice('')} aria-label="Dismiss" style={{ color: '#526A56' }}><i className="ri-close-line" /></button>
         </div>
       )}
 
@@ -433,10 +436,12 @@ export default function UsersPage() {
           }}
           footer={(
             <>
-              <button type="submit" disabled={creating} className="px-4 py-2 text-xs font-semibold disabled:opacity-50" style={primaryBtn}>Create User</button>
               <button type="button" onClick={closeCreate} className="px-4 py-2 text-xs font-medium" style={secondaryBtn}>Cancel</button>
+              <button type="submit" disabled={creating} className="px-4 py-2 text-xs font-semibold disabled:opacity-50" style={primaryBtn}>{creating ? 'Creating…' : 'Create User'}</button>
             </>
           )}
+          footerBottom
+          bottomRight
         >
           {formError && <div className="px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.12)' }}>{formError}</div>}
           <Field label="Full Name" required>
@@ -491,33 +496,33 @@ export default function UsersPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full min-w-[1100px] text-left" style={{ borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ borderBottom: `1px solid ${t.borderStrong}` }}>
+                <tr style={{ background: '#0F2D52' }}>
                   {['Name', 'Username', 'Email', 'Role', 'Assigned Barangay', 'Status', 'Last Login', 'Created By', ''].map((h, i) => (
-                    <th key={h || i} className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wide whitespace-nowrap" style={{ color: t.textMuted }}>
-                      {h || <span className="sr-only">Actions</span>}
+                    <th key={h || i} className="px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#ffffff', borderBottom: '1px solid #1E40AF', borderRight: i === 8 ? 'none' : '1px solid #1E40AF' }}>
+                      {h}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {filteredUsers.map((u) => {
+                {filteredUsers.map((u, index) => {
                   const open = menu?.user.id === u.id;
                   return (
-                    <tr key={u.id} style={{ borderBottom: `1px solid ${t.border}` }}>
-                      <td className="px-4 py-3 text-xs font-semibold" style={{ color: t.text }}>
+                    <tr key={u.id} className={`${index % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]'} transition-colors hover:bg-blue-50`} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                      <td className="px-3 py-2.5 text-[11px] font-semibold whitespace-nowrap" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }}>
                         <button type="button" onClick={() => setDetailUser(u)} className="text-left hover:underline">
-                          {u.full_name || <span style={{ color: t.textMuted, fontWeight: 400 }}>—</span>}
+                          {u.full_name || <span style={{ color: '#94A3B8', fontWeight: 400 }}>—</span>}
                         </button>
                       </td>
-                      <td className="px-4 py-3 text-xs" style={{ color: t.textSecondary }}>
-                        {u.username}{u.id === currentUserId && <span className="ml-1.5 text-[10px]" style={{ color: t.textMuted }}>(you)</span>}
+                      <td className="px-3 py-2.5 text-[11px] whitespace-nowrap" style={{ color: '#475569', borderRight: '1px solid #E2E8F0' }}>
+                        {u.username}{u.id === currentUserId && <span className="ml-1.5 text-[10px]" style={{ color: '#64748B' }}>(you)</span>}
                       </td>
-                      <td className="px-4 py-3 text-xs" style={{ color: t.textSecondary }}>{u.email || '—'}</td>
-                      <td className="px-4 py-3"><StatusBadge status={u.role} /></td>
-                      <td className="px-4 py-3 text-xs" style={{ color: u.role === 'admin' ? '#2E6FAF' : t.textSecondary }}>{accessLabel(u)}</td>
-                      <td className="px-4 py-3">
+                      <td className="max-w-[190px] truncate px-3 py-2.5 text-[11px]" style={{ color: '#475569', borderRight: '1px solid #E2E8F0' }} title={u.email || undefined}>{u.email || '—'}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap" style={{ borderRight: '1px solid #E2E8F0' }}><StatusBadge status={u.role} /></td>
+                      <td className="px-3 py-2.5 text-[11px] whitespace-nowrap" style={{ color: u.role === 'admin' ? '#2E6FAF' : '#475569', borderRight: '1px solid #E2E8F0' }}>{accessLabel(u)}</td>
+                      <td className="px-3 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}>
                         <div className="flex items-center gap-1.5 whitespace-nowrap">
                           <StatusBadge status={u.status || 'active'} />
                           {isLocked(u) && (
@@ -530,18 +535,18 @@ export default function UsersPage() {
                           )}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-xs whitespace-nowrap" style={{ color: t.textSecondary }}>{formatDateTime(u.last_login_at, 'Never')}</td>
-                      <td className="px-4 py-3 whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-[11px] whitespace-nowrap" style={{ color: '#475569', borderRight: '1px solid #E2E8F0' }}>{formatDateTime(u.last_login_at, 'Never')}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap" style={{ borderRight: '1px solid #E2E8F0' }}>
                         {u.created_by_name ? (
-                          <span className="block text-xs" style={{ color: t.textSecondary }} title={`@${u.created_by_username}`}>{u.created_by_name}</span>
+                          <span className="block text-[11px]" style={{ color: '#475569' }} title={`@${u.created_by_username}`}>{u.created_by_name}</span>
                         ) : (
-                          <span className="block text-xs" style={{ color: t.textMuted }} title="Created before account creation was recorded">Not recorded</span>
+                          <span className="block text-[11px]" style={{ color: '#64748B' }} title="Created before account creation was recorded">Not recorded</span>
                         )}
-                        <span className="block text-[10px]" style={{ color: t.textMuted }}>
+                        <span className="block text-[10px]" style={{ color: '#94A3B8' }}>
                           {u.created_at ? new Date(u.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
                         </span>
                       </td>
-                      <td className="px-2 py-3 text-right w-10">
+                      <td className="w-10 px-2 py-2.5 text-right">
                         <button
                           type="button"
                           aria-label={`Actions for ${u.username}`}

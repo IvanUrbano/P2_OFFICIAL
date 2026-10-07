@@ -54,7 +54,6 @@ function formatRecord(record) {
     record_created_at: record.record_created_at,
     source_type: record.source_type,
     validation_status: record.validation_status,
-    itis_case_id: record.itis_case_id,
     type: record.type ?? null,
     province: record.province ?? null,
     region: record.region ?? null,
@@ -181,9 +180,12 @@ function isSendableRecord(record) {
  * Send webhook to TBInsight with comprehensive sync tracking
  * @param {string} batchId - Batch ID to sync
  * @param {number} userId - ID of user initiating sync
+ * @param {{ extraCaseNos?: string[], actor?: { username?: string, role?: string } }} [options]
+ *   actor — who requested the sync; forwarded so TBInsight can record it on the
+ *   case history rows it writes when an update changes an existing case.
  * @returns {Object} { success, status, message, recordsSent, recordsAccepted }
  */
-async function sendWebhook(batchId, userId, { extraCaseNos = [] } = {}) {
+async function sendWebhook(batchId, userId, { extraCaseNos = [], actor = null } = {}) {
   const client = await db.pool.connect();
   let markedSyncing = false;
 
@@ -260,6 +262,18 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [] } = {}) {
       source: 'pasig-clone',
       batch_id: batchId,
       timestamp: new Date().toISOString(),
+      // WHO requested this sync. Optional and backward-compatible: TBInsight
+      // stores it as case_history.changed_by_label when an update lands on an
+      // existing Case ID, and older TBInsight builds simply ignore it. It says
+      // nothing about a patient — identity fields still never leave PASIG.
+      ...(actor && actor.username
+        ? {
+          actor: {
+            username: String(actor.username).slice(0, 100),
+            ...(actor.role ? { role: String(actor.role).slice(0, 40) } : {}),
+          },
+        }
+        : {}),
       sheets,
     };
 

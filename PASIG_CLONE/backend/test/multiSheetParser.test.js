@@ -136,10 +136,10 @@ describe('buildColumnMap', () => {
     assert.equal(map[0], undefined);
   });
 
-  it('maps itis_case_id for MN', () => {
+  it('ignores the ITIS Lite Case No. column for MN', () => {
     const headers = ['ITIS Lite Case No.'];
     const map = buildColumnMap(headers, 'MN');
-    assert.equal(map[0], 'itis_case_id');
+    assert.equal(map[0], undefined);
   });
 });
 
@@ -164,6 +164,7 @@ describe('validateRecord', () => {
     sex: 'Male',
     age: 30,
     city: 'Pasig City',
+    source_case_id: 'ROS-D-2025-00042',
   };
 
   it('passes for a valid record', () => {

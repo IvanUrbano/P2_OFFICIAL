@@ -4,7 +4,7 @@ import API from '../api/axios';
 import { useTheme } from '../theme';
 import SkeletonBlock from '../components/SkeletonBlock';
 import { timeAgo } from '../utils/notifications';
-import { caseIdOf } from '../utils/caseId';
+import { caseIdLabel } from '../utils/caseId';
 
 const cardStyle = (t) => ({
   background: t.cardSolid,
@@ -364,7 +364,7 @@ export default function DashboardPage() {
                         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: C.amber }} />
                         <span className="text-[14px] font-bold truncate" style={{ color: C.navy }}>{r.from_barangay || '—'} &rarr; {r.to_barangay || '—'}</span>
                       </div>
-                      <p className="text-[12px] mt-1 pl-3" style={{ color: C.sub }}>{caseIdOf(r) || `#${r.validated_case_id}`}</p>
+                      <p className="text-[12px] mt-1 pl-3" style={{ color: C.sub }}>{caseIdLabel(r)}</p>
                       <p className="text-[11px] mt-0.5 pl-3" style={{ color: C.faint }}>Pending · {timeAgo(r.created_at || r.initiated_at)}</p>
                     </div>
                     <span className="shrink-0 text-[12px] font-semibold" style={{ color: C.green }}>Review &rarr;</span>

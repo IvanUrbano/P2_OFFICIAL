@@ -3,7 +3,7 @@ import API from '../../api/axios';
 import SidePanel, { primaryBtn, secondaryBtn } from '../SidePanel';
 import { fmtDate, fullName, Pager, PinHint } from './shared';
 import { useConfirmDialog } from '../ConfirmDialog';
-import { caseIdOf } from '../../utils/caseId';
+import { caseIdLabel } from '../../utils/caseId';
 
 const isPasigCity = (c) => ['pasig city', 'pasig', ''].includes(String(c ?? '').trim().toLowerCase());
 
@@ -92,31 +92,38 @@ export default function LocationReviewPanel({ group, batch, onClose, onChanged }
     <>
     {confirmDialog}
     <SidePanel
-      width="max-w-3xl"
-      title="Review records"
-      subtitle={`Barangay: ${group.barangay_text || '(blank)'} · City: ${group.city_text || '(blank)'} · ${total} record${total === 1 ? '' : 's'} left`}
+      width="max-w-4xl"
+      title="Review patient locations"
+      subtitle={`${total.toLocaleString()} record${total === 1 ? '' : 's'} left to review`}
       onClose={onClose}
       footer={<button type="button" onClick={onClose} className="px-4 py-2 text-xs font-medium" style={secondaryBtn}>Done</button>}
+      footerDivider
     >
-      <p className="text-[11px] leading-relaxed px-3 py-2 rounded" style={{ background: '#F8FAFC', color: '#475569', borderLeft: '3px solid #2E6FAF' }}>
+      <div className="flex flex-wrap gap-x-8 gap-y-2 px-3 py-2.5 text-[11px]" style={{ background: '#F5F8FB', border: '1px solid #E8EDF2', color: '#475569' }}>
+        <p><span className="font-semibold" style={{ color: '#64748B' }}>Barangay in file:</span> {group.barangay_text || 'Not provided'}</p>
+        <p><span className="font-semibold" style={{ color: '#64748B' }}>City in file:</span> {group.city_text || 'Not provided'}</p>
+      </div>
+      <p className="text-[11px] leading-relaxed" style={{ color: '#64748B' }}>
         {pasigGroup
-          ? 'Assign each patient to the barangay where they live. Records in this group can belong to different barangays, so they are reviewed one at a time. The facility shown is where the patient was seen — it does not tell where they live.'
-          : `These records list ${group.city_text} as the city. If they are not Pasig residents, classify them as Outside Pasig; assign a barangay only to records that are actually in Pasig.`}
-        {' '}Once assigned, the record is visible to that barangay&apos;s staff.
+          ? 'Choose the barangay where each patient lives. The facility is where the patient was seen; it does not determine their barangay.'
+          : `These records list ${group.city_text || 'an unrecognized city'} as the city. Assign a barangay only if the patient lives in Pasig; otherwise, choose Outside Pasig.`}
+        {' '}After assignment, the record is visible to staff in that barangay.
       </p>
       <PinHint unlocked={data.identityUnlocked} />
 
       {data.canBulkOutsidePasig && total > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
-          <span className="text-[11px]" style={{ color: '#92400E' }}>City {group.city_text} is outside Pasig.</span>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2" style={{ background: '#F8F6F1', border: '1px solid #E8E1D5' }}>
+          <span className="text-[11px]" style={{ color: '#6B5B43' }}>The city listed for this group is {group.city_text}.</span>
           <button disabled={busy === 'bulk'} onClick={bulkOutside} className="px-3 py-1.5 text-[11px] font-semibold disabled:opacity-50" style={primaryBtn}>
-            Classify all {total} as Outside Pasig
+            {busy === 'bulk' ? 'Updating…' : `Mark all ${total} as Outside Pasig`}
           </button>
         </div>
       )}
 
       {notice && (
-        <div className="px-3 py-2 rounded-lg text-xs" style={{ background: notice.type === 'error' ? 'rgba(239,68,68,0.05)' : 'rgba(16,185,129,0.06)', color: notice.type === 'error' ? '#991B1B' : '#047857' }}>
+        <div className="px-3 py-2 text-xs" style={notice.type === 'error'
+          ? { background: '#FBF3F2', color: '#8F3A34', border: '1px solid #EAD5D2' }
+          : { background: '#F1F5F1', color: '#526A56', border: '1px solid #D5E0D5' }}>
           {notice.text}
         </div>
       )}
@@ -124,30 +131,42 @@ export default function LocationReviewPanel({ group, batch, onClose, onChanged }
       {loading ? (
         <p className="text-xs text-center py-8" style={{ color: '#94A3B8' }}>Loading…</p>
       ) : data.records.length === 0 ? (
-        <p className="text-xs text-center py-8" style={{ color: '#047857' }}>All records in this group are resolved.</p>
+        <p className="text-xs py-5" style={{ color: '#526A56' }}>All records in this group have been reviewed.</p>
       ) : (
-        <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #E2E8F0' }}>
+        <div style={{ borderTop: '1px solid rgba(15,45,82,0.06)' }}>
           {data.records.map(r => (
-            <div key={r.id} className="px-4 py-3 flex flex-col md:flex-row md:items-center gap-3" style={{ borderBottom: '1px solid #F1F5F9' }}>
-              <div className="flex-1 min-w-0 text-xs" style={{ color: '#0F2D52' }}>
-                <p className="font-semibold">{fullName(r)} <span className="font-mono font-normal" style={{ color: '#64748B' }}>{caseIdOf(r) || ''}</span></p>
-                <p className="text-[11px]" style={{ color: '#64748B' }}>
-                  {r.sex || '—'}{r.age != null ? `, ${r.age}` : ''} · Dx {fmtDate(r.date_of_diagnosis)} · {r.source_type}
-                </p>
-                <p className="text-[10px]" style={{ color: '#94A3B8' }}>
-                  Seen at {r.treatment_facility || r.screening_facility || '—'} · {r.filename || 'Import'}
+            <article key={r.id} className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(250px,300px)] gap-4 py-4" style={{ borderBottom: '1px solid rgba(15,45,82,0.06)' }}>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                  <p className="text-xs font-semibold" style={{ color: '#263746' }}>{fullName(r)}</p>
+                  <span className="text-[11px] font-mono" style={{ color: '#64748B' }}>{caseIdLabel(r)}</span>
+                </div>
+                <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] sm:grid-cols-3">
+                  <div><dt className="inline" style={{ color: '#94A3B8' }}>Sex / age: </dt><dd className="inline" style={{ color: '#475569' }}>{r.sex || '—'}{r.age != null ? ` / ${r.age}` : ''}</dd></div>
+                  <div><dt className="inline" style={{ color: '#94A3B8' }}>Diagnosis: </dt><dd className="inline" style={{ color: '#475569' }}>{fmtDate(r.date_of_diagnosis)}</dd></div>
+                  <div><dt className="inline" style={{ color: '#94A3B8' }}>Record type: </dt><dd className="inline" style={{ color: '#475569' }}>{r.source_type || '—'}</dd></div>
+                </dl>
+                <p className="mt-1.5 text-[10px] break-words" style={{ color: '#64748B' }}>
+                  Seen at {r.treatment_facility || r.screening_facility || 'Not provided'}
                 </p>
               </div>
-              <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                <select aria-label="Barangay where the patient lives" value={choice[r.id] || ''} onChange={e => setChoice(c => ({ ...c, [r.id]: e.target.value }))}
-                  className="px-2 py-1.5 text-[11px] rounded outline-none" style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52', maxWidth: 170 }}>
-                  <option value="">Barangay…</option>
-                  {data.barangays.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
-                <button disabled={busy === r.id} onClick={() => resolve(r, 'assign')} className="px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-50" style={primaryBtn}>Assign</button>
-                <button disabled={busy === r.id} onClick={() => resolve(r, 'outside_pasig')} className="px-2.5 py-1.5 text-[11px] font-medium disabled:opacity-50" style={secondaryBtn}>Outside Pasig</button>
+              <div className="flex flex-col items-start gap-2">
+                <label className="w-full">
+                  <span className="mb-1 block text-[10px] font-medium" style={{ color: '#64748B' }}>Barangay where the patient lives</span>
+                  <select aria-label={`Barangay where ${fullName(r)} lives`} value={choice[r.id] || ''} onChange={e => setChoice(c => ({ ...c, [r.id]: e.target.value }))}
+                    className="w-full px-2.5 py-2 text-[11px] outline-none" style={{ background: '#ffffff', border: '1px solid #D7DEE6', color: '#334155' }}>
+                    <option value="">Select barangay</option>
+                    {data.barangays.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button disabled={busy === r.id} onClick={() => resolve(r, 'assign')} className="px-3 py-1.5 text-[11px] font-semibold disabled:opacity-50" style={primaryBtn}>
+                    {busy === r.id ? 'Saving…' : 'Assign barangay'}
+                  </button>
+                  <button disabled={busy === r.id} onClick={() => resolve(r, 'outside_pasig')} className="px-2.5 py-1.5 text-[11px] font-medium disabled:opacity-50" style={secondaryBtn}>Outside Pasig</button>
+                </div>
               </div>
-            </div>
+            </article>
           ))}
           <Pager pagination={data.pagination} onPage={setPage} />
         </div>

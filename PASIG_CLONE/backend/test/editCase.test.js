@@ -23,11 +23,16 @@ const base = {
   last_name: 'Dela Cruz', first_name: 'Juan', date_of_birth: '1990-01-01', date_of_diagnosis: '2025-03-04',
   sex: 'Male', age: 35, city: 'Pasig City', outcome_status: 'ON TREATMENT', date_of_outcome: null,
   case_no: 'CS-2025-000001', patient_id: 1, batch_id: '00000000-0000-0000-0000-000000000001',
+  source_case_id: 'ROS-D-2025-00042',
 };
 
 function poolQuery(sql, params = []) {
   const q = String(sql).replace(/\s+/g, ' ').trim();
   if (q.startsWith('SELECT * FROM validated_tb_cases WHERE id = $1')) return { rows: cases.filter(c => c.id === Number(params[0])) };
+  if (q.startsWith('SELECT case_id_required FROM import_batches')) return { rows: [{ case_id_required: true }] };
+  if (q.startsWith('SELECT case_no FROM validated_tb_cases WHERE upper(source_case_id)')) {
+    return { rows: cases.filter(c => c.id !== Number(params[1]) && String(c.source_case_id).toUpperCase() === String(params[0]).toUpperCase()).map(c => ({ case_no: c.case_no })) };
+  }
   if (/^(BEGIN|COMMIT|ROLLBACK)/.test(q)) return { rows: [] };
   if (q.startsWith('UPDATE validated_tb_cases SET') || q.startsWith('INSERT INTO case_history')) { writes.push({ q, params }); return { rows: [] }; }
   return { rows: [] };
@@ -136,5 +141,42 @@ describe('PUT /records/:id', () => {
     assert.strictEqual(r.status, 200);
     assert.deepStrictEqual(r.body.changed, []);
     assert.strictEqual(writes.length, 0);
+  });
+
+  describe('Case ID and screening date', () => {
+    beforeEach(() => { cases[0].source_case_id = 'ROS-D-2025-00099'; });
+
+    it('saves a corrected Case ID, normalised to upper case without spaces', async () => {
+      const r = await put(1, { source_case_id: ' ros-d-2025-00100 ' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      assert.deepStrictEqual(r.body.changed, ['source_case_id']);
+      const upd = writes.find(w => w.q.startsWith('UPDATE validated_tb_cases SET'));
+      assert.ok(upd.params.includes('ROS-D-2025-00100'));
+    });
+
+    it('refuses a Case ID in the wrong format (e.g. a system CS- number)', async () => {
+      const r = await put(1, { source_case_id: 'CS-2025-000001' });
+      assert.strictEqual(r.status, 422);
+      assert.match(r.body.error, /Case ID must look like/);
+      assert.strictEqual(writes.length, 0);
+    });
+
+    it('refuses a Case ID that already belongs to another case (duplicate)', async () => {
+      const r = await put(1, { source_case_id: 'ros-d-2025-00042' });
+      assert.strictEqual(r.status, 409);
+      assert.match(r.body.error, /already belongs to case/);
+      assert.strictEqual(writes.length, 0);
+    });
+
+    it('a pending-match record can have its Case ID corrected', async () => {
+      const r = await put(4, { source_case_id: 'ROS-D-2025-00101' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    });
+
+    it('saves the date of screening', async () => {
+      const r = await put(1, { date_of_screening: '2025-02-20' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      assert.deepStrictEqual(r.body.changed, ['date_of_screening']);
+    });
   });
 });

@@ -4,10 +4,11 @@
  *     Age required; a missing / unknown Pasig barangay is kept for Needs Assignment
  *   - DSTB and MN validation are separate functions on a shared core; manual entry
  *     still requires name + date of birth
- *   - MN: ITIS Lite Case No. preserved as source_case_id; missing ITIS = warning only;
- *     the same ITIS no. is a possible match (a person decides, never merged)
- *   - DSTB: never matched on barangay + date + sex + age; keeps the generated Case ID
- *     and gets source file/row traceability (source_record_id)
+ *   - MN: the registry's ITIS Lite Case No. is ignored (not stored, not a matching key)
+ *   - DSTB: never matched on barangay + date + sex + age; keeps source file/row
+ *     traceability (source_record_id)
+ *   - the Case ID is never generated: it comes from the file's "Case ID" column, and a row
+ *     without one is a data issue (services/caseIds.js, services/validator.js)
  * Uses an in-memory stand-in for the database (nothing real is touched).
  * Run: node --test test/historicalImportRules.test.js
  */
@@ -22,6 +23,7 @@ function stub(modulePath, exportsValue) {
 
 // ---- minimal database stand-in for validateBatch ----
 const BATCH = '11111111-2222-3333-4444-555555555555';
+const OLD_BATCH = '99999999-8888-7777-6666-555555555555'; // uploaded before Case IDs were required
 let RAW = [];
 let EXISTING = [];
 let inserted = [];
@@ -30,9 +32,12 @@ let seq = 0;
 const INSERT_COLS = () => require('../services/validator').INSERT_COLUMNS;
 async function q(sql, params = []) {
   const s = String(sql).replace(/\s+/g, ' ').trim();
+  if (s.startsWith('SELECT identity_class, case_id_required FROM import_batches')) {
+    return { rows: [{ identity_class: 'historical', case_id_required: params[0] !== OLD_BATCH }] };
+  }
   if (s.startsWith('SELECT sync_status FROM import_batches')) return { rows: [{ sync_status: 'pending' }] };
   if (s.includes('COUNT(*)::int AS n')) return { rows: [{ n: 0 }] };
-  if (s.startsWith('SELECT case_no, date_of_diagnosis::text')) return { rows: EXISTING };
+  if (s.startsWith('SELECT id, case_no, date_of_diagnosis::text')) return { rows: EXISTING };
   if (s.startsWith("SELECT nextval('patient_no_seq')") || s.startsWith("SELECT nextval('case_no_seq')")) {
     return { rows: Array.from({ length: params[0] }, () => ({ n: ++seq })) };
   }
@@ -42,10 +47,12 @@ async function q(sql, params = []) {
   if (s.startsWith('INSERT INTO validation_issues')) { issues.push(...JSON.parse(params[1])); return { rows: [] }; }
   if (s.startsWith('INSERT INTO validated_tb_cases')) {
     const cols = INSERT_COLS();
+    const rows = [];
     for (let i = 0; i < params.length; i += cols.length) {
       inserted.push(Object.fromEntries(cols.map((c, k) => [c, params[i + k]])));
+      rows.push({ id: 9000 + inserted.length });
     }
-    return { rows: [] };
+    return { rows };
   }
   return { rows: [] };
 }
@@ -58,12 +65,12 @@ const { validateRecord, validateDSTB, validateMN, validateManual, sourceRefs, va
 const { planIdentities } = require('../services/patientIdentity');
 const { cleanRecord } = require('../services/dataCleaner');
 
-const deid = { barangay_name: 'Rosario', city: 'Pasig City', date_of_diagnosis: '2023-03-04', sex: 'Male', age: 41 };
+const deid = { barangay_name: 'Rosario', city: 'Pasig City', date_of_diagnosis: '2023-03-04', sex: 'Male', age: 41, source_case_id: 'ROS-D-2023-00042' };
 let BGY;
 beforeEach(async () => { BGY = await getValidBarangays(); });
 
 describe('DSTB / MN: de-identified historical rows', () => {
-  it('DSTB without name, date of birth or source Case ID is accepted', () => {
+  it('DSTB without name or date of birth is accepted (the Case ID still comes from the file)', () => {
     const r = validateRecord(deid, 'DSTB', BGY);
     assert.strictEqual(r.valid, true, JSON.stringify(r.errors));
     assert.deepStrictEqual(r.errors, []);
@@ -154,8 +161,11 @@ describe('source traceability', () => {
 
 describe('matching', () => {
   it('DSTB rows are never matched on barangay + date + sex + age', () => {
-    const rows = [{ ...deid, source_type: 'DSTB' }, { ...deid, source_type: 'DSTB' }];
-    const plan = planIdentities(rows, [{ case_no: 'CS-2023-000001', ...deid, source_type: 'DSTB' }]);
+    const rows = [
+      { ...deid, source_type: 'DSTB', source_case_id: 'ROS-D-2023-00042' },
+      { ...deid, source_type: 'DSTB', source_case_id: 'ROS-D-2023-00043' },
+    ];
+    const plan = planIdentities(rows, [{ case_no: 'CS-2023-000001', ...deid, source_type: 'DSTB', source_case_id: 'ROS-D-2023-00099' }]);
     assert.deepStrictEqual(plan.map(p => p.kind), ['new', 'new']);
   });
 
@@ -169,14 +179,14 @@ describe('matching', () => {
     }
   });
 
-  it('older MN files: the same ITIS no. as an existing case is a possible match (never merged)', () => {
-    const plan = planIdentities(
-      [{ ...deid, source_type: 'MN', itis_case_id: 'psg-0001 ' }],
-      [{ case_no: 'CS-2023-000009', date_of_diagnosis: '2023-03-04', source_type: 'MN', itis_case_id: 'PSG-0001' }]
-    );
-    assert.strictEqual(plan[0].kind, 'pending');
-    assert.strictEqual(plan[0].candidate.case_no, 'CS-2023-000009');
-    assert.strictEqual(plan[0].suggestion, 'same_case');
+  it('an ITIS no. is not a matching key (MN or DSTB)', () => {
+    for (const source_type of ['MN', 'DSTB']) {
+      const plan = planIdentities(
+        [{ ...deid, source_type, itis_case_id: 'psg-0001 ' }],
+        [{ case_no: 'CS-2023-000009', date_of_diagnosis: '2023-03-04', source_type: 'MN', itis_case_id: 'PSG-0001' }]
+      );
+      assert.strictEqual(plan[0].kind, 'new', source_type);
+    }
   });
 
   it('MN: the same ITIS no. twice in one file is caught; different numbers are not', () => {
@@ -189,23 +199,18 @@ describe('matching', () => {
     assert.deepStrictEqual(plan[1].candidate, { rowIndex: 0 });
   });
 
-  it('an ITIS no. on a DSTB row is not a matching key', () => {
-    const plan = planIdentities([{ ...deid, source_type: 'DSTB', itis_case_id: 'A-1' }],
-      [{ case_no: 'CS-1', source_type: 'MN', itis_case_id: 'A-1', date_of_diagnosis: '2023-03-04' }]);
-    assert.strictEqual(plan[0].kind, 'new');
-  });
 });
 
 describe('validateBatch end to end (de-identified DSTB + MN file)', () => {
   beforeEach(() => { inserted = []; issues = []; seq = 0; EXISTING = []; });
 
-  it('imports de-identified rows as cases with generated IDs and traceability; only a row missing Age becomes a data issue', async () => {
+  it('imports de-identified rows with the Case IDs the file carried and full traceability; only a row missing Age becomes a data issue', async () => {
     RAW = [
-      { id: 1, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 7, csv_data: { barangay_name: 'ROSARIO', date_of_diagnosis: '2023-03-04', sex: 'M', age: 41 } },
-      { id: 2, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 8, csv_data: { barangay_name: 'ROSARIO', date_of_diagnosis: '2023-03-04', sex: 'M', age: 41 } },
-      { id: 3, sheet_name: 'MN', source_type: 'MN', row_number: 5, csv_data: { barangay_name: 'Ugong', date_of_diagnosis: '2023-05-01', sex: 'F', age: 30, itis_case_id: 'PSG-77' } },
-      { id: 4, sheet_name: 'MN', source_type: 'MN', row_number: 6, csv_data: { barangay_name: '', date_of_diagnosis: '2023-05-02', sex: 'F', age: 22 } },
-      { id: 5, sheet_name: 'MN', source_type: 'MN', row_number: 9, csv_data: { barangay_name: 'Ugong', date_of_diagnosis: '2023-05-03', sex: 'F' } },
+      { id: 1, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 7, csv_data: { file_case_id: 'ROS-D-2023-00042', barangay_name: 'ROSARIO', date_of_diagnosis: '2023-03-04', sex: 'M', age: 41 } },
+      { id: 2, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 8, csv_data: { file_case_id: 'ROS-D-2023-00043', barangay_name: 'ROSARIO', date_of_diagnosis: '2023-03-04', sex: 'M', age: 41 } },
+      { id: 3, sheet_name: 'MN', source_type: 'MN', row_number: 5, csv_data: { file_case_id: 'TMCP-M-2023-00113', barangay_name: 'Ugong', date_of_diagnosis: '2023-05-01', sex: 'F', age: 30, itis_case_id: 'PSG-77' } },
+      { id: 4, sheet_name: 'MN', source_type: 'MN', row_number: 6, csv_data: { file_case_id: 'PND-M-2023-00001', barangay_name: '', date_of_diagnosis: '2023-05-02', sex: 'F', age: 22 } },
+      { id: 5, sheet_name: 'MN', source_type: 'MN', row_number: 9, csv_data: { file_case_id: 'PND-M-2023-00002', barangay_name: 'Ugong', date_of_diagnosis: '2023-05-03', sex: 'F' } },
     ];
     const res = await validateBatch(BATCH);
     assert.strictEqual(res.valid, 4);
@@ -216,28 +221,51 @@ describe('validateBatch end to end (de-identified DSTB + MN file)', () => {
     const byRow = Object.fromEntries(inserted.map(r => [r.source_record_id, r]));
     const dstb7 = byRow[`${BATCH}:DSTB:R7`];
     const dstb8 = byRow[`${BATCH}:DSTB:R8`];
-    assert.ok(/^CS-2023-\d{6}$/.test(dstb7.case_no), 'generated Case ID kept for DSTB');
+    assert.ok(/^CS-2023-\d{6}$/.test(dstb7.case_no), 'the internal case number is still generated');
     assert.notStrictEqual(dstb7.case_no, dstb8.case_no, 'identical DSTB attributes are two separate cases');
     assert.strictEqual(dstb8.match_status, 'none', 'no attribute matching for DSTB');
-    assert.match(dstb7.source_case_id, /^UNK-D-2023-\d{5}$/);
-    assert.notStrictEqual(dstb7.source_case_id, dstb8.source_case_id, 'every Case ID is unique');
+    assert.strictEqual(dstb7.source_case_id, 'ROS-D-2023-00042', 'Case ID comes from the file, unchanged');
+    assert.strictEqual(dstb8.source_case_id, 'ROS-D-2023-00043');
     assert.strictEqual(dstb7.last_name, null);
 
     const mn5 = byRow[`${BATCH}:MN:R5`];
-    assert.match(mn5.source_case_id, /^UNK-M-2023-\d{5}$/,'generated Case ID (facility not in the stand-in registry -> UNK)');
-    assert.strictEqual(mn5.itis_case_id, 'PSG-77', 'ITIS no. from an older file is still kept as a reference');
+    assert.strictEqual(mn5.source_case_id, 'TMCP-M-2023-00113', 'Case ID from the file, not generated');
+    assert.strictEqual(mn5.itis_case_id, undefined, 'the ITIS no. is not stored');
     const mn6 = byRow[`${BATCH}:MN:R6`];
     assert.ok(mn6, 'missing barangay is kept (Needs Assignment)');
     assert.strictEqual(mn6.barangay_name, null);
-    assert.match(mn6.source_case_id, /^UNK-M-2023-\d{5}$/);
+    assert.strictEqual(mn6.source_case_id, 'PND-M-2023-00001');
   });
 
-  it('an MN row whose ITIS no. already exists is held as a possible match', async () => {
-    EXISTING = [{ case_no: 'CS-2022-000100', date_of_diagnosis: '2022-11-01', source_type: 'MN', itis_case_id: 'PSG-77', source_case_id: null }];
-    RAW = [{ id: 1, sheet_name: 'MN', source_type: 'MN', row_number: 5, csv_data: { barangay_name: 'Ugong', date_of_diagnosis: '2023-05-01', sex: 'F', age: 30, itis_case_id: 'PSG-77' } }];
+  it('a row without a Case ID becomes a data issue — the system never invents one', async () => {
+    RAW = [{ id: 1, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 3, csv_data: { barangay_name: 'ROSARIO', date_of_diagnosis: '2023-03-04', sex: 'M', age: 41 } }];
     const res = await validateBatch(BATCH);
-    assert.strictEqual(res.possibleMatches, 1);
-    assert.strictEqual(inserted[0].match_status, 'pending');
-    assert.strictEqual(inserted[0].match_candidate_case_no, 'CS-2022-000100');
+    assert.strictEqual(res.valid, 0);
+    assert.strictEqual(res.invalid, 1);
+    assert.deepStrictEqual(issues.map(i => i.errors), [[`Case ID is required — it comes from the file's "Case ID" column`]]);
+    assert.strictEqual(inserted.length, 0, 'an invalid row is never written');
+  });
+
+  it('a malformed Case ID is an error even when everything else is clean', async () => {
+    RAW = [{ id: 1, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 4, csv_data: { file_case_id: '1180031', barangay_name: 'ROSARIO', date_of_diagnosis: '2023-03-04', sex: 'M', age: 41 } }];
+    const res = await validateBatch(BATCH);
+    assert.strictEqual(res.invalid, 1);
+    assert.ok(issues[0].errors[0].startsWith('Case ID must look like ROS-D-2025-00042'), issues[0].errors[0]);
+  });
+
+  it('a batch uploaded before Case IDs were required still validates without one (migration 018)', async () => {
+    RAW = [{ id: 1, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 3, csv_data: { barangay_name: 'ROSARIO', date_of_diagnosis: '2023-03-04', sex: 'M', age: 41 } }];
+    const res = await validateBatch(OLD_BATCH);
+    assert.strictEqual(res.valid, 1, JSON.stringify(res.errors));
+    assert.strictEqual(inserted[0].source_case_id, null, 'no Case ID is invented for an old batch');
+    assert.ok(/^CS-2023-\d{6}$/.test(inserted[0].case_no));
+  });
+
+  it('an MN row whose ITIS no. matches an existing case is NOT held as a match', async () => {
+    EXISTING = [{ case_no: 'CS-2022-000100', date_of_diagnosis: '2022-11-01', source_type: 'MN', itis_case_id: 'PSG-77', source_case_id: null }];
+    RAW = [{ id: 1, sheet_name: 'MN', source_type: 'MN', row_number: 5, csv_data: { file_case_id: 'TMCP-M-2023-00005', barangay_name: 'Ugong', date_of_diagnosis: '2023-05-01', sex: 'F', age: 30, itis_case_id: 'PSG-77' } }];
+    const res = await validateBatch(BATCH);
+    assert.strictEqual(res.possibleMatches, 0);
+    assert.strictEqual(inserted[0].match_status, 'none');
   });
 });

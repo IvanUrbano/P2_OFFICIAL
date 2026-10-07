@@ -192,6 +192,26 @@ async function initSchema() {
   }
   const mig017Path = path.join(__dirname, 'migrations', '017_case_status_treatment_outcome.sql');
   if (fs.existsSync(mig017Path)) await execSql(fs.readFileSync(mig017Path, 'utf8'));
+
+  const mig018Path = path.join(__dirname, 'migrations', '018_case_id_required.sql');
+  if (fs.existsSync(mig018Path)) {
+    try {
+      await execSql(fs.readFileSync(mig018Path, 'utf8'));
+      console.log('[pasig-clone] Migration 018 (Case ID required for new batches) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 018 failed (continuing):', err.message);
+    }
+  }
+
+  const mig019Path = path.join(__dirname, 'migrations', '019_case_id_unique.sql');
+  if (fs.existsSync(mig019Path)) {
+    try {
+      await execSql(fs.readFileSync(mig019Path, 'utf8'));
+      console.log('[pasig-clone] Migration 019 (Case ID unique per case) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 019 failed (continuing):', err.message);
+    }
+  }
 }
 
 // --- CRUD Helpers ---
@@ -239,8 +259,8 @@ function insertValidatedCase(batchId, record) {
       age, sex, city, screening_facility, treatment_facility, source_of_patient,
       anatomical_site, registration_group, bacteriological_status, date_started_treatment,
       outcome_status, date_of_outcome, record_created_at, date_of_screening,
-      validation_status, itis_case_id, is_valid, validation_errors, validation_warnings)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
+      validation_status, is_valid, validation_errors, validation_warnings)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
     [
       batchId, record.source_type, record.barangay_name, record.date_of_diagnosis,
       record.date_of_notification, record.age, record.sex, record.city,
@@ -248,7 +268,7 @@ function insertValidatedCase(batchId, record) {
       record.anatomical_site, record.registration_group, record.bacteriological_status,
       record.date_started_treatment, record.outcome_status, record.date_of_outcome,
       record.record_created_at, record.date_of_screening, record.validation_status,
-      record.itis_case_id, record.is_valid, JSON.stringify(record.errors),
+      record.is_valid, JSON.stringify(record.errors),
       JSON.stringify(record.warnings),
     ]
   );
@@ -427,6 +447,13 @@ function archiveRecord(recordId) {
   );
 }
 
+function restoreRecord(recordId) {
+  return pool.query(
+    `UPDATE validated_tb_cases SET is_archived = false WHERE id = $1 AND is_archived = true RETURNING *`,
+    [recordId]
+  );
+}
+
 function deleteValidatedCases(batchId) {
   return pool.query(
     `DELETE FROM validated_tb_cases WHERE batch_id = $1`,
@@ -514,4 +541,5 @@ module.exports = {
   archiveBatch,
   unarchiveBatch,
   archiveRecord,
+  restoreRecord,
 };

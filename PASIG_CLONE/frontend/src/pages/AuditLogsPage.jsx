@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import API from '../api/axios';
+import ModalCloseButton from '../components/ModalCloseButton';
 import { useTheme } from '../theme';
 import EmptyState from '../components/EmptyState';
 import SkeletonBlock from '../components/SkeletonBlock';
@@ -193,9 +194,7 @@ export default function AuditLogsPage() {
                 <i className="ri-file-list-3-line text-lg" style={{ color: '#0F2D52' }} />
                 <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Audit Entry</h3>
               </div>
-              <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded cursor-pointer">
-                <i className="ri-close-line text-lg" />
-              </button>
+              <ModalCloseButton onClick={() => setSelected(null)} />
             </div>
             <div className="p-5 overflow-y-auto space-y-3">
               <p className="text-xs" style={{ color: '#94A3B8' }}>

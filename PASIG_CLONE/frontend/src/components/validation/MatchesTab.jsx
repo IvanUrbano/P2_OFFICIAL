@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import API from '../../api/axios';
 import EmptyState from '../EmptyState';
-import { fmtDate, fullName, Notice, ChipFilter, th, thStyle, td, FIELD_LABELS, PinHint } from './shared';
+import { fmtDate, fullName, Notice, ChipFilter, FIELD_LABELS, PinHint } from './shared';
 import { primaryBtn, secondaryBtn } from '../SidePanel';
 import { can } from '../../utils/permissions';
 import ProgressOverlay from '../ProgressOverlay';
 import { useConfirmDialog } from '../ConfirmDialog';
-import { caseIdOf } from '../../utils/caseId';
+import { caseIdLabel } from '../../utils/caseId';
 
 const CATEGORY = {
   duplicate: { label: 'Duplicate', color: '#475569', bg: '#F1F5F9', hint: 'Same patient, same diagnosis date, nothing new.' },
@@ -75,7 +75,7 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
     setNotice(null);
     try {
       await API.post(`/api/data/records/${r.id}/resolve-match`, { resolution });
-      setNotice({ type: 'success', text: `${caseIdOf(r.candidate) || r.match_candidate_case_no || 'Record'}: ${resolution.replace('_', ' ')} recorded.` });
+      setNotice({ type: 'success', text: `${caseIdLabel(r.candidate)}: ${resolution.replace('_', ' ')} recorded.` });
       onChanged?.();
       load();
     } catch (err) {
@@ -87,11 +87,15 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
 
   const resolveSelected = async (resolution) => {
     if (selected.length === 0) return;
-    const label = resolution === 'suggested' ? 'the suggested decision' : `"${resolution.replace('_', ' ')}"`;
+    const selectedCount = selected.length;
+    const label = resolution === 'suggested'
+      ? 'the recommended decision'
+      : ALL_ACTIONS.find(action => action.resolution === resolution)?.label || resolution.replace(/_/g, ' ');
     if (!(await confirm({
-      title: 'Apply match decision?',
-      message: `Apply ${label} to ${selected.length} selected record(s)?`,
+      title: 'Confirm match decisions',
+      message: `Apply “${label}” to ${selectedCount} selected ${selectedCount === 1 ? 'record' : 'records'}?`,
       confirmLabel: 'Apply decision',
+      headerTone: '#0F2D52',
     }))) return;
     setBusy(true);
     setBulkCount(selected.length);
@@ -124,7 +128,6 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
         open={bulkCount > 0}
         title={`Resolving ${bulkCount} possible match${bulkCount === 1 ? '' : 'es'}`}
         detail="Applying the decision to each selected record."
-        icon="ri-git-merge-line"
       />
       {confirmDialog}
       <Notice notice={notice} onClose={() => setNotice(null)} />
@@ -149,98 +152,93 @@ export default function MatchesTab({ batch, refreshKey, onChanged, identityUnloc
         ) : visible.length === 0 ? (
           <EmptyState icon="ri-user-search-line" title="No Possible Matches" description="Every incoming record has a confirmed Case ID." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr>
-                  <th className={th} style={thStyle}>
-                    <input type="checkbox" aria-label="Select all" checked={allSelected}
-                      onChange={() => setSelected(allSelected ? [] : selectable.map(r => r.id))} />
-                  </th>
-                  {['Type', 'Incoming record', 'Existing case', 'What would change', 'Decision'].map(h => <th key={h} className={th} style={thStyle}>{h}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map(r => {
-                  const cat = CATEGORY[r.category] || CATEGORY.missing_candidate;
-                  const primary = PRIMARY_ACTION[r.category] || PRIMARY_ACTION.missing_candidate;
-                  const c = r.candidate;
-                  // "Same case" changes the existing case; it must be editable for this user.
-                  const existingEditable = !c || can(c, 'edit');
-                  const blocked = (resolution) => resolution === 'same_case' && !existingEditable;
-                  return (
-                    <tr key={r.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                      <td className={td}>
-                        <input type="checkbox" aria-label="Select record" disabled={!can(r, 'resolveMatch')} checked={selected.includes(r.id)}
-                          onChange={() => setSelected(s => (s.includes(r.id) ? s.filter(x => x !== r.id) : [...s, r.id]))} />
-                      </td>
-                      <td className={td}>
-                        <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap" style={{ background: cat.bg, color: cat.color }} title={cat.hint}>{cat.label}</span>
-                      </td>
-                      <td className={td} style={{ color: '#0F2D52' }}>
-                        <span className="font-semibold">{fullName(r)}</span>
-                        <span className="block text-[10px]" style={{ color: '#64748B' }}>
-                          Dx {fmtDate(r.date_of_diagnosis)} · {r.barangay_name || 'no barangay'} · {r.source_type}
-                        </span>
-                        <span className="block text-[10px]" style={{ color: '#94A3B8' }}>Outcome: {r.outcome_status || '—'}</span>
-                      </td>
-                      <td className={td} style={{ color: '#0F2D52' }}>
-                        {c ? (
-                          <>
-                            <span className="font-mono">{caseIdOf(c)}</span>
-                            <span className="block text-[10px]" style={{ color: '#64748B' }}>Dx {fmtDate(c.date_of_diagnosis)}</span>
-                            <span className="block text-[10px]" style={{ color: '#94A3B8' }}>Outcome: {c.outcome_status || '—'}</span>
-                          </>
-                        ) : <span style={{ color: '#991B1B' }}>No longer exists</span>}
-                      </td>
-                      <td className={td}>
-                        {r.category === 'new_episode' ? (
-                          <span className="text-[11px]" style={{ color: '#64748B' }}>New case for the same patient</span>
-                        ) : r.changes?.length ? (
-                          <ul className="space-y-0.5">
-                            {r.changes.map(ch => (
-                              <li key={ch.field} className="text-[11px]" style={{ color: '#334155' }}>
-                                <span style={{ color: '#64748B' }}>{FIELD_LABELS[ch.field] || ch.field}:</span>{' '}
-                                <span className="line-through" style={{ color: '#94A3B8' }}>{showValue(ch.field, ch.existing)}</span>{' → '}
-                                <b>{showValue(ch.field, ch.incoming)}</b>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <span className="text-[11px]" style={{ color: '#94A3B8' }}>Nothing — the case stays as it is</span>
+          <div className="divide-y" style={{ borderTop: '1px solid #E2E8F0', borderColor: '#E2E8F0' }}>
+            <div className="flex items-center gap-2 px-5 py-2.5" style={{ background: '#F8FAFC' }}>
+              <input type="checkbox" aria-label="Select all" checked={allSelected}
+                onChange={() => setSelected(allSelected ? [] : selectable.map(r => r.id))} />
+              <span className="text-[11px]" style={{ color: '#64748B' }}>Select all cases you can decide</span>
+            </div>
+            {visible.map(r => {
+              const cat = CATEGORY[r.category] || CATEGORY.missing_candidate;
+              const primary = PRIMARY_ACTION[r.category] || PRIMARY_ACTION.missing_candidate;
+              const c = r.candidate;
+              const existingEditable = !c || can(c, 'edit');
+              const blocked = (resolution) => resolution === 'same_case' && !existingEditable;
+              return (
+                <article key={r.id} className="px-5 py-4" style={{ borderColor: '#E2E8F0' }}>
+                  <div className="flex flex-wrap items-center gap-2 mb-3">
+                    <input type="checkbox" aria-label="Select record" disabled={!can(r, 'resolveMatch')} checked={selected.includes(r.id)}
+                      onChange={() => setSelected(s => (s.includes(r.id) ? s.filter(x => x !== r.id) : [...s, r.id]))} />
+                    <span className="text-xs font-semibold" style={{ color: '#263746' }}>{cat.label}</span>
+                    <span className="text-[11px]" style={{ color: '#64748B' }}>{cat.hint}</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <section className="p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                      <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#64748B' }}>Incoming record</h3>
+                      <p className="text-xs font-semibold" style={{ color: '#0F2D52' }}>{fullName(r)}</p>
+                      <p className="mt-1 text-[11px]" style={{ color: '#475569' }}>
+                        Diagnosis: {fmtDate(r.date_of_diagnosis)} <span className="mx-1">·</span> {r.barangay_name || 'No barangay'} <span className="mx-1">·</span> {r.source_type}
+                      </p>
+                      <p className="mt-0.5 text-[11px]" style={{ color: '#64748B' }}>Outcome: {r.outcome_status || '—'}</p>
+                    </section>
+                    <section className="p-3" style={{ background: '#FFFFFF', border: '1px solid #E2E8F0' }}>
+                      <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#64748B' }}>Existing case</h3>
+                      {c ? (
+                        <>
+                          <p className="text-xs font-mono font-semibold" style={{ color: '#0F2D52' }}>{caseIdLabel(c)}</p>
+                          <p className="mt-1 text-[11px]" style={{ color: '#475569' }}>Diagnosis: {fmtDate(c.date_of_diagnosis)}</p>
+                          <p className="mt-0.5 text-[11px]" style={{ color: '#64748B' }}>Outcome: {c.outcome_status || '—'}</p>
+                        </>
+                      ) : <p className="text-xs" style={{ color: '#991B1B' }}>This existing case no longer exists.</p>}
+                    </section>
+                  </div>
+
+                  <div className="mt-3">
+                    <h3 className="mb-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#64748B' }}>What would change</h3>
+                    {r.category === 'new_episode' ? (
+                      <p className="text-[11px]" style={{ color: '#475569' }}>This would create a new episode for the same patient.</p>
+                    ) : r.changes?.length ? (
+                      <ul className="space-y-1">
+                        {r.changes.map(ch => (
+                          <li key={ch.field} className="text-[11px]" style={{ color: '#334155' }}>
+                            <span className="font-medium">{FIELD_LABELS[ch.field] || ch.field}:</span>{' '}
+                            <span style={{ color: '#64748B' }}>{showValue(ch.field, ch.existing)}</span>
+                            <span className="mx-1" style={{ color: '#94A3B8' }}>→</span>
+                            <span className="font-semibold">{showValue(ch.field, ch.incoming)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-[11px]" style={{ color: '#64748B' }}>No details would change; the existing case stays as it is.</p>
+                    )}
+                  </div>
+
+                  <div className="mt-3 pt-3 flex flex-wrap items-center gap-2" style={{ borderTop: '1px solid #E8EDF2' }}>
+                    {can(r, 'resolveMatch') ? (
+                      <>
+                        <button disabled={busy || blocked(primary.resolution)} onClick={() => resolveOne(r, primary.resolution)}
+                          title={blocked(primary.resolution) ? 'The existing case is view-only for you' : ''}
+                          className="px-3 py-1.5 text-[11px] font-semibold disabled:opacity-50" style={primaryBtn}>{primary.label}</button>
+                        {ALL_ACTIONS.filter(a => a.resolution !== primary.resolution).map(a => (
+                          <button key={a.resolution} disabled={busy || (!c && a.resolution !== 'different_person') || blocked(a.resolution)} onClick={() => resolveOne(r, a.resolution)}
+                            className="px-2.5 py-1.5 text-[10px] font-medium disabled:opacity-40" style={secondaryBtn}>{a.label}</button>
+                        ))}
+                        {!existingEditable && (
+                          <span className="basis-full text-[10px]" style={{ color: '#9A672D' }}>The existing case is view-only for you, so it cannot be updated here.</span>
                         )}
-                      </td>
-                      <td className={`${td} whitespace-nowrap`}>
-                        {can(r, 'resolveMatch') ? (
-                          <div className="flex flex-col items-start gap-1">
-                            <button disabled={busy || blocked(primary.resolution)} onClick={() => resolveOne(r, primary.resolution)}
-                              title={blocked(primary.resolution) ? 'The existing case is view-only for you' : ''}
-                              className="px-3 py-1.5 text-[11px] font-semibold disabled:opacity-50" style={primaryBtn}>{primary.label}</button>
-                            <div className="flex gap-1">
-                              {ALL_ACTIONS.filter(a => a.resolution !== primary.resolution).map(a => (
-                                <button key={a.resolution} disabled={busy || (!c && a.resolution !== 'different_person') || blocked(a.resolution)} onClick={() => resolveOne(r, a.resolution)}
-                                  className="px-2 py-1 text-[10px] font-medium disabled:opacity-40" style={secondaryBtn}>{a.label}</button>
-                              ))}
-                            </div>
-                            {!existingEditable && (
-                              <span className="text-[10px]" style={{ color: '#B45309' }}>Existing case is view-only for you — it can&apos;t be updated from here.</span>
-                            )}
-                          </div>
-                        ) : r.permissions?.view === false ? (
-                          // Visible only because it came from this user's upload (or an
-                          // unassigned row): another barangay's case, decided by them.
-                          <span className="text-[10px] leading-snug inline-block text-right" style={{ maxWidth: 240, color: '#B45309' }}>
-                            🔒 Assigned to {r.barangay_name || 'another barangay'} — only its barangay staff or an administrator can decide this.
-                          </span>
-                        ) : (
-                          <span className="text-[10px]" style={{ color: '#94A3B8' }}>View only</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                      </>
+                    ) : r.permissions?.view === false ? (
+                      <span className="text-[11px]" style={{ color: '#9A672D' }}>
+                        Assigned to {r.barangay_name || 'another barangay'}; only that barangay&apos;s staff or an administrator can decide.
+                      </span>
+                    ) : (
+                      <span className="text-[11px]" style={{ color: '#64748B' }}>View only</span>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
       </div>

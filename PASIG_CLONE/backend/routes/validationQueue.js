@@ -40,7 +40,7 @@ const {
 } = require('../services/validationQueue');
 const { cleanRecord, PASIG_BARANGAYS } = require('../services/dataCleaner');
 const { validateRecord, getValidBarangays, INSERT_COLUMNS, rowValues, identityRuleFor, currentIssueErrors } = require('../services/validator');
-const { assignCaseIds, normalizeCaseId } = require('../services/caseIds');
+const { normalizeCaseId } = require('../services/caseIds');
 const { createPatient, nextCaseNo } = require('../services/matchResolution');
 const { resyncSyncedCases, logReviews } = require('../services/caseFollowUp');
 
@@ -717,7 +717,7 @@ router.get('/issues', authenticate, authorizeRoles('admin', 'staff'), async (req
       db.pool.query(
         `SELECT i.id, i.batch_id, i.row_number, i.source_type, i.record, i.errors, i.warnings,
                 i.barangay_id, i.barangay_name, i.identity_class,
-                i.created_at, i.updated_at, b.filename
+                i.created_at, i.updated_at, b.filename, b.case_id_required
          FROM validation_issues i LEFT JOIN import_batches b ON b.id = i.batch_id
          WHERE ${where}
          ORDER BY i.batch_id, i.row_number NULLS LAST LIMIT ${PAGE_SIZE} OFFSET $${params.length + 1}`,
@@ -729,7 +729,7 @@ router.get('/issues', authenticate, authorizeRoles('admin', 'staff'), async (req
     const issues = rows.rows.map(r => {
       // Errors under the CURRENT rules (checked on the unmasked record) — stored text
       // from older rules is never shown.
-      const errors = currentIssueErrors(r, validBarangays);
+      const errors = currentIssueErrors(r, validBarangays, { requireCaseId: r.case_id_required !== false });
       const types = [...new Set(errors.map(issueType))];
       types.forEach(t => { typeCounts[t] = (typeCounts[t] || 0) + 1; });
       return {
@@ -757,10 +757,11 @@ router.get('/issues', authenticate, authorizeRoles('admin', 'staff'), async (req
 });
 
 const EDITABLE_FIELDS = [
+  'source_case_id',
   'last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth', 'sex', 'age',
   'date_of_diagnosis', 'date_started_treatment', 'date_of_outcome', 'outcome_status',
   'barangay_name', 'city', 'treatment_facility', 'screening_facility',
-  'registration_group', 'bacteriological_status', 'anatomical_site', 'itis_case_id',
+  'registration_group', 'bacteriological_status', 'anatomical_site',
 ];
 // The row's location decides which barangay owns it, so changing it is an assignment
 // decision: staff fix the clinical values of issues already assigned to their barangay,
@@ -769,7 +770,10 @@ const EDITABLE_FIELDS = [
 const STAFF_LOCATION_FIELDS = new Set(['barangay_name', 'city']);
 
 async function loadIssueForUser(req, id, action) {
-  const issue = (await db.pool.query('SELECT * FROM validation_issues WHERE id = $1', [id])).rows[0];
+  const issue = (await db.pool.query(
+    `SELECT i.*, b.case_id_required FROM validation_issues i
+     LEFT JOIN import_batches b ON b.id = i.batch_id WHERE i.id = $1`, [id]
+  )).rows[0];
   if (!issue) return { error: [404, 'Data issue not found.'] };
   if (issue.status !== 'open') return { error: [409, `This issue was already ${issue.status}.`] };
   if (!can(req.user, await resolveUserScope(req.user), action, issue)) {
@@ -819,11 +823,18 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
       }
     }
     const { record: cleaned, notes } = cleanRecord(merged);
-    // Source traceability: keep the file row and the Case ID the file carried (if none,
-    // one is generated below, inside the transaction).
+    // Source traceability: keep the file row and the Case ID the file carried. A row
+    // without one is still a data issue, so the fix form supplies it here.
     cleaned.source_record_id = issue.record?.source_record_id ?? null;
-    cleaned.source_case_id = normalizeCaseId(issue.record?.source_case_id ?? issue.record?.file_case_id);
-    const validation = validateRecord(cleaned, issue.source_type, await getValidBarangays(), identityRuleFor(issue.identity_class));
+    cleaned.source_case_id = normalizeCaseId(
+      Object.prototype.hasOwnProperty.call(changes, 'source_case_id')
+        ? changes.source_case_id
+        : issue.record?.source_case_id ?? issue.record?.file_case_id
+    );
+    const validation = validateRecord(cleaned, issue.source_type, await getValidBarangays(), {
+      ...identityRuleFor(issue.identity_class),
+      requireCaseId: issue.case_id_required !== false,
+    });
     const warnings = [...notes, ...validation.warnings];
 
     if (!validation.valid) {
@@ -840,8 +851,8 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
     }
 
     // Possible returning patient -> pending match (a person decides; never merged):
-    // same name + DOB as an existing case (when both are given), or for MN the same
-    // ITIS Lite Case No. DSTB rows are never matched on barangay + date + sex + age.
+    // same name + DOB as an existing case (when both are given), or the same Case ID.
+    // Rows are never matched on barangay + date + sex + age.
     let cand = null;
     if (cleaned.last_name && cleaned.first_name && cleaned.date_of_birth) {
       cand = (await client.query(
@@ -859,16 +870,6 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
          WHERE v.case_no IS NOT NULL AND v.is_archived = false AND upper(v.source_case_id) = $1
          ORDER BY v.date_of_diagnosis DESC NULLS LAST LIMIT 1`,
         [cleaned.source_case_id]
-      )).rows[0] || null;
-    }
-    // Older MN files: same ITIS Lite Case No.
-    if (!cand && issue.source_type === 'MN' && cleaned.itis_case_id) {
-      cand = (await client.query(
-        `SELECT v.case_no, v.date_of_diagnosis::text AS date_of_diagnosis FROM validated_tb_cases v
-         WHERE v.case_no IS NOT NULL AND v.is_archived = false AND v.source_type = 'MN'
-           AND lower(regexp_replace(v.itis_case_id, '[[:space:]]', '', 'g')) = lower(regexp_replace($1, '[[:space:]]', '', 'g'))
-         ORDER BY v.date_of_diagnosis DESC NULLS LAST LIMIT 1`,
-        [String(cleaned.itis_case_id)]
       )).rows[0] || null;
     }
 
@@ -892,7 +893,6 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
       const patient = await createPatient(client, issue.batch_id);
       Object.assign(row, { patient_id: patient.id, case_no: await nextCaseNo(client, cleaned.date_of_diagnosis), match_status: 'none' });
     }
-    await assignCaseIds(client, [row]); // next free Case ID when the file carried none
     const placeholders = INSERT_COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
     const inserted = (await client.query(
       `INSERT INTO validated_tb_cases (${INSERT_COLUMNS.join(', ')}) VALUES (${placeholders}) RETURNING id, case_no`,

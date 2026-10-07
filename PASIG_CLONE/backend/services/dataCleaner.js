@@ -81,7 +81,7 @@ const DATE_FIELDS = [
 
 const TEXT_FIELDS = [
   'screening_facility', 'treatment_facility', 'source_of_patient', 'anatomical_site',
-  'registration_group', 'bacteriological_status', 'validation_status', 'itis_case_id',
+  'registration_group', 'bacteriological_status', 'validation_status',
   'type', 'province', 'region', 'referred_to_dots', 'referral_status',
   'microscopy_result', 'rdt_result', 'outcome_reason',
   'last_name', 'first_name', 'middle_name', 'suffix', 'full_name',
@@ -409,7 +409,7 @@ function cleanRecord(input) {
  * True when every meaningful field is empty (e.g. trailing formatted-but-empty spreadsheet rows).
  */
 function isBlankRecord(rec) {
-  const keys = ['barangay_name', 'date_of_diagnosis', 'age', 'sex', 'screening_facility', 'itis_case_id', 'outcome_status'];
+  const keys = ['barangay_name', 'date_of_diagnosis', 'age', 'sex', 'screening_facility', 'outcome_status'];
   return keys.every(k => rec[k] === null || rec[k] === undefined || cleanText(rec[k]) === null);
 }
 

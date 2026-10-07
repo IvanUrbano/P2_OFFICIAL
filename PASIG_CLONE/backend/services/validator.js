@@ -1,7 +1,11 @@
 const db = require('../db/pasigSchema');
 const { cleanRecord, isBlankRecord, PASIG_BARANGAYS } = require('./dataCleaner');
 const { planIdentities, formatPatientNo, formatCaseNo } = require('./patientIdentity');
-const { assignCaseIds, normalizeCaseId } = require('./caseIds');
+const { CASE_ID_RE, normalizeCaseId } = require('./caseIds');
+const { resolveMatch } = require('./matchResolution');
+const { resolveUserScope } = require('../policies/caseAccessPolicy');
+const { ACTIONS, assertCaseAction } = require('../policies/permissions');
+const { logReviews, resyncSyncedCases } = require('./caseFollowUp');
 
 const VALID_SEX = ['male', 'female'];
 
@@ -16,7 +20,7 @@ const INSERT_COLUMNS = [
   'age', 'sex', 'city', 'screening_facility', 'treatment_facility', 'source_of_patient',
   'anatomical_site', 'registration_group', 'bacteriological_status', 'date_started_treatment',
   'outcome_status', 'date_of_outcome', 'record_created_at', 'date_of_screening',
-  'validation_status', 'itis_case_id', 'is_valid', 'validation_errors', 'validation_warnings',
+  'validation_status', 'is_valid', 'validation_errors', 'validation_warnings',
   'source_record_id', 'record_status', 'updated_by',
   // MN-specific fields (previously dropped before reaching TBInsight)
   'type', 'province', 'region', 'referred_to_dots', 'referral_status',
@@ -24,7 +28,7 @@ const INSERT_COLUMNS = [
   // Identity (names/DOB stay in PASIG only)
   'last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth',
   'patient_id', 'case_no', 'match_status', 'match_candidate_case_no', 'match_suggestion',
-  // Source traceability (file row; MN ITIS Lite Case No.)
+  // Source traceability (the Case ID from the file)
   'source_case_id',
   'source_outcome_status',
 ];
@@ -86,7 +90,7 @@ function rowValues(batchId, r) {
     r.age, r.sex, r.city, r.screening_facility, r.treatment_facility, r.source_of_patient,
     r.anatomical_site, r.registration_group, r.bacteriological_status, r.date_started_treatment,
     r.outcome_status, r.date_of_outcome, r.record_created_at || null, r.date_of_screening,
-    r.validation_status, r.itis_case_id, r.is_valid, JSON.stringify(r.errors),
+    r.validation_status, r.is_valid, JSON.stringify(r.errors),
     JSON.stringify(r.warnings),
     r.source_record_id || null, r.record_status || 'new', null,
     r.type ?? null, r.province ?? null, r.region ?? null, r.referred_to_dots ?? null, r.referral_status ?? null,
@@ -104,12 +108,15 @@ function rowValues(batchId, r) {
  * Clean + validate every raw row of a batch and store the results.
  * Rows are cleaned first (dataCleaner), then validated; cleaning notes are kept as warnings.
  */
-async function validateBatch(batchId) {
+async function validateBatch(batchId, user = null) {
   const records = await db.getRawCases(batchId);
-  // Name / date-of-birth rules follow the batch's identity class (historical by default).
-  const batchClass = (await db.pool.query('SELECT identity_class FROM import_batches WHERE id = $1', [batchId])
-    .catch(() => ({ rows: [] }))).rows[0]?.identity_class || 'historical';
-  const identityRule = identityRuleFor(batchClass);
+  // Name / date-of-birth rules follow the batch's identity class (historical by default),
+  // and a batch uploaded before Case IDs were required (migration 018) keeps passing
+  // without one — only new uploads are held to the rule.
+  const batchRow = (await db.pool.query('SELECT identity_class, case_id_required FROM import_batches WHERE id = $1', [batchId])
+    .catch(() => ({ rows: [] }))).rows[0];
+  const identityRule = identityRuleFor(batchRow?.identity_class || 'historical');
+  const recordRules = { ...identityRule, requireCaseId: batchRow?.case_id_required !== false };
   const validBarangays = await getValidBarangays();
 
   const results = {
@@ -136,7 +143,7 @@ async function validateBatch(batchId) {
       rowNumber: record.row_number, fileCaseId: cleaned.file_case_id,
     }));
 
-    const validation = validateRecord(cleaned, record.source_type, validBarangays, identityRule);
+    const validation = validateRecord(cleaned, record.source_type, validBarangays, recordRules);
     const warnings = [...notes, ...validation.warnings];
     if (notes.some(n => n.includes('standardized'))) results.cleaned++;
     if (!isPasig) results.nonPasig++;
@@ -173,16 +180,40 @@ async function validateBatch(batchId) {
 
   // Patient # / Case ID: compare against every existing case outside this batch.
   const existing = await db.pool.query(
-    `SELECT case_no, date_of_diagnosis::text AS date_of_diagnosis,
+    `SELECT id, case_no, date_of_diagnosis::text AS date_of_diagnosis,
             last_name, first_name, date_of_birth::text AS date_of_birth,
-            source_type, itis_case_id, source_case_id
+            source_type, source_case_id
      FROM validated_tb_cases
      WHERE case_no IS NOT NULL AND is_archived = false AND batch_id <> $1`,
     [batchId]
   );
   const plan = planIdentities(validRecords, existing.rows);
-  const newIdx = plan.map((p, i) => (p.kind === 'new' ? i : -1)).filter(i => i >= 0);
+
+  // The same Case ID twice in one file, and the two rows disagree about the patient or
+  // the diagnosis date: which row is right is a decision for a person, so the later row
+  // becomes a Data Issue instead of silently overwriting the first one.
+  const demoted = new Map();
+  plan.forEach((p, i) => {
+    if (p.kind !== 'pending' || p.candidate.rowIndex == null || !p.conflict) return;
+    demoted.set(i, `Case ID ${validRecords[i].source_case_id} is already used by row `
+      + `${validRecords[p.candidate.rowIndex].row_number} of this file with a different patient or diagnosis date`);
+  });
+  for (const [i, message] of demoted) {
+    const r = validRecords[i];
+    r.is_valid = false;
+    r.errors = [message];
+    results.valid--;
+    results.invalid++;
+    results.errors.push({ row: r.row_number, source_type: r.source_type, errors: r.errors });
+    invalidRecords.push(r);
+  }
+
+  const newIdx = plan.map((p, i) => (p.kind === 'new' ? i : -1)).filter(i => i >= 0 && !demoted.has(i));
   let possibleMatches = 0;
+  // case_no each row was merged into, when its own Case ID pointed at another row
+  const resolvedInto = new Map();
+  let autoMerged = 0;
+  const autoMergedCaseNos = [];
 
   const client = await db.pool.connect();
   try {
@@ -234,12 +265,8 @@ async function validateBatch(batchId) {
       });
     }
 
-    // Case IDs for rows whose file did not carry one (next free number per facility /
-    // type / year — never repeats across files or batches).
-    await assignCaseIds(client, validRecords);
-
     plan.forEach((p, i) => {
-      if (p.kind !== 'pending') return;
+      if (p.kind !== 'pending' || demoted.has(i)) return;
       const r = validRecords[i];
       r.match_status = 'pending';
       r.match_candidate_case_no = p.candidate.case_no ?? validRecords[p.candidate.rowIndex].case_no;
@@ -248,19 +275,60 @@ async function validateBatch(batchId) {
       possibleMatches++;
     });
 
+    const toInsert = validRecords.filter((_, i) => !demoted.has(i));
     const COLS = INSERT_COLUMNS.length;
     const chunkSize = 100;
-    for (let i = 0; i < validRecords.length; i += chunkSize) {
-      const chunk = validRecords.slice(i, i + chunkSize);
+    const insertedIds = [];
+    for (let i = 0; i < toInsert.length; i += chunkSize) {
+      const chunk = toInsert.slice(i, i + chunkSize);
       const placeholders = chunk.map((_, idx) => {
         const base = idx * COLS;
         return `(${Array.from({ length: COLS }, (_, c) => `$${base + c + 1}`).join(',')})`;
       }).join(', ');
       const flatParams = chunk.flatMap(r => rowValues(batchId, r));
-      await client.query(
-        `INSERT INTO validated_tb_cases (${INSERT_COLUMNS.join(', ')}) VALUES ${placeholders}`,
+      const ins = await client.query(
+        `INSERT INTO validated_tb_cases (${INSERT_COLUMNS.join(', ')}) VALUES ${placeholders} RETURNING id`,
         flatParams
       );
+      insertedIds.push(...ins.rows.map(r => Number(r.id)));
+    }
+    toInsert.forEach((r, k) => { r.id = insertedIds[k]; });
+
+    // The Case ID identifies the case, so a row that carries the Case ID of a case the
+    // system already knows (in this file or in another batch) is a later report of it,
+    // applied to that case here — when the two rows agree about the patient and the
+    // diagnosis date and the person validating may edit the case. A row that contradicts
+    // the case it points at stays pending: only a person can decide which one is right.
+    const scope = user ? await resolveUserScope(user) : null;
+    for (let i = 0; i < validRecords.length && user; i++) {
+      const p = plan[i];
+      if (!p || p.kind !== 'pending' || demoted.has(i) || p.matchedBy !== 'case_id' || p.conflict) continue;
+      const r = validRecords[i];
+      // A candidate that was merged into another case itself: follow it there.
+      if (p.candidate.rowIndex != null && resolvedInto.has(p.candidate.rowIndex)) {
+        r.match_candidate_case_no = resolvedInto.get(p.candidate.rowIndex);
+        await client.query('UPDATE validated_tb_cases SET match_candidate_case_no = $2 WHERE id = $1',
+          [r.id, r.match_candidate_case_no]);
+      }
+      try {
+        const out = await resolveMatch(client, r, 'same_case', user.id, {
+          authorizeExistingCase: (cand) => assertCaseAction(user, scope, ACTIONS.CASE_EDIT, cand),
+        });
+        resolvedInto.set(i, out.caseNo);
+        autoMerged++;
+        autoMergedCaseNos.push(out.caseNo);
+        possibleMatches--;
+        await logReviews(client, user.id, [{
+          validated_case_id: r.id, case_no: out.caseNo, review_type: 'match', decision: 'same_case',
+          previous_status: 'pending', new_status: 'resolved',
+          notes: `Same Case ID ${r.source_case_id} — applied during validation`,
+        }]);
+      } catch (err) {
+        // Not allowed to edit that case (403) or it vanished (409): left for a person,
+        // exactly as an unresolvable match would be.
+        if (!err.status) throw err;
+        console.warn(`Same Case ID ${r.source_case_id} left pending: ${err.message}`);
+      }
     }
 
     await client.query(
@@ -278,11 +346,19 @@ async function validateBatch(batchId) {
     client.release();
   }
 
+  // A case already sent to TBInsight was just updated here; send it again on its own so
+  // the Case ID it is known by there carries the new values too.
+  if (autoMerged > 0 && user) {
+    await resyncSyncedCases(autoMergedCaseNos, user, 'Same Case ID re-import').catch(() => {});
+  }
+
   results.possibleMatches = possibleMatches;
+  results.autoMerged = autoMerged;
   results.summary = {
-    total: validRecords.length,
+    total: validRecords.length - demoted.size,
     new: newIdx.length,
     possibleMatches,
+    autoMerged,
     error: results.invalid,
     cleaned: results.cleaned,
     nonPasig: results.nonPasig,
@@ -309,14 +385,27 @@ async function validateBatch(batchId) {
 //   Manual entry          — always required.
 // Callers pass identityRuleFor(identity_class); a missing class counts as historical,
 // the same fail-closed default the privacy rules use.
+//
+// Case ID (required for every source, manual entry included): it comes from the file's
+// "Case ID" column — the system never generates one — and is what says that two rows are
+// the same case (services/caseIds.js). Batches uploaded before this rule (migration 018)
+// pass `requireCaseId: false`, so re-validating an old file does not fail it; a Case ID
+// they do carry is still format-checked.
 
 const NAME_DOB_FIELDS = ['last_name', 'first_name', 'date_of_birth'];
 const present = (v) => v !== null && v !== undefined && String(v).trim() !== '';
 const text = (v) => (v === null || v === undefined ? '' : String(v));
 
-function validateCore(rec, validBarangays, { requireIdentity = false, legacyMissingAge = false } = {}) {
+function validateCore(rec, validBarangays, { requireIdentity = false, legacyMissingAge = false, requireCaseId = true } = {}) {
   const errors = [];
   const warnings = [];
+
+  const caseId = normalizeCaseId(rec.source_case_id);
+  if (requireCaseId && !caseId) {
+    errors.push('Case ID is required — it comes from the file\'s "Case ID" column');
+  } else if (caseId && !CASE_ID_RE.test(caseId)) {
+    errors.push(`Case ID must look like ROS-D-2025-00042 (got "${text(rec.source_case_id).trim()}")`);
+  }
 
   const normalizedCity = text(rec.city).trim().toLowerCase();
   const isPasig = normalizedCity === 'pasig city' || normalizedCity === 'pasig';
@@ -361,7 +450,8 @@ function validateCore(rec, validBarangays, { requireIdentity = false, legacyMiss
   return { errors, warnings };
 }
 
-/** DSTB sheet: no patient name or source Case ID required (the system Case ID is generated). */
+/** DSTB sheet: no patient name required (historical de-identified files). Its Case ID must
+ *  come from the file's "Case ID" column — the system never generates one. */
 function validateDSTB(rec, validBarangays, opts = {}) {
   const r = validateCore(rec, validBarangays, opts);
   if (rec.validation_status && !text(rec.validation_status).toLowerCase().includes('validated')) {
@@ -370,8 +460,8 @@ function validateDSTB(rec, validBarangays, opts = {}) {
   return r;
 }
 
-/** MN sheet: no patient name required. Its Case ID comes from the file or is generated
- *  (services/caseIds.js); the ITIS Lite Case No. is no longer needed. */
+/** MN sheet: no patient name required. Its Case ID comes from the file's "Case ID" column;
+ *  nothing else identifies the case. */
 function validateMN(rec, validBarangays, opts = {}) {
   return validateCore(rec, validBarangays, opts);
 }
@@ -388,7 +478,7 @@ function identityRuleFor(identityClass) {
 
 /**
  * Validate one (already cleaned) record with the rules of its source.
- * @param opts { requireIdentity?, legacyMissingAge? }
+ * @param opts { requireIdentity?, legacyMissingAge?, requireCaseId? }
  */
 function validateRecord(csvData, sourceType, validBarangays, opts = {}) {
   const fn = sourceType === 'DSTB' ? validateDSTB : sourceType === 'MN' ? validateMN : validateManual;
@@ -399,8 +489,9 @@ function validateRecord(csvData, sourceType, validBarangays, opts = {}) {
 /**
  * Source traceability for an imported row (never changes existing records):
  *   source_record_id — the file row it came from: "<batch id>:<sheet>:R<row>"
- *   source_case_id   — the Case ID from the file's "Case ID" column (DSTB and MN); when the
- *                      file has none it is generated at validation (services/caseIds.js)
+ *   source_case_id   — the Case ID from the file's "Case ID" column (DSTB and MN). Never
+ *                      generated: a file without one fails validation (Data Issue), since
+ *                      this value is how the case is identified on a later import.
  */
 function sourceRefs({ batchId, sheetName, sourceType, rowNumber, fileCaseId }) {
   return {
@@ -415,9 +506,16 @@ function sourceRefs({ batchId, sheetName, sourceType, rowNumber, fileCaseId }) {
 // stale, so it is re-checked against the current rules — when issues are listed and
 // once at startup — instead of showing errors that no longer apply.
 
-/** Errors an open issue has under the CURRENT rules. */
-function currentIssueErrors(issue, validBarangays) {
-  return validateRecord(issue.record || {}, issue.source_type, validBarangays, identityRuleFor(issue.identity_class)).errors;
+/**
+ * Errors an open issue has under the CURRENT rules.
+ * @param opts.requireCaseId  false for issues of a batch uploaded before Case IDs were
+ *        required (migration 018) — callers read it from import_batches.
+ */
+function currentIssueErrors(issue, validBarangays, { requireCaseId = true } = {}) {
+  return validateRecord(issue.record || {}, issue.source_type, validBarangays, {
+    ...identityRuleFor(issue.identity_class),
+    requireCaseId,
+  }).errors;
 }
 
 /**
@@ -428,13 +526,15 @@ function currentIssueErrors(issue, validBarangays) {
 async function refreshOpenIssueErrors() {
   const validBarangays = await getValidBarangays();
   const { rows } = await db.pool.query(
-    `SELECT i.id, i.source_type, i.record, i.errors, i.identity_class
+    `SELECT i.id, i.source_type, i.record, i.errors, i.identity_class, b.case_id_required
      FROM validation_issues i
-     WHERE i.status = 'open' AND EXISTS (SELECT 1 FROM import_batches b WHERE b.id = i.batch_id)`
+     JOIN import_batches b ON b.id = i.batch_id
+     WHERE i.status = 'open'`
   );
   let updated = 0;
   for (const issue of rows) {
-    const current = currentIssueErrors(issue, validBarangays);
+    const current = currentIssueErrors(issue, validBarangays,
+      { requireCaseId: issue.case_id_required !== false });
     if (JSON.stringify(current) !== JSON.stringify(issue.errors || [])) {
       await db.pool.query('UPDATE validation_issues SET errors = $2 WHERE id = $1', [issue.id, JSON.stringify(current)]);
       updated++;

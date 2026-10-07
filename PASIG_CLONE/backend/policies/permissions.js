@@ -49,7 +49,7 @@ function casePermissions(user, scope, record) {
   const pendingMatch = record?.match_status === 'pending';
   return {
     view: a.canView,
-    edit: a.canEdit,
+    edit: a.canEdit && live,
     refer: a.canEdit && live && !pendingMatch,
     archive: a.canEdit && live,
     resolveMatch: a.canEdit && pendingMatch,

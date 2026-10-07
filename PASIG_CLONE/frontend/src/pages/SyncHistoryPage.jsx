@@ -1,26 +1,25 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
-import { useTheme } from '../theme';
 import EmptyState from '../components/EmptyState';
 import SkeletonBlock from '../components/SkeletonBlock';
-import { caseIdOf } from '../utils/caseId';
+import ModalCloseButton from '../components/ModalCloseButton';
+import StatusBadge from '../components/StatusBadge';
+import { caseIdLabel } from '../utils/caseId';
 
-const cardStyle = (t) => ({
-  background: t.cardSolid,
-  border: `1px solid ${t.border}`,
-  borderRadius: '12px',
-  boxShadow: '0 4px 16px rgba(15,23,42,0.04)',
-});
+const formatDateTime = (value) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+};
 
 const SYNC_STATUS_TABS = [
   { key: 'all', title: 'All', desc: 'All sync batches' },
-  { key: 'sent', title: 'Success', desc: 'Successfully sent' },
-  { key: 'failed', title: 'Failed', desc: 'Failed to send' },
+  { key: 'sent', title: 'Successful', desc: 'Sent successfully' },
+  { key: 'failed', title: 'Failed', desc: 'Could not be sent' },
 ];
 
 export default function SyncHistoryPage() {
-  const { t } = useTheme();
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -57,7 +56,7 @@ export default function SyncHistoryPage() {
   return (
     <div className="space-y-5">
       {rejections.length > 0 && (
-        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #FECACA', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
+        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #FECACA' }}>
           <div className="px-5 py-3.5 flex items-start gap-3" style={{ background: '#FEF2F2', borderBottom: '1px solid #FECACA' }}>
             <i className="ri-error-warning-line text-lg mt-0.5" style={{ color: '#DC2626' }} />
             <div>
@@ -71,23 +70,23 @@ export default function SyncHistoryPage() {
             </div>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full min-w-[900px] text-left" style={{ borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ background: '#FAFCFF', borderBottom: '1px solid #E2E8F0' }}>
-                  {['Case ID', 'Barangay', 'Source', 'Reason', 'Rejected', ''].map(h => (
-                    <th key={h} className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider" style={{ color: '#0F2D52' }}>{h}</th>
+                <tr style={{ background: '#0F2D52' }}>
+                  {['Case ID', 'Barangay', 'Record type', 'Why it was rejected', 'Rejected at', 'Action'].map((h, index) => (
+                    <th key={h || index} className="px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#ffffff', borderBottom: '1px solid #1E40AF', borderRight: index === 5 ? 'none' : '1px solid #1E40AF' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {rejections.map(r => (
-                  <tr key={r.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                    <td className="px-4 py-2.5 text-xs font-bold font-mono" style={{ color: '#0F2D52' }}>{caseIdOf(r) || `#${r.id}`}</td>
-                    <td className="px-4 py-2.5 text-xs" style={{ color: '#475569' }}>{r.barangay_name || '—'}</td>
-                    <td className="px-4 py-2.5 text-xs" style={{ color: '#475569' }}>{r.source_type || '—'}</td>
-                    <td className="px-4 py-2.5 text-xs" style={{ color: '#991B1B' }}>{r.reason}</td>
-                    <td className="px-4 py-2.5 text-xs whitespace-nowrap" style={{ color: '#64748B' }}>{r.rejected_at ? new Date(r.rejected_at).toLocaleString() : '—'}</td>
-                    <td className="px-4 py-2.5 text-right">
+                  {rejections.map((r, index) => (
+                    <tr key={r.id} className={index % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]'} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                      <td className="px-3 py-2.5 text-[11px] font-bold font-mono whitespace-nowrap" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }}>{caseIdLabel(r)}</td>
+                      <td className="px-3 py-2.5 text-[11px]" style={{ color: '#475569', borderRight: '1px solid #E2E8F0' }}>{r.barangay_name || '—'}</td>
+                      <td className="px-3 py-2.5 text-[11px]" style={{ color: '#475569', borderRight: '1px solid #E2E8F0' }}>{r.source_type || '—'}</td>
+                      <td className="px-3 py-2.5 text-[11px]" style={{ color: '#991B1B', borderRight: '1px solid #E2E8F0' }}>{r.reason}</td>
+                      <td className="px-3 py-2.5 text-[11px] whitespace-nowrap" style={{ color: '#64748B', borderRight: '1px solid #E2E8F0' }}>{formatDateTime(r.rejected_at)}</td>
+                      <td className="px-3 py-2.5 text-right whitespace-nowrap">
                       <button onClick={() => navigate(`/records?record=${r.id}`)} className="px-2.5 py-1 text-[11px] font-semibold rounded cursor-pointer" style={{ color: '#2E6FAF', border: '1px solid #BFDBFE' }}>
                         Open record
                       </button>
@@ -101,11 +100,11 @@ export default function SyncHistoryPage() {
       )}
 
       {/* Card Header with Tabs */}
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
+      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
         {/* Title Section */}
-        <div className="px-6 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
+        <div className="px-6 py-4" style={{ borderBottom: '1px solid #E2E8F0' }}>
           <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Sync History</h1>
-          <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>View past synchronization batches.</p>
+          <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Check when records were sent and whether TBInsight received them successfully.</p>
         </div>
 
         {/* Tabs */}
@@ -136,34 +135,41 @@ export default function SyncHistoryPage() {
             ))}
           </div>
         </div>
-      </div>
-
       {/* Table */}
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' }}>
         {filtered.length === 0 ? (
           <EmptyState icon="ri-history-line" title="No Sync History" description={filter !== 'all' ? 'No sync batches match the selected filter.' : 'Synchronization batches will appear here after transmitting records.'} />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full min-w-[720px] text-left" style={{ borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ background: '#FAFCFF', borderBottom: '1px solid #E2E8F0' }}>
-                  {['Batch ID', 'Status', 'HTTP Code', 'Initiated By', 'Timestamp'].map((h) => (
-                    <th key={h} className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider" style={{ color: '#0F2D52' }}>{h}</th>
+                <tr style={{ background: '#0F2D52' }}>
+                  {['Batch / file', 'Status', 'Started by', 'Date and time', 'Details'].map((h, index) => (
+                    <th key={h || index} className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#ffffff', borderBottom: '1px solid #1E40AF', borderRight: index === 4 ? 'none' : '1px solid #1E40AF' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((log) => (
-                  <tr key={log.id} className="cursor-pointer hover:bg-blue-50/40 transition-colors" onClick={() => setSelected(selected === log.id ? null : log.id)} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                    <td className="px-4 py-3 text-xs font-bold font-mono" style={{ color: '#0F2D52' }}>{log.batch_id?.slice(0, 8) || '—'}</td>
-                    <td className="px-4 py-3">
-                      <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${log.status === 'sent' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-                        {log.status === 'sent' ? 'SUCCESS' : 'FAILED'}
-                      </span>
+                {filtered.map((log, index) => (
+                  <tr key={log.id} className={`${index % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]'}`} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                    <td className="px-2 py-2" style={{ borderRight: '1px solid #E2E8F0' }}>
+                      <span className="block text-[11px] font-bold font-mono whitespace-nowrap" style={{ color: '#0F2D52' }} title={log.batch_id || undefined}>{log.batch_id?.slice(0, 8) || '—'}</span>
+                      <span className="block max-w-[180px] truncate text-[10px]" style={{ color: '#64748B' }} title={log.filename || undefined}>{log.filename || 'Batch details unavailable'}</span>
                     </td>
-                    <td className="px-4 py-3 text-xs font-semibold" style={{ color: '#475569' }}>{log.response_code || '—'}</td>
-                    <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{log.username || '—'}</td>
-                    <td className="px-4 py-3 text-xs" style={{ color: '#64748B' }}>{log.sent_at ? new Date(log.sent_at).toLocaleString() : '—'}</td>
+                    <td className="px-2 py-2 whitespace-nowrap" style={{ borderRight: '1px solid #E2E8F0' }}>
+                      <StatusBadge status={log.status === 'sent' ? 'Sent' : 'Failed'} />
+                    </td>
+                    <td className="px-2 py-2 text-[11px]" style={{ color: '#475569', borderRight: '1px solid #E2E8F0' }}>{log.username || '—'}</td>
+                    <td className="px-2 py-2 text-[11px] whitespace-nowrap" style={{ color: '#64748B', borderRight: '1px solid #E2E8F0' }}>{formatDateTime(log.initiated_at || log.sent_at)}</td>
+                    <td className="px-2 py-2 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setSelected(log)}
+                        className="px-2 py-1 text-[10px] font-semibold cursor-pointer"
+                        style={{ color: '#0F2D52', border: '1px solid #CBD5E1', background: '#ffffff' }}
+                      >
+                        View details
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -171,6 +177,56 @@ export default function SyncHistoryPage() {
           </div>
         )}
       </div>
+
+      {selected && (
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40" onClick={() => setSelected(null)}>
+          <div className="mx-4 flex max-h-[80vh] w-full max-w-[440px] flex-col overflow-hidden border border-gray-200 bg-white shadow-xl" style={{ borderRadius: 5 }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+              <div>
+                <h2 className="text-sm font-semibold" style={{ color: '#0F2D52' }}>Sync details</h2>
+                <p className="mt-0.5 text-[11px]" style={{ color: '#64748B' }}>
+                  {selected.status === 'sent' ? 'This batch was sent successfully.' : 'This batch could not be sent.'}
+                </p>
+              </div>
+              <ModalCloseButton onClick={() => setSelected(null)} />
+            </div>
+            <dl className="space-y-3 overflow-y-auto p-5">
+              <div>
+                <dt className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#64748B' }}>File</dt>
+                <dd className="mt-0.5 break-words text-xs" style={{ color: '#334155' }}>{selected.filename || 'Not available'}</dd>
+              </div>
+              <div>
+                <dt className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#64748B' }}>Batch ID</dt>
+                <dd className="mt-0.5 break-all font-mono text-xs" style={{ color: '#334155' }}>{selected.batch_id || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#64748B' }}>Status</dt>
+                <dd className="mt-1"><StatusBadge status={selected.status === 'sent' ? 'Sent' : 'Failed'} /></dd>
+              </div>
+              <div>
+                <dt className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#64748B' }}>Started by</dt>
+                <dd className="mt-0.5 text-xs" style={{ color: '#334155' }}>{selected.username || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#64748B' }}>Date and time</dt>
+                <dd className="mt-0.5 text-xs" style={{ color: '#334155' }}>{formatDateTime(selected.initiated_at || selected.sent_at)}</dd>
+              </div>
+              {selected.response_code != null && (
+                <div>
+                  <dt className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#64748B' }}>TBInsight response code</dt>
+                  <dd className="mt-0.5 text-xs" style={{ color: '#334155' }}>{selected.response_code} <span style={{ color: '#64748B' }}>(technical status from the receiving service)</span></dd>
+                </div>
+              )}
+              {selected.error_message && (
+                <div className="border-l-2 pl-3" style={{ borderColor: '#DC2626' }}>
+                  <dt className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#991B1B' }}>What went wrong</dt>
+                  <dd className="mt-0.5 break-words text-xs leading-5" style={{ color: '#7F1D1D' }}>{selected.error_message}</dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

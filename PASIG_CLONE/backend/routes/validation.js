@@ -69,8 +69,8 @@ router.post('/validate/:batchId', authenticate, authorizeRoles('admin', 'staff')
       return res.status(403).json({ error: 'Only the uploader or an administrator can validate this batch.' });
     }
 
-    // Run validation
-    const results = await validateBatch(batchId);
+    // Run validation (the acting user decides any auto-merge on a Case ID match)
+    const results = await validateBatch(batchId, req.user);
 
     // Update batch with validation tracking
     await db.pool.query(

@@ -24,9 +24,10 @@ function buildColumnMap(rawHeaders, sourceType) {
     if (n === 'no.' || n === 'no' || n === '#' || n === 'no. #') continue;
 
     let field = null;
-    if (n.includes('itis') && n.includes('lite')) field = 'itis_case_id';
+    // The registry's ITIS column is not used or stored (the Case ID identifies the case).
+    if (n.includes('itis')) continue;
     // Case ID carried by the file (<FACILITY>-<D|M>-<YEAR>-<NNNNN>, services/caseIds.js)
-    else if (n === 'case id' || n === 'case_id' || n === 'caseid') field = 'file_case_id';
+    if (n === 'case id' || n === 'case_id' || n === 'caseid') field = 'file_case_id';
     // Patient identity (stays in PASIG; never sent to TBInsight)
     else if (n.includes('birth') || n === 'dob' || n === 'birthday') field = 'date_of_birth';
     else if (n.includes('last name') || n.includes('surname') || n.includes('family name') || n === 'lastname') field = 'last_name';
@@ -136,7 +137,8 @@ function detectSheetType(sheetName) {
 
 /**
  * For CSV files (no sheet names): decide DSTB vs MN from the file name, then the headers.
- * MN registries carry "ITIS Lite Case No." / microscopy / RDT columns; DSTB ones do not.
+ * MN registries carry an "ITIS Lite Case No." / microscopy / RDT columns (used here only to
+ * recognise the file type; the ITIS number itself is ignored); DSTB ones do not.
  */
 function detectTypeFromHeaders(headers, filename = '') {
   const byName = detectSheetType(String(filename).replace(/\.[^.]+$/, '').replace(/[_]/g, ' '));
@@ -210,7 +212,7 @@ function parseSheetRows(rows, sheetName, sourceType) {
     const first = String(values[0] ?? '').trim().toUpperCase();
     if (first === 'TOTAL' || first === 'GRAND TOTAL') continue;
 
-    const mapped = { source_type: sourceType, validation_status: null, itis_case_id: null };
+    const mapped = { source_type: sourceType, validation_status: null };
     for (const [colIndex, field] of Object.entries(columnMap)) {
       const val = values[Number(colIndex)];
       if (val !== undefined && val !== null && String(val).trim() !== '') {
@@ -219,7 +221,7 @@ function parseSheetRows(rows, sheetName, sourceType) {
     }
 
     // Row must carry at least one case field (skips stray notes under the table)
-    const hasCaseData = ['barangay_name', 'date_of_diagnosis', 'age', 'sex', 'itis_case_id', 'last_name', 'full_name']
+    const hasCaseData = ['barangay_name', 'date_of_diagnosis', 'age', 'sex', 'last_name', 'full_name']
       .some(f => mapped[f] !== undefined && mapped[f] !== null);
     if (!hasCaseData) continue;
 

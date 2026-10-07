@@ -11,30 +11,26 @@ import IncomingReferrals from '../components/IncomingReferrals';
 import RowMenu from '../components/RowMenu';
 import ProgressOverlay from '../components/ProgressOverlay';
 import TablePagination from '../components/TablePagination';
+import FilterSelect from '../components/FilterSelect';
 import { can, accessBasis } from '../utils/permissions';
-import { caseIdOf } from '../utils/caseId';
+import { caseIdOf, caseIdLabel, systemRefOf } from '../utils/caseId';
+import { CASE_STATUS_OPTIONS, OUTCOME_OPTIONS, optionsFor, CASE_ID_RE, normalizeCaseId, CASE_ID_HINT } from '../utils/caseOptions';
+import ModalCloseButton from '../components/ModalCloseButton';
 
 const EMPTY_FORM = {
+  source_case_id: '',
   last_name: '', first_name: '', middle_name: '', suffix: '', date_of_birth: '',
   barangay_name: '', date_of_screening: '', date_of_diagnosis: '', date_of_notification: '',
   date_started_treatment: '', date_of_outcome: '', sex: '',
   screening_facility: '', treatment_facility: '', screening_facility_other: '', treatment_facility_other: '',
   source_of_patient: '', registration_group: '', anatomical_site: '', bacteriological_status: '',
-  case_status: '', treatment_outcome: '', itis_case_id: '',
+  case_status: '', treatment_outcome: '',
 };
 
-const CASE_STATUS_OPTIONS = ['DIAGNOSED', 'ON TREATMENT'];
-const OUTCOME_OPTIONS = ['CURED', 'TREATMENT COMPLETED', 'TREATMENT FAILED', 'LOST TO FOLLOW-UP', 'DIED', 'NOT EVALUATED', 'EXCLUDED'];
-
-const STATIC_REG = ['NEW','OTHER','PREVIOUS TX OUTCOME UNKNOWN','RELAPSE','TX AFTER FAILURE','TX AFTER LOST TO FF-UP'];
-const STATIC_SRC = ['COMMUNITY','OTHER PUBLIC FACILITY','PRIVATE FACILITY','PUBLIC HEALTH CENTER'];
-const STATIC_ANAT = ['P','EP'];
-const STATIC_BACT = ['SMEAR POSITIVE','SMEAR NEGATIVE','XPERT MTB/RIF DETECTED','XPERT MTB/RIF NOT DETECTED'];
-
 const RESOLUTION_LABELS = {
-  same_case: { title: 'Same case', desc: 'Update the existing case with this record' },
-  new_episode: { title: 'New episode', desc: 'Same patient, new TB case (new Case ID)' },
-  different_person: { title: 'Different person', desc: 'New case with its own Case ID' },
+  same_case: { title: 'Same case', desc: 'Fill in the Case ID on the existing case (it has none yet)' },
+  new_episode: { title: 'New episode', desc: 'Same patient, new TB episode with the Case ID you entered' },
+  different_person: { title: 'Different person', desc: 'A different patient who happens to share the name and date of birth' },
 };
 
 const inputStyle = { background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52', borderRadius: 4 };
@@ -99,29 +95,33 @@ export default function TBRecordsPage() {
   const isAdmin = user?.role === 'admin';
 
   // Possible Matches and Needs Assignment moved to the Validation page.
-  // Two views: All Records and Incoming Referrals (old ?view=transfers links land on referrals).
-  const [view, setView] = useState(['referrals', 'transfers'].includes(searchParams.get('view')) ? 'referrals' : 'all');
+  // Incoming Referrals keeps legacy ?view=transfers links; archived cases have their own list.
+  const initialView = searchParams.get('view');
+  const [view, setView] = useState(['referrals', 'transfers'].includes(initialView) ? 'referrals' : initialView === 'archived' ? 'archived' : 'all');
   useEffect(() => {
     const old = searchParams.get('view');
     if (old === 'matches') navigate('/validation?tab=matches', { replace: true });
     if (old === 'unassigned') navigate('/validation?tab=assignment', { replace: true });
   }, [searchParams, navigate]);
   const [records, setRecords] = useState([]);
-  const [counts, setCounts] = useState({ all: 0, matches: 0, unassigned: null });
+  const [counts, setCounts] = useState({ all: 0, matches: 0, unassigned: null, archived: 0 });
   const [pagination, setPagination] = useState({ page: 1, totalPages: 0, total: 0 });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [sort, setSort] = useState({ field: 'id', dir: 'desc' });
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  const [barangayFilter, setBarangayFilter] = useState('');
   const [caseStatusFilter, setCaseStatusFilter] = useState('');
   const [outcomeFilter, setOutcomeFilter] = useState('');
+  const hasActiveFilters = Boolean(searchInput || barangayFilter || caseStatusFilter || outcomeFilter);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(null);
   const [archiveTarget, setArchiveTarget] = useState(null);
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useState('');
+  const [restoring, setRestoring] = useState(null);
   const [detailId, setDetailId] = useState(null);
   const [detailMode, setDetailMode] = useState('view'); // 'view' | 'edit' | 'refer'
   const [rowMenu, setRowMenu] = useState(null); // { record, anchor }
@@ -129,6 +129,7 @@ export default function TBRecordsPage() {
   // Notification links: ?view=referrals opens Incoming Referrals, ?record=<id> opens that case.
   useEffect(() => {
     if (['referrals', 'transfers'].includes(searchParams.get('view'))) setView('referrals');
+    else if (searchParams.get('view') === 'archived') setView('archived');
     const recordId = Number(searchParams.get('record'));
     if (Number.isInteger(recordId) && recordId > 0) {
       setView('all');
@@ -161,6 +162,7 @@ export default function TBRecordsPage() {
     try {
       const params = new URLSearchParams({ page, limit: pageSize, view });
       if (search) params.set('search', search);
+      if (barangayFilter) params.set('barangay', barangayFilter);
       if (caseStatusFilter) params.set('status', caseStatusFilter);
       if (outcomeFilter) params.set('outcome', outcomeFilter);
       params.set('sort', sort.field);
@@ -190,7 +192,7 @@ export default function TBRecordsPage() {
     API.get('/api/data/manual-options').then(r => setOptions(r.data || {})).catch(() => {});
   }, []);
 
-  useEffect(() => { fetchRecords(); }, [view, page, pageSize, search, caseStatusFilter, outcomeFilter, sort]);
+  useEffect(() => { fetchRecords(); }, [view, page, pageSize, search, barangayFilter, caseStatusFilter, outcomeFilter, sort]);
 
   const loadPinStatus = () => API.get('/api/auth/pin/status').then(r => setPinStatus(r.data)).catch(() => {});
   useEffect(() => { loadPinStatus(); }, []);
@@ -250,7 +252,7 @@ export default function TBRecordsPage() {
     try {
       await API.patch(`/api/data/records/${record.id}/archive`);
       setArchiveTarget(null);
-      setNotice({ type: 'success', text: `${caseIdOf(record) || 'Record'} archived.` });
+      setNotice({ type: 'success', text: `${caseIdLabel(record)} archived.` });
       fetchRecords();
     } catch (err) {
       setArchiveError(err.response?.data?.error || 'Failed to archive the record.');
@@ -258,15 +260,48 @@ export default function TBRecordsPage() {
       setArchiving(false);
     }
   };
-  const rowMenuItems = (r) => [
-    { label: 'View details', icon: 'ri-eye-line', onClick: () => openDetail(r.id) },
-    { label: 'Edit details', icon: 'ri-edit-line', disabled: !can(r, 'edit'), reason: viewOnlyReason(r), onClick: () => openDetail(r.id, 'edit') },
-    { label: 'Refer case', icon: 'ri-share-forward-line', disabled: !can(r, 'refer'), reason: can(r, 'edit') ? 'Not available for this case' : viewOnlyReason(r), onClick: () => openDetail(r.id, 'refer') },
-    { divider: true },
-    { label: 'Archive', icon: 'ri-archive-line', danger: true, disabled: !can(r, 'archive'), reason: viewOnlyReason(r), onClick: () => { setArchiveError(''); setArchiveTarget(r); } },
-  ];
+  const restoreRecord = async (record) => {
+    if (!isAdmin || restoring !== null) return;
+    setRestoring(record.id);
+    setNotice(null);
+    try {
+      const res = await API.patch(`/api/data/records/${record.id}/restore`);
+      setNotice({ type: 'success', text: res.data.message || `${caseIdLabel(record)} restored.` });
+      await fetchRecords();
+    } catch (err) {
+      setNotice({ type: 'error', text: err.response?.data?.error || 'Failed to restore the record.' });
+    } finally {
+      setRestoring(null);
+    }
+  };
+  const rowMenuItems = (r) => r.is_archived
+    ? [
+      { label: 'View details', icon: 'ri-eye-line', onClick: () => openDetail(r.id) },
+      ...(isAdmin ? [
+        { divider: true },
+        { label: 'Restore', icon: 'ri-arrow-go-back-line', onClick: () => restoreRecord(r) },
+      ] : []),
+    ]
+    : [
+      { label: 'View details', icon: 'ri-eye-line', onClick: () => openDetail(r.id) },
+      { label: 'Edit details', icon: 'ri-edit-line', disabled: !can(r, 'edit'), reason: viewOnlyReason(r), onClick: () => openDetail(r.id, 'edit') },
+      { label: 'Refer case', icon: 'ri-share-forward-line', disabled: !can(r, 'refer'), reason: can(r, 'edit') ? 'Not available for this case' : viewOnlyReason(r), onClick: () => openDetail(r.id, 'refer') },
+      { divider: true },
+      { label: 'Archive', icon: 'ri-archive-line', danger: true, disabled: !can(r, 'archive'), reason: viewOnlyReason(r), onClick: () => { setArchiveError(''); setArchiveTarget(r); } },
+    ];
 
-  const switchView = (v) => { setView(v); setPage(1); setNotice(null); };
+  const switchView = (v) => {
+    setView(v);
+    setPage(1);
+    setNotice(null);
+    if (v === 'archived') {
+      setSearchInput('');
+      setSearch('');
+      setBarangayFilter('');
+      setCaseStatusFilter('');
+      setOutcomeFilter('');
+    }
+  };
 
   // Server-side sort (the list is paginated, so ordering happens in SQL). A newly
   // clicked column starts ascending; clicking the active one toggles it.
@@ -285,6 +320,9 @@ export default function TBRecordsPage() {
 
   const validate = () => {
     const errs = [];
+    const caseId = normalizeCaseId(form.source_case_id);
+    if (!caseId) errs.push('Case ID is required — enter the Case ID from DSTB/MN');
+    else if (!CASE_ID_RE.test(caseId)) errs.push(`Case ID must look like ROS-D-2025-00042 (got "${form.source_case_id.trim()}")`);
     if (!form.last_name.trim()) errs.push('Last name is required');
     if (!form.first_name.trim()) errs.push('First name is required');
     if (!form.date_of_birth) errs.push('Date of birth is required');
@@ -312,6 +350,7 @@ export default function TBRecordsPage() {
     const screening = form.screening_facility === '__other__' ? form.screening_facility_other : form.screening_facility;
     const treatment = form.treatment_facility === '__other__' ? form.treatment_facility_other : form.treatment_facility;
     const payload = {
+      source_case_id: normalizeCaseId(form.source_case_id),
       last_name: form.last_name.trim(),
       first_name: form.first_name.trim(),
       middle_name: form.middle_name.trim() || null,
@@ -331,7 +370,6 @@ export default function TBRecordsPage() {
       anatomical_site: form.anatomical_site || null,
       bacteriological_status: form.bacteriological_status || null,
       outcome_status: form.treatment_outcome || form.case_status || null,
-      itis_case_id: form.itis_case_id || null,
       ...(matchResolution ? { match_resolution: matchResolution } : {}),
     };
     try {
@@ -344,20 +382,24 @@ export default function TBRecordsPage() {
       const data = err.response?.data;
       if (err.response?.status === 409 && data?.possibleMatch) setPossibleMatch(data.possibleMatch);
       else if (data?.errors) setFormErrors(data.errors);
+      else if (err.response?.status === 409 && data?.code === 'DUPLICATE_CASE_ID') {
+        setFormErrors([`${data.error}${data.existingCase?.date_of_diagnosis ? ` (diagnosed ${data.existingCase.date_of_diagnosis})` : ''}`]);
+      }
       else setFormErrors([data?.error || 'Failed to create TB record.']);
     } finally {
       setSaving(false);
     }
   };
 
-  const regOptions = options.registration_group?.length ? options.registration_group : STATIC_REG;
-  const srcOptions = options.source_of_patient?.length ? options.source_of_patient : STATIC_SRC;
-  const anatOptions = options.anatomical_site?.length ? options.anatomical_site : STATIC_ANAT;
-  const bactOptions = options.bacteriological_status?.length ? options.bacteriological_status : STATIC_BACT;
+  const regOptions = optionsFor(options, 'registration_group');
+  const srcOptions = optionsFor(options, 'source_of_patient');
+  const anatOptions = optionsFor(options, 'anatomical_site');
+  const bactOptions = optionsFor(options, 'bacteriological_status');
   const facilityList = Array.isArray(facilities) ? facilities : [];
 
   const tabs = [
     { key: 'all', title: 'All Records', desc: 'Validated cases with their Case ID', count: counts.all },
+    { key: 'archived', title: 'Archived Cases', desc: 'Stored cases removed from active lists', count: counts.archived },
     { key: 'referrals', title: 'Incoming Referrals', desc: isAdmin ? 'Referrals between barangays' : 'Cases referred to your barangay', count: referralCount },
   ];
 
@@ -365,9 +407,8 @@ export default function TBRecordsPage() {
     <div className="space-y-5">
       <ProgressOverlay
         open={archiving}
-        title={`Archiving ${caseIdOf(archiveTarget) || 'record'}`}
+        title={`Archiving ${caseIdLabel(archiveTarget)}`}
         detail="Hiding the record from lists and analysis. It is kept for the record."
-        icon="ri-archive-line"
         tone="#D97706"
       />
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
@@ -417,23 +458,43 @@ export default function TBRecordsPage() {
               placeholder={pinStatus.unlocked ? 'Search name, Case ID, barangay...' : 'Search Case ID, barangay (unlock to search names)'}
               className="w-full pl-9 pr-3 py-2 text-xs rounded-lg outline-none" style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52' }} />
           </div>
-          <select aria-label="Case status filter" value={caseStatusFilter} onChange={e => { setCaseStatusFilter(e.target.value); setPage(1); }} className="px-3 py-2 text-xs rounded-lg" style={inputStyle}>
-            <option value="">All case statuses</option>
+          <FilterSelect label="Barangay" value={barangayFilter} onChange={value => { setBarangayFilter(value); setPage(1); }} selectStyle={{ maxWidth: 170 }}>
+            <option value="">All Barangays</option>
+            {PASIG_BARANGAYS.map(barangay => <option key={barangay} value={barangay}>{barangay}</option>)}
+          </FilterSelect>
+          <FilterSelect label="Case Status" value={caseStatusFilter} onChange={value => { setCaseStatusFilter(value); setPage(1); }}>
+            <option value="">All statuses</option>
             {CASE_STATUS_OPTIONS.map(status => <option key={status} value={status}>{status}</option>)}
-          </select>
-          <select aria-label="Treatment outcome filter" value={outcomeFilter} onChange={e => { setOutcomeFilter(e.target.value); setPage(1); }} className="px-3 py-2 text-xs rounded-lg" style={inputStyle}>
-            <option value="">All treatment outcomes</option>
+          </FilterSelect>
+          <FilterSelect label="Treatment Outcome" value={outcomeFilter} onChange={value => { setOutcomeFilter(value); setPage(1); }}>
+            <option value="">All outcomes</option>
             {OUTCOME_OPTIONS.map(outcome => <option key={outcome} value={outcome}>{outcome}</option>)}
-          </select>
+          </FilterSelect>
+          <button
+            type="button"
+            onClick={() => {
+              setSearchInput('');
+              setSearch('');
+              setBarangayFilter('');
+              setCaseStatusFilter('');
+              setOutcomeFilter('');
+              setPage(1);
+            }}
+            disabled={!hasActiveFilters}
+            className="ml-auto px-3 py-2 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4 }}
+          >
+            Clear
+          </button>
         </div>
       </div>
 
       {/* Records PIN: names and birth dates are hidden until unlocked */}
       {pinStatus.unlocked ? (
-        <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 rounded-lg text-xs" style={{ background: '#ECFDF5', border: '1px solid #A7F3D0', color: '#065F46' }}>
+        <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 rounded-lg text-xs" style={{ background: '#F1F5F1', border: '1px solid #D4DED3', color: '#526653' }}>
           <i className="ri-lock-unlock-line" />
           <span>Patient names are visible until <b>{new Date(pinStatus.unlockedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</b>.</span>
-          <button onClick={lockNames} className="ml-auto px-3 py-1 text-[11px] font-bold rounded" style={{ border: '1px solid #6EE7B7', background: '#ffffff', color: '#065F46' }}>Lock now</button>
+          <button onClick={lockNames} className="ml-auto px-3 py-1 text-[11px] font-semibold rounded" style={{ border: '1px solid #C8D5C6', background: '#ffffff', color: '#526653' }}>Lock now</button>
         </div>
       ) : (
         <form onSubmit={unlockNames} className="flex flex-wrap items-center gap-3 px-4 py-2.5 rounded-lg text-xs" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', color: '#334155' }}>
@@ -483,11 +544,16 @@ export default function TBRecordsPage() {
           <ErrorState message={error} onRetry={fetchRecords} />
         ) : records.length === 0 ? (
           <EmptyState icon="ri-file-list-line"
-            title="No Records Found"
-            description="There are no records matching your search." />
+            title={view === 'archived' ? 'No Archived Cases' : 'No Records Found'}
+            description={view === 'archived' ? 'There are no archived cases matching your search.' : 'There are no records matching your search.'} />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left" style={{ borderCollapse: 'collapse' }}>
+            <table className="w-full table-fixed text-left" style={{ borderCollapse: 'collapse' }}>
+              <colgroup>
+                {[11, 15, 8, 7, 4, 3, 10, 10, 7, 9, 5, 7, 4].map((width, index) => (
+                  <col key={RECORD_COLUMNS[index].label} style={{ width: `${width}%` }} />
+                ))}
+              </colgroup>
               <thead>
                 <tr style={{ background: '#0F2D52' }}>
                   {RECORD_COLUMNS.map(({ label, field }, idx) => {
@@ -495,7 +561,7 @@ export default function TBRecordsPage() {
                     return (
                       <th
                         key={label}
-                        className={`${idx === 0 ? 'pl-6' : 'px-3'} pr-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${field ? 'cursor-pointer select-none' : ''}`}
+                        className={`${idx === 0 ? 'pl-3' : 'px-1.5'} py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${field ? 'cursor-pointer select-none' : ''}`}
                         style={{
                           color: isActive ? '#93C5FD' : '#ffffff',
                           borderBottom: '1px solid #1E40AF',
@@ -523,9 +589,9 @@ export default function TBRecordsPage() {
               <tbody>
                 {records.map((r, i) => (
                   <tr key={r.id} className={`hover:bg-blue-50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]'}`} style={{ borderBottom: '1px solid #E2E8F0' }}>
-                    <td className="pl-6 pr-3 py-2.5 text-xs font-mono font-bold whitespace-nowrap" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }}>{caseIdOf(r) || '—'}</td>
-                    <td className="px-3 py-2.5 text-xs font-semibold whitespace-nowrap" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }}>{fullName(r)}</td>
-                    <td className="px-3 py-2.5 text-xs" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>
+                    <td className="pl-3 pr-1.5 py-2.5 text-[11px] font-mono font-bold whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }} title={caseIdOf(r) || undefined}>{caseIdOf(r) || <span className="font-normal italic" style={{ color: '#94A3B8' }}>No Case ID</span>}{!caseIdOf(r) && systemRefOf(r) && <span className="block text-[10px] font-normal not-italic" style={{ color: '#94A3B8' }}>System Reference {systemRefOf(r)}</span>}</td>
+                    <td className="px-1.5 py-2.5 text-[11px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }} title={fullName(r)}>{fullName(r)}</td>
+                    <td className="px-1.5 py-2.5 text-[11px]" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>
                       {r.barangay_name || '—'}
                       {/* Responsibility moved by an accepted referral (patient barangay itself never changes) */}
                       {r.responsible_barangay && r.responsible_barangay !== r.barangay_name && (
@@ -536,20 +602,20 @@ export default function TBRecordsPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-3 py-2.5 text-xs whitespace-nowrap" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{fmtDate(r.date_of_diagnosis)}</td>
-                    <td className="px-3 py-2.5 text-xs" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{r.sex || '—'}</td>
-                    <td className="px-3 py-2.5 text-xs" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{r.age ?? '—'}</td>
-                    <td className="px-3 py-2.5 text-xs max-w-[170px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }} title={r.screening_facility || undefined}>{r.screening_facility || '—'}</td>
-                    <td className="px-3 py-2.5 text-xs max-w-[170px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }} title={r.bacteriological_status || undefined}>{r.bacteriological_status || '—'}</td>
-                    <td className="px-3 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}><StatusBadge status={r.case_status || '—'} /></td>
-                    <td className="px-3 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}>{r.treatment_outcome ? <StatusBadge status={r.treatment_outcome} /> : r.case_status ? <span className="text-xs cursor-help" style={{ color: '#94A3B8' }} title={r.case_status === 'DIAGNOSED' ? 'Diagnosed, not yet on treatment — no final outcome yet' : 'Still on treatment — no final outcome yet'}>—</span> : <StatusBadge status="—" />}</td>
-                    <td className="px-3 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}>
+                    <td className="px-1.5 py-2.5 text-[11px] whitespace-nowrap" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{fmtDate(r.date_of_diagnosis)}</td>
+                    <td className="px-1.5 py-2.5 text-[11px]" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{r.sex || '—'}</td>
+                    <td className="px-1.5 py-2.5 text-[11px]" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{r.age ?? '—'}</td>
+                    <td className="px-1.5 py-2.5 text-[11px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }} title={r.screening_facility || undefined}>{r.screening_facility || '—'}</td>
+                    <td className="px-1.5 py-2.5 text-[11px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }} title={r.bacteriological_status || undefined}>{r.bacteriological_status || '—'}</td>
+                    <td className="px-1.5 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}><StatusBadge status={r.case_status || '—'} /></td>
+                    <td className="px-1.5 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}>{r.treatment_outcome ? <StatusBadge status={r.treatment_outcome} /> : r.case_status ? <span className="text-[11px] cursor-help" style={{ color: '#94A3B8' }} title={r.case_status === 'DIAGNOSED' ? 'Diagnosed, not yet on treatment — no final outcome yet' : 'Still on treatment — no final outcome yet'}>—</span> : <StatusBadge status="—" />}</td>
+                    <td className="px-1.5 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}>
                       <span className="inline-flex px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide rounded-full whitespace-nowrap"
                         style={SOURCE_STYLES[r.source_type] || SOURCE_STYLES.MANUAL}>
                         {r.source_type || '—'}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap" style={{ borderRight: '1px solid #E2E8F0' }}>
+                    <td className="px-1.5 py-2.5 whitespace-nowrap" style={{ borderRight: '1px solid #E2E8F0' }}>
                       {/* From the server's permission decision — the API also refuses edits on view-only cases. */}
                       {can(r, 'edit') ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
@@ -567,11 +633,11 @@ export default function TBRecordsPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-1.5 py-2.5">
                       <div className="inline-flex items-center gap-1">
                         <button
                           type="button"
-                          aria-label={`More actions for ${caseIdOf(r) || 'record'}`}
+                          aria-label={`More actions for ${caseIdLabel(r)}`}
                           aria-haspopup="menu"
                           onClick={(e) => setRowMenu(rowMenu?.record.id === r.id ? null : { record: r, anchor: e.currentTarget })}
                           className="inline-flex items-center justify-center h-6 w-6 rounded"
@@ -587,12 +653,12 @@ export default function TBRecordsPage() {
             </table>
           </div>
         )}
-        {view === 'all' && !loading && !error && (
+        {['all', 'archived'].includes(view) && !loading && !error && (
           <TablePagination
             page={pagination.page}
             pageSize={pageSize}
             total={pagination.total}
-            itemName="records"
+            itemName={view === 'archived' ? 'archived cases' : 'records'}
             onPageChange={setPage}
             onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
           />
@@ -605,7 +671,7 @@ export default function TBRecordsPage() {
           <div role="dialog" aria-modal="true" aria-labelledby="archive-dialog-title" className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl" onClick={e => e.stopPropagation()}>
             <h2 id="archive-dialog-title" className="text-sm font-bold" style={{ color: '#0F2D52' }}>Archive record?</h2>
             <p className="mt-2 text-xs leading-relaxed" style={{ color: '#475569' }}>
-              {caseIdOf(archiveTarget) || 'This record'} will be removed from active lists and analysis. Its history will be kept.
+              {caseIdLabel(archiveTarget)} will be removed from active lists and analysis. Its history will be kept.
             </p>
             {archiveError && <p role="alert" className="mt-3 rounded px-3 py-2 text-xs" style={{ background: '#FEF2F2', color: '#991B1B' }}>{archiveError}</p>}
             <div className="mt-5 flex justify-end gap-2">
@@ -630,11 +696,9 @@ export default function TBRecordsPage() {
             <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ background: '#0F2D52', color: '#ffffff' }}>
               <div>
                 <h2 className="text-sm font-extrabold">Add TB Record</h2>
-                <p className="text-[11px] mt-0.5 opacity-70">The Case ID is assigned automatically.</p>
+                <p className="text-[11px] mt-0.5 opacity-70">Enter the Case ID from DSTB/MN — it is never generated.</p>
               </div>
-              <button type="button" onClick={closeForm} aria-label="Close" className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
-                <i className="ri-close-line text-base" />
-              </button>
+              <ModalCloseButton onClick={closeForm} light />
             </div>
 
             <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="flex min-h-0 flex-1 flex-col">
@@ -655,11 +719,14 @@ export default function TBRecordsPage() {
               <div className="mx-6 mt-4 p-4 rounded-lg text-xs" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
                 <p className="font-bold mb-1" style={{ color: '#92400E' }}>This may be an existing patient</p>
                 <p style={{ color: '#475569' }}>
-                  Same name and date of birth as case <b>{possibleMatch.case_id || possibleMatch.case_no}</b>, diagnosed {possibleMatch.date_of_diagnosis || '—'}
+                  Same name and date of birth as case <b>{possibleMatch.case_id || 'No Case ID'}</b>, diagnosed {possibleMatch.date_of_diagnosis || '—'}
                   {possibleMatch.barangay_name ? `, ${possibleMatch.barangay_name}` : ''}{possibleMatch.outcome_status ? `, ${possibleMatch.outcome_status}` : ''}.
                 </p>
+                <p className="mt-1" style={{ color: '#475569' }}>
+                  {possibleMatch.new_case_id ? <>You entered a different Case ID (<b>{possibleMatch.new_case_id}</b>), so this is likely a returning patient with a new episode.</> : null}
+                </p>
                 <div className="flex flex-col gap-1.5 mt-3">
-                  {Object.entries(RESOLUTION_LABELS).map(([key, l]) => (
+                  {Object.entries(RESOLUTION_LABELS).filter(([key]) => key !== 'same_case' || possibleMatch.has_case_id === false).map(([key, l]) => (
                     <button key={key} type="button" disabled={saving || (key === 'same_case' && possibleMatch.canUpdateExisting === false)} onClick={() => submit(key)}
                       title={key === 'same_case' && possibleMatch.canUpdateExisting === false ? 'The existing case is view-only for you' : ''}
                       className="px-3 py-2 text-left rounded-md disabled:opacity-50"
@@ -679,6 +746,12 @@ export default function TBRecordsPage() {
             )}
 
             <div className="px-6 py-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold mb-1" style={labelStyle}>Case ID *</label>
+                <input type="text" value={form.source_case_id} onChange={e => setField('source_case_id', e.target.value.toUpperCase())} className="w-full px-3 py-2 text-xs outline-none font-mono" style={inputStyle} placeholder="ROS-D-2025-00042" autoComplete="off" />
+                <p className="text-[10px] mt-1" style={{ color: '#94A3B8' }}>{CASE_ID_HINT}. One Case ID per TB episode — a returning patient gets a new one.</p>
+              </div>
+
               {/* Patient */}
               <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Patient</p>
               <div className="grid grid-cols-2 gap-3">
@@ -830,11 +903,6 @@ export default function TBRecordsPage() {
                   <label className="block text-xs font-bold mb-1" style={labelStyle}>Date of Outcome</label>
                   <input type="date" value={form.date_of_outcome} onChange={e => setField('date_of_outcome', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold mb-1" style={labelStyle}>ITIS Case ID <span className="font-normal opacity-60">(optional, reference only)</span></label>
-                <input type="text" value={form.itis_case_id} onChange={e => setField('itis_case_id', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle} placeholder="For MN records" />
               </div>
 
             </div>

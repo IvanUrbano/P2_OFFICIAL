@@ -5,7 +5,8 @@ import { can, accessBasis } from '../utils/permissions';
 import CaseEditForm from './CaseEditForm';
 import { patientName } from '../utils/patientName';
 import { useConfirmDialog } from './ConfirmDialog';
-import { caseIdOf } from '../utils/caseId';
+import { caseIdLabel } from '../utils/caseId';
+import ModalCloseButton from './ModalCloseButton';
 
 const fmtDate = (v) => (v ? new Date(v).toLocaleDateString() : '—');
 const fmtDateTime = (v) => (v ? new Date(v).toLocaleString() : '—');
@@ -174,11 +175,9 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
         <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ background: '#0F2D52', color: '#ffffff' }}>
           <div>
             <h2 className="text-sm font-extrabold">{r ? fullName(r) : 'TB Record'}</h2>
-            <p className="text-[11px] mt-0.5 opacity-70">{r ? (caseIdOf(r) || '—') : 'Loading…'}</p>
+            <p className="text-[11px] mt-0.5 opacity-70">{r ? caseIdLabel(r) : 'Loading…'}</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}>
-            <i className="ri-close-line text-base" />
-          </button>
+          <ModalCloseButton onClick={onClose} light />
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -226,8 +225,10 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
             <section>
               <p className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: '#64748B' }}>Patient</p>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Case ID" value={caseIdOf(r)} />
-                {r.source_case_id && r.case_no && <Field label="System ref." value={r.case_no} />}
+                {r.source_case_id
+                  ? <Field label="Case ID" value={r.source_case_id} />
+                  : <Field label="Case ID" value="No Case ID — add it via Edit details" />}
+                {r.case_no && <Field label="System Reference" value={r.case_no} />}
                 <Field label="Date of birth" value={fmtDate(r.date_of_birth)} />
                 <Field label="Age / Sex" value={`${r.age ?? '—'} / ${r.sex || '—'}`} />
                 <Field label="Patient barangay" value={r.barangay_name} />
@@ -238,19 +239,23 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
             <section>
               <p className="text-[11px] font-bold uppercase tracking-wider mt-1 mb-3 pt-3 border-t" style={{ color: '#64748B', borderColor: '#E2E8F0' }}>TB Case</p>
               <div className="grid grid-cols-2 gap-3">
+                <Field label="Date of screening" value={fmtDate(r.date_of_screening)} />
                 <Field label="Date of diagnosis" value={fmtDate(r.date_of_diagnosis)} />
+                <Field label="Date of notification" value={fmtDate(r.date_of_notification)} />
                 <Field label="Treatment started" value={fmtDate(r.date_started_treatment)} />
                 <Field label="Case status" value={r.case_status ? <StatusBadge status={r.case_status} /> : '—'} />
                 <Field label="Treatment outcome" value={r.treatment_outcome ? <StatusBadge status={r.treatment_outcome} /> : r.case_status ? <span className="cursor-help" title={r.case_status === 'DIAGNOSED' ? 'Diagnosed, not yet on treatment — no final outcome yet' : 'Still on treatment — no final outcome yet'}>—</span> : '—'} />
                 <Field label="Source value" value={r.source_outcome_status || r.outcome_status || '—'} />
                 <Field label="Date of outcome" value={fmtDate(r.date_of_outcome)} />
+                <Field label="Outcome reason" value={r.outcome_reason} />
                 <Field label="Registration group" value={r.registration_group} />
                 <Field label="Bacteriological status" value={r.bacteriological_status} />
+                <Field label="Anatomical site" value={r.anatomical_site} />
+                <Field label="Source of patient" value={r.source_of_patient} />
                 <Field label="Screening facility" value={r.screening_facility} />
                 <Field label="Treatment facility" value={r.treatment_facility} />
                 <Field label="Responsible barangay" value={r.responsible_barangay_effective || '—'} />
-                <Field label="Source / ITIS ref." value={`${r.source_type || '—'}${r.itis_case_id ? ` · ${r.itis_case_id}` : ''}`} />
-                {r.source_case_id && <Field label="Source Case ID" value={r.source_case_id} />}
+                <Field label="Source" value={r.source_type} />
                 {r.source_record_id && (() => {
                   const [, sheet, row] = String(r.source_record_id).split(':');
                   return <Field label="Source file row" value={`${r.source_file || 'Import'} · ${sheet || r.source_type} sheet, row ${String(row || '').replace(/^R/, '')}`} />;

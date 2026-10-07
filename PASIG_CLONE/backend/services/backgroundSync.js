@@ -44,7 +44,14 @@ async function notifySync(batchId, result, user) {
  * @returns {Promise} settles when the sync is over (tests await it; routes don't)
  */
 function startBackgroundSync(batchId, user, options = {}) {
-  return sendWebhook(batchId, user.id, options)
+  // Who asked for this sync. TBInsight keeps it on the case history rows it
+  // writes for a same-case outcome update; it is a label, not an id, because a
+  // PASIG account has no row in TBInsight's users table. Omitted when the caller
+  // has no username to report — history then simply records a null actor.
+  const senderOptions = user && user.username
+    ? { ...options, actor: { username: user.username, role: user.role } }
+    : options;
+  return sendWebhook(batchId, user.id, senderOptions)
     .then(result => notifySync(batchId, result, user))
     .catch(async (err) => {
       console.error(`❌ Background sync of batch ${batchId} failed:`, err.message);

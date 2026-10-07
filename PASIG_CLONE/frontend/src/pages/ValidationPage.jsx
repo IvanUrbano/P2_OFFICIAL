@@ -179,14 +179,13 @@ export default function ValidationPage() {
         open={Boolean(validating)}
         title={`Validating ${(summary?.batches || []).find(b => b.id === validating)?.filename || 'batch'}`}
         detail="Cleaning each record, checking required fields and looking for possible patient matches. Large files can take a minute."
-        icon="ri-shield-check-line"
         note="Keep this page open until validation finishes."
       />
       {validateNotice && (
         <div className="px-4 py-3 rounded-lg text-xs flex items-center justify-between gap-3"
           style={validateNotice.type === 'error'
             ? { background: '#FEF2F2', color: '#991B1B', border: '1px solid #FECACA' }
-            : { background: '#ECFDF5', color: '#047857', border: '1px solid #A7F3D0' }}>
+            : { background: '#F1F5F1', color: '#526A56', border: '1px solid #D5E0D5' }}>
           <span>{validateNotice.text}</span>
           <button onClick={() => setValidateNotice(null)} aria-label="Dismiss"><i className="ri-close-line" /></button>
         </div>

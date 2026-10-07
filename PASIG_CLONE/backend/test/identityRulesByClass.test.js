@@ -29,7 +29,9 @@ let ISSUES = []; let updates = []; let listSql = '';
 
 async function q(sql, params = []) {
   const s = String(sql).replace(/\s+/g, ' ').trim();
-  if (s.startsWith('SELECT identity_class FROM import_batches')) return { rows: [{ identity_class: batchClass }] };
+  if (s.startsWith('SELECT identity_class, case_id_required FROM import_batches')) {
+    return { rows: [{ identity_class: batchClass, case_id_required: true }] };
+  }
   if (s.startsWith('SELECT sync_status FROM import_batches')) return { rows: [{ sync_status: 'pending' }] };
   if (s.startsWith('SELECT case_no, date_of_diagnosis::text')) return { rows: [] };
   if (s.includes("nextval('patient_no_seq')") || s.includes("nextval('case_no_seq')")) {
@@ -43,8 +45,8 @@ async function q(sql, params = []) {
     return { rows: [] };
   }
   // Data Issues list / refresh
-  if (s.startsWith('SELECT i.id, i.source_type, i.record, i.errors, i.identity_class FROM validation_issues i')) {
-    return { rows: ISSUES.filter(x => x.status === 'open' && !x.orphan) };
+  if (s.startsWith('SELECT i.id, i.source_type, i.record, i.errors, i.identity_class')) {
+    return { rows: ISSUES.filter(x => x.status === 'open' && !x.orphan).map(x => ({ ...x, case_id_required: true })) };
   }
   if (s.startsWith('UPDATE validation_issues SET errors')) { updates.push({ id: params[0], errors: JSON.parse(params[1]) }); return { rows: [] }; }
   if (s.startsWith('SELECT COUNT(*)::int AS n FROM validation_issues i')) {
@@ -71,7 +73,7 @@ const {
   validateBatch, getValidBarangays,
 } = require('../services/validator');
 
-const deid = { barangay_name: 'Rosario', city: 'Pasig City', date_of_diagnosis: '2025-03-04', sex: 'Male', age: 41 };
+const deid = { barangay_name: 'Rosario', city: 'Pasig City', date_of_diagnosis: '2025-03-04', sex: 'Male', age: 41, source_case_id: 'ROS-D-2025-00042' };
 const person = { last_name: 'DELA CRUZ', first_name: 'JUAN', date_of_birth: '1984-01-15' };
 const NAME_ERRORS = ['Last name is required', 'First name is required', 'Date of birth is required'];
 let BGY;
@@ -126,10 +128,10 @@ describe('rules by identity class', () => {
 describe('import + data-issue generation + revalidation follow the batch class', () => {
   beforeEach(() => { inserted = []; issuesInserted = []; seq = 0; });
   const rows = () => [
-    { id: 1, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 7, csv_data: { ...deid } },
-    { id: 2, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 8, csv_data: { ...deid, ...person } },
-    { id: 3, sheet_name: 'MN', source_type: 'MN', row_number: 2, csv_data: { ...deid, itis_case_id: 'PSG-1' } },
-    { id: 4, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 9, csv_data: { ...deid, ...person, date_of_birth: '2026-01-01' } },
+    { id: 1, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 7, csv_data: { ...deid, file_case_id: 'ROS-D-2025-00042' } },
+    { id: 2, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 8, csv_data: { ...deid, ...person, file_case_id: 'ROS-D-2025-00043' } },
+    { id: 3, sheet_name: 'MN', source_type: 'MN', row_number: 2, csv_data: { ...deid, itis_case_id: 'PSG-1', file_case_id: 'TMCP-M-2025-00007' } },
+    { id: 4, sheet_name: 'DSTB', source_type: 'DSTB', row_number: 9, csv_data: { ...deid, ...person, date_of_birth: '2026-01-01', file_case_id: 'ROS-D-2025-00044' } },
   ];
 
   it('historical batch: de-identified rows become cases; names kept when present; DOB error only where DOB given', async () => {

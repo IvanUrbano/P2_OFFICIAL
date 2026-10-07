@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import API from '../../api/axios';
 import EmptyState from '../EmptyState';
 import SidePanel, { primaryBtn, secondaryBtn } from '../SidePanel';
-import { fullName, Notice, ChipFilter, Pager, th, thStyle, td, FIELD_LABELS, PinHint } from './shared';
+import { fullName, Notice, ChipFilter, Pager, FIELD_LABELS, PinHint } from './shared';
 import { can } from '../../utils/permissions';
 
 const TYPE = {
@@ -16,7 +16,7 @@ const SECTIONS = [
   { title: 'Patient', fields: ['last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth', 'sex', 'age'] },
   { title: 'Location', fields: ['barangay_name', 'city'] },
   { title: 'TB case', fields: ['date_of_diagnosis', 'date_started_treatment', 'outcome_status', 'date_of_outcome', 'registration_group', 'bacteriological_status', 'anatomical_site'] },
-  { title: 'Facilities & reference', fields: ['treatment_facility', 'screening_facility', 'itis_case_id'] },
+  { title: 'Facilities', fields: ['treatment_facility', 'screening_facility'] },
 ];
 const DATE_FIELDS = new Set(['date_of_birth', 'date_of_diagnosis', 'date_started_treatment', 'date_of_outcome']);
 const NAME_FIELDS = new Set(['last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth']);
@@ -130,59 +130,56 @@ export default function IssuesTab({ batch, refreshKey, onChanged }) {
           <EmptyState icon="ri-file-warning-line" title="No Data Issues" description="Every imported row passed validation, or its problems were resolved." />
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead><tr>{['File / row', 'Patient', 'Problems', ''].map(h => <th key={h} className={th} style={thStyle}>{h}</th>)}</tr></thead>
-                <tbody>
-                  {visible.map(i => (
-                    <tr key={i.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                      <td className={td} style={{ color: '#0F2D52' }}>
-                        <span className="font-semibold">{i.filename || 'Import'}</span>
-                        <span className="block text-[10px]" style={{ color: '#94A3B8' }}>Row {i.row_number ?? '—'} · {i.source_type}</span>
-                      </td>
-                      <td className={td} style={{ color: '#0F2D52' }}>
-                        {fullName(i.record)}
-                        <span className="block text-[10px]" style={{ color: '#94A3B8' }}>
-                          {i.permissions?.reason === 'other_barangay' && i.barangay_name
-                            ? `Assigned Barangay: ${i.barangay_name}`
-                            : i.record?.barangay_name || 'no barangay'}
+            <div className="px-5" style={{ borderTop: '1px solid rgba(15,45,82,0.06)' }}>
+              {visible.map(i => (
+                <article key={i.id} className="grid grid-cols-1 gap-3 py-4 md:grid-cols-[minmax(150px,0.9fr)_minmax(150px,0.8fr)_minmax(220px,1.5fr)_auto] md:items-start"
+                  style={{ borderBottom: '1px solid rgba(15,45,82,0.06)' }}>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold break-words" style={{ color: '#334155' }}>{i.filename || 'Import'}</p>
+                    <p className="mt-1 text-[11px]" style={{ color: '#64748B' }}>Row {i.row_number ?? '—'} <span className="mx-1">·</span> {i.source_type || '—'}</p>
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium break-words" style={{ color: '#334155' }}>{fullName(i.record)}</p>
+                    <p className="mt-1 text-[11px] break-words" style={{ color: '#64748B' }}>
+                      {i.permissions?.reason === 'other_barangay' && i.barangay_name
+                        ? `Assigned Barangay: ${i.barangay_name}`
+                        : i.record?.barangay_name || 'No barangay listed'}
+                    </p>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 mb-1.5">
+                      {i.issue_types.map(t => (
+                        <span key={t} className="text-[10px] font-medium" style={{ color: TYPE[t]?.color || '#475569' }}>
+                          {TYPE[t]?.label || t}
                         </span>
-                      </td>
-                      <td className={td}>
-                        <div className="flex flex-wrap gap-1 mb-1">
-                          {i.issue_types.map(t => (
-                            <span key={t} className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: TYPE[t].bg, color: TYPE[t].color }}>{TYPE[t].label}</span>
-                          ))}
-                        </div>
-                        <ul className="text-[11px] space-y-0.5" style={{ color: '#475569' }}>
-                          {(i.errors || []).map((m, k) => <li key={k}>{m}</li>)}
-                          {i.no_remaining_errors && (
-                            <li style={{ color: '#047857' }}>No remaining problems under the current rules. Open it and save to add it as a case.</li>
-                          )}
-                        </ul>
-                      </td>
-                      <td className={`${td} whitespace-nowrap text-right`}>
-                        <div className="flex gap-1 justify-end">
-                          {can(i, 'fix') && <button onClick={() => openFix(i)} className="px-3 py-1.5 text-[11px] font-semibold" style={primaryBtn}>Review &amp; Correct</button>}
-                          {can(i, 'exclude') && <button onClick={() => setExcluding({ issue: i, note: '' })} className="px-2.5 py-1.5 text-[11px] font-medium" style={secondaryBtn}>Exclude</button>}
-                          {!can(i, 'fix') && !can(i, 'exclude') && (
-                            <span className="text-[10px] leading-snug text-right inline-block" style={{ maxWidth: 250, color: '#B45309' }}>
-                              {i.permissions?.reason === 'admin_required' ? (
-                                <>
-                                  ⚠ Requires Administrator Review
-                                  <span className="block" style={{ color: '#94A3B8' }}>Barangay could not be matched.</span>
-                                </>
-                              ) : (
-                                <>🔒 This record can only be resolved by {i.barangay_name || 'its assigned barangay'} Staff or an Administrator.</>
-                              )}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      ))}
+                    </div>
+                    {i.errors?.length > 0 ? (
+                      <ul className="space-y-1 text-[11px]" style={{ color: '#475569' }}>
+                        {i.errors.map((message, index) => <li key={index}>{message}</li>)}
+                      </ul>
+                    ) : i.no_remaining_errors ? (
+                      <p className="text-[11px]" style={{ color: '#526A56' }}>No problems remain under the current rules. Review and save to add this row as a case.</p>
+                    ) : (
+                      <p className="text-[11px]" style={{ color: '#64748B' }}>Review this row to see the problem details.</p>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-start gap-2 md:justify-end">
+                    {can(i, 'fix') && <button onClick={() => openFix(i)} className="px-3 py-1.5 text-[11px] font-semibold whitespace-nowrap" style={primaryBtn}>Review &amp; Correct</button>}
+                    {can(i, 'exclude') && <button onClick={() => setExcluding({ issue: i, note: '' })} className="px-3 py-1.5 text-[11px] font-medium" style={secondaryBtn}>Exclude</button>}
+                    {!can(i, 'fix') && !can(i, 'exclude') && (
+                      <span className="text-[11px] leading-relaxed md:max-w-[220px] md:text-right" style={{ color: '#64748B' }}>
+                        {i.permissions?.reason === 'admin_required'
+                          ? 'Administrator review required because the barangay could not be matched.'
+                          : `Only ${i.barangay_name || 'the assigned barangay'} staff or an administrator can resolve this record.`}
+                      </span>
+                    )}
+                  </div>
+                </article>
+              ))}
             </div>
             <Pager pagination={data.pagination} onPage={setPage} />
           </>

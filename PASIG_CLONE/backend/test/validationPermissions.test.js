@@ -72,12 +72,16 @@ function dispatch(sql, params) {
   if (q.startsWith('SELECT * FROM validation_issues WHERE id')) {
     return { rows: ISSUES.filter(i => i.id === Number(params[0])) };
   }
+  // Issue + its batch flag (loadIssueForUser) — must be checked before the list query.
+  if (q.startsWith('SELECT i.*, b.case_id_required FROM validation_issues i')) {
+    return { rows: ISSUES.filter(i => i.id === Number(params[0])).map(r => ({ ...r, case_id_required: true })) };
+  }
   if (q.startsWith('SELECT COUNT(*)::int AS n FROM validation_issues')) {
     return { rows: [{ n: ISSUES.length }] };
   }
   if (q.startsWith('SELECT i.batch_id, COUNT(*)::int AS n')) return { rows: [] };
-  if (q.includes('FROM validation_issues i LEFT JOIN import_batches')) {
-    return { rows: ISSUES.map(r => ({ ...r })) };
+  if (q.startsWith('SELECT i.id, i.batch_id') && q.includes('FROM validation_issues i LEFT JOIN import_batches')) {
+    return { rows: ISSUES.map(r => ({ ...r, case_id_required: true })) };
   }
   if (q.includes('COUNT(DISTINCT norm_facility(f.name))') && !q.includes('GROUP BY v.batch_id')) return { rows: [{ names: 4 }] };
   if (q.includes('COUNT(*) FILTER') && !q.includes('GROUP BY v.batch_id')) {

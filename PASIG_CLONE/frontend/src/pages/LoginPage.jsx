@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
+import ModalCloseButton from '../components/ModalCloseButton';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -164,12 +165,7 @@ export default function LoginPage() {
                 <i className="ri-information-line text-lg" style={{ color: '#0F2D52' }} />
                 <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Password Reset Assistance</h3>
               </div>
-              <button
-                onClick={() => setShowForgotModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded cursor-pointer"
-              >
-                <i className="ri-close-line text-lg" />
-              </button>
+              <ModalCloseButton onClick={() => setShowForgotModal(false)} />
             </div>
 
             <div className="p-5 space-y-3">
@@ -210,12 +206,7 @@ export default function LoginPage() {
                 <i className="ri-shield-keyhole-line text-lg" style={{ color: '#0F2D52' }} />
                 <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Password Recently Reset</h3>
               </div>
-              <button
-                onClick={() => { setShowPasswordResetNotice(false); navigate('/dashboard'); }}
-                className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded cursor-pointer"
-              >
-                <i className="ri-close-line text-lg" />
-              </button>
+              <ModalCloseButton onClick={() => { setShowPasswordResetNotice(false); navigate('/dashboard'); }} />
             </div>
 
             <div className="p-5 space-y-3">

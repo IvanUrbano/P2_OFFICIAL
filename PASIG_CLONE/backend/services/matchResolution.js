@@ -1,18 +1,35 @@
 /**
  * Applying a person's decision on a possible patient match.
  *
- *   same_case        the record is a later report of the matched case: its outcome /
- *                    treatment fields update that case (blank values never erase
- *                    existing ones). The record itself does not become a case.
+ *   same_case        the record is a later report of the matched case: its clinical
+ *                    fields update that case (blank values never erase existing ones).
+ *                    The record itself does not become a case.
  *   new_episode      same patient, new TB episode: new Case ID, existing Patient #.
  *   different_person new Patient # and new Case ID.
  *
- * Never automatic — only called from an explicit user action.
+ * Normally called from an explicit user action — except when the file's own Case ID
+ * says two rows are the same case (services/validator.js), which resolves itself.
  */
 const { formatPatientNo, formatCaseNo } = require('./patientIdentity');
+const { normalizeCaseId } = require('./caseIds');
 
-const UPDATE_FIELDS = ['outcome_status', 'date_of_outcome', 'date_started_treatment', 'treatment_facility'];
+// Every clinical value a later report of the same case may correct. Location is absent
+// on purpose: a barangay change goes through Validation -> Needs Assignment, which also
+// re-points barangay_id. Patient identity (names, date of birth) is absent too — the
+// file does not carry it for de-identified records, and migration 015 protects it.
+const UPDATE_FIELDS = [
+  'date_of_diagnosis', 'date_of_notification', 'date_of_screening',
+  'age', 'sex',
+  'date_started_treatment', 'outcome_status', 'date_of_outcome', 'outcome_reason',
+  'treatment_facility', 'screening_facility',
+  'source_of_patient', 'anatomical_site', 'registration_group', 'bacteriological_status',
+  'type', 'province', 'region', 'referred_to_dots', 'referral_status',
+  'microscopy_result', 'microscopy_release_date', 'rdt_result', 'rdt_release_date',
+  'source_outcome_status',
+];
 const RESOLUTIONS = ['same_case', 'new_episode', 'different_person'];
+
+const upper = (v) => (v == null ? null : String(v).toUpperCase());
 
 async function nextCaseNo(client, dateOfDiagnosis) {
   const r = await client.query(`SELECT nextval('case_no_seq')::bigint AS n`);
@@ -60,6 +77,13 @@ async function resolveMatch(client, row, resolution, userId, { authorizeExisting
       { status: 409 }
     );
   }
+  // Guard: if the resolution is not "same case" and the Case ID already belongs
+  // to this case, refuse – a person must decide which resolution is correct.
+  if (resolution !== 'same_case' && cand && cand.source_case_id) {
+    if (upper(cand.source_case_id) === upper(row.source_case_id)) {
+      throw Object.assign(new Error('This case already carries the Case ID ' + row.source_case_id + '. Choose a different resolution.'), { status: 409 });
+    }
+  }
 
   const resolvedCols = `match_status = 'resolved', match_resolution = $2, match_resolved_by = $3, match_resolved_at = NOW()`;
 
@@ -73,6 +97,20 @@ async function resolveMatch(client, row, resolution, userId, { authorizeExisting
       `UPDATE validated_tb_cases SET ${sets}, updated_by = $${UPDATE_FIELDS.length + 2}, updated_at = NOW() WHERE id = $1`,
       [cand.id, ...UPDATE_FIELDS.map(f => (f.startsWith('date_') ? ymd(row[f]) : row[f] ?? null)), userId]
     );
+    // The Case ID identifies the case: one that already has it is never given another.
+    // It is only filled in when the case still has none (a batch from before Case IDs
+    // were required), and only when no other live case carries it (migration 019).
+    const wanted = normalizeCaseId(row.source_case_id);
+    if (wanted && !cand.source_case_id) {
+      await client.query(
+        `UPDATE validated_tb_cases SET source_case_id = $2
+          WHERE id = $1 AND source_case_id IS NULL
+            AND NOT EXISTS (SELECT 1 FROM validated_tb_cases o
+                             WHERE o.id <> $1 AND upper(o.source_case_id) = upper($2)
+                               AND o.is_archived = false AND o.merged_into_case_no IS NULL)`,
+        [cand.id, wanted]
+      );
+    }
     await client.query(
       `UPDATE validated_tb_cases SET ${resolvedCols}, merged_into_case_no = $4, patient_id = $5, record_status = 'updated'
        WHERE id = $1`,
