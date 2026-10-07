@@ -22,6 +22,11 @@ if (!ML_API_KEY) {
 // takes well over a minute on a single core (e.g. Render's free plan).
 const ML_TIMEOUT_MS = Number(process.env.ML_TIMEOUT_MS) || 300_000;
 
+// Health check timeout. Must exceed a Lambda cold start (the AWS Lambda ML service
+// takes ~10s to init), otherwise the first request after idle fails and the pipeline
+// falls back to rule-based classification.
+const ML_HEALTH_TIMEOUT_MS = Number(process.env.ML_HEALTH_TIMEOUT_MS) || 30_000;
+
 /**
  * Generic POST to the ML service
  * @param {string} path - Endpoint path (e.g. '/forecast')
@@ -67,7 +72,7 @@ async function mlPost(path, body) {
  */
 async function healthCheck() {
   try {
-    const res = await fetch(`${ML_BASE}/api/ml/health`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${ML_BASE}/api/ml/health`, { signal: AbortSignal.timeout(ML_HEALTH_TIMEOUT_MS) });
     if (!res.ok) return false;
     const data = await res.json();
     return data.status === 'ok';
