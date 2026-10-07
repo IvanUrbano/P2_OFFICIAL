@@ -75,7 +75,7 @@ export function shareInsight(items, { nameKey = 'name', valueKey = 'value', noun
   return `${text}.`;
 }
 
-/** Treatment outcomes: most common status, success share, still on treatment, lost to follow-up. */
+/** Final treatment outcomes only; current case status is a separate measure. */
 export function outcomeInsight(items, { nameKey = 'name', valueKey = 'Cases' } = {}) {
   const rows = (items || []).filter((r) => r && Number(r[valueKey]) > 0);
   if (rows.length === 0) return null;
@@ -83,11 +83,9 @@ export function outcomeInsight(items, { nameKey = 'name', valueKey = 'Cases' } =
   const get = (...names) => sum(rows.filter((r) => names.includes(String(r[nameKey]).toUpperCase())).map((r) => Number(r[valueKey])));
   const top = [...rows].sort((a, b) => Number(b[valueKey]) - Number(a[valueKey]))[0];
   const success = get('CURED', 'TREATMENT COMPLETED');
-  const onTx = get('ON TREATMENT');
-  const ltfu = get('LOST TO FF-UP', 'LOST TO FOLLOW-UP');
-  let text = `${titleCase(top[nameKey])} is the most common status (${pct(top[valueKey], total)}%). `;
-  text += `Cured or treatment completed: ${pct(success, total)}% of these cases`;
-  if (onTx) text += `; still on treatment: ${pct(onTx, total)}%`;
+  const ltfu = get('LOST TO FOLLOW-UP');
+  let text = `${titleCase(top[nameKey])} is the most common recorded treatment outcome (${pct(top[valueKey], total)}%). `;
+  text += `Cured or treatment completed: ${pct(success, total)}% of recorded outcomes`;
   if (ltfu) text += `; lost to follow-up: ${pct(ltfu, total)}%`;
   return `${text}.`;
 }
@@ -103,18 +101,15 @@ export function riskInsight(rows, { nameKey = 'name', classKey = 'risk_class' } 
   return `${text}. Risk levels compare barangays with each other within Pasig; they are not national thresholds.`;
 }
 
-/** Year-over-year: latest complete-year change and the overall direction. */
-export function yoyInsight(rows, latestYoy) {
-  const complete = (rows || []).filter((r) => r.complete);
-  if (complete.length === 0) return null;
-  const peak = complete.reduce((a, b) => (b.cases > a.cases ? b : a));
+/** Case trend: matched-period change and the year with the most reported cases. */
+export function caseTrendInsight(rows, latestPeriod) {
+  if (!rows || rows.length === 0) return null;
+  const peak = rows.reduce((a, b) => (b.cases > a.cases ? b : a));
   let text = '';
-  if (latestYoy && latestYoy.pct != null) {
-    text = `${latestYoy.currentYear} had ${Math.abs(latestYoy.pct)}% ${latestYoy.pct >= 0 ? 'more' : 'fewer'} cases than ${latestYoy.previousYear}. `;
+  if (latestPeriod && latestPeriod.changePct != null) {
+    text = `For ${latestPeriod.period}, ${latestPeriod.year} had ${Math.abs(latestPeriod.changePct)}% ${latestPeriod.changePct >= 0 ? 'more' : 'fewer'} cases than ${latestPeriod.previousYear}. `;
   }
-  text += `The year with the most cases was ${peak.year} (${fmt(peak.cases)}).`;
-  const partial = (rows || []).filter((r) => !r.complete).map((r) => r.year);
-  if (partial.length) text += ` ${partial.join(', ')} ${partial.length > 1 ? 'have' : 'has'} too few months of data to compare.`;
+  text += `The year with the most reported cases was ${peak.year} (${fmt(peak.cases)} across ${peak.coverage.toLowerCase()}).`;
   return text;
 }
 

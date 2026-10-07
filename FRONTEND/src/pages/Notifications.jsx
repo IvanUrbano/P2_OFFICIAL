@@ -10,6 +10,7 @@ export default function Notifications() {
   const navigate = useNavigate();
 
   const [notifications, setNotifications] = useState([]);
+  const [filterOptions, setFilterOptions] = useState({ status: [], source: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filterStatus, setFilterStatus] = useState('all');
@@ -33,8 +34,12 @@ export default function Notifications() {
       if (filterSource) params.source = filterSource;
       if (filterDate !== 'all') params.date = filterDate;
 
-      const res = await API.get('/api/tb/alerts', { params, signal: controller.signal });
+      const [res, optionsRes] = await Promise.all([
+        API.get('/api/tb/alerts', { params, signal: controller.signal }),
+        API.get('/api/tb/alerts/filter-options', { params: { type: 'notification' }, signal: controller.signal }),
+      ]);
       setNotifications(res.data.alerts || []);
+      setFilterOptions(optionsRes.data || { status: [], source: [] });
       setPagination(res.data.pagination || { total: 0, totalPages: 1 });
     } catch (err) {
       if (err.name === 'CanceledError' || err.name === 'AbortError') return;
@@ -44,7 +49,11 @@ export default function Notifications() {
     }
   }, [page, filterStatus, filterSource, filterDate]);
 
-  useEffect(() => { fetchNotifications(); }, [fetchNotifications]);
+  useEffect(() => {
+    fetchNotifications();
+    window.addEventListener('focus', fetchNotifications);
+    return () => window.removeEventListener('focus', fetchNotifications);
+  }, [fetchNotifications]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -151,18 +160,12 @@ export default function Notifications() {
         <div className="rounded-xl px-4 py-3 flex items-center gap-2 flex-wrap" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
           <FilterSelect label="Status" value={filterStatus} onChange={v => { setFilterStatus(v); setPage(1); }}>
             <option value="all">All Status</option>
-            <option value="unread">Unread</option>
-            <option value="read">Read</option>
+            {filterOptions.status.map(value => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</option>)}
           </FilterSelect>
 
           <FilterSelect label="Source" value={filterSource} onChange={v => { setFilterSource(v); setPage(1); }}>
             <option value="">All Sources</option>
-            <option value="tb_records">TB Records</option>
-            <option value="forecasting">Forecasting</option>
-            <option value="reports">Reports</option>
-            <option value="data_integration">Data Integration</option>
-            <option value="analytics">Analytics</option>
-            <option value="gis">GIS Hotspots</option>
+            {filterOptions.source.map(value => <option key={value} value={value}>{MODULE_LABELS[value] || value}</option>)}
           </FilterSelect>
 
           <FilterSelect label="Date" value={filterDate} onChange={v => { setFilterDate(v); setPage(1); }}>

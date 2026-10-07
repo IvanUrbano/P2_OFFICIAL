@@ -134,7 +134,7 @@ async function buildDashboardMetrics(pool) {
     safe(pool.query(`
       SELECT COUNT(*)::INTEGER AS on_treatment
       FROM tb_cases
-      WHERE UPPER(TRIM(outcome_status)) = 'ON TREATMENT'
+      WHERE case_status = 'ON TREATMENT'
         AND ${countedCases()}
     `), 'onTreatment'),
   ]);

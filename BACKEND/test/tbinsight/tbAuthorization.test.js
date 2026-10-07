@@ -98,7 +98,6 @@ const READ_ENDPOINTS = [
   '/api/tb/insights/dashboard',
   '/api/tb/insights/forecasting',
   '/api/tb/insights/gis',
-  '/api/tb/treatment-cascade',
   '/api/tb/treatment-success-rate',
   '/api/tb/case-fatality-rate',
   '/api/tb/pipeline/status',

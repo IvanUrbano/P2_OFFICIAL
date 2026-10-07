@@ -9,7 +9,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import API from '../api/axios';
 import DashboardWelcomeInsightsSection from '../components/DashboardWelcomeInsightsSection';
-import TreatmentCascadeCard from '../components/TreatmentCascadeCard';
+import OutcomeStatusPanel from '../components/OutcomeStatusPanel';
 import ChartInsight from '../components/ChartInsight';
 import { trendInsight, riskInsight, shareInsight, outcomeInsight, forecastInsight } from '../utils/chartInsights';
 import { getDashboardInsight } from '../services/insightService';
@@ -316,7 +316,7 @@ export default function DashboardPage() {
   const [riskYear, setRiskYear] = useState(null);
   const [pipelineStatus, setPipelineStatus] = useState(null);
   const [demographicsData, setDemographicsData] = useState([]);
-  const [cascadeData, setCascadeData] = useState(null);
+  const [statusSummary, setStatusSummary] = useState(null); // diagnosed / on treatment counts
   // Freshness metadata from GET /api/tb/data-freshness: Last Synced and Last
   // Model Run are distinct timestamps and are kept distinct.
   const [freshness, setFreshness] = useState(null);
@@ -378,7 +378,7 @@ export default function DashboardPage() {
     );
 
     const [monthlyRes, outcomesRes, forecastsRes, alertsRes, riskRes,
-      pipelineRes, demoRes, cascadeRes, tsrRes, cfrRes, freshRes] =
+      pipelineRes, demoRes, statusRes, tsrRes, cfrRes, freshRes] =
       await Promise.all([
         get('/api/tb/dashboard/monthly'),
         get('/api/tb/dashboard/outcomes'),
@@ -391,7 +391,8 @@ export default function DashboardPage() {
         get('/api/tb/gis/choropleth'),
         get('/api/tb/pipeline/status'),
         get('/api/tb/dashboard/demographics'),
-        get('/api/tb/treatment-cascade'),
+        // Case status counts (Diagnosed / On Treatment) for the outcomes panel
+        get('/api/tb/dashboard/summary'),
         // Unfiltered (no year/barangay) — the Dashboard is an overview page —
         // which defaults to the current-year Y-1 cohort.
         get('/api/tb/treatment-success-rate'),
@@ -407,7 +408,7 @@ export default function DashboardPage() {
       risk: !riskRes.ok,
       pipeline: !pipelineRes.ok,
       demographics: !demoRes.ok,
-      cascade: !cascadeRes.ok,
+      status: !statusRes.ok,
       tsr: !tsrRes.ok,
       cfr: !cfrRes.ok,
       freshness: !freshRes.ok,
@@ -419,10 +420,10 @@ export default function DashboardPage() {
     setAlertsData(alertsRes.data?.alerts || []);
     setAlertsTotal(alertsRes.data?.pagination?.total ?? null);
     setRiskData(riskRes.data?.choropleth || []);
-    setRiskYear(riskRes.data?.year ?? null);
+    setRiskYear(riskRes.data?.assessment_year ?? riskRes.data?.year ?? null);
     setPipelineStatus(pipelineRes.data?.latest_run || null);
     setDemographicsData(demoRes.data?.demographics || []);
-    setCascadeData(cascadeRes.data || null);
+    setStatusSummary(statusRes.data?.summary || null);
     setTsrData(tsrRes.data || null);
     setCfrData(cfrRes.data || null);
     setFreshness(freshRes.data || null);
@@ -431,7 +432,7 @@ export default function DashboardPage() {
     // there is genuinely nothing to show. A partial failure keeps the page
     // and degrades the affected cards individually.
     const anyOk = [monthlyRes, outcomesRes, forecastsRes, riskRes,
-      alertsRes, demoRes, cascadeRes, tsrRes, cfrRes, freshRes].some((r) => r.ok);
+      alertsRes, demoRes, statusRes, tsrRes, cfrRes, freshRes].some((r) => r.ok);
     if (!anyOk) {
       setError('Dashboard data could not be retrieved. Please try again.');
     }
@@ -519,20 +520,26 @@ export default function DashboardPage() {
     return riskData.filter((r) => (r.risk_class || '').toLowerCase() === 'high').length;
   }, [riskData, hasRiskData]);
 
-  /* ── Assessed-barangay denominator ──
-   * The "N / M" denominator is the number of barangays that actually carry a
-   * persisted classification in the latest snapshot — not a hardcoded 30.
+  /* ── City-wide classification breakdown ──
    * /gis/choropleth LEFT JOINs every reference barangay and COALESCEs a
-   * missing classification to 'No Data', so a snapshot that skipped a
-   * barangay would otherwise be reported as though all 30 were assessed. */
-  const assessedCount = useMemo(
-    () => riskData.filter((r) => r.risk_class && (r.risk_class || '').toLowerCase() !== 'no data').length,
-    [riskData]
-  );
-  const noAssessmentCount = useMemo(
-    () => riskData.filter((r) => !r.risk_class || (r.risk_class || '').toLowerCase() === 'no data').length,
-    [riskData]
-  );
+   * missing classification to 'No Data', so `totalBarangays` is the real
+   * number of barangays in the snapshot — not a hardcoded 30 — while
+   * `noAssessmentCount` keeps saying plainly how many were never assessed.
+   * Canonical classes are High/Medium/Low; 'Medium' is shown as "Moderate"
+   * here exactly as on the GIS page. */
+  const riskCounts = useMemo(() => {
+    const counts = { high: 0, moderate: 0, low: 0, noData: 0 };
+    riskData.forEach((r) => {
+      const rc = (r.risk_class || '').trim().toLowerCase();
+      if (rc === 'high') counts.high += 1;
+      else if (rc === 'medium' || rc === 'moderate') counts.moderate += 1;
+      else if (rc === 'low') counts.low += 1;
+      else counts.noData += 1;
+    });
+    return counts;
+  }, [riskData]);
+  const totalBarangays = riskData.length || 30;
+  const noAssessmentCount = riskCounts.noData;
 
   /* ── 5. Forecasted Cases ── */
   const forecastSummary = useMemo(() => {
@@ -1099,27 +1106,49 @@ export default function DashboardPage() {
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
-              {/* High-Risk Barangays */}
+              {/* ── City Risk Classification ──
+                  The old "{high}/{assessed}" figure read as an unexplained
+                  ratio ("10 / 24"). The count is now spelled out in words and
+                  the snapshot's full class breakdown is shown alongside it, so
+                  High/Moderate/Low can be read together. */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-alarm-warning-line text-sm" style={{ color: '#C4886A' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>City Risk Classification</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
-                  {failed.risk ? 'Unavailable' : highRiskCount == null ? 'N/A' : `${animatedHighRisk}/${assessedCount}`}
+                  {failed.risk ? 'Unavailable' : highRiskCount == null ? 'N/A' : animatedHighRisk}
                 </p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                <span
+                  className="text-[11px] font-medium mt-1"
+                  style={{ color: '#94A3B8' }}
+                  title="This represents the number of Pasig barangays classified as High Risk by the risk-classification model for the selected assessment period."
+                >
                   {failed.risk
                     ? 'Risk classification could not be loaded'
                     : highRiskCount == null
                       ? 'No risk assessment available yet'
-                      : `Of ${assessedCount} assessed barangays${riskYear ? ` (${riskYear} assessment)` : ''}`}
+                      : `of ${totalBarangays} barangays classified as High Risk`}
                 </span>
-                {!failed.risk && noAssessmentCount > 0 && (
-                  <span className="text-[10px] font-medium" style={{ color: '#B07070' }}>
-                    {noAssessmentCount} not assessed
-                  </span>
+                {!failed.risk && highRiskCount != null && (
+                  <div className="mt-2 pt-2 space-y-1" style={{ borderTop: '1px solid #F1F5F9' }}>
+                    <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: '#64748B' }}>
+                      Assessment Period: <span style={{ color: '#0F2D52' }}>{riskYear ?? 'N/A'}</span>
+                    </p>
+                    <p className="text-[11px] font-medium leading-snug" style={{ color: '#475569' }}>
+                      High Risk: <strong style={{ color: '#EF4444' }}>{riskCounts.high}</strong>
+                      <span style={{ color: '#CBD5E1' }}> · </span>
+                      Moderate Risk: <strong style={{ color: '#F97316' }}>{riskCounts.moderate}</strong>
+                      <span style={{ color: '#CBD5E1' }}> · </span>
+                      Low Risk: <strong style={{ color: '#B45309' }}>{riskCounts.low}</strong>
+                    </p>
+                    {noAssessmentCount > 0 && (
+                      <p className="text-[10px] font-medium" style={{ color: '#B07070' }}>
+                        {noAssessmentCount} not assessed
+                      </p>
+                    )}
+                  </div>
                 )}
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
@@ -1332,9 +1361,6 @@ export default function DashboardPage() {
             </SectionCard>
           </div>
 
-          {/* ─── Treatment Cascade (shared backend calculation) ─── */}
-          <TreatmentCascadeCard data={cascadeData} failed={!!failed.cascade} />
-
           {/* ─── 7. Demographics — Sex + Treatment Outcomes ─── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Sex Distribution */}
@@ -1401,10 +1427,10 @@ export default function DashboardPage() {
 
             {/* Treatment Outcomes */}
             <SectionCard
-              title="Case Status / Outcome Distribution"
+              title="Treatment Outcomes & Case Status"
               insight={outcomeInsight(outcomeChartData, { nameKey: 'outcome', valueKey: 'count' })}
               iconColor="#10B981"
-              description="Distribution of reported TB records by the Outcome/Status values recorded in the source data."
+              description="Final treatment outcomes, with cases still diagnosed or on treatment shown separately."
               action="View Analytics"
               actionTo="/analytics"
             >
@@ -1413,51 +1439,18 @@ export default function DashboardPage() {
                   <i className="ri-cloud-off-line text-xl" style={{ color: '#B07070' }} />
                   <p className="text-xs" style={{ color: '#B07070' }}>Outcome data could not be loaded.</p>
                 </div>
-              ) : outcomeChartData.length > 0 ? (
-                <div className="flex items-center justify-center gap-6">
-                  <div className="w-[180px] h-[180px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={outcomeChartData.map(e => ({ name: e.outcome, value: e.count }))}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={45}
-                          outerRadius={80}
-                          paddingAngle={2}
-                          dataKey="value"
-                        >
-                          {outcomeChartData.map((entry, i) => (
-                            <Cell key={i} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip formatter={(value) => value.toLocaleString()} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="space-y-1.5">
-                    {outcomeChartData.map((entry) => (
-                      <div key={entry.outcome} className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: entry.color }} />
-                        <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>
-                          {entry.outcome?.length > 16 ? entry.outcome.slice(0, 14) + '...' : entry.outcome}
-                        </span>
-                        <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{entry.count}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-16 gap-2">
-                  <i className="ri-pie-chart-2-line text-xl" style={{ color: '#CBD5E1' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>No outcome data available.</p>
-                </div>
+                <OutcomeStatusPanel
+                  outcomes={Object.fromEntries(outcomeChartData.map((e) => [e.outcome, e.count]))}
+                  diagnosed={statusSummary?.diagnosed_count || 0}
+                  onTreatment={statusSummary?.on_treatment_count || 0}
+                />
               )}
               {outcomeChart.excluded > 0 && (
                 <p className="text-[10px] mt-3" style={{ color: '#94A3B8' }}>
                   Showing {outcomeChart.chartTotal.toLocaleString()} of {totalCases.total.toLocaleString()} records.
                   {' '}{outcomeChart.excluded.toLocaleString()} record{outcomeChart.excluded === 1 ? '' : 's'} carry a
-                  status that is not one of the verified source Outcome/Status categories and are not charted.
+                  source value without a final treatment outcome and are not charted.
                 </p>
               )}
             </SectionCard>

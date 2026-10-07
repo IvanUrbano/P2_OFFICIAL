@@ -9,6 +9,7 @@ import {
 import API from '../api/axios';
 import AiInsightPanel from '../components/AiInsightPanel';
 import FilterSelect from '../components/FilterSelect';
+import RiskClassificationGuide from '../components/RiskClassificationGuide';
 import { getGisInsight } from '../services/insightService';
 
 const RISK_COLORS = {
@@ -24,40 +25,216 @@ const RISK_COLORS = {
 const RISK_LABELS = { High: 'High', Medium: 'Moderate', Low: 'Low', 'No Data': 'No Data' };
 const riskLabel = (cls) => RISK_LABELS[cls] || cls || 'No Data';
 
-// Human-readable labels for the actual 8 RF input features (see
-// BACKEND/tbinsight/pipeline.js:buildFeatureRow / ML_SERVICE/rf_classifier.py:FEATURES).
+// Human-readable labels for the actual 7 RF input features (see
+// BACKEND/tbinsight/pipeline.js:buildFeatureRow / ML_SERVICE/rf_classifier.py:FEATURES
+// — there were 8 before historical_bias, the past ARIMA error, was removed).
 // These are the model's real inputs, shown as "indicators used" — never as
 // a causal "this factor caused High Risk" claim.
 const RF_FEATURE_LABELS = {
-  rolling_12m_incidence: 'Rolling 12-Month Incidence',
-  recent_trend: 'Recent Case Trend',
+  rolling_12m_incidence: 'TB Incidence in the Past 12 Months',
+  recent_trend: 'Recent TB Case Trend',
   seasonality_flag: 'Seasonal Pattern',
-  lag_1m: '1-Month Lag Cases',
-  lag_2m: '2-Month Lag Cases',
-  lag_3m: '3-Month Lag Cases',
-  neighbor_risk: 'Bordering Barangays Risk',
+  lag_1m: 'Cases in Recent Months',
+  neighbor_risk: 'Nearby Barangay Risk',
 };
 const RF_FEATURE_ORDER = [
-  'rolling_12m_incidence', 'recent_trend', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk', 'seasonality_flag',
+  'rolling_12m_incidence', 'recent_trend', 'lag_1m', 'neighbor_risk', 'seasonality_flag',
 ];
 function formatRfFeatureValue(key, value) {
   if (value == null) return 'N/A';
   switch (key) {
-    case 'rolling_12m_incidence': return `${Number(value).toFixed(1)} / 100k`;
-    case 'recent_trend': return `${value > 0 ? '+' : ''}${Number(value).toFixed(2)} cases/mo`;
-    case 'seasonality_flag': return value ? 'Detected' : 'Not detected';
+    case 'rolling_12m_incidence': return `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 1 })} cases per 100,000`;
+    case 'recent_trend': {
+      const trend = Number(value);
+      if (trend === 0) return 'Stable';
+      const direction = trend < 0 ? 'decreasing' : 'increasing';
+      return Math.abs(trend) < 0.5
+        ? `Slightly ${direction}`
+        : `${direction[0].toUpperCase()}${direction.slice(1)}`;
+    }
+    case 'seasonality_flag': return value ? 'Pattern detected' : 'None detected';
     case 'neighbor_risk': return `${Math.round(Number(value) * 100)}%`;
     default: return String(Math.round(Number(value)));
   }
 }
 
+function formatRecentMonthCases(features) {
+  return [
+    features.lag_3m,
+    features.lag_2m,
+    features.lag_1m,
+  ]
+    .filter((value, index) => (
+      ['lag_3m', 'lag_2m', 'lag_1m'][index] in features
+    ))
+    .map(value => value == null ? 'N/A' : Math.round(Number(value)).toLocaleString())
+    .join(' → ')
+    .concat(' cases');
+}
+
+/* ── Qualitative bands for the "Why {Risk}?" panel ──
+ *
+ * The model gives no per-factor importance, so a factor can only be
+ * described IN COMPARISON with the other barangays in the SAME risk
+ * snapshot: tertiles of that factor's cross-section. Deliberately NOT
+ * fixed cutoffs (they would be invented numbers this dataset never
+ * validated) and NEVER phrased as "this factor caused the classification".
+ *
+ * seasonality_flag is binary and recent_trend is signed, so neither is
+ * banded — see describeFeatureBand. historical_bias (past forecast error)
+ * is not banded either: it was removed from the RF feature set
+ * (ML_SERVICE/rf_classifier.py) and lives only in the legacy index.
+ */
+const RF_BAND_TEXT = {
+  rolling_12m_incidence: ['Lower than most barangays', 'About typical', 'Higher than most barangays'],
+  recent_cases: ['Lower than usual', 'About typical', 'Higher than usual'],
+  neighbor_risk: ['Low', 'Moderate', 'High'],
+};
+
+function recentCaseAverage(features) {
+  const counts = ['lag_1m', 'lag_2m', 'lag_3m']
+    .map(key => features[key] == null ? NaN : Number(features[key]))
+    .filter(Number.isFinite);
+  return counts.length ? counts.reduce((sum, count) => sum + count, 0) / counts.length : NaN;
+}
+
+function computeFeatureBands(features) {
+  const rows = (features || []).map(f => f?.properties?.rf_features).filter(Boolean);
+  // Tertiles over two rows are noise; without a real cross-section the
+  // honest output is no band at all (describeFeatureBand then returns null
+  // and only the raw value is rendered).
+  if (rows.length < 3) return null;
+  const bands = {};
+  for (const key of Object.keys(RF_BAND_TEXT)) {
+    const values = rows
+      .map(r => key === 'recent_cases'
+        ? recentCaseAverage(r)
+        : r[key] == null ? NaN : Number(r[key]))
+      .filter(v => Number.isFinite(v))
+      .sort((a, b) => a - b);
+    if (values.length < 3) continue;
+    bands[key] = {
+      lo: values[Math.floor(values.length / 3)],
+      hi: values[Math.floor((2 * values.length) / 3)],
+    };
+  }
+  return Object.keys(bands).length ? bands : null;
+}
+
+function describeFeatureBand(key, value, bands) {
+  if (value == null || !Number.isFinite(Number(value))) return null;
+  const b = bands?.[key];
+  const text = RF_BAND_TEXT[key];
+  if (!b || !text) return null;
+  const v = Number(value);
+  if (v > b.hi) return { text: text[2], tone: 'high' };
+  if (v < b.lo) return { text: text[0], tone: 'low' };
+  return { text: text[1], tone: 'mid' };
+}
+
+function describeRfFeature(key, value, features, bands) {
+  if (key === 'recent_trend' && value != null && Number.isFinite(Number(value))) {
+    const trend = Number(value);
+    const amount = Math.abs(trend).toFixed(2);
+    if (trend < 0) return `Cases have decreased by about ${amount} cases per month recently.`;
+    if (trend > 0) return `Cases have increased by about ${amount} cases per month recently.`;
+    return 'Recent case counts have remained about the same.';
+  }
+  if (key === 'seasonality_flag') {
+    if (value == null) return 'Seasonal pattern information is not available for this assessment.';
+    return Number(value) ? 'A recurring seasonal pattern was identified in the available data.' : 'No clear recurring seasonal pattern was identified in the available data.';
+  }
+
+  const comparisonKey = key === 'lag_1m' ? 'recent_cases' : key;
+  const comparisonValue = key === 'lag_1m' ? recentCaseAverage(features) : value;
+  const band = describeFeatureBand(comparisonKey, comparisonValue, bands);
+  if (!band) return 'Comparison with other barangays is not available for this assessment.';
+
+  if (key === 'rolling_12m_incidence') {
+    if (band.text === 'Lower than most barangays') return 'Lower than most Pasig barangays.';
+    if (band.text === 'Higher than most barangays') return 'Higher than most Pasig barangays.';
+    return 'About typical compared with other Pasig barangays.';
+  }
+  if (key === 'lag_1m') {
+    return `Recent monthly case counts are ${band.text.toLowerCase()} compared with other Pasig barangays.`;
+  }
+  if (key === 'neighbor_risk') {
+    const level = band.text.toLowerCase();
+    return `Risk among bordering barangays is relatively ${level}.`;
+  }
+  return '';
+}
+
+function _joinClauses(list) {
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} and ${list[1]}`;
+  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
+}
+
+/**
+ * The two-sentence "Barangay Summary". Pure and fully template-driven —
+ * every clause is omitted when its value is unavailable, so the text can
+ * never assert a number the page does not actually have.
+ *
+ * Sentence 1 states what was recorded and (when a snapshot exists) how it
+ * is classified. Sentence 2 lists only the figures that are present.
+ */
+function buildBarangaySummary({
+  name, filterYear, availableYears, totalCases,
+  riskClass, riskLabelText, modelType,
+  incidence, onTreatment, tsrRate, tsrCohortYear, cfrRate,
+}) {
+  const cases = totalCases != null ? Number(totalCases).toLocaleString() : '—';
+  const span = availableYears && availableYears.length > 1
+    ? `${availableYears[availableYears.length - 1]}\u2013${availableYears[0]}`
+    : null;
+  const classified = !!riskClass && riskClass !== 'No Data';
+
+  let head;
+  if (filterYear) {
+    head = `${name} recorded ${cases} TB cases in ${filterYear}`;
+  } else {
+    head = `${name} recorded ${cases} TB cases across all available years${span ? ` (${span})` : ''}`;
+  }
+
+  if (classified) {
+    head += ` and is currently classified as ${riskLabelText} Risk based on the model's assessment of recent and historical indicators.`;
+  } else if (filterYear) {
+    head += `. No risk assessment has been computed for ${filterYear} yet.`;
+  } else {
+    head += '. No risk assessment is available for this barangay.';
+  }
+  if (classified && modelType && modelType !== 'random_forest') {
+    head += ' This classification came from a rule-based fallback, not the trained Random Forest model.';
+  }
+
+  const parts = [];
+  if (incidence != null && Number.isFinite(Number(incidence))) {
+    parts.push(`incidence was ${Number(incidence).toLocaleString()} per 100,000`);
+  }
+  if (onTreatment != null && Number.isFinite(Number(onTreatment))) {
+    parts.push(`${Number(onTreatment).toLocaleString()} cases are currently on treatment`);
+  }
+  if (tsrRate != null && Number.isFinite(Number(tsrRate))) {
+    parts.push(tsrCohortYear
+      ? `treatment success was ${tsrRate}% for the ${tsrCohortYear} cohort`
+      : `treatment success was ${tsrRate}%`);
+  }
+  if (cfrRate != null && Number.isFinite(Number(cfrRate))) {
+    parts.push(`the fatality rate was ${cfrRate}%`);
+  }
+  if (!parts.length) return head;
+
+  const body = _joinClauses(parts);
+  return `${head} ${body.charAt(0).toUpperCase()}${body.slice(1)}.`;
+}
+
 const OUTCOME_COLORS = {
   'CURED': '#047857',
   'TREATMENT COMPLETED': '#2E6FAF',
-  'ON TREATMENT': '#92400E',
-  'FAILED': '#991B1B',
+  'TREATMENT FAILED': '#991B1B',
   'DIED': '#991B1B',
-  'LOST TO FF-UP': '#6B7280',
+  'LOST TO FOLLOW-UP': '#6B7280',
   'EXCLUDED': '#64748B',
   'NOT EVALUATED': '#94A3B8',
   'DIAGNOSED': '#0369A1',
@@ -170,6 +347,7 @@ export default function GisMap() {
   const [barangayDetail, setBarangayDetail] = useState(null);
   const [barangayDetailLoading, setBarangayDetailLoading] = useState(false);
   const [barangayTsr, setBarangayTsr] = useState(null);
+  const [barangayCfr, setBarangayCfr] = useState(null);
   const [barangayInterventionCount, setBarangayInterventionCount] = useState(0);
   const [hoveredBarangay, setHoveredBarangay] = useState(null);
   // Legacy weighted risk_score breakdown — hidden by default (see item 12 of
@@ -186,6 +364,9 @@ export default function GisMap() {
   const [gisInsightLoading, setGisInsightLoading] = useState(false);
   const [gisInsightError, setGisInsightError] = useState(null);
   const [pipelineRun, setPipelineRun] = useState(null);
+  // Latest completed pipeline run — carries the threshold cut points and their
+  // source, shown read-only in the modal's Why panel.
+  const [latestRun, setLatestRun] = useState(null);
   const [pipelineRefreshTick, setPipelineRefreshTick] = useState(0);
   const wasRunningRef = useRef(false);
   const closeButtonRef = useRef(null);
@@ -194,7 +375,7 @@ export default function GisMap() {
     try {
       setGisInsightLoading(true);
       setGisInsightError(null);
-      const insight = await getGisInsight({ barangay: filterBarangay || undefined });
+      const insight = await getGisInsight({ barangay: filterBarangay || undefined, year: filterYear || undefined });
       setGisInsight(insight);
     } catch (err) {
       if (import.meta.env.DEV) console.error('GIS insight generation failed:', err);
@@ -202,7 +383,7 @@ export default function GisMap() {
     } finally {
       setGisInsightLoading(false);
     }
-  }, [filterBarangay]);
+  }, [filterBarangay, filterYear]);
 
   // Auto-focus close button when modal opens and handle Escape key
   useEffect(() => {
@@ -227,7 +408,7 @@ export default function GisMap() {
       }
     })();
     return () => controller.abort();
-  }, []);
+  }, [pipelineRefreshTick]);
 
   // Shared fetch helpers (used by both useEffects and handleRefresh)
   const fetchGeoData = useCallback(async (signal) => {
@@ -294,6 +475,7 @@ export default function GisMap() {
         const res = await API.get('/api/tb/pipeline/status', { signal: controller.signal });
         const cur = res.data?.current_run || null;
         setPipelineRun(cur);
+        setLatestRun(res.data?.latest_run || null);
         running = !!(cur && cur.running);
         if (wasRunningRef.current && !running) setPipelineRefreshTick(t => t + 1);
         wasRunningRef.current = running;
@@ -333,6 +515,9 @@ export default function GisMap() {
   }, [loading]);
 
   // Filtered features based on active filters
+  const availableRiskLevels = React.useMemo(() => [...new Set((data?.features || [])
+    .map(f => f.properties?.risk_class).filter(Boolean))]
+    .sort((a, b) => ['High', 'Medium', 'Low', 'No Data'].indexOf(a) - ['High', 'Medium', 'Low', 'No Data'].indexOf(b)), [data]);
   const filteredFeatures = React.useMemo(() => {
     if (!data?.features) return [];
     let features = data.features;
@@ -405,12 +590,16 @@ export default function GisMap() {
     const merged = { ...geoProps, ...b };
     const riskColor = RISK_COLORS[merged.risk_class] || '#64748B';
     const totalOutcomeCases = outcomes.reduce((s, o) => s + (o.total || 0), 0);
-    const activeCases = outcomes.find(o => o.outcome_status === 'ON TREATMENT')?.total || 0;
+    const onTreatmentCases = barangayDetail?.case_status_counts?.find(s => s.case_status === 'ON TREATMENT')?.total || 0;
     // Treatment Success Rate: the cohort-based figure fetched from
     // GET /api/tb/treatment-success-rate (see barangayTsr) — NOT computed
     // from this barangay's outcomes breakdown, which is diagnosis-date
     // filtered and a different metric under the same label.
     const successRate = barangayTsr?.successRate != null ? barangayTsr.successRate.toFixed(1) : '—';
+    // Case Fatality Rate from GET /api/tb/case-fatality-rate — the single
+    // shared calculation (DIED over evaluated terminal outcomes). Null when
+    // no case in scope has reached a terminal outcome yet (never rendered 0%).
+    const fatalityRate = barangayCfr?.rate != null ? barangayCfr.rate.toFixed(1) : null;
     const trendChartData = monthly.slice(-12).map(m => ({
       label: m.month ? new Date(m.month.includes('T') ? m.month : m.month + 'T00:00:00').toLocaleString('default', { month: 'short', year: '2-digit' }) : '',
       cases: Number(m.case_count ?? 0),
@@ -426,9 +615,7 @@ export default function GisMap() {
     const outcomeChartData = outcomes
       .map(o => {
         const raw = (o.outcome_status || '').toUpperCase();
-        const display = raw === 'TREATMENT FAILED' ? 'FAILED'
-          : raw === 'LOST TO FOLLOW-UP' ? 'LOST TO FF-UP'
-          : raw;
+        const display = raw;
         return { display, value: o.total };
       })
       .filter(o => o.display && OUTCOME_COLORS[o.display])
@@ -437,31 +624,72 @@ export default function GisMap() {
         value: o.value,
         color: OUTCOME_COLORS[o.display] || '#64748B',
       }));
-    return { merged, riskColor, totalOutcomeCases, activeCases, successRate, trendChartData, demoChartData, outcomeChartData };
-  }, [selectedBarangayName, barangayDetail, barangayDetailLoading, monthlyByBarangay, data, barangayTsr]);
+    // Real border-sharing neighbour names, carried on the GeoJSON feature.
+    // Null (not []) when the backend had no adjacency map, so the UI can
+    // hide the section instead of inventing a neighbour list.
+    const neighbours = Array.isArray(geoProps.neighbours) ? geoProps.neighbours : null;
+    return { merged, riskColor, totalOutcomeCases, onTreatmentCases, successRate, fatalityRate, trendChartData, demoChartData, outcomeChartData, neighbours };
+  }, [selectedBarangayName, barangayDetail, barangayDetailLoading, monthlyByBarangay, data, barangayTsr, barangayCfr]);
 
   const hasActiveFilters = filterBarangay || filterRiskLevel || filterYear;
 
-  // Assessment year of the risk snapshot. Snapshots are keyed at
-  // (assessment year + 1)-01-01 and serialized as an ISO instant
-  // ("2025-12-31T16:00:00.000Z" = local midnight Jan 1, 2026 in Pasig,
-  // UTC+8). Shifting by +8h before reading the UTC year makes this correct
-  // in any browser timezone: 2026 - 1 = 2025, the year the snapshot's
-  // data actually covers. Also avoids the old `period + 'T00:00:00'`
-  // concatenation, which produced an Invalid Date on ISO strings.
-  const riskAssessmentYear = React.useMemo(() => {
-    const p = data?.meta?.risk_assessment_period;
-    if (!p) return null;
-    const d = new Date(p);
-    if (Number.isNaN(d.getTime())) return null;
-    return new Date(d.getTime() + 8 * 3600 * 1000).getUTCFullYear() - 1;
+  // Data year is the year used to train the snapshot. Assessment year is the
+  // calendar year of its stored prediction period; these can differ.
+  const riskAssessmentYear = data?.meta?.assessment_year ?? null;
+  const riskDataYear = data?.meta?.data_year ?? null;
+  const riskAssessmentPeriod = data?.meta?.assessment_period ?? null;
+
+  // Period shown next to every snapshot-derived label. A specific year shows
+  // that year's own assessment (or says plainly that none was computed yet);
+  // "All Years" shows which snapshot the screen is actually using instead of
+  // implying the risk figures span the whole dataset.
+  const riskPeriodLabel = React.useMemo(() => {
+    if (filterYear) {
+      return data?.meta?.requested_year_has_snapshot === false
+        ? 'No Snapshot'
+        : `${riskAssessmentYear ?? 'Unknown'} Assessment (Data ${riskDataYear ?? filterYear})`;
+    }
+    return riskAssessmentYear != null ? `${riskAssessmentYear} Assessment` : 'No Snapshot';
+  }, [filterYear, data, riskAssessmentYear, riskDataYear]);
+
+  // The risk band cut points live on the latest completed pipeline run, so
+  // they are only true for that run's own snapshot. Showing them next to an
+  // older year's classification would misattribute another year's thresholds.
+  const thresholdsForSnapshot = React.useMemo(() => {
+    const cfg = latestRun?.config;
+    if (!cfg?.thresholds || riskAssessmentYear == null) return null;
+    const runYear = Number(String(cfg.period || '').slice(0, 4));
+    if (!Number.isInteger(runYear)) return null;
+    if (runYear !== riskAssessmentYear) return null;
+    return {
+      thresholds: cfg.thresholds,
+      source: cfg.thresholdSource,
+      percentiles: cfg.thresholdPercentiles,
+    };
+  }, [latestRun, riskAssessmentYear]);
+
+  // Tertile bands per RF factor, computed over ALL barangays in the snapshot
+  // on screen (never the filtered subset — filtering by Risk Level would
+  // narrow the cross-section to one band and flatten every descriptor).
+  const featureBands = React.useMemo(
+    () => computeFeatureBands(data?.features),
+    [data]
+  );
+
+  // name -> risk_class of the snapshot on screen. Used to resolve the
+  // neighbour names carried in the GeoJSON to each neighbour's OWN
+  // classification for the same period — never a copied or re-derived label.
+  const riskByBarangay = React.useMemo(() => {
+    const map = {};
+    for (const f of data?.features || []) {
+      const p = f.properties;
+      if (p?.name) map[p.name] = p.risk_class || 'No Data';
+    }
+    return map;
   }, [data]);
 
-  // Whether the snapshot on screen came from the rule-based fallback rather
-  // than the trained Random Forest. A year with no population reference of its
-  // own produces no usable training rows, so its snapshot degrades to the
-  // fallback — a real difference in reliability that was previously only
-  // visible after opening an individual barangay.
+  // Whether any saved classifications in this snapshot used the rule-based
+  // fallback. Keep the saved method visible without guessing its cause.
   const snapshotClassifier = React.useMemo(() => {
     const classified = (data?.features || [])
       .map(f => f.properties?.model_type)
@@ -672,34 +900,60 @@ export default function GisMap() {
 
   // Fetch barangay detail data when a barangay is selected
   useEffect(() => {
-    if (!selectedBarangayName) { setBarangayDetail(null); setBarangayInterventionCount(0); setBarangayTsr(null); return; }
+    if (!selectedBarangayName) { setBarangayDetail(null); setBarangayInterventionCount(0); setBarangayTsr(null); setBarangayCfr(null); return; }
     const controller = new AbortController();
     (async () => {
       setBarangayDetailLoading(true);
       try {
-        const [detailRes, interventionsRes, tsrRes] = await Promise.all([
-          API.get(`/api/tb/dashboard/barangay/${encodeURIComponent(selectedBarangayName)}`, { signal: controller.signal }),
+        const [detailRes, interventionsRes, tsrRes, cfrRes] = await Promise.all([
+          // ?year scopes case_status_counts (On Treatment) to the selected
+          // diagnosis year — see /dashboard/barangay/:name. Monthly,
+          // demographics and outcomes stay all-time by design.
+          API.get(`/api/tb/dashboard/barangay/${encodeURIComponent(selectedBarangayName)}`, {
+            params: filterYear ? { year: filterYear } : {},
+            signal: controller.signal,
+          }),
           API.get('/api/tb/interventions', { params: { barangay: selectedBarangayName, limit: 1 }, signal: controller.signal }),
           // Treatment Success Rate: from GET /api/tb/treatment-success-rate
           // (the cohort-based methodology). Previously computed here from
           // this barangay's outcomes breakdown (diagnosis-date filtered, no
-          // cohort) — a DIFFERENT metric under the same label.
-          API.get('/api/tb/treatment-success-rate', { params: { barangay: selectedBarangayName }, signal: controller.signal })
+          // cohort) — a DIFFERENT metric under the same label. `year` must be
+          // sent: without it the backend defaults reportingYear to the current
+          // calendar year, so the cohort would ignore the map's Year filter.
+          API.get('/api/tb/treatment-success-rate', {
+            params: {
+              barangay: selectedBarangayName,
+              ...(filterYear ? { year: filterYear } : {}),
+            },
+            signal: controller.signal,
+          })
+            .catch(() => ({ data: null })),
+          // Case Fatality Rate: the shared backend calculation (DIED over
+          // evaluated terminal outcomes) scoped to this barangay, and to the
+          // selected diagnosis year when one is chosen.
+          API.get('/api/tb/case-fatality-rate', {
+            params: {
+              barangay: selectedBarangayName,
+              ...(filterYear ? { year: filterYear } : {}),
+            },
+            signal: controller.signal,
+          })
             .catch(() => ({ data: null })),
         ]);
         setBarangayDetail(detailRes.data);
         setBarangayInterventionCount(interventionsRes.data.pagination?.total || 0);
         setBarangayTsr(tsrRes.data);
+        setBarangayCfr(cfrRes.data);
       } catch (err) {
         if (err.name !== 'CanceledError' && err.name !== 'AbortError') {
-          setBarangayDetail(null); setBarangayInterventionCount(0); setBarangayTsr(null);
+          setBarangayDetail(null); setBarangayInterventionCount(0); setBarangayTsr(null); setBarangayCfr(null);
         }
       } finally {
         if (!controller.signal.aborted) setBarangayDetailLoading(false);
       }
     })();
     return () => controller.abort();
-  }, [selectedBarangayName]);
+  }, [selectedBarangayName, filterYear]);
 
   // Build timeline data: { 'YYYY-MM': { barangayName: caseCount } }
   const timelineMonths = React.useMemo(() => {
@@ -728,11 +982,13 @@ export default function GisMap() {
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [geoData, grouped] = await Promise.all([
+      const [geoData, grouped, yearsRes] = await Promise.all([
         fetchGeoData(),
         fetchMonthlyData(),
+        API.get('/api/tb/gis/years').catch(() => null),
       ]);
       setData(geoData);
+      if (yearsRes) setAvailableYears(yearsRes.data.years || []);
       setError(null);
       setMonthlyByBarangay(grouped);
     } catch {
@@ -741,6 +997,11 @@ export default function GisMap() {
       setRefreshing(false);
     }
   }, [fetchGeoData, fetchMonthlyData]);
+
+  useEffect(() => {
+    window.addEventListener('focus', handleRefresh);
+    return () => window.removeEventListener('focus', handleRefresh);
+  }, [handleRefresh]);
 
   // Timeline animation
   const animateTimeline = useCallback(() => {
@@ -846,9 +1107,7 @@ export default function GisMap() {
 
             <FilterSelect label="Risk" value={filterRiskLevel} onChange={(v) => { setFilterRiskLevel(v); setSelectedBarangayName(null); }}>
               <option value="">All</option>
-              <option value="High">High Risk</option>
-              <option value="Medium">Moderate</option>
-              <option value="Low">Low Risk</option>
+              {availableRiskLevels.map(level => <option key={level} value={level}>{level === 'No Data' ? 'No Assessment' : `${riskLabel(level)} Risk`}</option>)}
             </FilterSelect>
 
             <FilterSelect label="Year" value={filterYear} onChange={(v) => { setFilterYear(v); setSelectedBarangayName(null); }}>
@@ -856,13 +1115,8 @@ export default function GisMap() {
               {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
             </FilterSelect>
 
-            {/* Risk classification is a per-year snapshot: selecting a Year
-                shows THAT year's own assessment (using only data through
-                that year — see the admin "Backfill Historical Risk
-                Snapshots" action), never a different year's data
-                relabeled. "All Years" shows the latest snapshot. If a
-                specific year has no snapshot computed yet, say so plainly
-                instead of implying one is missing due to an error. */}
+            {/* GIS Year selects the snapshot trained on that year's data.
+                Assessment year and prediction period are shown separately. */}
             {(() => {
               if (!filterYear) {
                 return data?.meta?.risk_assessment_period ? (
@@ -871,7 +1125,7 @@ export default function GisMap() {
                     style={{ background: '#F8FAFC', color: '#64748B', border: '1px solid #E2E8F0' }}
                     title="Showing the most recent risk assessment. Select a specific Year to see that year's own snapshot."
                   >
-                    Risk Assessment: Latest ({riskAssessmentYear ?? '—'})
+                    Data Year {riskDataYear ?? '—'} · Assessment Year {riskAssessmentYear ?? '—'} · Prediction Period {riskAssessmentPeriod ?? '—'}
                   </span>
                 ) : null;
               }
@@ -880,7 +1134,7 @@ export default function GisMap() {
                   <span
                     className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
                     style={{ background: '#FFFBEB', color: '#B45309', border: '1px solid #FDE68A' }}
-                    title="An administrator can compute this from Forecasting > Backfill Historical Risk Snapshots."
+                    title="An administrator can compute this from Settings > Backfill Historical Risk Snapshots."
                   >
                     No risk snapshot for {filterYear} yet
                   </span>
@@ -891,7 +1145,7 @@ export default function GisMap() {
                   className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
                   style={{ background: '#F8FAFC', color: '#64748B', border: '1px solid #E2E8F0' }}
                 >
-                  Risk Assessment for {filterYear}
+                  Data Year {riskDataYear ?? '—'} · Assessment Year {riskAssessmentYear} · Prediction Period {riskAssessmentPeriod ?? '—'}
                 </span>
               ) : null;
             })()}
@@ -903,11 +1157,7 @@ export default function GisMap() {
               <span
                 className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
                 style={{ background: '#FFFBEB', color: '#B45309', border: '1px solid #FDE68A' }}
-                title={
-                  'The Random Forest model could not be trained for this period — typically because the ' +
-                  'selected year has no matching population reference, leaving no usable training data. ' +
-                  'These classifications came from incidence thresholds alone and carry no confidence score.'
-                }
+                title="This saved assessment used incidence thresholds because no Random Forest result was available for these barangays. Check the pipeline run status and training row count before rerunning the assessment. Rule-based results have no model confidence score."
               >
                 <i className="ri-error-warning-line mr-1" />
                 {snapshotClassifier.allRuleBased
@@ -1122,9 +1372,9 @@ export default function GisMap() {
 
             {/* 2. TB Cases */}
             <div className="flex flex-col px-5 py-5 relative">
-              <div className="flex items-center gap-2">
+              <div className="flex items-start gap-2">
                 <i className="ri-stethoscope-line text-sm" style={{ color: '#B8956A' }} />
-                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>TB Cases</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>TB Cases ({filterYear || 'All Years'})</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
               <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{stats.totalCases.toLocaleString()}</p>
@@ -1133,9 +1383,9 @@ export default function GisMap() {
 
             {/* 3. High-Risk Barangays */}
             <div className="flex flex-col px-5 py-5 relative">
-              <div className="flex items-center gap-2">
+              <div className="flex items-start gap-2">
                 <i className="ri-alarm-warning-line text-sm" style={{ color: '#C4886A' }} />
-                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk Barangays</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }} title="Risk classification is a per-year Random Forest snapshot, not a live figure.">High-Risk Barangays ({riskPeriodLabel})</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
               <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
@@ -1146,9 +1396,9 @@ export default function GisMap() {
 
             {/* 4. Case Density */}
             <div className="flex flex-col px-5 py-5">
-              <div className="flex items-center gap-2">
+              <div className="flex items-start gap-2">
                 <i className="ri-node-tree text-sm" style={{ color: '#6B9E9E' }} />
-                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Density</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Case Density ({filterYear || 'All Years'})</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
               <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{(stats.totalCases / PASIG_AREA_KM2).toFixed(1)}</p>
@@ -1171,9 +1421,11 @@ export default function GisMap() {
         // All Years drops the per-100k column entirely (every row would be
         // N/A — 30 rows of N/A is clutter without information). A specific
         // year shows the same-year incidence normally.
+        const showConfidenceColumn = (data?.features || []).some(f =>
+          f.properties?.model_type === 'random_forest' && f.properties.classification_confidence != null);
         const rankCols = !filterYear
-          ? '32px 150px 118px 132px 70px'
-          : '32px 150px 104px 112px 96px 70px';
+          ? `32px 150px 118px ${showConfidenceColumn ? '132px ' : ''}70px`
+          : `32px 150px 104px ${showConfidenceColumn ? '112px ' : ''}96px 70px`;
 
         return (
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E8ECF1', boxShadow: '0 4px 24px rgba(15,45,82,0.06)' }}>
@@ -1210,7 +1462,7 @@ export default function GisMap() {
                   (a fabricated year range would be worse than none). */}
               {!filterYear && data?.meta?.risk_assessment_period && caseYearRange && (
                 <p className="text-[9px] font-medium mt-2" style={{ color: '#94A3B8' }}>
-                  All Years combines available TB records from {caseYearRange}. Risk classification and confidence are based on the latest available risk assessment ({riskAssessmentYear}). Incidence per 100,000 is available only when a specific year is selected.
+                  All Years combines available TB records from {caseYearRange}. Risk classification is based on the latest available risk assessment ({riskAssessmentYear}). Incidence per 100,000 is available only when a specific year is selected.
                 </p>
               )}
             </div>
@@ -1232,7 +1484,7 @@ export default function GisMap() {
                         <span>Rank</span>
                         <span>Barangay</span>
                         <span>{!filterYear ? `Latest Risk Assessment (${riskAssessmentYear ?? '—'})` : 'Risk Class'}</span>
-                        <span className="text-right">{!filterYear ? 'Latest Classification Confidence' : 'Classification Confidence'}</span>
+                        {showConfidenceColumn && <span className="text-right">{!filterYear ? 'Latest Classification Confidence' : 'Classification Confidence'}</span>}
                         {filterYear && <span className="text-right">per 100k</span>}
                         <span className="text-right">Actions</span>
                       </div>
@@ -1281,13 +1533,13 @@ export default function GisMap() {
                                       missing for the selected year. */}
                                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: `${sec.color}15`, color: sec.color, border: `1px solid ${sec.color}40` }}>{sec.key === 'No Data' ? 'No Assessment' : `${riskLabel(b.risk_class)} Risk`}</span>
                                 </div>
-                                <div className="text-right" title="How strongly the Random Forest model supports the assigned risk classification. This is not the probability of developing TB.">
+                                {showConfidenceColumn && <div className="text-right" title={hasRfConfidence ? 'How strongly the Random Forest model supports the assigned risk classification. This is not the probability of developing TB.' : undefined}>
                                   {hasRfConfidence ? (
                                     <span className="text-[13px] font-extrabold" style={{ color: sec.color }}>{Math.round(b.classification_confidence * 100)}%</span>
                                   ) : (
                                     <span className="text-[13px] font-bold" style={{ color: '#CBD5E1' }}>—</span>
                                   )}
-                                </div>
+                                </div>}
                                 {filterYear && (
                                   <div className="text-right">
                                     <span className="text-[13px] font-bold" style={{ color: b.incidence_per_100k != null ? '#475569' : '#94A3B8' }}>{b.incidence_per_100k != null ? formatNum(b.incidence_per_100k) : 'N/A'}</span>
@@ -1398,46 +1650,119 @@ export default function GisMap() {
 
             {/* Content */}
             {!barangayDetailLoading && modalData && (() => {
-              const { merged, riskColor, totalOutcomeCases, activeCases, successRate, trendChartData, demoChartData, outcomeChartData } = modalData;
+              const { merged, riskColor, totalOutcomeCases, onTreatmentCases, successRate, fatalityRate, trendChartData, demoChartData, outcomeChartData, neighbours } = modalData;
+
+              // 'No Data' means "not assessed" for this period — never
+              // "assessed and found to be low risk".
+              const hasSnapshot = !!merged.risk_class && merged.risk_class !== 'No Data';
+              const riskChipText = hasSnapshot ? `${riskLabel(merged.risk_class)} Risk` : 'No Assessment';
+              const confidencePct = merged.model_type === 'random_forest' && merged.classification_confidence != null
+                ? Math.round(merged.classification_confidence * 100)
+                : null;
+              const isRuleBased = !!merged.model_type && merged.model_type !== 'random_forest';
+
+              // ── Barangay Summary — template-driven, no figure is ever
+              // hard-coded: every clause drops out when its value is absent. ──
+              const barangaySummary = buildBarangaySummary({
+                name: merged.name || selectedBarangayName,
+                filterYear,
+                availableYears,
+                totalCases: merged.total_cases,
+                riskClass: merged.risk_class,
+                riskLabelText: riskLabel(merged.risk_class),
+                modelType: merged.model_type,
+                incidence: merged.incidence_per_100k,
+                onTreatment: onTreatmentCases,
+                tsrRate: successRate === '—' ? null : successRate,
+                tsrCohortYear: barangayTsr?.cohortYear ?? null,
+                cfrRate: barangayCfr?.rate ?? null,
+              });
+
+              // ── Neighboring Barangay Context ──
+              // Names come from the real shared-border adjacency map; each
+              // chip is that neighbour's OWN risk_class in the snapshot on
+              // screen (riskByBarangay). The selected barangay is excluded
+              // defensively. Null/empty neighbours -> the whole section is
+              // omitted rather than showing a fabricated list.
+              const selfName = merged.name || selectedBarangayName;
+              const neighbourRows = (neighbours || [])
+                .filter(n => n && n !== selfName)
+                .map(n => ({ name: n, riskClass: riskByBarangay[n] || 'No Data' }));
 
               // ── Unified View ──
               return (
                 <div className="px-6 py-5 space-y-5">
                   {/* Hero + Key Metrics */}
                   <div>
-                    <div className="flex items-center gap-3 mb-3">
-                      <div>
-                        <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>{merged.name || selectedBarangayName}</h3>
+                    <div className="mb-3">
+                      <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>{merged.name || selectedBarangayName}</h3>
+                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: `${riskColor}15`, color: riskColor }}>
                           <span className="w-1.5 h-1.5 rounded-full" style={{ background: riskColor }} />
-                          {riskLabel(merged.risk_class)}{merged.risk_class ? ' Risk' : ''}
+                          {riskChipText}
                         </span>
+                        {confidencePct != null && (
+                          <span
+                            className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold"
+                            style={{ background: '#EEF2FF', color: '#3730A3' }}
+                            title="The Random Forest model's own confidence that the label it chose is correct. It is not a patient's probability of developing TB, and not a prediction that residents will catch TB."
+                          >
+                            RF {confidencePct}%
+                          </span>
+                        )}
+                        {isRuleBased && (
+                          <span
+                            className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold"
+                            style={{ background: '#FFFBEB', color: '#92400E' }}
+                            title="Produced by a rule-based fallback on incidence thresholds, not the trained Random Forest model — a confidence figure is not meaningful for a rule-based result."
+                          >
+                            Rule-based fallback
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3 mt-3">
                       <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                        <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Total Cases</span>
+                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }}>Total Cases ({filterYear || 'All Years'})</span>
                         <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.total_cases)}</p>
+                      </div>
+                      <div className="rounded-lg p-3" style={{ background: '#F1F5F9', border: '1px solid #E2E8F0' }}>
+                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }}>On Treatment ({filterYear || 'All Years'})</span>
+                        <p className="text-xl font-extrabold mt-1" style={{ color: '#2563EB' }}>{onTreatmentCases}</p>
                       </div>
                       <div
                         className="rounded-lg p-3"
                         style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}
                         title={
+                          'Cases ÷ Population × 100,000. ' +
                           "Cases diagnosed in the selected year divided by that year's population, per 100,000. " +
                           'The model classifies risk from a 12-month rolling incidence instead, shown under ' +
-                          'Indicators Used — the two are measured differently and need not match.'
+                          'the Why panel below — the two are measured differently and need not match.'
                         }
                       >
-                        <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Incidence / 100k</span>
+                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }}>Incidence / 100k ({filterYear || 'All Years'})</span>
                         <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.incidence_per_100k)}</p>
                       </div>
-                       <div className="rounded-lg p-3" style={{ background: '#F1F5F9', border: '1px solid #E2E8F0' }}>
-                        <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Active Cases</span>
-                        <p className="text-xl font-extrabold mt-1" style={{ color: '#2563EB' }}>{activeCases}</p>
+                      <div className="rounded-lg p-3" style={{ background: successRate !== '—' && Number(successRate) >= 85 ? '#F1F8F1' : '#FDF8F0', border: `1px solid ${successRate !== '—' && Number(successRate) >= 85 ? '#D4EDDA' : '#F5E6CC'}` }}>
+                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }} title="Cohort-based: (Cured + Treatment Completed) among patients whose treatment started in the cohort year, over that year's total treatment cohort.">{barangayTsr?.cohortYear ? `Success Rate — ${barangayTsr.cohortYear} Cohort` : 'Success Rate'}</span>
+                        <p className="text-xl font-extrabold mt-1" style={{ color: successRate !== '—' && Number(successRate) >= 85 ? '#16A34A' : '#EA580C' }}>{successRate === '—' ? 'N/A' : `${successRate}%`}</p>
                       </div>
-                       <div className="rounded-lg p-3" style={{ background: successRate !== '—' && Number(successRate) >= 85 ? '#F1F8F1' : '#FDF8F0', border: `1px solid ${successRate !== '—' && Number(successRate) >= 85 ? '#D4EDDA' : '#F5E6CC'}` }}>
-                        <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Success Rate</span>
-                        <p className="text-xl font-extrabold mt-1" style={{ color: successRate !== '—' && Number(successRate) >= 85 ? '#16A34A' : '#EA580C' }}>{successRate}%</p>
+                      <div
+                        className="rounded-lg p-3"
+                        style={{ background: '#FDF2F2', border: '1px solid #F5D6D6' }}
+                        title="Died ÷ evaluated terminal outcomes (Cured, Treatment Completed, Died, Treatment Failed, Lost to Follow-up) among this barangay's cases diagnosed in the selected period. Cases still on treatment are excluded because they have not reached an outcome."
+                      >
+                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }}>Fatality Rate ({filterYear || 'All Years'})</span>
+                        <p className="text-xl font-extrabold mt-1" style={{ color: '#B91C1C' }}>{fatalityRate != null ? `${fatalityRate}%` : 'N/A'}</p>
+                      </div>
+                      <div
+                        className="rounded-lg p-3"
+                        style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}
+                        title="The assessment year is the year of the stored RF snapshot. Its training data year is shown separately."
+                      >
+                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }}>Assessment Year</span>
+                        <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{riskAssessmentYear ?? 'No Snapshot'}</p>
+                        {riskAssessmentPeriod && <p className="text-[10px] mt-1" style={{ color: '#64748B' }}>Data Year {riskDataYear} · Prediction Period {riskAssessmentPeriod}</p>}
                       </div>
                        <div className="rounded-lg p-3 col-span-2" style={{ background: '#F0F5F4', border: '1px solid #D1D5DB' }}>
                         <div className="flex items-center justify-between">
@@ -1461,50 +1786,15 @@ export default function GisMap() {
                     </div>
                   </div>
 
-                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
-
-                  {/* Cases Over Time + Month-over-Month */}
-                  {trendChartData.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Cases Over Time</h4>
-                      {(() => {
-                        const last = trendChartData[trendChartData.length - 1]?.cases || 0;
-                        const prev = trendChartData.length >= 2 ? (trendChartData[trendChartData.length - 2]?.cases || 0) : 0;
-                        const delta = prev > 0 ? (((last - prev) / prev) * 100).toFixed(1) : null;
-                        const isUp = last > prev;
-                        return delta !== null && prev > 0 ? (
-                          <div className="flex items-center gap-1.5 mb-3">
-                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: isUp ? '#FEF2F2' : '#ECFDF5', color: isUp ? '#991B1B' : '#047857' }}>
-                              <i className={`ri-arrow-${isUp ? 'up' : 'down'}-line text-[10px]`} />
-                              {delta}%
-                            </span>
-                            <span className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>vs previous month</span>
-                          </div>
-                        ) : null;
-                      })()}
-                      <div style={{ height: 180 }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={trendChartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-                            <defs>
-                              <linearGradient id="gisAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="#3B82F6" stopOpacity={0.2} />
-                                <stop offset="100%" stopColor="#3B82F6" stopOpacity={0.02} />
-                              </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                            <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#94A3B8' }} />
-                            <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} allowDecimals={false} />
-                            <Tooltip
-                              contentStyle={{ background: '#0F2D52', border: 'none', borderRadius: 8, color: '#fff', fontSize: 11 }}
-                              labelStyle={{ color: '#94A3B8', fontSize: 10 }}
-                              itemStyle={{ color: '#fff' }}
-                            />
-                            <Area type="monotone" dataKey="cases" stroke="#3B82F6" strokeWidth={2} fill="url(#gisAreaGrad)" name="Cases" />
-                          </AreaChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  )}
+                  {/* Barangay Summary — two sentences assembled by
+                      buildBarangaySummary() from the figures already on
+                      screen; every clause is dropped when its value is
+                      absent, so the prose can never claim a number the page
+                      does not actually have. */}
+                  <div className="rounded-lg p-4" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                    <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: '#64748B' }}>Barangay Summary</p>
+                    <p className="text-[12px] leading-relaxed" style={{ color: '#334155' }}>{barangaySummary}</p>
+                  </div>
 
                   <div style={{ borderTop: '1px solid #E2E8F0' }} />
 
@@ -1514,13 +1804,14 @@ export default function GisMap() {
                       analytical view, never the explanation for this. */}
                   {merged.risk_class && (
                     <div>
-                      {/* All Years shows the NEWEST snapshot only — label it as
-                          such (with the assessment year) so one year's RF
-                          output is never read as an all-history classification. */}
+                      {/* All Years shows the NEWEST snapshot only — the
+                          ({riskPeriodLabel}) suffix in the heading above says
+                          which assessment year that is, so one year's RF
+                          output is never read as an all-history
+                          classification. */}
                       <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
-                        {!filterYear && data?.meta?.risk_assessment_period
-                          ? `Latest Risk Assessment (${riskAssessmentYear ?? '—'})`
-                          : 'Risk Classification'}
+                        {hasSnapshot ? `Why ${riskChipText}?` : 'Risk Assessment'}
+                        <span style={{ color: '#94A3B8', fontWeight: 600 }}> ({riskPeriodLabel})</span>
                       </h4>
                       {/* Selected year has case data but no risk snapshot —
                           contextual note inside this section (the page-level
@@ -1531,52 +1822,79 @@ export default function GisMap() {
                           No risk assessment exists for {filterYear}. Case data and population information may still be available below.
                         </p>
                       )}
-                      <div className="grid grid-cols-2 gap-3 mb-3">
-                        <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                          <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Risk Level</span>
-                          <p className="text-lg font-extrabold mt-1" style={{ color: riskColor }}>
-                            {/* "No Assessment" not "No Data": case data may
-                                exist for this year — only the snapshot is
-                                missing, and the latest one is never
-                                substituted. */}
-                            {filterYear && merged.risk_class === 'No Data'
-                              ? 'No Assessment'
-                              : riskLabel(merged.risk_class)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                          <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>{!filterYear ? 'Latest Classification Confidence' : 'Classification Confidence'}</span>
-                          <p className="text-lg font-extrabold mt-1" style={{ color: '#0F2D52' }}>
-                            {merged.model_type === 'random_forest' && merged.classification_confidence != null
-                              ? `${Math.round(merged.classification_confidence * 100)}%`
-                              : 'N/A'}
-                          </p>
-                        </div>
-                      </div>
+                      {/* The RF's own input values, each described in
+                          comparison with the OTHER barangays in this same
+                          snapshot (tertiles). Deliberately not a ranked list
+                          of causes: the model exposes no per-factor
+                          importance, so a descriptor states relative position
+                          only — never "this factor caused High Risk". */}
                       {merged.model_type && merged.model_type !== 'random_forest' && (
                         <p className="text-[11px] mb-3 leading-relaxed" style={{ color: '#B45309' }}>
                           <i className="ri-error-warning-line mr-1" />
                           Produced by a rule-based fallback, not the trained Random Forest model — confidence is not meaningful for a rule-based result.
                         </p>
                       )}
-                      {merged.rf_features && (
+                      {merged.rf_features ? (
                         <>
-                          <p className="text-[10px] font-bold uppercase mb-2" style={{ color: '#64748B' }}>Indicators Used</p>
-                          <p className="text-[10px] mb-2 leading-relaxed" style={{ color: '#94A3B8' }}>
-                            The values the model was given for this classification — not individually-ranked reasons.
-                            Rolling 12-Month Incidence is the model&apos;s own measure, annualised from the preceding
-                            12 months, so it will not equal the Incidence / 100k shown above, which uses the selected
-                            year&apos;s own case total and population.
-                          </p>
-                          <div className="space-y-1.5">
-                            {RF_FEATURE_ORDER.filter(k => k in merged.rf_features).map(key => (
-                              <div key={key} className="flex items-center justify-between text-[11px]">
-                                <span className="font-semibold" style={{ color: '#475569' }}>{RF_FEATURE_LABELS[key] || key}</span>
-                                <span style={{ color: '#0F2D52' }}>{formatRfFeatureValue(key, merged.rf_features[key])}</span>
-                              </div>
-                            ))}
+                          <div className="space-y-2">
+                            {RF_FEATURE_ORDER.filter(k => (
+                              k === 'lag_1m'
+                                ? ['lag_1m', 'lag_2m', 'lag_3m'].some(lagKey => lagKey in merged.rf_features)
+                                : k in merged.rf_features
+                            )).map(key => {
+                              const isRecentCases = key === 'lag_1m';
+                              const value = isRecentCases
+                                ? formatRecentMonthCases(merged.rf_features)
+                                : formatRfFeatureValue(key, merged.rf_features[key]);
+                              const explanation = describeRfFeature(
+                                key,
+                                merged.rf_features[key],
+                                merged.rf_features,
+                                featureBands
+                              );
+                              return (
+                                <div key={key}>
+                                  <div className="text-[11px] font-semibold" style={{ color: '#475569' }}>
+                                    {RF_FEATURE_LABELS[key] || key}
+                                  </div>
+                                  <div className="text-[12px] font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>
+                                    {value}
+                                  </div>
+                                  <p className="text-[10px] mt-0.5 leading-relaxed" style={{ color: '#64748B' }}>
+                                    {explanation}
+                                  </p>
+                                </div>
+                              );
+                            })}
                           </div>
+                          <div className="mt-3 pt-3 space-y-1.5" style={{ borderTop: '1px solid #E2E8F0' }}>
+                            <div className="text-[11px]">
+                              <span className="font-semibold" style={{ color: '#475569' }}>Overall Classification: </span>
+                              <span className="font-extrabold" style={{ color: riskColor }}>{hasSnapshot ? riskChipText : 'No Assessment'}</span>
+                            </div>
+                            {confidencePct != null && (
+                              <div className="text-[11px]">
+                                <span className="font-semibold" style={{ color: '#475569' }}>Classification Confidence: </span>
+                                <span className="font-extrabold" style={{ color: '#0F2D52' }}>{confidencePct}%</span>
+                              </div>
+                            )}
+                          </div>
+                          <p className="text-[10px] mt-2 leading-relaxed" style={{ color: '#64748B' }}>
+                            TBInsight considered these indicators together when assigning the risk classification.
+                            No single indicator alone determines the result.
+                          </p>
                         </>
+                      ) : (
+                        <p className="text-[11px] leading-relaxed" style={{ color: '#94A3B8' }}>
+                          No indicator values were recorded for this classification, so there is nothing to break down.
+                        </p>
+                      )}
+                      {thresholdsForSnapshot && (
+                        <RiskClassificationGuide
+                          thresholds={thresholdsForSnapshot.thresholds}
+                          source={thresholdsForSnapshot.source}
+                          percentiles={thresholdsForSnapshot.percentiles}
+                        />
                       )}
                     </div>
                   )}
@@ -1625,6 +1943,7 @@ export default function GisMap() {
                                 );
                               });
                             })()}
+
                             <div className="flex items-center justify-between text-[11px] pt-1">
                               <span className="font-semibold" style={{ color: '#475569' }}>Index score (0-100)</span>
                               <span className="font-bold" style={{ color: '#64748B' }}>{formatNum(merged.risk_score)}</span>
@@ -1632,6 +1951,96 @@ export default function GisMap() {
                           </div>
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {/* ── Neighboring Barangay Context ──
+                      Answers "can nearby barangays affect the prediction?".
+                      The neighbour NAMES are the real shared-border list; each
+                      chip is that barangay's OWN classification in the snapshot
+                      on screen. Purely predictive context — no causal or
+                      transmission claim is made anywhere in this block.
+                      Gated on hasSnapshot: with no snapshot there is no
+                      neighbour_risk input to explain, so the section would be
+                      claiming the model used something it never ran. */}
+                  {hasSnapshot && neighbourRows.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
+                        Neighboring Barangay Context
+                        <span style={{ color: '#94A3B8', fontWeight: 600 }}> ({riskPeriodLabel})</span>
+                      </h4>
+                      <div className="space-y-1.5 mb-3">
+                        {neighbourRows.map(n => {
+                          const color = RISK_COLORS[n.riskClass] || RISK_COLORS['No Data'];
+                          const text = n.riskClass === 'No Data' ? 'No Assessment' : `${riskLabel(n.riskClass)} Risk`;
+                          return (
+                            <div
+                              key={n.name}
+                              className="flex items-center justify-between gap-2 rounded-lg px-3 py-2"
+                              style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}
+                            >
+                              <span className="text-[12px] font-semibold" style={{ color: '#334155' }}>{n.name}</span>
+                              <span
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap"
+                                style={{ background: `${color}15`, color, border: `1px solid ${color}40` }}
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+                                {text}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] leading-relaxed" style={{ color: '#94A3B8' }}>
+                        <i className="ri-information-line mr-0.5" />
+                        Each label is that barangay&apos;s own assessment for this period; it does not indicate TB
+                        transmission between barangays.
+                      </p>
+                    </div>
+                  )}
+
+                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
+
+                  {/* Cases Over Time + Month-over-Month */}
+                  {trendChartData.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Cases Over Time</h4>
+                      {(() => {
+                        const last = trendChartData[trendChartData.length - 1]?.cases || 0;
+                        const prev = trendChartData.length >= 2 ? (trendChartData[trendChartData.length - 2]?.cases || 0) : 0;
+                        const delta = prev > 0 ? (((last - prev) / prev) * 100).toFixed(1) : null;
+                        const isUp = last > prev;
+                        return delta !== null && prev > 0 ? (
+                          <div className="flex items-center gap-1.5 mb-3">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: isUp ? '#FEF2F2' : '#ECFDF5', color: isUp ? '#991B1B' : '#047857' }}>
+                              <i className={`ri-arrow-${isUp ? 'up' : 'down'}-line text-[10px]`} />
+                              {delta}%
+                            </span>
+                            <span className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>vs previous month</span>
+                          </div>
+                        ) : null;
+                      })()}
+                      <div style={{ height: 180 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={trendChartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+                            <defs>
+                              <linearGradient id="gisAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#3B82F6" stopOpacity={0.2} />
+                                <stop offset="100%" stopColor="#3B82F6" stopOpacity={0.02} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                            <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#94A3B8' }} />
+                            <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} allowDecimals={false} />
+                            <Tooltip
+                              contentStyle={{ background: '#0F2D52', border: 'none', borderRadius: 8, color: '#fff', fontSize: 11 }}
+                              labelStyle={{ color: '#94A3B8', fontSize: 10 }}
+                              itemStyle={{ color: '#fff' }}
+                            />
+                            <Area type="monotone" dataKey="cases" stroke="#3B82F6" strokeWidth={2} fill="url(#gisAreaGrad)" name="Cases" />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   )}
 

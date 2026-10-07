@@ -7,22 +7,34 @@ import {
 import API from '../api/axios';
 import AiInsightPanel from '../components/AiInsightPanel';
 import ChartInsight from '../components/ChartInsight';
-import { trendInsight, yoyInsight, rankingInsight, incidenceInsight, shareInsight, outcomeInsight } from '../utils/chartInsights';
-import TreatmentCascadeCard from '../components/TreatmentCascadeCard';
+import { trendInsight, caseTrendInsight, rankingInsight, incidenceInsight, shareInsight, outcomeInsight } from '../utils/chartInsights';
+import OutcomeStatusPanel from '../components/OutcomeStatusPanel';
 import FilterSelect from '../components/FilterSelect';
 import { getAnalyticsInsight } from '../services/insightService';
 import {
-  APPROVED_OUTCOMES, OUTCOME_FILTER_OPTIONS, OUTCOME_COLORS, ACTIVE_OUTCOMES,
+  APPROVED_OUTCOMES,
 } from '../utils/outcomeStatus';
 import {
   categorizeAge,
   matchesNonYearFilters,
   buildMonthlySeries,
+  buildCaseTrendComparison,
   buildPreviousYearComparison,
   mergeComparison,
 } from '../utils/trendComparison';
+import RiskClassificationGuide from '../components/RiskClassificationGuide';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
+
+// Canonical risk_class values from barangay_risk_scores are High/Medium/Low;
+// 'Medium' is shown as "Moderate" here exactly as on the GIS page. Anything
+// else means the snapshot never assessed that barangay — "No Assessment",
+// never "Low".
+const RISK_DISPLAY = { High: 'High', Medium: 'Moderate', Low: 'Low' };
+const riskDisplay = (cls) => RISK_DISPLAY[cls] || 'No Assessment';
+// Same palette the choropleth legend uses. 'Low' is rendered a shade deeper
+// than the map's #FBBF24 so the text stays legible on a white card.
+const RISK_CLASS_COLORS = { High: '#EF4444', Medium: '#F97316', Low: '#B45309' };
 
 const COLORS = {
   primary: '#0F2D52',
@@ -42,12 +54,6 @@ const OUTCOME_ORDER = APPROVED_OUTCOMES;
 
 const AGE_GROUP_ORDER = ['0-14', '15-24', '25-34', '35-44', '45-54', '55-64', '65+'];
 
-const MONTHS = [
-  'All Months', 'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
-
-const OUTCOMES = OUTCOME_FILTER_OPTIONS;
 
 /* ─── Helper Components ──────────────────────────────────────────────── */
 
@@ -109,7 +115,7 @@ function EmptyState() {
 export default function Analytics() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  /* Nonce re-triggering the metric-card effects (cascade/TSR/CFR/population)
+  /* Nonce re-triggering the metric-card effects (TSR/CFR/population)
    * on header Refresh — their deps are filter values only, so identical
    * filters would otherwise never refetch. */
   const [refreshTick, setRefreshTick] = useState(0);
@@ -119,6 +125,11 @@ export default function Analytics() {
   const [allCases, setAllCases] = useState([]);
   const [barangays, setBarangays] = useState([]);
   const [riskData, setRiskData] = useState([]);
+  const [riskYear, setRiskYear] = useState(null);
+  // Latest completed pipeline run — carries the risk band cut points and how
+  // they were derived (model_metadata.config), shown read-only on the
+  // City Risk Classification card.
+  const [pipelineMeta, setPipelineMeta] = useState(null);
   const [facilities, setFacilities] = useState([]);
   const [filterOptions, setFilterOptions] = useState({ sex: [], bacteriological_status: [], outcome_status: [] });
 
@@ -128,6 +139,7 @@ export default function Analytics() {
   const [filterBarangay, setFilterBarangay] = useState('');
   const [filterFacility, setFilterFacility] = useState('');
   const [filterOutcome, setFilterOutcome] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
   const [filterSex, setFilterSex] = useState('');
   const [filterAgeGroup, setFilterAgeGroup] = useState('');
   const [filterBact, setFilterBact] = useState('');
@@ -139,6 +151,7 @@ export default function Analytics() {
   const [aBarangay, setABarangay] = useState('');
   const [aFacility, setAFacility] = useState('');
   const [aOutcome, setAOutcome] = useState('');
+  const [aStatus, setAStatus] = useState('');
   const [aSex, setASex] = useState('');
   const [aAgeGroup, setAAgeGroup] = useState('');
   const [aBact, setABact] = useState('');
@@ -157,27 +170,34 @@ export default function Analytics() {
   const [insightData, setInsightData] = useState(null);
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightError, setInsightError] = useState(null);
-  const [cascadeData, setCascadeData] = useState(null);
   const [tsrData, setTsrData] = useState(null);
   const [prevTsrData, setPrevTsrData] = useState(null);
   const [cfrData, setCfrData] = useState(null);
-  const [cascadeLoading, setCascadeLoading] = useState(false);
 
   /* ── Data fetching ── */
   const loadAll = useCallback(async () => {
     try {
       setError(null);
       // Every case, but only the fields this page computes from (no identifiers).
-      const [allCasesRes, brgyRes, riskRes, filterRes, facilityRes] = await Promise.all([
+      const [allCasesRes, brgyRes, riskRes, filterRes, facilityRes, pipelineRes] = await Promise.all([
         API.get('/api/tb/cases/analytics-dataset'),
         API.get('/api/tb/barangays'),
         API.get('/api/tb/gis/choropleth'),
         API.get('/api/tb/filter-options').catch(() => ({ data: {} })),
         API.get('/api/tb/facilities').catch(() => ({ data: { facilities: [] } })),
+        // Read-only: only used for the cut points shown under the risk
+        // classification card. A failure must never blank this page.
+        API.get('/api/tb/pipeline/status').catch(() => ({ data: {} })),
       ]);
       setAllCases(allCasesRes.data.cases || []);
       setBarangays(brgyRes.data.barangays || brgyRes.data || []);
       setRiskData(riskRes.data.choropleth || []);
+      setPipelineMeta(pipelineRes.data?.latest_run || null);
+      // Assessment year of the risk snapshot returned by /gis/choropleth
+      // (this call sends no ?year, so it is always the latest snapshot).
+      // Shown next to the High-Risk Barangays label — the count is a
+      // per-year assessment, not an all-time figure.
+      setRiskYear(riskRes.data.assessment_year ?? riskRes.data.year ?? null);
       setFilterOptions(filterRes.data || {});
       setFacilities(facilityRes.data.facilities || []);
     } catch (err) {
@@ -188,7 +208,11 @@ export default function Analytics() {
     }
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => {
+    loadAll();
+    window.addEventListener('focus', loadAll);
+    return () => window.removeEventListener('focus', loadAll);
+  }, [loadAll]);
 
   /* ── Apply filters ── */
   const handleApply = useCallback(() => {
@@ -197,11 +221,12 @@ export default function Analytics() {
     setABarangay(filterBarangay);
     setAFacility(filterFacility);
     setAOutcome(filterOutcome);
+    setAStatus(filterStatus);
     setASex(filterSex);
     setAAgeGroup(filterAgeGroup);
     setABact(filterBact);
     setApplied(true);
-  }, [filterYear, filterMonth, filterBarangay, filterFacility, filterOutcome, filterSex, filterAgeGroup, filterBact]);
+  }, [filterYear, filterMonth, filterBarangay, filterFacility, filterOutcome, filterStatus, filterSex, filterAgeGroup, filterBact]);
 
   const handleClear = useCallback(() => {
     setFilterYear('');
@@ -209,6 +234,7 @@ export default function Analytics() {
     setFilterBarangay('');
     setFilterFacility('');
     setFilterOutcome('');
+    setFilterStatus('');
     setFilterSex('');
     setFilterAgeGroup('');
     setFilterBact('');
@@ -217,6 +243,7 @@ export default function Analytics() {
     setABarangay('');
     setAFacility('');
     setAOutcome('');
+    setAStatus('');
     setASex('');
     setAAgeGroup('');
     setABact('');
@@ -234,6 +261,7 @@ export default function Analytics() {
         barangay: aBarangay,
         facility: aFacility,
         outcome: aOutcome,
+        status: aStatus,
         sex: aSex,
         ageGroup: aAgeGroup,
         bacteriological: aBact,
@@ -245,7 +273,7 @@ export default function Analytics() {
     } finally {
       setInsightLoading(false);
     }
-  }, [insightLoading, aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [insightLoading, aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Header refresh: reload EVERYTHING — base data (loadAll), the metric
    * cards (refreshTick re-fires their effects), and a fresh NLG insight
@@ -261,37 +289,6 @@ export default function Analytics() {
       setRefreshing(false);
     }
   }, [loadAll, refreshing, handleGenerateInsight]);
-
-  /* ── Treatment Cascade — shared backend calculation with active filters ── */
-  const activeCascadeFilters = useMemo(() => {
-    const f = {};
-    if (aYear) f.year = aYear;
-    if (aMonth) f.month = aMonth;
-    if (aBarangay) f.barangay = aBarangay;
-    if (aSex) f.sex = aSex;
-    if (aAgeGroup) f.ageGroup = aAgeGroup;
-    if (aBact) f.bacteriological = aBact;
-    return f;
-  }, [aYear, aMonth, aBarangay, aSex, aAgeGroup, aBact]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setCascadeLoading(true);
-        const res = await API.get('/api/tb/treatment-cascade', { params: activeCascadeFilters });
-        if (!cancelled) setCascadeData(res.data);
-      } catch (err) {
-        if (!cancelled) {
-          if (import.meta.env.DEV) console.error('Cascade fetch failed:', err);
-          setCascadeData(null);
-        }
-      } finally {
-        if (!cancelled) setCascadeLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [activeCascadeFilters, refreshTick]);
 
   /* ── Treatment Success Rate — shared backend cohort calculation ──
    * GET /api/tb/treatment-success-rate: (Cured+Completed) / patients whose
@@ -324,7 +321,7 @@ export default function Analytics() {
 
   /* ── Case Fatality Rate — shared backend calculation ──
    * GET /api/tb/case-fatality-rate: DIED / evaluated terminal outcomes,
-   * scoped by diagnosis year (same year semantics as Total/Active Cases),
+   * scoped by diagnosis year (same year semantics as Total Cases / On Treatment),
    * optionally scoped to aBarangay. */
   useEffect(() => {
     let cancelled = false;
@@ -411,6 +408,7 @@ export default function Analytics() {
       barangay: () => { setFilterBarangay(''); setABarangay(''); },
       facility: () => { setFilterFacility(''); setAFacility(''); },
       outcome: () => { setFilterOutcome(''); setAOutcome(''); },
+      status: () => { setFilterStatus(''); setAStatus(''); },
       sex: () => { setFilterSex(''); setASex(''); },
       age: () => { setFilterAgeGroup(''); setAAgeGroup(''); },
       bacterio: () => { setFilterBact(''); setABact(''); },
@@ -434,6 +432,11 @@ export default function Analytics() {
     });
     return [...years].sort((a, b) => b - a).map(String);
   }, [allCases]);
+  const availableMonths = useMemo(() => [...new Set(allCases
+    .filter(c => c.date_of_diagnosis && (!filterYear || String(new Date(c.date_of_diagnosis).getFullYear()) === filterYear))
+    .map(c => new Date(c.date_of_diagnosis).getMonth() + 1))]
+    .filter(Number.isInteger).sort((a, b) => a - b), [allCases, filterYear]);
+  const availableAgeGroups = useMemo(() => new Set(allCases.map(c => categorizeAge(c.age))), [allCases]);
 
   /* ── Filtered cases ──
      Non-year filters go through the shared `matchesNonYearFilters`
@@ -446,6 +449,7 @@ export default function Analytics() {
         barangay: aBarangay,
         facility: aFacility,
         outcome: aOutcome,
+        status: aStatus,
         sex: aSex,
         ageGroup: aAgeGroup,
         bacteriological: aBact,
@@ -458,7 +462,7 @@ export default function Analytics() {
       }
       return true;
     });
-  }, [allCases, applied, aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [allCases, applied, aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Previous year cases (for trend indicators) ──
      Non-year filters go through the SAME `matchesNonYearFilters` predicate
@@ -476,17 +480,18 @@ export default function Analytics() {
         barangay: aBarangay,
         facility: aFacility,
         outcome: aOutcome,
+        status: aStatus,
         sex: aSex,
         ageGroup: aAgeGroup,
         bacteriological: aBact,
       });
     });
-  }, [allCases, aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [allCases, aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Summary Metrics ── */
   const metrics = useMemo(() => {
     const total = filteredCases.length;
-    const active = filteredCases.filter((c) => ACTIVE_OUTCOMES.includes((c.outcome_status || '').toUpperCase())).length;
+    const active = filteredCases.filter((c) => c.case_status === 'ON TREATMENT').length;
     // Treatment Success Rate: from GET /api/tb/treatment-success-rate (the
     // cohort-based methodology — Cured+Completed / patients whose treatment
     // started in year Y-1). Previously computed here as
@@ -520,6 +525,27 @@ export default function Analytics() {
       });
       highRisk = highRiskSet.size;
     }
+    // City-wide classification breakdown for the SAME snapshot
+    // /gis/choropleth returned. Canonical classes are High/Medium/Low
+    // ('Medium' displays as "Moderate" everywhere); anything else is a
+    // barangay that snapshot never assessed. Only rendered when no barangay
+    // filter is active, so a filtered 0/1 cannot sit next to city totals.
+    const riskCounts = { high: 0, moderate: 0, low: 0, noData: 0 };
+    let selectedRiskClass = null;
+    riskData.forEach((r) => {
+      const rc = (r.risk_class || '').trim().toLowerCase();
+      if (rc === 'high') riskCounts.high += 1;
+      else if (rc === 'medium' || rc === 'moderate') riskCounts.moderate += 1;
+      else if (rc === 'low') riskCounts.low += 1;
+      else riskCounts.noData += 1;
+      if (aBarangay && r.name === aBarangay) selectedRiskClass = r.risk_class || null;
+    });
+    // 0 rows, or a snapshot in which nothing was ever assessed, must read
+    // "no risk assessment available yet" — never a fabricated "0 of 30".
+    const hasRiskData = riskData.some(
+      (r) => r.risk_class && (r.risk_class || '').trim().toLowerCase() !== 'no data'
+    );
+    const totalBarangays = riskData.length || 30;
     // Incidence per 100k: cases(scope, aYear) / population(scope, aYear) ×
     // 100,000 — same rule as populationService.computeYearIncidence. N/A
     // (not 0) for All Years (no single matching year) or missing population.
@@ -533,13 +559,38 @@ export default function Analytics() {
       }
     }
     const fatalityRate = cfrData?.rate != null ? cfrData.rate.toFixed(1) : null;
-    return { total, active, successRate, highRisk, incidence, fatalityRate };
+    return {
+      total, active, successRate, highRisk, incidence, fatalityRate,
+      riskCounts, hasRiskData, totalBarangays, selectedRiskClass,
+    };
   }, [filteredCases, riskData, aBarangay, aYear, tsrData, cfrData, yearPopulationMap]);
+
+  /* Read-only risk band cut points for the snapshot this card is counting.
+     They are stored on the latest completed pipeline run, so they are only
+     shown when that run's assessment year matches the snapshot on screen —
+     another year's thresholds must never be attributed to it. */
+  const thresholdsInfo = useMemo(() => {
+    const cfg = pipelineMeta?.config;
+    if (!cfg?.thresholds || riskYear == null) return null;
+    const d = new Date(cfg.period);
+    if (Number.isNaN(d.getTime())) return null;
+    // A snapshot's assessment year IS its stored period's year (routes.js
+    // derives effectiveYear and meta.assessment_year the same way). A date-only
+    // string parses at UTC midnight, so this resolves to the same year in any
+    // browser timezone.
+    const runYear = new Date(d.getTime() + 8 * 3600 * 1000).getUTCFullYear();
+    if (runYear !== Number(riskYear)) return null;
+    return {
+      thresholds: cfg.thresholds,
+      source: cfg.thresholdSource,
+      percentiles: cfg.thresholdPercentiles,
+    };
+  }, [pipelineMeta, riskYear]);
 
   /* ── Previous year metrics (for trend badges) ── */
   const previousMetrics = useMemo(() => {
     const total = previousYearCases.length;
-    const active = previousYearCases.filter((c) => ACTIVE_OUTCOMES.includes((c.outcome_status || '').toUpperCase())).length;
+    const active = previousYearCases.filter((c) => c.case_status === 'ON TREATMENT').length;
     // Same cohort-based TSR, for the year before the selected one — see the
     // prevTsrData fetch above (year: aYear-1, so its own cohort is aYear-2).
     const successRate = prevTsrData?.successRate != null ? prevTsrData.successRate.toFixed(1) : null;
@@ -568,12 +619,13 @@ export default function Analytics() {
         barangay: aBarangay,
         facility: aFacility,
         outcome: aOutcome,
+        status: aStatus,
         sex: aSex,
         ageGroup: aAgeGroup,
         bacteriological: aBact,
       },
     });
-  }, [compareYear, aYear, aMonth, allCases, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [compareYear, aYear, aMonth, allCases, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Merged YoY trend data ──
      Merges by remapped month key ("2023-10" → "2024-10") and stores the
@@ -585,51 +637,20 @@ export default function Analytics() {
     return mergeComparison(trendData, previousComparison);
   }, [compareYear, trendData, previousComparison]);
 
-  /* ── Year-over-Year Trending ──
-     YoY% = (current − previous) / previous × 100; previous = 0 → null (N/A). */
-  const yoyData = useMemo(() => {
-    const yearMap = new Map(); // year -> { count, months: Set }
-    filteredCases.forEach((c) => {
-      if (!c.date_of_diagnosis) return;
-      const d = new Date(c.date_of_diagnosis);
-      const year = d.getFullYear();
-      if (Number.isNaN(year)) return;
-      if (!yearMap.has(year)) yearMap.set(year, { count: 0, months: new Set() });
-      const entry = yearMap.get(year);
-      entry.count++;
-      entry.months.add(d.getMonth());
-    });
-    // A year is "complete" for YoY comparison if it spans ≥3 distinct months.
-    // An isolated historical record (e.g. 2022 with 1 case in 1 month) is incomplete.
-    const COMPLETE_THRESHOLD = 3;
-    const isComplete = (year) => {
-      const entry = yearMap.get(year);
-      return entry && entry.months.size >= COMPLETE_THRESHOLD;
-    };
-    const years = [...yearMap.keys()].sort((a, b) => a - b);
-    const rows = years.map((year, i) => {
-      const cases = yearMap.get(year).count;
-      const complete = isComplete(year);
-      let yoyPct = null;
-      if (i > 0 && complete) {
-        const prevYear = years[i - 1];
-        if (isComplete(prevYear)) {
-          const prev = yearMap.get(prevYear).count;
-          if (prev > 0) yoyPct = Math.round(((cases - prev) / prev) * 100 * 10) / 10;
-        }
-      }
-      return { year, cases, yoyPct, complete };
-    });
-    // Latest YoY Change: from the two most recent COMPLETE consecutive years
-    const completeRows = rows.filter((r) => r.complete);
-    let latestYoy = null;
-    if (completeRows.length >= 2) {
-      const curr = completeRows[completeRows.length - 1];
-      const prev = completeRows[completeRows.length - 2];
-      latestYoy = { pct: curr.yoyPct, currentYear: curr.year, previousYear: prev.year };
-    }
-    return { rows, latestYoy };
-  }, [filteredCases]);
+  /* Compare each year's reported months with those same months in the prior
+     year. Period filters are intentionally excluded so incomplete years are
+     compared on matching available coverage instead of against full years. */
+  const caseTrendComparison = useMemo(() => buildCaseTrendComparison(allCases, {
+    filters: {
+      barangay: aBarangay,
+      facility: aFacility,
+      outcome: aOutcome,
+      status: aStatus,
+      sex: aSex,
+      ageGroup: aAgeGroup,
+      bacteriological: aBact,
+    },
+  }), [allCases, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── TB Cases by Barangay ──
    * Only Pasig residents appear here. A Non-Pasig resident treated at a Pasig
@@ -713,15 +734,19 @@ export default function Analytics() {
 
   const totalSex = useMemo(() => sexData.reduce((s, r) => s + r.value, 0), [sexData]);
 
+  /* ── Case status (current state; never an outcome) ── */
+  const statusCounts = useMemo(() => ({
+    diagnosed: filteredCases.filter((c) => c.case_status === 'DIAGNOSED').length,
+    onTreatment: filteredCases.filter((c) => c.case_status === 'ON TREATMENT').length,
+  }), [filteredCases]);
+
   /* ── Treatment Outcomes ── */
   const outcomeData = useMemo(() => {
     const byOutcome = {};
     filteredCases.forEach((c) => {
       const raw = (c.outcome_status || 'Unknown').toUpperCase();
       // Map DB variants to source-aligned display form
-      const status = raw === 'TREATMENT FAILED' ? 'FAILED'
-        : raw === 'LOST TO FOLLOW-UP' ? 'LOST TO FF-UP'
-        : raw;
+      const status = raw;
       if (!OUTCOME_ORDER.includes(status)) return; // exclude SCREENED etc.
       if (!byOutcome[status]) byOutcome[status] = 0;
       byOutcome[status]++;
@@ -735,15 +760,16 @@ export default function Analytics() {
   const activeFilters = useMemo(() => {
     const chips = [];
     if (aYear) chips.push({ key: 'year', label: 'Year', value: aYear });
-    if (aMonth) chips.push({ key: 'month', label: 'Month', value: MONTHS[Number(aMonth)] || aMonth });
+    if (aMonth) chips.push({ key: 'month', label: 'Month', value: new Date(2000, Number(aMonth) - 1, 1).toLocaleDateString('en-US', { month: 'long' }) });
     if (aBarangay) chips.push({ key: 'barangay', label: 'Barangay', value: aBarangay });
     if (aFacility) chips.push({ key: 'facility', label: 'Facility', value: aFacility });
-    if (aOutcome) chips.push({ key: 'outcome', label: 'Case Status / Outcome', value: aOutcome });
+    if (aOutcome) chips.push({ key: 'outcome', label: 'Treatment Outcome', value: aOutcome });
+    if (aStatus) chips.push({ key: 'status', label: 'Case Status', value: aStatus });
     if (aSex) chips.push({ key: 'sex', label: 'Sex', value: aSex });
     if (aAgeGroup) chips.push({ key: 'age', label: 'Age Group', value: aAgeGroup });
     if (aBact) chips.push({ key: 'bacterio', label: 'Bacterio', value: aBact });
     return chips;
-  }, [aYear, aMonth, aBarangay, aFacility, aOutcome, aSex, aAgeGroup, aBact]);
+  }, [aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Last updated ── */
   const lastUpdated = useMemo(() => {
@@ -849,12 +875,13 @@ export default function Analytics() {
         {/* Filter bar */}
         <div className="flex items-start justify-between gap-3 px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
           <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
-            <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
+            <FilterSelect label="Year" value={filterYear} onChange={value => { setFilterYear(value); setFilterMonth(''); }}>
               <option value="">All Years</option>
               {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
             </FilterSelect>
             <FilterSelect label="Month" value={filterMonth} onChange={setFilterMonth}>
-              {MONTHS.map((m, i) => <option key={m} value={i === 0 ? '' : String(i)}>{m}</option>)}
+              <option value="">All Months</option>
+              {availableMonths.map(m => <option key={m} value={String(m)}>{new Date(2000, m - 1, 1).toLocaleDateString('en-US', { month: 'long' })}</option>)}
             </FilterSelect>
             <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 140 }}>
               <option value="">All Barangays</option>
@@ -864,21 +891,25 @@ export default function Analytics() {
               <option value="">All Facilities</option>
               {facilities.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
             </FilterSelect>
-            <FilterSelect label="Case Status / Outcome" value={filterOutcome} onChange={setFilterOutcome} selectStyle={{ maxWidth: 150 }}>
+            <FilterSelect label="Treatment Outcome" value={filterOutcome} onChange={setFilterOutcome} selectStyle={{ maxWidth: 150 }}>
               <option value="">All</option>
-              {(filterOptions.outcome_status || OUTCOMES.filter(o => o !== 'All')).map((o) => (
+              {(filterOptions.outcome_status || []).map((o) => (
                 <option key={o} value={o}>{o}</option>
               ))}
             </FilterSelect>
+            <FilterSelect label="Case Status" value={filterStatus} onChange={setFilterStatus} selectStyle={{ maxWidth: 150 }}>
+              <option value="">All</option>
+              {(filterOptions.case_status || []).map(status => <option key={status} value={status}>{status}</option>)}
+            </FilterSelect>
             <FilterSelect label="Sex" value={filterSex} onChange={setFilterSex}>
               <option value="">All</option>
-              {(filterOptions.sex || ['Male', 'Female']).map((s) => (
+              {(filterOptions.sex || []).map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </FilterSelect>
             <FilterSelect label="Age" value={filterAgeGroup} onChange={setFilterAgeGroup}>
               <option value="">All Ages</option>
-              {AGE_GROUP_ORDER.map((g) => <option key={g} value={g}>{g}</option>)}
+              {AGE_GROUP_ORDER.filter(g => availableAgeGroups.has(g)).map((g) => <option key={g} value={g}>{g}</option>)}
             </FilterSelect>
             <FilterSelect label="Bacterio" value={filterBact} onChange={setFilterBact} selectStyle={{ maxWidth: 130 }}>
               <option value="">All</option>
@@ -931,9 +962,9 @@ export default function Analytics() {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
               {/* Total TB Cases */}
               <div className="flex flex-col px-4 py-4 relative">
-                <div className="flex items-center gap-2 h-5 min-w-0">
+                <div className="flex items-start gap-2 min-h-5 min-w-0">
                   <i className="ri-file-list-3-line text-sm shrink-0" style={{ color: '#6B7FA3' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Total TB Cases</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Total TB Cases ({aYear || 'All Years'})</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <div className="flex items-end gap-1.5 flex-wrap">
@@ -947,10 +978,13 @@ export default function Analytics() {
               </div>
 
               {/* Incidence per 100k */}
-              <div className="flex flex-col px-4 py-4 relative">
-                <div className="flex items-center gap-2 h-5 min-w-0">
+              <div
+                className="flex flex-col px-4 py-4 relative"
+                title="Cases ÷ Population × 100,000 — cases diagnosed in the selected year over that same year's population."
+              >
+                <div className="flex items-start gap-2 min-h-5 min-w-0">
                   <i className="ri-pulse-line text-sm shrink-0" style={{ color: '#6B9E9E' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Incidence / 100k</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Incidence / 100k ({aYear || 'All Years'})</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.incidence == null ? 'N/A' : metrics.incidence}</p>
@@ -962,10 +996,10 @@ export default function Analytics() {
 
               {/* Currently On Treatment */}
               <div className="flex flex-col px-4 py-4 relative">
-                <div className="flex items-center justify-between gap-2 h-5">
-                  <div className="flex items-center gap-2 min-w-0">
+                <div className="flex items-start justify-between gap-2 min-h-5">
+                  <div className="flex items-start gap-2 min-w-0">
                     <i className="ri-first-aid-kit-line text-sm shrink-0" style={{ color: '#B8956A' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Currently On Treatment</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Currently On Treatment ({aYear || 'All Years'})</span>
                   </div>
                   {metrics.total > 0 && (
                     <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ background: '#FFFBEB', color: '#92400E' }}>
@@ -982,11 +1016,15 @@ export default function Analytics() {
               </div>
 
               {/* Treatment Success Rate (TSR) */}
-              <div className="flex flex-col px-4 py-4 relative" title="TSR is a cohort-based indicator: (Cured + Treatment Completed) among patients whose treatment started in the previous year, divided by the total previous-year treatment cohort. This differs from the Treatment Cascade's Successful Outcome % of Evaluated.">
-                <div className="flex items-center justify-between gap-2 h-5">
-                  <div className="flex items-center gap-2 min-w-0">
+              <div className="flex flex-col px-4 py-4 relative" title="TSR is a cohort-based indicator: (Cured + Treatment Completed) among patients whose treatment started in the previous year, divided by the total previous-year treatment cohort.">
+                <div className="flex items-start justify-between gap-2 min-h-5">
+                  <div className="flex items-start gap-2 min-w-0">
                     <i className="ri-check-double-line text-sm shrink-0" style={{ color: '#6B9E8A' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Treatment Success Rate (TSR)</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>
+                      {(tsrData?.cohortYear || aYear)
+                        ? `Treatment Success Rate — ${tsrData?.cohortYear || Number(aYear) - 1} Cohort`
+                        : 'Treatment Success Rate'}
+                    </span>
                   </div>
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ background: '#ECFDF5', color: '#047857' }}>
                     {metrics.successRate == null ? 'N/A' : `${metrics.successRate}%`}
@@ -1014,13 +1052,13 @@ export default function Analytics() {
 
               {/* Case Fatality Rate */}
               <div className="flex flex-col px-4 py-4 relative">
-                <div className="flex items-center gap-2 h-5 min-w-0">
+                <div className="flex items-start gap-2 min-h-5 min-w-0">
                   <i className="ri-heart-pulse-line text-sm shrink-0" style={{ color: '#B07070' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>Case Fatality Rate</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Case Fatality Rate ({aYear || 'All Years'})</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.fatalityRate == null ? 'N/A' : `${metrics.fatalityRate}%`}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Deaths / evaluated terminal outcomes</span>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Deaths / evaluated terminal outcomes{aYear ? ` — ${aYear} diagnoses` : ''}</span>
                 {cfrData?.total > 0 && cfrData?.evaluated != null && (cfrData.evaluated / cfrData.total) < 0.5 && (
                   <span className="text-[9px] mt-1" style={{ color: '#D97706' }}>
                     Only {cfrData.evaluated} of {cfrData.total} cases have reached a terminal outcome. CFR may not be representative.
@@ -1035,39 +1073,89 @@ export default function Analytics() {
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
-              {/* High-Risk Barangays */}
+              {/* ── City Risk Classification ──
+                  The old red "{high}/{total}" badge read as an unexplained
+                  ratio ("10 / 30 High Risk"). The count is now spelled out in
+                  words, and the snapshot's full class breakdown is shown so
+                  High/Moderate/Low can be read together. Breakdown is
+                  city-wide only: with a barangay filter active the card shows
+                  that barangay's own classification instead of city totals. */}
               <div className="flex flex-col px-4 py-4">
-                <div className="flex items-center justify-between gap-2 h-5">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <i className="ri-alarm-warning-line text-sm shrink-0" style={{ color: '#C4886A' }} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: '#64748B' }}>High-Risk Barangays</span>
-                  </div>
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ background: '#FEF2F2', color: '#991B1B' }}>
-                    {metrics.highRisk}/{barangayNames.length || 30}
+                <div className="flex items-start gap-2 min-h-5 min-w-0">
+                  <i className="ri-alarm-warning-line text-sm shrink-0" style={{ color: '#C4886A' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>
+                    {aBarangay
+                      ? `${aBarangay} Risk Classification${riskYear ? ` (${riskYear} Assessment)` : ''}`
+                      : 'City Risk Classification'}
                   </span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.highRisk}</p>
+                {!metrics.hasRiskData ? (
+                  <>
+                    <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>N/A</p>
+                    <span className="text-[11px] font-medium mt-1 leading-snug" style={{ color: '#94A3B8' }}>
+                      No risk assessment available yet
+                    </span>
+                  </>
+                ) : aBarangay ? (
+                  /* Barangay filter active: this card shows that barangay's
+                     own classification. The city-wide counts are hidden — a
+                     filtered 0/1 sitting next to city totals would be
+                     contradictory, and the period is already in the heading. */
+                  <>
+                    <p
+                      className="text-xl lg:text-2xl font-extrabold"
+                      style={{ color: RISK_CLASS_COLORS[metrics.selectedRiskClass] || '#64748B' }}
+                    >
+                      {riskDisplay(metrics.selectedRiskClass)}
+                    </p>
+                    <span className="text-[11px] font-medium mt-1 leading-snug" style={{ color: '#94A3B8' }}>
+                      City-wide breakdown hidden by the barangay filter
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.highRisk}</p>
+                    <span
+                      className="text-[11px] font-medium mt-1 leading-snug"
+                      style={{ color: '#94A3B8' }}
+                      title="This represents the number of Pasig barangays classified as High Risk by the risk-classification model for the selected assessment period."
+                    >
+                      of {metrics.totalBarangays} barangays classified as High Risk
+                    </span>
+                    <div className="mt-2 pt-2 space-y-1" style={{ borderTop: '1px solid #F1F5F9' }}>
+                      <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: '#64748B' }}>
+                        Assessment Period: <span style={{ color: '#0F2D52' }}>{riskYear ?? 'N/A'}</span>
+                      </p>
+                      <p className="text-[11px] font-medium leading-snug" style={{ color: '#475569' }}>
+                        High Risk: <strong style={{ color: '#EF4444' }}>{metrics.riskCounts.high}</strong>
+                        <span style={{ color: '#CBD5E1' }}> · </span>
+                        Moderate Risk: <strong style={{ color: '#F97316' }}>{metrics.riskCounts.moderate}</strong>
+                        <span style={{ color: '#CBD5E1' }}> · </span>
+                        Low Risk: <strong style={{ color: '#B45309' }}>{metrics.riskCounts.low}</strong>
+                      </p>
+                      {metrics.riskCounts.noData > 0 && (
+                        <p className="text-[10px] font-medium" style={{ color: '#B07070' }}>
+                          {metrics.riskCounts.noData} not assessed
+                        </p>
+                      )}
+                    </div>
+                  </>
+                )}
+                {thresholdsInfo && (
+                  <RiskClassificationGuide
+                    thresholds={thresholdsInfo.thresholds}
+                    source={thresholdsInfo.source}
+                    percentiles={thresholdsInfo.percentiles}
+                  />
+                )}
               </div>
             </div>
           </div>
 
           <div className="flex gap-6">
-            {/* ─── LEFT COLUMN: Cascade + Charts (scrollable) ─── */}
+            {/* ─── LEFT COLUMN: Charts (scrollable) ─── */}
             <div className="flex-1 min-w-0 space-y-6">
-
-          {/* ─── Treatment Cascade (shared backend calculation) ─── */}
-          <TreatmentCascadeCard
-            data={cascadeData}
-            loading={cascadeLoading}
-            description="Diagnosis-to-outcome progression for the active filters."
-          />
-          {aOutcome && (
-            <p className="text-[9px] -mt-4 flex items-center gap-1" style={{ color: '#94A3B8' }}>
-              <i className="ri-information-line" />
-              Treatment Cascade excludes the Case Status / Outcome filter because outcome determines treatment progression stages.
-            </p>
-          )}
 
           {/* ─── TB Cases Trend (with YoY Comparison) ─── */}
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
@@ -1137,55 +1225,62 @@ export default function Analytics() {
             </div>
           </div>
 
-          {/* ─── Year-over-Year Trending ─── */}
+          {/* ─── Case Trend Comparison ─── */}
           <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
             <div className="flex items-center justify-between px-5 py-4">
               <div className="flex items-center gap-3">
                 <div className="w-1 h-8 rounded-full" style={{ background: '#7C3AED' }} />
                 <div>
-                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Year-over-Year Trending</h3>
-                  <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Annual case counts and change versus the previous year.</p>
+                  <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Case Trend Comparison</h3>
+                  <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Each year is compared with the same reported months of the previous year.</p>
                 </div>
               </div>
               <div className="text-right">
-                <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Latest YoY Change</p>
+                <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Latest Period Change</p>
                 <p
                   className="text-lg font-extrabold"
-                  style={{ color: yoyData.latestYoy?.pct == null ? '#94A3B8' : yoyData.latestYoy.pct > 0 ? '#DC2626' : yoyData.latestYoy.pct < 0 ? '#047857' : '#64748B' }}
+                  style={{ color: caseTrendComparison.latestPeriod?.changePct == null ? '#94A3B8' : caseTrendComparison.latestPeriod.changePct > 0 ? '#DC2626' : caseTrendComparison.latestPeriod.changePct < 0 ? '#047857' : '#64748B' }}
                 >
-                  {yoyData.latestYoy?.pct == null ? 'N/A' : `${yoyData.latestYoy.pct > 0 ? '+' : ''}${yoyData.latestYoy.pct}%`}
+                  {caseTrendComparison.latestPeriod?.changePct == null
+                    ? 'N/A'
+                    : `${caseTrendComparison.latestPeriod.changePct > 0 ? '+' : ''}${caseTrendComparison.latestPeriod.changePct}%`}
                 </p>
-                {yoyData.latestYoy && (
+                {caseTrendComparison.latestPeriod && (
                   <p className="text-[9px] mt-0.5" style={{ color: '#94A3B8' }}>
-                    {yoyData.latestYoy.currentYear} vs {yoyData.latestYoy.previousYear}
+                    {caseTrendComparison.latestPeriod.period} {caseTrendComparison.latestPeriod.year} vs{' '}
+                    {caseTrendComparison.latestPeriod.period} {caseTrendComparison.latestPeriod.previousYear}
                   </p>
                 )}
               </div>
             </div>
             <div className="px-5 pb-5">
-              {yoyData.rows.length > 0 ? (
+              {caseTrendComparison.rows.length > 0 ? (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left">
                     <thead>
                       <tr style={{ background: '#0F2D52', color: '#ffffff' }}>
                         <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider">Year</th>
                         <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-right">Cases</th>
-                        <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-right">YoY Change</th>
+                        <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider">Data Coverage</th>
+                        <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-right">Change vs Same Period</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {[...yoyData.rows].reverse().map((row) => (
+                      {[...caseTrendComparison.rows].reverse().map((row) => (
                         <tr key={row.year} style={{ borderBottom: '1px solid #F1F5F9' }}>
                           <td className="px-3 py-2 text-[12px] font-bold" style={{ color: '#0F2D52' }}>{row.year}</td>
                           <td className="px-3 py-2 text-[12px] text-right font-semibold" style={{ color: '#475569' }}>{row.cases.toLocaleString()}</td>
+                          <td className="px-3 py-2 text-[11px] font-medium" style={{ color: '#64748B' }}>
+                            {row.coverage}
+                          </td>
                           <td className="px-3 py-2 text-right">
-                            {!row.complete ? (
-                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded" style={{ background: '#FEF3C7', color: '#92400E' }}>Incomplete Data</span>
-                            ) : row.yoyPct == null ? (
+                            {!row.comparable ? (
+                              <span className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>Not enough matching coverage</span>
+                            ) : row.changePct == null ? (
                               <span className="text-[11px] font-bold" style={{ color: '#94A3B8' }}>N/A</span>
                             ) : (
-                              <span className="text-[11px] font-bold" style={{ color: row.yoyPct > 0 ? '#DC2626' : row.yoyPct < 0 ? '#047857' : '#64748B' }}>
-                                {row.yoyPct > 0 ? '+' : ''}{row.yoyPct}%
+                              <span className="text-[11px] font-bold" style={{ color: row.changePct > 0 ? '#DC2626' : row.changePct < 0 ? '#047857' : '#64748B' }}>
+                                {row.changePct > 0 ? '+' : ''}{row.changePct}%
                               </span>
                             )}
                           </td>
@@ -1195,11 +1290,11 @@ export default function Analytics() {
                   </table>
                 </div>
               ) : (
-                <p className="text-sm text-center py-8" style={{ color: '#94A3B8' }}>No yearly data available for the selected filters.</p>
+                <p className="text-sm text-center py-8" style={{ color: '#94A3B8' }}>No case data available for the selected filters.</p>
               )}
-              <ChartInsight text={yoyInsight(yoyData.rows, yoyData.latestYoy)} />
+              <ChartInsight text={caseTrendInsight(caseTrendComparison.rows, caseTrendComparison.latestPeriod)} />
               <p className="text-[9px] mt-2" style={{ color: '#CBD5E1' }}>
-                YoY% = (current − previous) / previous × 100. Years with fewer than 3 months of data are marked Incomplete. A zero previous-year count shows N/A.
+                Changes compare the months with reported cases in each year against those same months in the previous year. A change is shown only when matching month coverage is available.
               </p>
             </div>
           </div>
@@ -1326,52 +1421,17 @@ export default function Analytics() {
                   <div className="flex items-center gap-3">
                     <div className="w-1 h-8 rounded-full" style={{ background: '#047857' }} />
                     <div>
-                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Case Status / Outcome Distribution</h3>
-                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Distribution of reported TB records by the Outcome/Status values recorded in the source data.</p>
+                      <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Treatment Outcomes &amp; Case Status</h3>
+                      <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Final outcomes for the active filters; cases still diagnosed or on treatment shown separately.</p>
                     </div>
                   </div>
                 </div>
                 <div className="px-5 pb-5">
-                  {outcomeData.length > 0 ? (
-                    <div className="flex flex-wrap items-center justify-center gap-6">
-                      <div className="w-[180px] h-[180px] shrink-0">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <PieChart>
-                            <Pie
-                              data={outcomeData}
-                              cx="50%"
-                              cy="50%"
-                              innerRadius={45}
-                              outerRadius={80}
-                              paddingAngle={2}
-                              dataKey="Cases"
-                            >
-                              {outcomeData.map((entry) => (
-                                <Cell key={entry.name} fill={OUTCOME_COLORS[entry.name] || '#94A3B8'} />
-                              ))}
-                            </Pie>
-                            <Tooltip formatter={(value) => value.toLocaleString()} />
-                          </PieChart>
-                        </ResponsiveContainer>
-                      </div>
-                      <div className="space-y-1.5">
-                        {outcomeData.map((entry) => (
-                          <div key={entry.name} className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: OUTCOME_COLORS[entry.name] || '#94A3B8' }} />
-                            <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>
-                              {entry.name?.length > 16 ? entry.name.slice(0, 14) + '...' : entry.name}
-                            </span>
-                            <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{entry.Cases}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center py-16 gap-2">
-                      <i className="ri-pie-chart-2-line text-xl" style={{ color: '#CBD5E1' }} />
-                      <p className="text-xs" style={{ color: '#94A3B8' }}>No outcome data available.</p>
-                    </div>
-                  )}
+                  <OutcomeStatusPanel
+                    outcomes={Object.fromEntries(outcomeData.map((e) => [e.name, e.Cases]))}
+                    diagnosed={statusCounts.diagnosed}
+                    onTreatment={statusCounts.onTreatment}
+                  />
                   <ChartInsight text={outcomeInsight(outcomeData)} />
                 </div>
               </div>
@@ -1488,4 +1548,3 @@ export default function Analytics() {
     </div>
   );
 }
-

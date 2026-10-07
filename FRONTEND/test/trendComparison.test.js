@@ -14,6 +14,7 @@ import {
   categorizeAge,
   matchesNonYearFilters,
   buildMonthlySeries,
+  buildCaseTrendComparison,
   buildPreviousYearComparison,
   mergeComparison,
   COMPLETE_YEAR_THRESHOLD,
@@ -68,6 +69,62 @@ function fixture() {
 
 const sum = (rows, key = 'Cases') => rows.reduce((s, r) => s + (r[key] || 0), 0);
 const valueKey = (year) => `Previous Year (${year})`;
+
+describe('buildCaseTrendComparison', () => {
+  it('compares the latest partial year with the same months in the prior year', () => {
+    const cases = [
+      ...yearCases(2025, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
+      ...yearCases(2026, [2, 2, 2, 2, 2, 2, 2, 2, 2]),
+    ];
+    const result = buildCaseTrendComparison(cases);
+
+    assert.equal(result.latestPeriod.year, 2026);
+    assert.equal(result.latestPeriod.previousYear, 2025);
+    assert.equal(result.latestPeriod.period, 'Jan–Sep');
+    assert.equal(result.latestPeriod.coverage, 'Jan–Sep');
+    assert.equal(result.latestPeriod.currentPeriodCases, 18);
+    assert.equal(result.latestPeriod.previousPeriodCases, 9);
+    assert.equal(result.latestPeriod.changePct, 100);
+    assert.equal(result.rows.find(row => row.year === 2025).coverage, 'Full Year');
+  });
+
+  it('requires matching reported months and describes non-contiguous coverage', () => {
+    const cases = [
+      ...yearCases(2025, [1, 1, 0, 1]),
+      ...yearCases(2026, [2, 2, 0, 2]),
+    ];
+    const result = buildCaseTrendComparison(cases);
+
+    assert.equal(result.latestPeriod.period, 'Jan–Feb, Apr');
+    assert.equal(result.latestPeriod.comparable, true);
+    assert.equal(result.latestPeriod.changePct, 100);
+    assert.equal(result.rows[0].comparable, false);
+  });
+
+  it('does not treat a missing prior-year month as zero cases', () => {
+    const cases = [
+      ...yearCases(2025, [1, 1]),
+      ...yearCases(2026, [2, 2, 2]),
+    ];
+    const result = buildCaseTrendComparison(cases);
+
+    assert.equal(result.latestPeriod.comparable, false);
+    assert.equal(result.latestPeriod.changePct, null);
+  });
+
+  it('applies the same non-period filters to every year', () => {
+    const cases = [
+      ...yearCases(2025, [1], { barangay_name: 'Alpha' }),
+      ...yearCases(2025, [0, 1], { barangay_name: 'Beta' }),
+      ...yearCases(2026, [2], { barangay_name: 'Alpha' }),
+    ];
+    const result = buildCaseTrendComparison(cases, { filters: { barangay: 'Alpha' } });
+
+    assert.equal(result.rows.length, 2);
+    assert.equal(result.latestPeriod.previousPeriodCases, 1);
+    assert.equal(result.latestPeriod.currentPeriodCases, 2);
+  });
+});
 
 /* ── categorizeAge (moved from Analytics.jsx — parity) ──────────────── */
 

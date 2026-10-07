@@ -10,8 +10,7 @@ const FEATURES = [
 ];
 
 const PASIG_CLONE_URL =
-  import.meta.env.VITE_PASIG_CLONE_URL ||
-  (import.meta.env.DEV ? 'http://localhost:5174' : 'https://pasig-clone.vercel.app');
+  import.meta.env.VITE_PASIG_CLONE_URL || 'https://pasig-clone.onrender.com';
 
 export default function LandingPage() {
   const navigate = useNavigate();

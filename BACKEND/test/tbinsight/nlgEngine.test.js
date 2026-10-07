@@ -326,6 +326,12 @@ describe('generateForecastingInsight', () => {
     assert.ok(result.sections[1].text.includes('No forecast data'));
   });
 
+  it('reports a genuine persisted zero forecast as zero cases', () => {
+    const metrics = { ...baseMetrics, predictedCases: { total: 0, monthlyAvg: 0, horizon: 1, available: true } };
+    const result = generateForecastingInsight(metrics);
+    assert.ok(result.sections[1].text.includes('**0** total cases'));
+  });
+
   it('generates peak period text', () => {
     const result = generateForecastingInsight(baseMetrics);
     const section = result.sections[2];
@@ -360,12 +366,20 @@ describe('generateForecastingInsight', () => {
     assert.ok(result.sections[3].text.includes('no significant change'));
   });
 
+  it('explains an unavailable baseline while retaining an existing forecast', () => {
+    const metrics = { ...baseMetrics, direction: { trend: 'unavailable', growthRate: null } };
+    const result = generateForecastingInsight(metrics);
+    assert.ok(result.sections[0].text.includes('no positive monthly baseline'));
+    assert.ok(result.sections[3].text.includes('unavailable'));
+    assert.ok(!result.sections[3].text.includes('no significant change'));
+  });
+
   it('generates high-risk areas text', () => {
     const result = generateForecastingInsight(baseMetrics);
     const section = result.sections[4];
     assert.strictEqual(section.id, 'highRiskAreas');
     assert.ok(section.text.includes('4'));
-    assert.ok(section.text.includes('high-risk'));
+    assert.ok(section.text.includes('High Risk'));
   });
 
   it('generates no-high-risk text', () => {
@@ -440,7 +454,7 @@ describe('generateGisInsight', () => {
     const result = generateGisInsight(baseMetrics, { barangay: 'San Jose' });
     assert.strictEqual(result.type, 'gis');
     assert.ok(result.meta.basedOn.includes('San Jose'));
-    assert.ok(result.meta.basedOn.includes('Risk Period 2025'));
+    assert.ok(result.meta.basedOn.includes('Assessment Year 2025'));
     assert.ok(result.meta.generatedAt);
   });
 

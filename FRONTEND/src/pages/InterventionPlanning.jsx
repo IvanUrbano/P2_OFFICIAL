@@ -68,6 +68,7 @@ export default function InterventionPlanning() {
 
   /* ── Data state ── */
   const [interventions, setInterventions] = useState([]);
+  const [filterOptions, setFilterOptions] = useState({ priority: [], type: [], status: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [actionError, setActionError] = useState(null);
@@ -144,12 +145,14 @@ export default function InterventionPlanning() {
       if (filterType) params.type = filterType;
       if (debouncedSearch) params.search = debouncedSearch;
 
-      const [listRes, countsRes] = await Promise.all([
+      const [listRes, countsRes, optionsRes] = await Promise.all([
         API.get('/api/tb/interventions', { params }),
         API.get('/api/tb/interventions/counts'),
+        API.get('/api/tb/interventions/filter-options'),
       ]);
 
       setInterventions(listRes.data.interventions || []);
+      setFilterOptions(optionsRes.data || { priority: [], type: [] });
       setPagination(listRes.data.pagination || { total: 0, totalPages: 1 });
       setSummary(countsRes.data || { total: 0, pending: 0, in_progress: 0, completed: 0, overdue: 0 });
     } catch (err) {
@@ -160,7 +163,11 @@ export default function InterventionPlanning() {
     }
   }, [page, filterStatus, filterPriority, filterBarangay, filterType, debouncedSearch]);
 
-  useEffect(() => { fetchInterventions(); }, [fetchInterventions]);
+  useEffect(() => {
+    fetchInterventions();
+    window.addEventListener('focus', fetchInterventions);
+    return () => window.removeEventListener('focus', fetchInterventions);
+  }, [fetchInterventions]);
 
   /* ── Handlers ── */
 
@@ -321,7 +328,7 @@ export default function InterventionPlanning() {
         {/* Tabs */}
         <div style={{ borderBottom: '1px solid #E2E8F0' }}>
           <div className="flex gap-0 overflow-x-auto">
-            {STATUS_TABS.map(tab => (
+            {STATUS_TABS.filter(tab => tab.key === 'all' || (tab.key === 'overdue' ? summary.overdue > 0 : filterOptions.status?.includes(tab.key))).map(tab => (
               <button
                 key={tab.key}
                 onClick={() => handleStatusChange(tab.key)}
@@ -367,9 +374,7 @@ export default function InterventionPlanning() {
           <div className="flex items-center gap-2 flex-wrap">
             <FilterSelect label="Priority" value={filterPriority} onChange={setFilterPriority}>
               <option value="all">All Priorities</option>
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
+              {filterOptions.priority.map(value => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</option>)}
             </FilterSelect>
 
             <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 160 }}>
@@ -379,7 +384,7 @@ export default function InterventionPlanning() {
 
             <FilterSelect label="Type" value={filterType} onChange={setFilterType}>
               <option value="">All Types</option>
-              {INTERVENTION_TYPES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+              {filterOptions.type.map(value => <option key={value} value={value}>{INTERVENTION_TYPES.find(t => t.key === value)?.label || value}</option>)}
             </FilterSelect>
 
             <div className="relative">

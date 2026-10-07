@@ -20,13 +20,11 @@ const EMPTY_FORM = {
   date_started_treatment: '', date_of_outcome: '', sex: '',
   screening_facility: '', treatment_facility: '', screening_facility_other: '', treatment_facility_other: '',
   source_of_patient: '', registration_group: '', anatomical_site: '', bacteriological_status: '',
-  outcome_status: '', itis_case_id: '',
+  case_status: '', treatment_outcome: '', itis_case_id: '',
 };
 
-const OUTCOME_OPTIONS = [
-  'ON TREATMENT','CURED','TREATMENT COMPLETED','DIED','LOST TO FF-UP',
-  'TREATMENT FAILED','NOT EVALUATED','REFUSED','EXCLUDED',
-];
+const CASE_STATUS_OPTIONS = ['DIAGNOSED', 'ON TREATMENT'];
+const OUTCOME_OPTIONS = ['CURED', 'TREATMENT COMPLETED', 'TREATMENT FAILED', 'LOST TO FOLLOW-UP', 'DIED', 'NOT EVALUATED', 'EXCLUDED'];
 
 const STATIC_REG = ['NEW','OTHER','PREVIOUS TX OUTCOME UNKNOWN','RELAPSE','TX AFTER FAILURE','TX AFTER LOST TO FF-UP'];
 const STATIC_SRC = ['COMMUNITY','OTHER PUBLIC FACILITY','PRIVATE FACILITY','PUBLIC HEALTH CENTER'];
@@ -80,7 +78,8 @@ const RECORD_COLUMNS = [
   { label: 'Age', field: 'age' },
   { label: 'Facility (Screening)', field: 'facility' },
   { label: 'Bacteriologic Status', field: 'bact' },
-  { label: 'Outcome', field: 'outcome' },
+  { label: 'Case Status', field: 'status' },
+  { label: 'Treatment Outcome', field: 'outcome' },
   { label: 'Source', field: 'source' },
   { label: 'Access', field: null },
   { label: 'Action', field: null },
@@ -115,6 +114,8 @@ export default function TBRecordsPage() {
   const [sort, setSort] = useState({ field: 'id', dir: 'desc' });
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  const [caseStatusFilter, setCaseStatusFilter] = useState('');
+  const [outcomeFilter, setOutcomeFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(null);
@@ -160,6 +161,8 @@ export default function TBRecordsPage() {
     try {
       const params = new URLSearchParams({ page, limit: pageSize, view });
       if (search) params.set('search', search);
+      if (caseStatusFilter) params.set('status', caseStatusFilter);
+      if (outcomeFilter) params.set('outcome', outcomeFilter);
       params.set('sort', sort.field);
       params.set('dir', sort.dir);
       const res = await API.get(`/api/data/records?${params}`);
@@ -187,7 +190,7 @@ export default function TBRecordsPage() {
     API.get('/api/data/manual-options').then(r => setOptions(r.data || {})).catch(() => {});
   }, []);
 
-  useEffect(() => { fetchRecords(); }, [view, page, pageSize, search, sort]);
+  useEffect(() => { fetchRecords(); }, [view, page, pageSize, search, caseStatusFilter, outcomeFilter, sort]);
 
   const loadPinStatus = () => API.get('/api/auth/pin/status').then(r => setPinStatus(r.data)).catch(() => {});
   useEffect(() => { loadPinStatus(); }, []);
@@ -327,7 +330,7 @@ export default function TBRecordsPage() {
       registration_group: form.registration_group || null,
       anatomical_site: form.anatomical_site || null,
       bacteriological_status: form.bacteriological_status || null,
-      outcome_status: form.outcome_status || null,
+      outcome_status: form.treatment_outcome || form.case_status || null,
       itis_case_id: form.itis_case_id || null,
       ...(matchResolution ? { match_resolution: matchResolution } : {}),
     };
@@ -407,13 +410,21 @@ export default function TBRecordsPage() {
           </div>
         </div>
 
-        <div className="px-6 py-3" style={{ background: '#F8FAFC' }}>
+        <div className="px-6 py-3 flex flex-wrap gap-3 items-center" style={{ background: '#F8FAFC' }}>
           <div className="relative max-w-sm">
             <i className="ri-search-line absolute left-3 top-1/2 -translate-y-1/2 text-sm" style={{ color: '#94A3B8' }} />
             <input type="text" value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
               placeholder={pinStatus.unlocked ? 'Search name, Case ID, barangay...' : 'Search Case ID, barangay (unlock to search names)'}
               className="w-full pl-9 pr-3 py-2 text-xs rounded-lg outline-none" style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: '#0F2D52' }} />
           </div>
+          <select aria-label="Case status filter" value={caseStatusFilter} onChange={e => { setCaseStatusFilter(e.target.value); setPage(1); }} className="px-3 py-2 text-xs rounded-lg" style={inputStyle}>
+            <option value="">All case statuses</option>
+            {CASE_STATUS_OPTIONS.map(status => <option key={status} value={status}>{status}</option>)}
+          </select>
+          <select aria-label="Treatment outcome filter" value={outcomeFilter} onChange={e => { setOutcomeFilter(e.target.value); setPage(1); }} className="px-3 py-2 text-xs rounded-lg" style={inputStyle}>
+            <option value="">All treatment outcomes</option>
+            {OUTCOME_OPTIONS.map(outcome => <option key={outcome} value={outcome}>{outcome}</option>)}
+          </select>
         </div>
       </div>
 
@@ -530,7 +541,8 @@ export default function TBRecordsPage() {
                     <td className="px-3 py-2.5 text-xs" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{r.age ?? '—'}</td>
                     <td className="px-3 py-2.5 text-xs max-w-[170px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }} title={r.screening_facility || undefined}>{r.screening_facility || '—'}</td>
                     <td className="px-3 py-2.5 text-xs max-w-[170px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }} title={r.bacteriological_status || undefined}>{r.bacteriological_status || '—'}</td>
-                    <td className="px-3 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}><StatusBadge status={r.outcome_status || '—'} /></td>
+                    <td className="px-3 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}><StatusBadge status={r.case_status || '—'} /></td>
+                    <td className="px-3 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}>{r.treatment_outcome ? <StatusBadge status={r.treatment_outcome} /> : r.case_status ? <span className="text-xs cursor-help" style={{ color: '#94A3B8' }} title={r.case_status === 'DIAGNOSED' ? 'Diagnosed, not yet on treatment — no final outcome yet' : 'Still on treatment — no final outcome yet'}>—</span> : <StatusBadge status="—" />}</td>
                     <td className="px-3 py-2.5" style={{ borderRight: '1px solid #E2E8F0' }}>
                       <span className="inline-flex px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide rounded-full whitespace-nowrap"
                         style={SOURCE_STYLES[r.source_type] || SOURCE_STYLES.MANUAL}>
@@ -801,8 +813,15 @@ export default function TBRecordsPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Outcome Status</label>
-                  <FormSelect value={form.outcome_status} onChange={e => setField('outcome_status', e.target.value)} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Case Status</label>
+                  <FormSelect value={form.case_status} onChange={e => setForm(f => ({ ...f, case_status: e.target.value, treatment_outcome: '' }))} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
+                    <option value="">Select…</option>
+                    {CASE_STATUS_OPTIONS.map(v => <option key={v} value={v}>{v}</option>)}
+                  </FormSelect>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={labelStyle}>Treatment Outcome</label>
+                  <FormSelect value={form.treatment_outcome} onChange={e => setForm(f => ({ ...f, treatment_outcome: e.target.value, case_status: '' }))} className="w-full px-3 py-2 text-xs outline-none" style={inputStyle}>
                     <option value="">Select…</option>
                     {OUTCOME_OPTIONS.map(v => <option key={v} value={v}>{v}</option>)}
                   </FormSelect>

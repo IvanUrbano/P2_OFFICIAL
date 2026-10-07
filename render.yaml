@@ -33,8 +33,8 @@ services:
         sync: false
         # Set manually — must match ML Service's ML_API_KEY
       - key: ML_SERVICE_URL
+        value: https://tb-system-ml.onrender.com
         sync: false
-        # Set manually — the ML service Lambda Function URL (https://....lambda-url.us-west-2.on.aws)
 
   # ==================== Pasig Clone Backend ====================
   - type: web
@@ -70,7 +70,22 @@ services:
         # Pasig Clone frontend is on Vercel (PASIG_CLONE/frontend/vercel.json proxies /api here)
 
   # ==================== TBInsight ML Service ====================
-  # Not on Render: deployed to AWS Lambda from ML_SERVICE/Dockerfile (.github/workflows/deploy-ml-lambda.yml).
+  - type: web
+    name: tb-system-ml
+    env: python
+    plan: free
+    rootDir: ML_SERVICE
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: 3.12.10
+        # Same Python the pinned requirements.txt versions were verified with
+      - key: ML_API_KEY
+        sync: false
+        # Set manually — must match TBInsight backend's ML_API_KEY
 
 databases: []
   # Render free Postgres was auto-deleted.

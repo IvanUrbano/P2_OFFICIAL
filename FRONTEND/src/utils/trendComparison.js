@@ -67,12 +67,13 @@ export function parseCaseDate(value) {
  * filter match "Female" cases too, because "female" contains "male".
  */
 export function matchesNonYearFilters(c, filters = {}) {
-  const { barangay, facility, outcome, sex, ageGroup, bacteriological } = filters;
+  const { barangay, facility, status, outcome, sex, ageGroup, bacteriological } = filters;
   const eq = (value, needle) => String(value ?? '').trim().toLowerCase() === needle.trim().toLowerCase();
   if (barangay && c.barangay_name !== barangay) return false;
   if (facility && c.screening_facility !== facility && c.treatment_facility !== facility) return false;
   if (sex && !eq(c.sex, sex)) return false;
   if (outcome && (c.outcome_status || '').trim().toUpperCase() !== outcome.trim().toUpperCase()) return false;
+  if (status && (c.case_status || '').trim().toUpperCase() !== status.trim().toUpperCase()) return false;
   if (bacteriological && !eq(c.bacteriological_status, bacteriological)) return false;
   if (ageGroup && categorizeAge(c.age) !== ageGroup) return false;
   return true;
@@ -101,6 +102,74 @@ export function buildMonthlySeries(cases) {
         Cases: count,
       };
     });
+}
+
+function formatMonthCoverage(monthNumbers) {
+  if (monthNumbers.length === 12) return 'Full Year';
+  const ranges = [];
+  let start = monthNumbers[0];
+  let previous = start;
+  for (const month of monthNumbers.slice(1)) {
+    if (month !== previous + 1) {
+      ranges.push(start === previous ? MONTHS_SHORT[start - 1] : `${MONTHS_SHORT[start - 1]}–${MONTHS_SHORT[previous - 1]}`);
+      start = month;
+    }
+    previous = month;
+  }
+  if (monthNumbers.length) {
+    ranges.push(start === previous ? MONTHS_SHORT[start - 1] : `${MONTHS_SHORT[start - 1]}–${MONTHS_SHORT[previous - 1]}`);
+  }
+  return ranges.join(', ');
+}
+
+/**
+ * Compare each year's reported months with the same months of the prior year.
+ * A comparison is unavailable when the prior year is missing any of those
+ * months, rather than treating unreported months as zero cases.
+ */
+export function buildCaseTrendComparison(cases, { filters = {} } = {}) {
+  const years = new Map();
+  for (const record of cases || []) {
+    if (!matchesNonYearFilters(record, filters)) continue;
+    const date = parseCaseDate(record.date_of_diagnosis);
+    if (!date) continue;
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    if (!years.has(year)) years.set(year, new Map());
+    const months = years.get(year);
+    months.set(month, (months.get(month) || 0) + 1);
+  }
+
+  const yearNumbers = [...years.keys()].sort((a, b) => a - b);
+  const rows = yearNumbers.map((year) => {
+    const months = years.get(year);
+    const monthNumbers = [...months.keys()].sort((a, b) => a - b);
+    const previousMonths = years.get(year - 1);
+    const comparable = monthNumbers.length > 0
+      && previousMonths != null
+      && monthNumbers.every(month => previousMonths.has(month));
+    const casesInPeriod = monthNumbers.reduce((sum, month) => sum + months.get(month), 0);
+    const previousCasesInPeriod = comparable
+      ? monthNumbers.reduce((sum, month) => sum + previousMonths.get(month), 0)
+      : null;
+    const changePct = comparable && previousCasesInPeriod > 0
+      ? Math.round(((casesInPeriod - previousCasesInPeriod) / previousCasesInPeriod) * 1000) / 10
+      : null;
+
+    return {
+      year,
+      cases: casesInPeriod,
+      coverage: formatMonthCoverage(monthNumbers),
+      period: formatMonthCoverage(monthNumbers),
+      previousYear: year - 1,
+      comparable,
+      currentPeriodCases: casesInPeriod,
+      previousPeriodCases: previousCasesInPeriod,
+      changePct,
+    };
+  });
+  const latestPeriod = rows.length ? rows[rows.length - 1] : null;
+  return { rows, latestPeriod };
 }
 
 /**

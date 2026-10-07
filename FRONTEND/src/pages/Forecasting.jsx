@@ -10,10 +10,10 @@ import { forecastInsight, accuracyInsight } from '../utils/chartInsights';
 import FilterSelect from '../components/FilterSelect';
 import ProgressOverlay from '../components/ProgressOverlay';
 import { getForecastingInsight } from '../services/insightService';
+import { forecastMonthKey as localMonthKey, aggregateForecastHistory, calculateForecastGrowth } from '../utils/forecastSeries';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
-const ALL_YEARS = ['2023', '2024', '2025', '2026'];
 
 const HORIZON_OPTIONS = [
   { value: 1, label: '1 Month' },
@@ -132,15 +132,36 @@ function SectionSkeleton({ rows = 3 }) {
   );
 }
 
-/** 'YYYY-MM' from a date value using local date parts; null if unparseable. */
-function localMonthKey(value) {
-  if (!value) return null;
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return null;
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+function ModelOverview() {
+  return (
+    <section className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }} aria-labelledby="model-overview-heading">
+      <div className="grid grid-cols-1 md:grid-cols-3">
+        <div className="px-5 py-3.5 md:border-r" style={{ borderColor: '#F1F5F9' }}>
+          <h2 id="model-overview-heading" className="text-sm font-bold" style={{ color: '#1E293B' }}>
+            About the Models
+          </h2>
+          <p className="text-xs mt-1 leading-relaxed" style={{ color: '#64748B' }}>
+            Historical monthly TB cases inform two distinct outputs for planning.
+          </p>
+        </div>
+        <div className="px-5 py-3.5 border-t md:border-t-0 md:border-r" style={{ borderColor: '#F1F5F9' }}>
+          <h3 className="text-xs font-bold" style={{ color: '#0F2D52' }}>ARIMA Forecasting</h3>
+          <p className="text-xs mt-1 leading-relaxed" style={{ color: '#475569' }}>
+            Estimates future monthly TB case counts for each barangay.
+          </p>
+        </div>
+        <div className="px-5 py-3.5 border-t md:border-t-0" style={{ borderColor: '#F1F5F9' }}>
+          <h3 className="text-xs font-bold" style={{ color: '#0F2D52' }}>Random Forest — GIS Hotspots</h3>
+          <p className="text-xs mt-1 leading-relaxed" style={{ color: '#475569' }}>
+            Classifies each barangay as Low, Moderate, or High Risk on the GIS map.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
 }
 
-/* ─── Model Evaluation results (walk-forward metrics from the ML service) ─── */
+/* ─── Model Performance (saved walk-forward metrics from the ML service) ─── */
 
 function EvalMetric({ label, value }) {
   return (
@@ -151,146 +172,125 @@ function EvalMetric({ label, value }) {
   );
 }
 
-/* Plain-language comparison of a model score against its simple reference,
-   so the evaluation can be read as "better / about the same / worse". */
-function BaselineNote({ children }) {
-  return (
-    <p className="text-[11px] mt-2.5 pt-2.5 leading-relaxed" style={{ color: '#475569', borderTop: '1px solid #E2E8F0' }}>
-      {children}
-    </p>
-  );
+function formatEvaluationMonth(value) {
+  if (!value) return null;
+  const [year, month] = String(value).slice(0, 10).split('-').map(Number);
+  if (!year || !month) return null;
+  return new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 }
 
-function compareLabel(model, reference, lowerIsBetter) {
-  if (model == null || reference == null || reference === 0) return null;
-  const rel = (model - reference) / reference;
-  if (Math.abs(rel) < 0.03) return 'about the same as';
-  const better = lowerIsBetter ? rel < 0 : rel > 0;
-  return better ? 'better than' : 'worse than';
-}
-
-function EvaluationResults({ evaluation }) {
-  const arima = evaluation?.arima || {};
-  const rf = evaluation?.rf || {};
-  const methods = arima.method_counts || {};
-  const arimaTotal = Object.values(methods).reduce((a, b) => a + b, 0);
-  const arimaSteps = methods.arima || 0;
-  const fallbackSteps = arimaTotal - arimaSteps;
-  const fmt = (v, digits = 4) => (v == null ? '\u2014' : Number(v).toFixed(digits));
-  const pct = (v, digits = 1) => (v == null ? '\u2014' : `${(Number(v) * 100).toFixed(digits)}%`);
-  const classes = ['Low', 'Medium', 'High'];
+function ModelPerformance({ record, status, loading, error }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const evaluation = record?.metrics || {};
+  const arima = evaluation.arima || {};
+  const config = record?.config || {};
+  const methods = Object.entries(arima.method_counts || {}).filter(([, count]) => count > 0);
+  const method = config.method || (methods.length
+    ? methods.map(([name]) => name === 'arima' ? 'ARIMA' : name.replaceAll('_', ' ')).join(' + ')
+    : '—');
+  const steps = Array.isArray(arima.steps) ? arima.steps.filter(step => step.month) : [];
+  const stepMonths = steps.map(step => String(step.month).slice(0, 10)).sort();
+  const periodStart = formatEvaluationMonth(config.evaluation_start || stepMonths[0]);
+  const periodEnd = formatEvaluationMonth(config.evaluation_end || stepMonths[stepMonths.length - 1]);
+  const evaluationPeriod = periodStart && periodEnd
+    ? periodStart === periodEnd ? periodStart : `${periodStart}–${periodEnd}`
+    : 'Not recorded in this saved evaluation';
+  const savedAt = record?.trained_at ? new Date(record.trained_at).toLocaleString() : 'date unavailable';
+  const failedAt = status?.failedAt ? new Date(status.failedAt).toLocaleString() : 'date unavailable';
+  const formatCount = value => value == null || !Number.isFinite(Number(value))
+    ? '—'
+    : Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {/* ARIMA */}
-      <div className="rounded-lg p-4" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-        <div className="flex items-center justify-between gap-2 mb-3">
-          <h3 className="text-xs font-extrabold uppercase tracking-wide" style={{ color: '#0F2D52' }}>ARIMA Forecast</h3>
-          <span
-            className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0"
-            style={fallbackSteps === 0
-              ? { background: '#ECFDF5', color: '#047857' }
-              : { background: '#FFFBEB', color: '#B45309' }}
-          >
-            {arimaTotal === 0 ? 'No steps evaluated'
-              : fallbackSteps === 0 ? `All ${arimaTotal} steps: ARIMA`
-              : `${fallbackSteps} of ${arimaTotal} steps used fallback`}
-          </span>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          <EvalMetric label="MAE" value={fmt(arima.mae)} />
-          <EvalMetric label="MAPE" value={arima.mape != null ? `${arima.mape}%` : '\u2014'} />
-          <EvalMetric label="Steps/barangay" value={arima.n_steps ?? '\u2014'} />
-        </div>
-        {fallbackSteps > 0 && (
-          <p className="text-[11px] mt-2.5 leading-relaxed" style={{ color: '#B45309' }}>
-            MAE/MAPE include fallback models:{' '}
-            {Object.entries(methods).filter(([m]) => m !== 'arima').map(([m, c]) => `${m} \u00D7 ${c}`).join(', ')}.
-          </p>
-        )}
-        {arimaTotal > 0 && (
-          <p className="text-[11px] mt-2" style={{ color: '#94A3B8' }}>
-            {arimaSteps} real ARIMA fit{arimaSteps === 1 ? '' : 's'} across barangays · one-step-ahead walk-forward.
-          </p>
-        )}
-        {arima.baseline_mae != null && arima.mae != null && (
-          <BaselineNote>
-            Reference — plain 12-month average on the same steps: MAE {fmt(arima.baseline_mae)}
-            {arima.baseline_mape != null ? ` · MAPE ${arima.baseline_mape}%` : ''}.
-            {' '}ARIMA is <strong>{compareLabel(arima.mae, arima.baseline_mae, true)}</strong> this reference.
-          </BaselineNote>
-        )}
-        {Array.isArray(arima.failed_barangays) && arima.failed_barangays.length > 0 && (
-          <div className="mt-2.5 pt-2.5" style={{ borderTop: '1px solid #FECACA' }}>
-            <p className="text-[11px] font-bold" style={{ color: '#B91C1C' }}>
-              {arima.failed_barangays.length} barangay{arima.failed_barangays.length === 1 ? '' : 's'} could not be evaluated:
-            </p>
-            {arima.failed_barangays.map((f, i) => (
-              <p key={i} className="text-[11px]" style={{ color: '#991B1B' }}>{f.barangay_name}: {f.error}</p>
-            ))}
-          </div>
-        )}
+    <section className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
+      <div className="px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
+        <h2 className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>Model Performance</h2>
       </div>
-
-      {/* Random Forest */}
-      <div className="rounded-lg p-4" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-        <div className="flex items-center justify-between gap-2 mb-3">
-          <h3 className="text-xs font-extrabold uppercase tracking-wide" style={{ color: '#0F2D52' }}>Random Forest</h3>
-          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0" style={{ background: '#EFF6FF', color: '#1E40AF' }}>
-            {rf.n_steps ? `${rf.n_steps} test months` : 'No steps evaluated'}
-          </span>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          <EvalMetric label="Accuracy" value={pct(rf.accuracy)} />
-          <EvalMetric label="F1 (macro)" value={pct(rf.f1_macro)} />
-          <EvalMetric label="Steps" value={rf.n_steps ?? '\u2014'} />
-        </div>
-        <div className="mt-3 space-y-1">
-          {classes.map((cls) => (
-            <div key={cls} className="flex items-center justify-between text-[11px]">
-              <span className="font-semibold" style={{ color: '#64748B' }}>{cls}</span>
-              <span style={{ color: '#334155' }}>
-                Precision {fmt(rf.precision?.[cls])} · Recall {fmt(rf.recall?.[cls])}
-              </span>
+      <div className="px-6 py-4">
+        {loading && !record ? (
+          <p className="text-xs" style={{ color: '#64748B' }}>Loading latest performance results…</p>
+        ) : error && !record ? (
+          <p className="text-xs" style={{ color: '#B91C1C' }}>{error}</p>
+        ) : !record ? (
+          <p className="text-xs" style={{ color: '#64748B' }}>
+            No saved evaluation is available yet. Results will be generated automatically after the next analysis pipeline run.
+            {status?.lastError && <span className="block mt-1" style={{ color: '#B91C1C' }}>The latest automatic evaluation could not be completed; an administrator may need to check the model service.</span>}
+          </p>
+        ) : (
+          <>
+            {error && <p className="text-[10px] mb-2" style={{ color: '#B91C1C' }}>Could not refresh model performance: {error}. Showing the last loaded result.</p>}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <EvalMetric label="MAE" value={arima.mae == null ? '—' : `${Number(arima.mae).toFixed(1)} cases`} />
+              <EvalMetric label="MAPE" value={arima.mape == null ? '—' : `${Number(arima.mape).toFixed(1)}%`} />
+              <EvalMetric label="Method" value={method} />
+              <EvalMetric label="Evaluation Period" value={evaluationPeriod} />
             </div>
-          ))}
-        </div>
-        {rf.baseline_accuracy != null && rf.accuracy != null && (
-          <BaselineNote>
-            Reference — rank the last 12 months' incidence into thirds: accuracy {pct(rf.baseline_accuracy)}
-            {rf.baseline_f1_macro != null ? ` · F1 ${pct(rf.baseline_f1_macro)}` : ''}. Chance is 33.3%.
-            {' '}Random Forest is <strong>{compareLabel(rf.accuracy, rf.baseline_accuracy, false)}</strong> this reference.
-          </BaselineNote>
-        )}
-        {rf.confusion_matrix && (
-          <div className="mt-3">
-            <p className="text-[10px] font-bold mb-1" style={{ color: '#64748B' }}>Confusion matrix (rows = actual)</p>
-            <table className="text-[10px]" style={{ borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th />
-                  {classes.map((c) => (
-                    <th key={c} className="font-semibold" style={{ color: '#94A3B8', padding: '2px 8px', textAlign: 'center' }}>{c}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {classes.map((a) => (
-                  <tr key={a}>
-                    <th className="font-semibold" style={{ color: '#64748B', padding: '2px 8px', textAlign: 'left' }}>{a}</th>
-                    {classes.map((p) => (
-                      <td key={p} style={{ color: '#334155', padding: '2px 8px', textAlign: 'center' }}>
-                        {rf.confusion_matrix[a]?.[p] ?? 0}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+            {status?.running && <p className="text-[10px] mt-2" style={{ color: '#64748B' }}>A newer evaluation is running. Showing saved results from {savedAt}.</p>}
+            {!status?.running && status?.lastError && (
+              <p className="text-[10px] mt-2 leading-relaxed" style={{ color: '#B45309' }}>
+                The latest evaluation failed on {failedAt}. These are previous saved results from {savedAt}.
+              </p>
+            )}
+            {!periodStart && <p className="text-[10px] mt-2" style={{ color: '#64748B' }}>This older saved result did not include its tested months. Run a new evaluation to record the exact period.</p>}
+            <button
+              type="button"
+              onClick={() => setShowDetails(open => !open)}
+              className="inline-flex items-center gap-1 mt-3 text-[11px] font-bold"
+              style={{ color: '#174A7E' }}
+              aria-expanded={showDetails}
+            >
+              <i className={`ri-arrow-${showDetails ? 'down' : 'right'}-s-line`} />
+              {showDetails ? 'Hide Details' : 'View Details'}
+            </button>
+            {showDetails && (
+              <div className="mt-3 pt-3" style={{ borderTop: '1px solid #E2E8F0' }}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px] leading-relaxed">
+                  <p style={{ color: '#475569' }}><strong>MAE</strong><br />Average number of cases by which forecasts differed from actual recorded cases.</p>
+                  <p style={{ color: '#475569' }}><strong>MAPE</strong><br />Average forecast error expressed as a percentage.</p>
+                </div>
+                <h3 className="text-[11px] font-bold mt-4" style={{ color: '#0F2D52' }}>Actual vs Predicted{arima.example_barangay ? ` — ${arima.example_barangay}` : ''}</h3>
+                {steps.length > 0 ? (
+                  <>
+                    <div className="overflow-x-auto mt-3">
+                      <table className="w-full text-[11px] text-left">
+                        <thead style={{ color: '#64748B', background: '#F8FAFC' }}>
+                          <tr>
+                            {['Period', 'Actual', 'Predicted', 'Absolute Error'].map(label => (
+                              <th key={label} className="px-3 py-2 font-semibold">{label}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {steps.map(step => (
+                            <tr key={`${step.month}-${step.test_month}`} style={{ borderTop: '1px solid #F1F5F9', color: '#334155' }}>
+                              <td className="px-3 py-2">{formatEvaluationMonth(step.month)}</td>
+                              <td className="px-3 py-2">{formatCount(step.actual)}</td>
+                              <td className="px-3 py-2">{formatCount(step.predicted)}</td>
+                              <td className="px-3 py-2">{formatCount(Number.isFinite(Number(step.actual)) && Number.isFinite(Number(step.predicted))
+                                ? Math.abs(Number(step.actual) - Number(step.predicted))
+                                : step.error == null ? null : Math.abs(Number(step.error)))}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-[10px] mt-1.5" style={{ color: '#94A3B8' }}>
+                      Rows show one barangay&apos;s walk-forward results; MAE and MAPE summarize all evaluated barangays.
+                    </p>
+                  </>
+                ) : <p className="text-[10px] mt-2" style={{ color: '#64748B' }}>This saved evaluation did not retain monthly Actual vs Predicted rows.</p>}
+                <p className="text-[10px] mt-3 leading-relaxed" style={{ color: '#64748B' }}>
+                  Performance results are based on the historical data available for evaluation and may change as additional validated monthly data become available.
+                </p>
+              </div>
+            )}
+            <p className="text-[10px] mt-2" style={{ color: '#94A3B8' }}>
+              Last evaluated: {savedAt}
+            </p>
+          </>
         )}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -304,10 +304,12 @@ export default function Forecasting() {
   const [barangays, setBarangays] = useState([]);
   const [casesData, setCasesData] = useState([]);
   const [pipelineStatus, setPipelineStatus] = useState(null);
+  const availableYears = useMemo(() => [...new Set(monthlyData
+    .map(row => localMonthKey(row.month)?.slice(0, 4)).filter(Boolean))].sort(), [monthlyData]);
 
   /* ── Control state (user selections before clicking Run) ── */
-  const [startYear, setStartYear] = useState('2024');
-  const [endYear, setEndYear] = useState('2025');
+  const [startYear, setStartYear] = useState('');
+  const [endYear, setEndYear] = useState('');
   const [selectedBarangay, setSelectedBarangay] = useState('');
   const [forecastMonths, setForecastMonths] = useState(3);
   const [compareBarangay, setCompareBarangay] = useState('');
@@ -342,10 +344,11 @@ export default function Forecasting() {
 
   const isBusy = viewStatus === 'loading' || viewStatus === 'checking' || pipelineRunStatus === 'loading';
 
-  /* ── Model evaluation (Evaluate Model — admin only) ── */
-  const [evalLoading, setEvalLoading] = useState(false);
-  const [evalError, setEvalError] = useState(null);
-  const [evalResult, setEvalResult] = useState(null);
+  /* ── Automatically updated model performance ── */
+  const [modelEvaluation, setModelEvaluation] = useState(null);
+  const [evaluationStatus, setEvaluationStatus] = useState(null);
+  const [performanceLoading, setPerformanceLoading] = useState(true);
+  const [performanceError, setPerformanceError] = useState(null);
   const isAdmin = (() => {
     try { return JSON.parse(localStorage.getItem('user') || '{}')?.role === 'admin'; } catch { return false; }
   })();
@@ -361,6 +364,20 @@ export default function Forecasting() {
 
   /* ────────── Data fetching ────────── */
 
+  const loadModelPerformance = useCallback(async () => {
+    setPerformanceLoading(true);
+    setPerformanceError(null);
+    try {
+      const response = await API.get('/api/tb/evaluation/latest');
+      setModelEvaluation(response.data?.latest_evaluation || null);
+      setEvaluationStatus(response.data?.evaluation_status || null);
+    } catch (err) {
+      setPerformanceError(err.response?.data?.error || err.message || 'Unable to load model performance.');
+    } finally {
+      setPerformanceLoading(false);
+    }
+  }, []);
+
   const loadAll = useCallback(async () => {
     try {
       setError(null);
@@ -369,12 +386,16 @@ export default function Forecasting() {
         await Promise.all([
           API.get('/api/tb/dashboard/monthly'),
           API.get('/api/tb/forecasts'),
-          API.get('/api/tb/barangays'),
-          API.get('/api/tb/cases/analytics-dataset'),
+          API.get('/api/tb/barangays').catch(() => ({ data: { barangays: [] } })),
+          API.get('/api/tb/cases/analytics-dataset').catch(() => ({ data: { cases: [] } })),
           API.get('/api/tb/pipeline/status').catch(() => ({ data: { latest_run: null } })),
           API.get('/api/tb/forecast/backtest').catch(() => ({ data: { data: [] } })),
         ]);
       setMonthlyData(monthlyRes.data.monthly || []);
+      const years = [...new Set((monthlyRes.data.monthly || [])
+        .map(row => localMonthKey(row.month)?.slice(0, 4)).filter(Boolean))].sort();
+      setStartYear(current => years.includes(current) ? current : (years[0] || ''));
+      setEndYear(current => years.includes(current) ? current : (years[years.length - 1] || ''));
       setForecastsData(forecastsRes.data.forecasts || []);
       setBarangays(barangaysRes.data.barangays || []);
       setCasesData(allCasesRes.data.cases || []);
@@ -383,37 +404,54 @@ export default function Forecasting() {
     } catch (err) {
       if (import.meta.env.DEV) console.error('Forecasting fetch error:', err);
       setError('Failed to load analytics data. Make sure the backend is running.');
+      setPerformanceLoading(false);
     }
   }, []);
 
   useEffect(() => {
     loadAll();
-  }, [loadAll]);
+    loadModelPerformance();
+    window.addEventListener('focus', loadAll);
+    return () => window.removeEventListener('focus', loadAll);
+  }, [loadAll, loadModelPerformance]);
+
+  useEffect(() => {
+    if (!evaluationStatus?.running) return undefined;
+    const interval = window.setInterval(loadModelPerformance, 5000);
+    return () => window.clearInterval(interval);
+  }, [evaluationStatus?.running, loadModelPerformance]);
 
   /* ────────── Run Forecast ────────── */
 
   const refreshForecastView = useCallback(async () => {
-    const [freshForecasts, freshAvp, freshPipeline] = await Promise.all([
+    const [freshMonthly, freshForecasts, freshAvp, freshPipeline, freshCases] = await Promise.all([
+      API.get('/api/tb/dashboard/monthly'),
       API.get('/api/tb/forecasts'),
-      API.get('/api/tb/forecast/backtest'),
-      API.get('/api/tb/pipeline/status').catch(() => ({ data: { latest_run: null } })),
+      API.get('/api/tb/forecast/backtest').catch(() => ({ data: { data: [] } })),
+      API.get('/api/tb/pipeline/status'),
+      API.get('/api/tb/cases/analytics-dataset').catch(() => ({ data: { cases: [] } })),
     ]);
+    const monthly = freshMonthly.data.monthly || [];
+    const years = [...new Set(monthly.map(row => localMonthKey(row.month)?.slice(0, 4)).filter(Boolean))].sort();
+    setMonthlyData(monthly);
+    setStartYear(current => years.includes(current) ? current : (years[0] || ''));
+    setEndYear(current => years.includes(current) ? current : (years[years.length - 1] || ''));
     setForecastsData(freshForecasts.data.forecasts || []);
     setBacktestData(freshAvp.data.data || []);
     setPipelineStatus(freshPipeline.data.latest_run || null);
+    setCasesData(freshCases.data.cases || []);
+    return years;
   }, []);
 
-  const applySelectedFilters = useCallback(() => {
-    setAppliedStartYear(startYear);
-    setAppliedEndYear(endYear);
+  const applySelectedFilters = useCallback((years = availableYears) => {
+    const effectiveStart = years.includes(startYear) ? startYear : (years[0] || null);
+    const effectiveEnd = years.includes(endYear) ? endYear : (years[years.length - 1] || null);
+    setAppliedStartYear(effectiveStart);
+    setAppliedEndYear(effectiveEnd);
     setAppliedBarangay(selectedBarangay);
     setAppliedMonths(forecastMonths);
-  }, [startYear, endYear, selectedBarangay, forecastMonths]);
-
-  const scopeLabel = useCallback(() => {
-    const barangayPart = selectedBarangay || 'All Pasig Barangays';
-    return `${barangayPart} • ${startYear}–${endYear}`;
-  }, [selectedBarangay, startYear, endYear]);
+    return { startYear: effectiveStart, endYear: effectiveEnd, barangay: selectedBarangay, horizon: forecastMonths };
+  }, [startYear, endYear, selectedBarangay, forecastMonths, availableYears]);
 
   // Loads currently persisted forecasts under the selected filters — read-only,
   // available to every user, never reprocesses ARIMA/RF. A failed request
@@ -423,6 +461,8 @@ export default function Forecasting() {
     setViewStatus('loading');
     setViewErrorMessage(null);
     setViewSuccessInfo(null);
+    setInsightData(null);
+    setInsightError(null);
 
     if (Number(startYear) > Number(endYear)) {
       setViewStatus('error');
@@ -431,16 +471,25 @@ export default function Forecasting() {
     }
 
     try {
-      await refreshForecastView();
-      applySelectedFilters();
-      setViewSuccessInfo({ scope: scopeLabel() });
+      const years = await refreshForecastView();
+      const filters = applySelectedFilters(years);
+      setViewSuccessInfo({ scope: `${filters.barangay || 'All Pasig Barangays'} • ${filters.startYear || 'N/A'}–${filters.endYear || 'N/A'}` });
       setViewStatus('checking');
+      setInsightLoading(true);
+      try {
+        setInsightData(await getForecastingInsight(filters));
+      } catch (insightErr) {
+        if (import.meta.env.DEV) console.error('Forecast insight error:', insightErr);
+        setInsightError('Unable to generate insight.');
+      } finally {
+        setInsightLoading(false);
+      }
     } catch (err) {
       if (import.meta.env.DEV) console.error('Forecast fetch error:', err.response?.data?.error || err.message);
       setViewStatus('error');
       setViewErrorMessage(err.response?.data?.error || err.message || 'Could not load the forecast.');
     }
-  }, [startYear, endYear, refreshForecastView, applySelectedFilters, scopeLabel]);
+  }, [startYear, endYear, refreshForecastView, applySelectedFilters]);
 
   // Admin-only reprocessing action — runs ARIMA + RF, then shows the
   // refreshed view. Captures the full pipeline result (never discards it)
@@ -450,6 +499,8 @@ export default function Forecasting() {
     setPipelineRunStatus('loading');
     setPipelineRunResult(null);
     setPipelineRunErrorMessage(null);
+    setInsightData(null);
+    setInsightError(null);
 
     if (Number(startYear) > Number(endYear)) {
       setPipelineRunStatus('error');
@@ -482,6 +533,7 @@ export default function Forecasting() {
         errors: result.errors || [],
       });
       setPipelineRunStatus(hasWarnings ? 'warning' : 'success');
+      loadModelPerformance();
     } catch (err) {
       if (import.meta.env.DEV) console.error('Pipeline error:', err.response?.data?.error || err.message);
       setPipelineRunStatus('error');
@@ -496,47 +548,30 @@ export default function Forecasting() {
     setViewStatus('loading');
     setViewErrorMessage(null);
     try {
-      await refreshForecastView();
-      applySelectedFilters();
-      setViewSuccessInfo({ scope: scopeLabel() });
+      const years = await refreshForecastView();
+      const filters = applySelectedFilters(years);
+      setViewSuccessInfo({ scope: `${filters.barangay || 'All Pasig Barangays'} • ${filters.startYear || 'N/A'}–${filters.endYear || 'N/A'}` });
       setViewStatus('checking');
+      setInsightLoading(true);
+      try {
+        const insight = await getForecastingInsight(filters);
+        setInsightData(insight);
+      } catch (insightErr) {
+        if (import.meta.env.DEV) console.error('Post-pipeline insight error:', insightErr);
+        setInsightError('Unable to generate insight.');
+      } finally {
+        setInsightLoading(false);
+      }
     } catch (err) {
       if (import.meta.env.DEV) console.error('Post-pipeline refresh error:', err.response?.data?.error || err.message);
       setViewStatus('error');
       setViewErrorMessage(err.response?.data?.error || err.message || 'Pipeline completed, but the view could not be refreshed. Click View Forecast to try again.');
     }
-  }, [startYear, endYear, forecastMonths, selectedBarangay, refreshForecastView, applySelectedFilters, scopeLabel]);
-
-  /* ────────── Evaluate Model (admin) ────────── */
-
-  // Walk-forward evaluation of ARIMA + RF via the existing
-  // POST /api/tb/evaluate endpoint. Metrics arrive from the backend/ML
-  // service as-is — nothing is computed or substituted in the frontend.
-  // On any failure (e.g. ML service down) the error is shown INSTEAD of
-  // results, so fallback models can never be presented as ARIMA/RF metrics.
-  const handleRunEvaluation = useCallback(async () => {
-    setEvalLoading(true);
-    setEvalError(null);
-    setEvalResult(null);
-    try {
-      const res = await API.post('/api/tb/evaluate', {});
-      const evaluation = res.data?.evaluation;
-      if (evaluation) {
-        setEvalResult(evaluation);
-      } else {
-        setEvalError('Evaluation returned no results.');
-      }
-    } catch (err) {
-      const data = err.response?.data;
-      setEvalError(data?.details || data?.error || err.message);
-    } finally {
-      setEvalLoading(false);
-    }
-  }, []);
+  }, [startYear, endYear, forecastMonths, selectedBarangay, refreshForecastView, applySelectedFilters, loadModelPerformance]);
 
   const handleReset = useCallback(() => {
-    setStartYear('2024');
-    setEndYear('2025');
+    setStartYear(availableYears[0] || '');
+    setEndYear(availableYears[availableYears.length - 1] || '');
     setSelectedBarangay('');
     setForecastMonths(3);
     setAppliedStartYear(null);
@@ -546,7 +581,7 @@ export default function Forecasting() {
     setViewStatus('idle');
     setViewErrorMessage(null);
     setViewSuccessInfo(null);
-  }, []);
+  }, [availableYears]);
 
   const handleGenerateInsight = useCallback(async () => {
     try {
@@ -582,58 +617,31 @@ export default function Forecasting() {
       data = data.filter((r) => r.barangay_name === appliedBarangay);
     }
     return data.filter((r) => {
-      const yr = new Date(r.month).getFullYear();
+      const yr = Number(localMonthKey(r.month)?.slice(0, 4));
       return yr >= Number(appliedStartYear) && yr <= Number(appliedEndYear);
     });
   }, [monthlyData, appliedStartYear, appliedEndYear, appliedBarangay]);
 
   /** Aggregate monthly data into time-series for chart */
-  const aggregatedMonthly = useMemo(() => {
-    const byMonth = {};
-    filteredMonthly.forEach((r) => {
-      const key = r.month;
-      if (!byMonth[key]) byMonth[key] = 0;
-      byMonth[key] += Number(r.case_count || 0);
-    });
-    return Object.entries(byMonth)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([month, count]) => {
-        const d = new Date(month);
-        return {
-          month,
-          label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
-          cases: count,
-        };
-      });
-  }, [filteredMonthly]);
+  const aggregatedMonthly = useMemo(() => aggregateForecastHistory(filteredMonthly), [filteredMonthly]);
 
   /** Total historical cases in the selected period */
-  const historicalCases = useMemo(
-    () => aggregatedMonthly.reduce((sum, r) => sum + r.cases, 0),
-    [aggregatedMonthly]
-  );
+  const historicalCases = useMemo(() => aggregatedMonthly.length
+    ? aggregatedMonthly.reduce((sum, r) => sum + r.cases, 0) : null, [aggregatedMonthly]);
 
-  /** Latest month with actual case data (YYYY-MM), across all barangays.
-   * Keys use local date parts, like the rest of this page: DATE columns
-   * arrive as ISO timestamps shifted to UTC (Oct 1 → "…09-30T16:00Z"). */
-  const latestActualMonth = useMemo(() => {
-    let latest = null;
-    monthlyData.forEach((r) => {
-      const key = localMonthKey(r.month);
-      if (key && (!latest || key > latest)) latest = key;
-    });
-    return latest;
-  }, [monthlyData]);
+  /** Latest actual month within the selected years and barangay. */
+  const latestActualMonth = aggregatedMonthly[aggregatedMonthly.length - 1]?.month || null;
 
-  /** Filter forecasts by barangay and aggregate by period */
+  /** Select the persisted months from the latest completed pipeline run. */
   const filteredForecasts = useMemo(() => {
-    if (!appliedBarangay && !appliedMonths) return [];
-    // Only periods AFTER the latest actual month are forecasts to show.
-    // Older rows are past runs' targets (kept for forecast-error tracking)
-    // and were being sliced in ahead of the real forecast, out of order.
-    let data = latestActualMonth
-      ? forecastsData.filter((r) => (localMonthKey(r.period || r.forecast_period) || '') > latestActualMonth)
-      : forecastsData;
+    const runStart = String(pipelineStatus?.config?.period || '').slice(0, 7);
+    if (!appliedMonths || !/^\d{4}-\d{2}$/.test(runStart)) return [];
+    const [year, month] = runStart.split('-').map(Number);
+    const months = new Set(Array.from({ length: appliedMonths }, (_, i) => {
+      const d = new Date(year, month - 1 + i, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }));
+    let data = forecastsData.filter((r) => months.has(String(r.period || r.forecast_period || '').slice(0, 7)));
     if (appliedBarangay) {
       data = data.filter((r) => (r.barangay_name || '') === appliedBarangay);
     }
@@ -644,7 +652,7 @@ export default function Forecasting() {
     // 0 would misrepresent "not modeled" as "predicted zero cases".
     const byPeriod = {};
     data.forEach((r) => {
-      const period = r.period || r.forecast_period || '';
+      const period = String(r.period || r.forecast_period || '').slice(0, 7);
       if (!period) return;
       if (!byPeriod[period]) {
         byPeriod[period] = {
@@ -690,9 +698,8 @@ export default function Forecasting() {
 
     let result = Object.values(byPeriod).sort((a, b) => a.period.localeCompare(b.period));
     // Limit to horizon
-    if (appliedMonths) result = result.slice(0, appliedMonths);
     return result;
-  }, [forecastsData, appliedBarangay, appliedMonths, latestActualMonth]);
+  }, [forecastsData, appliedBarangay, appliedMonths, pipelineStatus]);
 
   // Resolves the transient 'checking' state (set right after a successful
   // fetch) into 'success' or 'no_data' once historicalCases/filteredForecasts
@@ -701,28 +708,33 @@ export default function Forecasting() {
   // aren't readable synchronously inside the handler that set that state.
   useEffect(() => {
     if (viewStatus !== 'checking') return;
-    const hasData = historicalCases > 0 || filteredForecasts.length > 0;
+    const hasData = historicalCases != null || filteredForecasts.length > 0;
     setViewStatus(hasData ? 'success' : 'no_data');
   }, [viewStatus, historicalCases, filteredForecasts]);
 
   /** Comparison forecasts for barangay comparison */
   const comparisonForecasts = useMemo(() => {
     if (!showCompare || !compareBarangay || !appliedMonths) return [];
-    let data = forecastsData.filter((r) => (r.barangay_name || '') === compareBarangay);
+    const selectedPeriods = new Set(filteredForecasts.map(r => r.period));
+    let data = forecastsData.filter((r) => (r.barangay_name || '') === compareBarangay
+      && selectedPeriods.has(String(r.period || r.forecast_period || '').slice(0, 7)));
     const byPeriod = {};
     data.forEach((r) => {
-      const period = r.period || r.forecast_period || '';
+      const period = String(r.period || r.forecast_period || '').slice(0, 7);
       if (!period) return;
       if (!byPeriod[period]) {
-        byPeriod[period] = { period, forecasted: 0, count: 0 };
+        byPeriod[period] = { period, forecasted: 0, hasForecast: false, count: 0 };
       }
-      byPeriod[period].forecasted += Number(r.forecasted_count || 0);
+      if (r.forecasted_count != null) {
+        byPeriod[period].forecasted += Number(r.forecasted_count);
+        byPeriod[period].hasForecast = true;
+      }
       byPeriod[period].count += 1;
     });
     let result = Object.values(byPeriod).sort((a, b) => a.period.localeCompare(b.period));
     if (appliedMonths) result = result.slice(0, appliedMonths);
     return result;
-  }, [showCompare, compareBarangay, forecastsData, appliedMonths]);
+  }, [showCompare, compareBarangay, forecastsData, appliedMonths, filteredForecasts]);
 
   /** Build AVP chart data from backtest results (historical actual vs predicted) */
   const avpChartData = useMemo(() => {
@@ -764,28 +776,13 @@ export default function Forecasting() {
   }, [backtestData, appliedBarangay, appliedStartYear, appliedEndYear]);
 
   /** Metric card computations */
-  const totalForecasted = useMemo(
-    () => filteredForecasts.reduce((s, r) => {
-      const d = new Date(r.period);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      const hasCases = casesData.some((c) => {
-        if (!c.date_of_diagnosis) return false;
-        const dt = new Date(c.date_of_diagnosis);
-        return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}` === key;
-      });
-      if (hasCases) return s;
-      return s + r.forecasted;
-    }, 0),
-    [filteredForecasts, casesData]
-  );
+  const totalForecasted = useMemo(() => {
+    const modeled = filteredForecasts.filter(r => r.hasForecast);
+    return modeled.length ? modeled.reduce((sum, r) => sum + r.forecasted, 0) : null;
+  }, [filteredForecasts]);
 
-  const growthRate = useMemo(() => {
-    if (historicalCases === 0 || totalForecasted === 0) return 0;
-    const monthlyAvg = historicalCases / (new Set(filteredMonthly.map(r => r.month)).size || 1);
-    const firstForecast = filteredForecasts.length > 0 ? filteredForecasts[0].forecasted : 0;
-    const baseline = monthlyAvg || 1;
-    return ((firstForecast - baseline) / baseline) * 100;
-  }, [historicalCases, totalForecasted, filteredForecasts, filteredMonthly]);
+  const growth = useMemo(() => calculateForecastGrowth(aggregatedMonthly, filteredForecasts), [aggregatedMonthly, filteredForecasts]);
+  const growthRate = growth.rate;
 
   /** Forecast tier for the selected scope: 'arima' | a baseline method name
    * | 'insufficient_data' | null (nothing loaded yet). Drives the Model
@@ -795,31 +792,12 @@ export default function Forecasting() {
     return filteredForecasts[filteredForecasts.length - 1]?.method || null;
   }, [filteredForecasts]);
   const isBaselineTier = forecastTier != null && forecastTier !== 'arima' && forecastTier !== 'insufficient_data';
-  // forecastTier is a raw method name (e.g. 'arima_nonseasonal'), which
-  // formatForecastingStatus doesn't know — normalise it to a status first so
-  // the Model Status card can't read "Not Run" right after a successful run.
-  const forecastTierStatus = isBaselineTier ? 'baseline' : forecastTier;
 
   /** Chart data: historical + forecast combined */
   const forecastChartData = useMemo(() => {
-    const points = [];
-    // Build actual case counts by period
-    const actualByPeriod = {};
-    casesData.forEach((r) => {
-      const d = r.date_of_diagnosis;
-      if (!d) return;
-      const dt = new Date(d);
-      if (isNaN(dt.getTime())) return;
-      const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
-      if (!actualByPeriod[key]) actualByPeriod[key] = 0;
-      actualByPeriod[key] += 1;
-    });
-    const allActualPeriods = Object.keys(actualByPeriod).sort();
-    const latestActual = allActualPeriods.length > 0 ? allActualPeriods[allActualPeriods.length - 1] : null;
-
-    // Add historical actual data
+    const pointsByMonth = new Map();
     aggregatedMonthly.forEach((r) => {
-      points.push({
+      pointsByMonth.set(r.month, {
         label: r.label,
         month: r.month,
         Actual: r.cases,
@@ -830,31 +808,33 @@ export default function Forecasting() {
       });
     });
 
-    // Add forecast data (only for future periods, not historical)
+    // A saved forecast may overlap months with actuals imported after its run.
+    // Keep both series at those months so the chart shows what was predicted
+    // alongside what subsequently happened.
     filteredForecasts.forEach((r) => {
-      const d = new Date(r.period);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      const isFuture = !latestActual || key > latestActual;
-      const hasValue = isFuture && r.hasForecast;
+      const d = new Date(`${r.period}-01T12:00:00`);
+      const key = r.period;
+      const hasValue = r.hasForecast;
       const comparePoint = comparisonForecasts.find((c) => {
-        const cd = new Date(c.period);
-        return `${cd.getFullYear()}-${String(cd.getMonth() + 1).padStart(2, '0')}` === key;
+        return c.period === key;
       });
-      points.push({
+      const existing = pointsByMonth.get(key);
+      pointsByMonth.set(key, {
+        ...existing,
         label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
         month: r.period,
-        Actual: null,
+        Actual: existing?.Actual ?? null,
         // No point is drawn at all for an insufficient-history period — a
         // fabricated zero would misrepresent "not modeled" as a prediction.
         Forecast: hasValue ? Math.round(r.forecasted) : null,
-        CompareForecast: hasValue && comparePoint ? Math.round(comparePoint.forecasted) : null,
+        CompareForecast: hasValue && comparePoint?.hasForecast ? Math.round(comparePoint.forecasted) : null,
         ci_upper: hasValue && r.hasCI ? r.ci_upper : null,
         ci_lower: hasValue && r.hasCI ? r.ci_lower : null,
         isForecast: hasValue,
       });
     });
-    return points;
-  }, [aggregatedMonthly, filteredForecasts, comparisonForecasts, casesData]);
+    return [...pointsByMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
+  }, [aggregatedMonthly, filteredForecasts, comparisonForecasts]);
 
   /** First forecast label for the ReferenceLine */
   const forecastStartLabel = useMemo(() => {
@@ -885,17 +865,14 @@ export default function Forecasting() {
     const latestActualPeriod = allActualPeriods.length > 0 ? allActualPeriods[allActualPeriods.length - 1] : null;
     const lastActualCount = latestActualPeriod ? actualByPeriod[latestActualPeriod] : 0;
 
-    let lastForecasted = null;
-
-    return filteredForecasts.map((r, i) => {
-      const pDate = new Date(r.period);
-      const periodKey = isNaN(pDate.getTime()) ? r.period : `${pDate.getFullYear()}-${String(pDate.getMonth() + 1).padStart(2, '0')}`;
+    return filteredForecasts.map((r, index) => {
+      const periodKey = r.period;
 
       // Determine if this is a historical or forecast period
       const hasActual = actualByPeriod[periodKey] != null;
-      const isHistorical = hasActual && periodKey <= latestActualPeriod;
+      const isHistorical = false;
 
-      const actual = isHistorical ? actualByPeriod[periodKey] : null;
+      const actual = hasActual ? actualByPeriod[periodKey] : null;
       const isInsufficient = !isHistorical && r.method === 'insufficient_data';
       const forecasted = !isHistorical && r.hasForecast ? Math.round(Number(r.forecasted)) : null;
       const ci_lower = !isHistorical && r.hasCI ? Math.round(Number(r.ci_lower)) : null;
@@ -904,16 +881,16 @@ export default function Forecasting() {
       // Growth: first forecast compares to last actual, subsequent compare to previous forecast
       let gr = null;
       if (!isHistorical && forecasted != null) {
-        const baseline = lastForecasted != null ? lastForecasted : lastActualCount;
+        const previousForecast = filteredForecasts.slice(0, index).reverse().find(previous => previous.hasForecast);
+        const baseline = previousForecast ? previousForecast.forecasted : lastActualCount;
         if (baseline > 0) {
           gr = (((forecasted - baseline) / baseline) * 100).toFixed(1);
         }
-        lastForecasted = forecasted;
       }
 
       return {
         period: r.period,
-        periodLabel: new Date(r.period).toLocaleDateString('en-US', {
+        periodLabel: new Date(`${r.period}-01T12:00:00`).toLocaleDateString('en-US', {
           month: 'long',
           year: 'numeric',
         }),
@@ -1043,10 +1020,11 @@ export default function Forecasting() {
     return m ? new Date(Number(m[1]), Number(m[2]) - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : null;
   };
   const runMetrics = pipelineStatus?.metrics || {};
-  const basisStart = monthLabel(runMetrics.dataStart);
-  const basisEnd = monthLabel(runMetrics.dataEnd);
-  const forecastStart = monthLabel(pipelineStatus?.config?.period);
-  const usedFallback = (runMetrics.forecastMethods || []).some(m => String(m).includes('fallback') || String(m).includes('baseline'));
+  const basisStart = monthLabel(aggregatedMonthly[0]?.month);
+  const basisEnd = monthLabel(aggregatedMonthly[aggregatedMonthly.length - 1]?.month);
+  const forecastStart = monthLabel(filteredForecasts[0]?.period);
+  const forecastHorizon = Number(appliedMonths ?? runMetrics.forecastHorizon);
+  const forecastEnd = monthLabel(filteredForecasts[filteredForecasts.length - 1]?.period);
   const runMethods = (runMetrics.forecastMethods || []).map(String);
   const forecastMethodLabel = runMethods.length === 0 ? null
     : runMethods.every(m => m === 'arima') ? 'ARIMA'
@@ -1062,19 +1040,35 @@ export default function Forecasting() {
         icon="ri-line-chart-line"
         note="This usually takes a few minutes. Keep this page open until it finishes."
       />
-      <ProgressOverlay
-        open={evalLoading}
-        title="Evaluating the models"
-        detail="Walk-forward testing of ARIMA and the Random Forest against past months."
-        icon="ri-bar-chart-box-line"
-        note="This can take several minutes. Keep this page open until it finishes."
-      />
-
-      {basisStart && basisEnd && (
-        <div className="rounded-xl px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs" style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', color: '#1E3A5F' }}>
-          <span><i className="ri-database-2-line mr-1" />Based on monthly TB data from <b>{basisStart}</b> to <b>{basisEnd}</b>{pipelineStatus?.training_months ? ` (${pipelineStatus.training_months} months)` : ''}</span>
-          {forecastStart && <span><i className="ri-calendar-event-line mr-1" />Forecast starts <b>{forecastStart}</b> — the month after the latest data</span>}
-          {usedFallback && <span style={{ color: '#92400E' }}><i className="ri-error-warning-line mr-1" />Some barangays use a simpler fallback forecast (too little history or the ML service was unavailable)</span>}
+      {viewStatus === 'success' && (
+        <div className="rounded-xl px-5 py-3 text-xs" style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', color: '#1E3A5F' }}>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+          <div>
+            <span className="font-semibold" style={{ color: '#0F2D52' }}>Historical Data Period</span>
+            <span>{basisStart && basisEnd ? `${basisStart} – ${basisEnd}` : 'N/A'}</span>
+          </div>
+          <div>
+            <span className="font-semibold" style={{ color: '#0F2D52' }}>Latest Actual Data</span>
+            <span>{latestActualMonth ? monthLabel(latestActualMonth) : 'N/A'}</span>
+          </div>
+          <div>
+            <span className="font-semibold" style={{ color: '#0F2D52' }}>Forecast Period</span>
+            <span>{forecastStart && forecastEnd ? `${forecastStart} – ${forecastEnd}` : 'N/A'}</span>
+          </div>
+          <div>
+            <span className="font-semibold" style={{ color: '#0F2D52' }}>Forecast Horizon</span>
+            <span>{forecastHorizon > 0 ? `${forecastHorizon} month${forecastHorizon === 1 ? '' : 's'}` : '—'}</span>
+          </div>
+          <div>
+            <span className="font-semibold" style={{ color: '#0F2D52' }}>Forecast Method</span>
+            <span>{forecastMethodLabel ?? forecastTierMethodLabel(forecastTier) ?? '—'}</span>
+          </div>
+          </div>
+          {latestActualMonth && filteredForecasts.length > 0 && filteredForecasts[filteredForecasts.length - 1].period <= latestActualMonth && (
+            <p className="mt-2" style={{ color: '#92400E' }}>
+              Actual data now extends through or beyond this saved forecast. Run the analysis pipeline to generate a forecast after the latest actual month.
+            </p>
+          )}
         </div>
       )}
 
@@ -1130,22 +1124,6 @@ export default function Forecasting() {
                   : <><i className="ri-refresh-line mr-1" />Run Analysis Pipeline</>}
               </button>
             )}
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={handleRunEvaluation}
-                disabled={evalLoading || isBusy}
-                title="Walk-forward evaluation of ARIMA + Random Forest (admin)"
-                className="px-5 py-2 text-xs font-semibold disabled:opacity-60"
-                style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = '#ffffff'; }}
-              >
-                {evalLoading
-                  ? <><i className="ri-loader-4-line text-xs animate-spin mr-1" /> Evaluating...</>
-                  : <><i className="ri-flask-line mr-1" />Evaluate Model</>}
-              </button>
-            )}
           </div>
         </div>
 
@@ -1165,10 +1143,10 @@ export default function Forecasting() {
         <div className="flex items-center justify-between px-6 py-3" style={{ background: '#F8FAFC', borderTop: '1px solid #E2E8F0' }}>
           <div className="flex items-center gap-1.5 flex-wrap">
             <FilterSelect label="Start" value={startYear} onChange={setStartYear}>
-              {ALL_YEARS.map((yr) => <option key={yr} value={yr}>{yr}</option>)}
+              {availableYears.map((yr) => <option key={yr} value={yr}>{yr}</option>)}
             </FilterSelect>
             <FilterSelect label="End" value={endYear} onChange={setEndYear}>
-              {ALL_YEARS.map((yr) => <option key={yr} value={yr}>{yr}</option>)}
+              {availableYears.map((yr) => <option key={yr} value={yr}>{yr}</option>)}
             </FilterSelect>
             <FilterSelect label="Barangay" value={selectedBarangay} onChange={setSelectedBarangay} selectStyle={{ maxWidth: 180 }}>
               <option value="">All Pasig Barangays</option>
@@ -1199,6 +1177,8 @@ export default function Forecasting() {
           </div>
         </div>
       </div>
+
+      <ModelOverview />
 
       {/* ─── Run Analysis Pipeline result (admin) ─── */}
       {isAdmin && pipelineRunStatus !== 'idle' && (
@@ -1285,51 +1265,12 @@ export default function Forecasting() {
         </div>
       )}
 
-      {/* ─── Model Evaluation (admin) ─── */}
-      {isAdmin && (evalLoading || evalError || evalResult) && (
-        <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)' }}>
-          <div className="flex items-center justify-between px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
-            <div>
-              <h2 className="text-sm font-extrabold" style={{ color: '#0F2D52' }}>Model Evaluation</h2>
-              <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>
-                Walk-forward validation of the ARIMA and Random Forest models — metrics computed by the ML service, not in the browser.
-              </p>
-            </div>
-            {evalResult?.model_version && (
-              <span className="text-[11px] font-medium shrink-0" style={{ color: '#94A3B8' }}>{evalResult.model_version}</span>
-            )}
-          </div>
-
-          <div className="px-6 py-4">
-            {evalLoading ? (
-              <div className="flex items-center gap-2 text-xs font-medium" style={{ color: '#64748B' }}>
-                <i className="ri-loader-4-line animate-spin" />
-                Running walk-forward evaluation — one model is trained per step, this may take a few minutes...
-              </div>
-            ) : evalError ? (
-              <div className="rounded-lg px-4 py-3" style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
-                <p className="text-xs font-bold" style={{ color: '#B91C1C' }}>
-                  <i className="ri-error-warning-line mr-1" />
-                  Model evaluation could not be completed.
-                </p>
-                <p className="text-[11px] mt-1 font-mono break-words" style={{ color: '#991B1B' }}>{evalError}</p>
-                <p className="text-[11px] mt-1.5 leading-relaxed" style={{ color: '#7F1D1D' }}>
-                  No metrics are shown because the intended models could not be evaluated. Fallback models are never
-                  reported here as ARIMA/RF results — make sure the ML service is running (port 8001), then run again.
-                </p>
-              </div>
-            ) : evalResult ? (
-              <>
-                <EvaluationResults evaluation={evalResult} />
-                <p className="text-[11px] mt-3" style={{ color: '#94A3B8' }}>
-                  Source: POST /api/tb/evaluate (walk-forward: trains on months 1..T, predicts T+1, slides forward).
-                  Results are also stored in model_metadata for provenance.
-                </p>
-              </>
-            ) : null}
-          </div>
-        </div>
-      )}
+      <ModelPerformance
+        record={modelEvaluation}
+        status={evaluationStatus}
+        loading={performanceLoading}
+        error={performanceError}
+      />
 
       {/* ─── Content States ───
           Five distinct states, never conflated: idle (nothing requested),
@@ -1425,8 +1366,8 @@ export default function Forecasting() {
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Historical Cases</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{historicalCases.toLocaleString()}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{appliedStartYear}\u2013{appliedEndYear} period</span>
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{historicalCases != null ? historicalCases.toLocaleString() : 'N/A'}</p>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{appliedStartYear} – {appliedEndYear} period</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
@@ -1437,7 +1378,7 @@ export default function Forecasting() {
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Forecasted Cases</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{totalForecasted.toLocaleString()}</p>
+                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{totalForecasted != null ? Math.round(totalForecasted).toLocaleString() : 'N/A'}</p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{appliedMonths}-month horizon</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
@@ -1445,17 +1386,17 @@ export default function Forecasting() {
               {/* Expected Growth Rate */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-percent-line text-sm" style={{ color: growthRate >= 0 ? '#B07070' : '#6B9E8A' }} />
+                  <i className="ri-percent-line text-sm" style={{ color: growthRate == null || growthRate >= 0 ? '#B07070' : '#6B9E8A' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Expected Growth Rate</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <div className="flex items-end gap-2">
                   <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
-                    {growthRate >= 0 ? '+' : '\u2212'}{Math.abs(growthRate).toFixed(1)}%
+                    {growthRate == null ? 'N/A' : `${growthRate >= 0 ? '+' : '\u2212'}${Math.abs(growthRate).toFixed(1)}%`}
                   </p>
                 </div>
                 <span className="text-[11px] font-medium mt-1" style={{ color: growthRate >= 0 ? '#B07070' : '#6B9E8A' }}>
-                  {growthRate >= 0 ? 'Rising' : 'Falling'} vs baseline
+                  {growthRate == null ? growth.reason : `${growthRate >= 0 ? 'Rising' : 'Falling'} vs ${growth.baseline.toFixed(1)} cases/month baseline`}
                 </span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
@@ -1480,8 +1421,8 @@ export default function Forecasting() {
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-[11px] font-semibold shrink-0" style={{ color: '#64748B' }}>Forecasting</span>
-                    <span className="text-[11px] font-extrabold text-right" style={{ color: formatForecastingStatus(forecastTierStatus).color }}>
-                      {formatForecastingStatus(forecastTierStatus).label}
+                    <span className="text-[11px] font-extrabold text-right" style={{ color: formatForecastingStatus(pipelineStatus?.arima_status).color }}>
+                      {formatForecastingStatus(pipelineStatus?.arima_status).label}
                     </span>
                   </div>
                 </div>

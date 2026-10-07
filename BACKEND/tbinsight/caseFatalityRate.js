@@ -45,7 +45,7 @@ async function computeCaseFatalityRate(pool, { year, month, barangay, sex, ageGr
   // values[0].. — Postgres rejected that bind ("could not determine data
   // type of parameter $1") for ANY param-bearing filter, 500-ing the NLG
   // insight endpoint and the CFR KPI whenever a filter was active.
-  const conditions = [`UPPER(TRIM(outcome_status)) = ANY($1)`];
+  const conditions = [`treatment_outcome = ANY($1)`];
   const params = [EVALUATED_TERMINAL_OUTCOMES];
   const totalConditions = [];
   const totalParams = [];
@@ -86,7 +86,7 @@ async function computeCaseFatalityRate(pool, { year, month, barangay, sex, ageGr
     pool.query(
       `SELECT
          COUNT(*)::INTEGER AS evaluated,
-         SUM(CASE WHEN UPPER(TRIM(outcome_status)) = 'DIED' THEN 1 ELSE 0 END)::INTEGER AS died
+         SUM(CASE WHEN treatment_outcome = 'DIED' THEN 1 ELSE 0 END)::INTEGER AS died
        FROM tb_cases
        WHERE ${conditions.join(' AND ')}`,
       params

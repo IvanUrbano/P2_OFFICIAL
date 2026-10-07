@@ -7,23 +7,81 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
+let mockQueryFn = async () => ({ rows: [] });
 
 const dbPath = require.resolve('../../db');
 require.cache[dbPath] = {
   id: dbPath,
   filename: dbPath,
   loaded: true,
-  exports: { query: async () => ({ rows: [] }), connect: async () => ({}) },
+  exports: { query: (...args) => mockQueryFn(...args), connect: async () => ({}) },
 };
 
 const {
   buildDenseSeries, buildTrainingRows, buildFeatureRow, _featureWindow, _neighborRisksAt,
   _uniformPopMapByYear, _popFor, _popForFeature, _resolveClassification, _ruleBasedClassify,
+  _mergeClassifications,
+  runHistoricalSnapshots,
 } = require('../../tbinsight/pipeline');
 const { monthKey, classifyByTertile } = require('../../tbinsight/scoring');
 
 // pg returns DATE columns as JS Dates at local midnight
 const localDate = (y, m) => new Date(y, m - 1, 1);
+
+describe('historical RF backfill', () => {
+  it('does not duplicate the current 2026 assessment built from 2025 data', async () => {
+    const calls = [];
+    mockQueryFn = async (sql, params) => {
+      calls.push({ sql, params });
+      if (sql.includes('FROM monthly_case_summary')) return { rows: Array.from({ length: 12 }, (_, i) => ({
+        barangay_name: 'A', month: localDate(2025, i + 1), case_count: 1,
+      })) };
+      if (sql.includes('FROM model_metadata')) return { rows: [{ assessment_period: '2026-01-01', data_end: '2025-12-01' }] };
+      if (sql.includes('FROM barangay_risk_scores')) return { rows: [{ present: true }] };
+      throw new Error(`Unexpected query: ${sql}`);
+    };
+    try {
+      const result = await runHistoricalSnapshots();
+      assert.strictEqual(result.length, 1);
+      assert.deepStrictEqual({
+        data_year: result[0].data_year,
+        assessment_year: result[0].assessment_year,
+        assessment_period: result[0].assessment_period,
+        prediction_period: result[0].prediction_period,
+        status: result[0].status,
+      }, { data_year: 2025, assessment_year: 2026, assessment_period: '2026-01-01',
+        prediction_period: '2026-01-01', status: 'skipped' });
+      assert.strictEqual(calls.length, 3);
+    } finally {
+      mockQueryFn = async () => ({ rows: [] });
+    }
+  });
+});
+
+describe('_mergeClassifications', () => {
+  it('keeps valid RF predictions and uses rules only for missing barangays', () => {
+    const rows = [
+      { barangay_name: 'A', features: { rolling_12m_incidence: 10 } },
+      { barangay_name: 'B', features: { rolling_12m_incidence: 100 } },
+    ];
+    const rf = [{ barangay_name: 'A', risk_class: 'High', proba: { Low: 0.1, Medium: 0.1, High: 0.8 } }];
+    const result = _mergeClassifications(rows, rf, 'random_forest', { low_max: 30, med_max: 60 });
+    assert.strictEqual(result.method, 'mixed');
+    assert.strictEqual(result.fallbackCount, 1);
+    assert.strictEqual(result.byName.A.model_type, 'random_forest');
+    assert.strictEqual(result.byName.A.risk_class, 'High');
+    assert.strictEqual(result.byName.B.model_type, 'rule_based');
+    assert.strictEqual(_resolveClassification(result.byName.B, result.byName.B.model_type).classification_confidence, null);
+  });
+  it('keeps an all-RF snapshot model-classified', () => {
+    const rows = [{ barangay_name: 'A', features: { rolling_12m_incidence: 10 } }];
+    const rf = [{ barangay_name: 'A', risk_class: 'High', proba: { Low: 0.1, Medium: 0.1, High: 0.8 } }];
+    const result = _mergeClassifications(rows, rf, 'random_forest', { low_max: 30, med_max: 60 });
+    assert.strictEqual(result.method, 'random_forest');
+    assert.strictEqual(result.byName.A.model_type, 'random_forest');
+    assert.strictEqual(_resolveClassification(result.byName.A, result.byName.A.model_type).classification_confidence, 0.8);
+  });
+});
 
 function rowsFor(counts) {
   // counts: {name: [c1, c2, ...]} starting Jan 2025; 0 entries are omitted (as in monthly_case_summary)
@@ -349,14 +407,15 @@ describe('_ruleBasedClassify (rename check)', () => {
 });
 
 describe('classifyByTertile', () => {
-  it('splits 30 scores into 10 / 10 / 10 even when they bunch in a narrow band', () => {
-    // Scores 30..45 like a real run: fixed 33/66 cutoffs would call almost all of these Medium
+  it('splits 30 scores into 10 Low / 8 Medium / 12 High (33.3 / 60 percentile)', () => {
+    // Scores 30..45 like a real run: fixed 33/66 cutoffs would call almost all of these Medium.
+    // The Moderate|High cut sits at the 60th percentile, so the top 40% is High.
     const scores = Array.from({ length: 30 }, (_, i) => 30 + i * 0.5);
     const { classes } = classifyByTertile(scores);
     const count = (c) => classes.filter(x => x === c).length;
     assert.strictEqual(count('Low'), 10);
-    assert.strictEqual(count('Medium'), 10);
-    assert.strictEqual(count('High'), 10);
+    assert.strictEqual(count('Medium'), 8);
+    assert.strictEqual(count('High'), 12);
   });
 
   it('keeps input order and ranks the highest score High, the lowest Low', () => {

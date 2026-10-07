@@ -17,7 +17,8 @@ Frontend directory layout is **non-standard**: shared components live in `FRONTE
 | `npm run lint` | FRONTEND | ESLint (frontend only) |
 | `npm run build` | FRONTEND | Vite build → `FRONTEND/dist/` |
 
-Backend has 660+ tests (run `node --test BACKEND/test/*.test.js BACKEND/test/tbinsight/*.test.js`; pure-logic tests stub `db.js` via `require.cache`, so no database is needed). CI (`/.github/workflows/ci.yml`) only runs `npm run build` on the frontend — no backend checks or lint.
+Backend has 80\+ tests (run \
+ode --test BACKEND/test/\*.test.js BACKEND/test/tbinsight/\*.test.js\). CI (`/.github/workflows/ci.yml`) only runs `npm run build` on the frontend — no backend checks or lint.
 
 ## Database Setup
 
@@ -47,19 +48,8 @@ Allows `localhost:5173`, `localhost:5174`, `localhost:3000`, and any Vercel prev
 
 ## Deployment
 
-Everything deploys from `main` of this one repo; each platform builds only its root directory.
-
-| Part | Where | Root dir / config |
-|---|---|---|
-| TBInsight frontend | Vercel `p2-official` | repo root, root `vercel.json` (`cd FRONTEND && …`) |
-| TBInsight backend | Render `p2-official` | `BACKEND`, `render.yaml` |
-| Pasig Clone frontend | Vercel `pasig-clone` | `PASIG_CLONE/frontend`, its own `vercel.json` |
-| Pasig Clone backend | Render `pasig-clone-backend` | `PASIG_CLONE/backend`, `render.yaml` |
-| ML service | AWS Lambda `tb-system-ml` (us-west-2) | `ML_SERVICE/Dockerfile`, `.github/workflows/deploy-ml-lambda.yml` |
-
-- `PASIG_CLONE/frontend/vercel.json` pins its own build commands — without it Vercel applies the repo-root `vercel.json` (`cd FRONTEND …`) and the build fails. It also rewrites `/api/*` to the Render backend: Pasig auth is cookie-only (`sameSite: 'lax'`, CSRF double-submit read from `document.cookie`), so `VITE_API_URL` must stay unset on Vercel or login breaks.
-- ML service: Lambda container image with the Lambda Web Adapter (FastAPI unchanged). Pushes to `main` touching `ML_SERVICE/` rebuild it via GitHub Actions (secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`). TBInsight backend needs `ML_SERVICE_URL` (Function URL, no trailing slash), `ML_API_KEY`, and `ML_HEALTH_TIMEOUT_MS=120000` for cold starts.
-- Free tiers: Render services sleep after 15 min; the AWS Free plan ends Jan 20, 2027.
+- **Backend**: Render via `render.yaml` (Node, free plan, `BACKEND/` root dir)
+- **Frontend**: Vercel via `FRONTEND/vercel.json` (SPA rewrites, build from `FRONTEND/`)
 - Root `package.json` has a `vercel-build` script used by Vercel monorepo setups (`cd FRONTEND && npm install --no-package-lock && npm run build`)
 
 ## Key Quirks

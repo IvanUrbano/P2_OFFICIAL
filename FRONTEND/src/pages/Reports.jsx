@@ -9,23 +9,12 @@ import FilterSelect from '../components/FilterSelect';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
-const MONTH_OPTIONS = [
-  { value: '1', label: 'January' }, { value: '2', label: 'February' },
-  { value: '3', label: 'March' }, { value: '4', label: 'April' },
-  { value: '5', label: 'May' }, { value: '6', label: 'June' },
-  { value: '7', label: 'July' }, { value: '8', label: 'August' },
-  { value: '9', label: 'September' }, { value: '10', label: 'October' },
-  { value: '11', label: 'November' }, { value: '12', label: 'December' },
-];
-
-const YEARS = Array.from({ length: new Date().getFullYear() - 2019 }, (_, i) => String(2020 + i));
-
-const QUARTER_OPTIONS = [
-  { value: '1', label: 'Q1 \u2014 January\u2013March' },
-  { value: '2', label: 'Q2 \u2014 April\u2013June' },
-  { value: '3', label: 'Q3 \u2014 July\u2013September' },
-  { value: '4', label: 'Q4 \u2014 October\u2013December' },
-];
+const monthLabel = month => new Date(2000, Number(month) - 1, 1)
+  .toLocaleDateString('en-US', { month: 'long' });
+const quarterLabel = quarter => {
+  const start = (Number(quarter) - 1) * 3 + 1;
+  return `Q${quarter} — ${monthLabel(start)}–${monthLabel(start + 2)}`;
+};
 
 const REPORT_TYPES = [
   { key: 'monthly', title: 'Monthly', desc: 'City-wide or per barangay' },
@@ -44,13 +33,13 @@ function buildReport(data, config) {
   // Period-specific labels
   let title, headerTitle, subtitle, footerPeriod;
   if (type === 'monthly') {
-    const monthName = MONTH_OPTIONS.find(m => m.value === month)?.label || month;
+    const monthName = monthLabel(month);
     title = `Monthly TB Report \u2014 ${monthName} ${year}${barangay ? ' \u00B7 ' + barangay : ' \u00B7 City-wide'}`;
     headerTitle = 'TUBERCULOSIS MONTHLY REPORT';
     subtitle = `${monthName} ${year}  \u00B7  ${isCitywide ? 'City-wide' : barangay}`;
     footerPeriod = `Report Period: ${monthName} ${year}`;
   } else if (type === 'quarterly') {
-    const qLabel = QUARTER_OPTIONS.find(q => q.value === quarter)?.label || `Q${quarter}`;
+    const qLabel = quarterLabel(quarter);
     title = `Quarterly TB Report \u2014 ${qLabel} ${year}`;
     headerTitle = 'TUBERCULOSIS QUARTERLY REPORT';
     subtitle = `${qLabel} ${year}`;
@@ -70,17 +59,17 @@ function buildReport(data, config) {
   // Executive summary
   const executiveSummary = [];
   if (type === 'monthly') {
-    const monthName = MONTH_OPTIONS.find(m => m.value === month)?.label || month;
+    const monthName = monthLabel(month);
     executiveSummary.push(`${summary.totalCases} new TB cases were recorded in ${monthName} ${year}${isCitywide ? ' across Pasig City' : ' in ' + barangay}.`);
   } else if (type === 'quarterly') {
-    executiveSummary.push(`${summary.totalCases} TB cases were recorded in the ${QUARTER_OPTIONS.find(q => q.value === quarter)?.label || 'Q' + quarter} of ${year}.`);
+    executiveSummary.push(`${summary.totalCases} TB cases were recorded in the ${quarterLabel(quarter)} of ${year}.`);
   } else if (type === 'annual') {
     executiveSummary.push(`${summary.totalCases} TB cases were recorded in calendar year ${year}.`);
   } else {
     executiveSummary.push(`${summary.totalCases} TB cases were recorded in Barangay ${barangay} for ${year}.`);
   }
-  if (summary.activeCases > 0) {
-    executiveSummary.push(`${summary.activeCases} cases remain active on treatment.`);
+  if (summary.onTreatmentCases > 0) {
+    executiveSummary.push(`${summary.onTreatmentCases} cases are recorded as on treatment.`);
   }
   if (summary.successRate != null) {
     executiveSummary.push(`Treatment success rate is ${summary.successRate}%, ${summary.successRate >= 85 ? 'above' : 'below'} the 85% target.`);
@@ -105,6 +94,13 @@ function buildReport(data, config) {
 
   // Tables
   const tables = [{
+    title: 'CASE STATUS BREAKDOWN',
+    headers: ['Status', 'Count'],
+    rows: [
+      ['DIAGNOSED', summary.diagnosedCases || 0],
+      ['ON TREATMENT', summary.onTreatmentCases || 0],
+    ],
+  }, {
     title: 'TREATMENT OUTCOME BREAKDOWN',
     headers: ['Outcome', 'Count', 'Percentage'],
     rows: outcomes?.map(o => [o.outcome_status, o.count, `${o.percentage}%`]) || [],
@@ -171,7 +167,8 @@ function ReportRenderer({ report, reportData }) {
             <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
             <div className="flex flex-wrap gap-x-8 gap-y-1 text-xs" style={{ color: '#1E293B' }}>
               <span><strong>Total Cases:</strong> {reportData.summary.totalCases ?? 0}</span>
-              <span><strong>Active Cases:</strong> {reportData.summary.activeCases ?? 0}</span>
+              <span><strong>Diagnosed:</strong> {reportData.summary.diagnosedCases ?? 0}</span>
+              <span><strong>On Treatment:</strong> {reportData.summary.onTreatmentCases ?? 0}</span>
               <span><strong>Success Rate:</strong> {reportData.summary.successRate != null ? `${reportData.summary.successRate}%` : 'N/A'}</span>
               <span><strong>Case Fatality Rate:</strong> {reportData.summary.fatalityRate != null ? `${reportData.summary.fatalityRate}%` : 'N/A'}</span>
             </div>
@@ -474,9 +471,9 @@ function ReportRenderer({ report, reportData }) {
 export default function Reports() {
   /* ── Filter state ── */
   const [reportType, setReportType] = useState('monthly');
-  const [filterMonth, setFilterMonth] = useState(String(new Date().getMonth() + 1));
-  const [filterQuarter, setFilterQuarter] = useState('1');
-  const [filterYear, setFilterYear] = useState(String(new Date().getFullYear()));
+  const [filterMonth, setFilterMonth] = useState('');
+  const [filterQuarter, setFilterQuarter] = useState('');
+  const [filterYear, setFilterYear] = useState('');
   const [filterBarangay, setFilterBarangay] = useState('');
 
   /* ── Data state ── */
@@ -486,6 +483,8 @@ export default function Reports() {
   const [error, setError] = useState('');
   const [recentReports, setRecentReports] = useState(() => getRecentReports());
   const [barangays, setBarangays] = useState([]);
+  const [availableYears, setAvailableYears] = useState([]);
+  const [monthsByYear, setMonthsByYear] = useState({});
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [regenerateTrigger, setRegenerateTrigger] = useState(0);
   const [showAllReports, setShowAllReports] = useState(false);
@@ -497,22 +496,52 @@ export default function Reports() {
 
   useEffect(() => {
     const controller = new AbortController();
-    API.get('/api/tb/barangays', { signal: controller.signal }).then(res => {
+    const loadBarangays = () => API.get('/api/tb/barangays', { signal: controller.signal }).then(res => {
       const names = (res.data.barangays || []).map(b => b.barangay_name || b.name).filter(Boolean).sort();
       setBarangays(names);
     }).catch(() => { });
-    return () => controller.abort();
+    loadBarangays();
+    window.addEventListener('focus', loadBarangays);
+    return () => { controller.abort(); window.removeEventListener('focus', loadBarangays); };
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const loadOptions = () => API.get('/api/tb/filter-options', { signal: controller.signal }).then(res => {
+      const years = (res.data.years || []).map(String);
+      const byYear = res.data.months_by_year || {};
+      setAvailableYears(years);
+      setMonthsByYear(byYear);
+      setFilterYear(current => years.includes(current) ? current : (years[0] || ''));
+      const latestMonths = byYear[years[0]] || [];
+      setFilterMonth(current => current || String(latestMonths[latestMonths.length - 1] || ''));
+      const latestQuarters = [...new Set(latestMonths.map(m => String(Math.ceil(Number(m) / 3))))];
+      setFilterQuarter(current => current || (latestQuarters[latestQuarters.length - 1] || ''));
+    }).catch(() => {});
+    loadOptions();
+    window.addEventListener('focus', loadOptions);
+    return () => { controller.abort(); window.removeEventListener('focus', loadOptions); };
+  }, []);
+
+  const availableMonths = (monthsByYear[filterYear] || []).map(String);
+  const availableQuarters = [...new Set(availableMonths.map(m => String(Math.ceil(Number(m) / 3))))];
+  const handleYearChange = (year) => {
+    setFilterYear(year);
+    const months = (monthsByYear[year] || []).map(String);
+    setFilterMonth(months.includes(filterMonth) ? filterMonth : (months[months.length - 1] || ''));
+    const quarters = [...new Set(months.map(m => String(Math.ceil(Number(m) / 3))))];
+    setFilterQuarter(quarters.includes(filterQuarter) ? filterQuarter : (quarters[quarters.length - 1] || ''));
+  };
 
   const handleReportTypeChange = useCallback((newType) => {
     setReportType(newType);
     setReport(null);
     setReportData(null);
     setError('');
-    setFilterMonth(String(new Date().getMonth() + 1));
-    setFilterQuarter('1');
+    setFilterMonth((monthsByYear[filterYear] || []).map(String).at(-1) || '');
+    setFilterQuarter([...new Set((monthsByYear[filterYear] || []).map(m => String(Math.ceil(Number(m) / 3))))].at(-1) || '');
     setFilterBarangay('');
-  }, []);
+  }, [monthsByYear, filterYear]);
 
   /* ── Generate report ── */
   const handleGenerate = useCallback(async () => {
@@ -562,14 +591,16 @@ export default function Reports() {
 
   const handleReset = useCallback(() => {
     setReportType('monthly');
-    setFilterMonth(String(new Date().getMonth() + 1));
-    setFilterQuarter('1');
-    setFilterYear(String(new Date().getFullYear()));
+    const latestYear = availableYears[0] || '';
+    const months = monthsByYear[latestYear] || [];
+    setFilterMonth(String(months[months.length - 1] || ''));
+    setFilterQuarter(String(months.length ? Math.ceil(Number(months[months.length - 1]) / 3) : ''));
+    setFilterYear(latestYear);
     setFilterBarangay('');
     setReportData(null);
     setReport(null);
     setError('');
-  }, []);
+  }, [availableYears, monthsByYear]);
 
   const handleDeleteReport = useCallback(() => {
     if (!deleteTarget) return;
@@ -657,33 +688,33 @@ export default function Reports() {
           <div className="flex items-center gap-2 flex-wrap">
             {reportType === 'monthly' && (
               <>
-                <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
-                  {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                <FilterSelect label="Year" value={filterYear} onChange={handleYearChange}>
+                  {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </FilterSelect>
                 <FilterSelect label="Month" value={filterMonth} onChange={setFilterMonth}>
-                  {MONTH_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  {availableMonths.map(month => <option key={month} value={month}>{monthLabel(month)}</option>)}
                 </FilterSelect>
               </>
             )}
             {reportType === 'quarterly' && (
               <>
-                <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
-                  {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                <FilterSelect label="Year" value={filterYear} onChange={handleYearChange}>
+                  {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </FilterSelect>
                 <FilterSelect label="Quarter" value={filterQuarter} onChange={setFilterQuarter}>
-                  {QUARTER_OPTIONS.map(q => <option key={q.value} value={q.value}>{q.label}</option>)}
+                  {availableQuarters.map(quarter => <option key={quarter} value={quarter}>{quarterLabel(quarter)}</option>)}
                 </FilterSelect>
               </>
             )}
             {reportType === 'annual' && (
-              <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
-                {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+              <FilterSelect label="Year" value={filterYear} onChange={handleYearChange}>
+                {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
               </FilterSelect>
             )}
             {reportType === 'barangay' && (
               <>
-                <FilterSelect label="Year" value={filterYear} onChange={setFilterYear}>
-                  {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                <FilterSelect label="Year" value={filterYear} onChange={handleYearChange}>
+                  {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </FilterSelect>
                 <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 160 }}>
                   <option value="">Select Barangay</option>
@@ -699,7 +730,7 @@ export default function Reports() {
                 onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
                 Clear
               </button>
-              <button onClick={handleGenerate} disabled={loading || (reportType === 'barangay' && !filterBarangay)}
+              <button onClick={handleGenerate} disabled={loading || !filterYear || (reportType === 'monthly' && !filterMonth) || (reportType === 'quarterly' && !filterQuarter) || (reportType === 'barangay' && !filterBarangay)}
                 className="px-4 py-2 text-xs font-semibold"
                 style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, opacity: loading || (reportType === 'barangay' && !filterBarangay) ? 0.5 : 1, cursor: loading || (reportType === 'barangay' && !filterBarangay) ? 'not-allowed' : 'pointer', transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}

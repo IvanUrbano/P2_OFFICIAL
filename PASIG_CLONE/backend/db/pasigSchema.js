@@ -190,6 +190,8 @@ async function initSchema() {
       console.error('[pasig-clone] Migration 016 failed (continuing):', err.message);
     }
   }
+  const mig017Path = path.join(__dirname, 'migrations', '017_case_status_treatment_outcome.sql');
+  if (fs.existsSync(mig017Path)) await execSql(fs.readFileSync(mig017Path, 'utf8'));
 }
 
 // --- CRUD Helpers ---

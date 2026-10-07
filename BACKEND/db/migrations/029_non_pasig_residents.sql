@@ -41,7 +41,6 @@ ALTER TABLE tb_cases ALTER COLUMN barangay_name DROP NOT NULL;
 -- table needs a NULL barangay. A PRIMARY KEY column cannot be NULL, so the key moves
 -- onto a generated NOT NULL expression that coalesces '' for those rows.
 
-ALTER TABLE facility_summary ALTER COLUMN barangay_name DROP NOT NULL;
 
 ALTER TABLE facility_summary ADD COLUMN IF NOT EXISTS barangay_key TEXT
   GENERATED ALWAYS AS (COALESCE(barangay_name, '')) STORED;
@@ -56,6 +55,9 @@ BEGIN
   ) THEN
     ALTER TABLE facility_summary DROP CONSTRAINT facility_summary_pkey;
   END IF;
+  -- barangay_name can only lose NOT NULL once it is no longer in the primary key
+  -- (the old key was (facility_name, barangay_name, month)).
+  ALTER TABLE facility_summary ALTER COLUMN barangay_name DROP NOT NULL;
 
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint

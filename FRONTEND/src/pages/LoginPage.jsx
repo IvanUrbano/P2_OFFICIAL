@@ -4,8 +4,7 @@ import API from '../api/axios';
 import Logo from '../../components/Logo';
 
 // Pasig Clone (data import / validation / sync). Set VITE_PASIG_CLONE_URL for deployments.
-const PASIG_CLONE_URL = import.meta.env.VITE_PASIG_CLONE_URL ||
-  (import.meta.env.DEV ? 'http://localhost:5174' : 'https://pasig-clone.vercel.app');
+const PASIG_CLONE_URL = import.meta.env.VITE_PASIG_CLONE_URL || 'http://localhost:5174';
 
 export default function LoginPage() {
   const navigate = useNavigate();

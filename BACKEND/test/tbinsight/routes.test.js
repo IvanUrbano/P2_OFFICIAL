@@ -90,6 +90,55 @@ function teardown() {
 
 afterEach(teardown);
 
+describe('GET /api/tb/filter-options', () => {
+  it('returns years, months, and case statuses from validated case rows', async () => {
+    mockQueryFn = async sql => {
+      if (sql.includes('EXTRACT(YEAR FROM date_of_diagnosis)')) return { rows: [
+        { year: 2027, month: 2 }, { year: 2027, month: 1 }, { year: 2025, month: 12 },
+      ] };
+      if (sql.includes('TRIM(case_status)')) return { rows: [{ case_status: 'DIAGNOSED' }] };
+      return { rows: [] };
+    };
+    const res = await request(buildApp()).get('/api/tb/filter-options');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.years, [2027, 2025]);
+    assert.deepStrictEqual(res.body.months, [1, 2, 12]);
+    assert.deepStrictEqual(res.body.months_by_year['2027'], [1, 2]);
+    assert.deepStrictEqual(res.body.case_status, ['DIAGNOSED']);
+  });
+});
+
+describe('GET /api/tb/gis/years', () => {
+  it('includes validated case years before monthly aggregation catches up', async () => {
+    mockQueryFn = async sql => {
+      assert.ok(sql.includes('FROM tb_cases'));
+      assert.ok(sql.includes('FROM barangay_risk_scores'));
+      assert.ok(sql.includes('date_of_diagnosis'));
+      assert.ok(sql.includes('barangay_name IS NOT NULL'));
+      assert.ok(!sql.includes('monthly_case_summary'));
+      return { rows: [{ year: 2026 }, { year: 2025 }] };
+    };
+    const res = await request(buildApp()).get('/api/tb/gis/years');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.years, [2026, 2025]);
+  });
+});
+
+describe('GET /api/tb/alerts/filter-options', () => {
+  it('uses stored notification values when requested', async () => {
+    mockQueryFn = async (_sql, params) => {
+      assert.deepStrictEqual(params, ['notification']);
+      return { rows: [
+        { type: 'notification', severity: 'info', status: 'unread', source_module: 'gis' },
+        { type: 'notification', severity: 'info', status: 'read', source_module: 'gis' },
+      ] };
+    };
+    const res = await request(buildApp()).get('/api/tb/alerts/filter-options?type=notification');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body, { type: ['notification'], severity: ['info'], status: ['read', 'unread'], source: ['gis'] });
+  });
+});
+
 describe('GET /api/tb/barangays', () => {
   it('returns barangay list with count', async () => {
     mockQueryFn = async () => ({
@@ -107,14 +156,15 @@ describe('GET /api/tb/barangays', () => {
 });
 
 describe('GET /api/tb/facilities', () => {
-  it('returns facility list with count', async () => {
-    mockQueryFn = async () => ({
-      rows: [{ name: 'Dela Paz HC', type: 'HC', barangay_name: 'Dela Paz' }],
-    });
+  it('includes screening and treatment facilities used by validated cases', async () => {
+    mockQueryFn = async sql => {
+      assert.ok(sql.includes('screening_facility'));
+      assert.ok(sql.includes('treatment_facility'));
+      return { rows: [{ screening_facility: 'Dela Paz HC' }, { screening_facility: 'Treatment Center' }] };
+    };
     const res = await request(buildApp()).get('/api/tb/facilities');
     assert.strictEqual(res.status, 200);
-    assert.ok(Array.isArray(res.body.facilities));
-    assert.strictEqual(res.body.facilities.length, 1);
+    assert.deepStrictEqual(res.body.facilities, [{ name: 'Dela Paz HC' }, { name: 'Treatment Center' }]);
   });
 });
 
@@ -202,7 +252,7 @@ describe('GET /api/tb/cases', () => {
     const outcomeParam = capturedParams.find((p) => Array.isArray(p) && p.includes('CURED'));
     assert.ok(outcomeParam, `expected a bound array containing CURED, got ${JSON.stringify(capturedParams)}`);
     assert.deepStrictEqual(outcomeParam, ['CURED']);
-    assert.match(capturedSql, /UPPER\(TRIM\(c\.outcome_status\)\)\s*=\s*ANY\(\$\d+\)/);
+    assert.match(capturedSql, /c\.treatment_outcome\s*=\s*ANY\(\$\d+\)/);
   });
 
   it('expands FAILED to the legacy TREATMENT FAILED value', async () => {
@@ -225,15 +275,15 @@ describe('GET /api/tb/cases', () => {
     assert.ok(outcomeParam.includes('TREATMENT FAILED'), 'also matches the legacy stored value');
   });
 
-  it('returns record outcomes as the source-aligned label, never the legacy form', async () => {
+  it('returns separate canonical treatment state and the retained source value', async () => {
     let callCount = 0;
     mockQueryFn = async () => {
       callCount++;
       if (callCount === 1) return { rows: [{ total: 2 }] };
       return {
         rows: [
-          { id: 1, outcome_status: 'TREATMENT FAILED' },
-          { id: 2, outcome_status: 'SCREENED' },
+          { id: 1, outcome_status: 'TREATMENT FAILED', source_outcome_status: 'Failed', case_status: null, treatment_outcome: 'TREATMENT FAILED' },
+          { id: 2, outcome_status: 'SCREENED', case_status: null, treatment_outcome: null },
         ],
       };
     };
@@ -241,12 +291,11 @@ describe('GET /api/tb/cases', () => {
     assert.strictEqual(res.status, 200);
 
     const [failed, screened] = res.body.cases;
-    // Legacy value is presented under the source-aligned label...
-    assert.strictEqual(failed.outcome_status, 'FAILED');
-    assert.strictEqual(failed.outcome_status_raw, 'TREATMENT FAILED');
+    assert.strictEqual(failed.outcome_status, 'TREATMENT FAILED');
+    assert.strictEqual(failed.outcome_status_raw, 'Failed');
     assert.strictEqual(failed.outcome_status_approved, true);
-    // ...and an unverified value is preserved, not remapped, but flagged.
-    assert.strictEqual(screened.outcome_status, 'SCREENED');
+    assert.strictEqual(screened.outcome_status, null);
+    assert.strictEqual(screened.outcome_status_raw, 'SCREENED');
     assert.strictEqual(screened.outcome_status_approved, false);
   });
 
@@ -286,13 +335,13 @@ describe('GET /api/tb/cases/analytics-dataset', () => {
   }
 
   const FIELDS = ['barangay_name', 'age', 'sex', 'date_of_diagnosis', 'screening_facility',
-    'treatment_facility', 'bacteriological_status', 'outcome_status', 'imported_at'];
+    'treatment_facility', 'bacteriological_status', 'outcome_status', 'outcome_status_raw', 'source_outcome_status', 'case_status', 'treatment_outcome', 'imported_at'];
 
   it('returns every case with only the fields the charts use — no identifiers', async () => {
     let captured;
     mockQueryFn = async (sql, params) => {
       captured = { sql, params };
-      return { rows: [{ barangay_name: 'Pinagbuhatan', age: 41, sex: 'M', date_of_diagnosis: '2025-01-05', screening_facility: 'A', treatment_facility: 'B', bacteriological_status: 'BC', outcome_status: 'TREATMENT FAILED', imported_at: '2025-02-01' }] };
+      return { rows: [{ barangay_name: 'Pinagbuhatan', age: 41, sex: 'M', date_of_diagnosis: '2025-01-05', screening_facility: 'A', treatment_facility: 'B', bacteriological_status: 'BC', outcome_status: 'TREATMENT FAILED', source_outcome_status: 'Failed', case_status: null, treatment_outcome: 'TREATMENT FAILED', imported_at: '2025-02-01' }] };
     };
     const res = await request(buildAppAs({ role: 'admin' })).get('/api/tb/cases/analytics-dataset');
     assert.strictEqual(res.status, 200);
@@ -303,7 +352,8 @@ describe('GET /api/tb/cases/analytics-dataset', () => {
     }
     assert.ok(!/\bLIMIT\b/.test(captured.sql), 'not paginated: Analytics needs every case');
     assert.match(captured.sql, /ORDER BY c\.date_of_diagnosis DESC/, 'same order as /api/tb/cases');
-    assert.strictEqual(res.body.cases[0].outcome_status, 'FAILED', 'same outcome labels as /api/tb/cases');
+    assert.strictEqual(res.body.cases[0].outcome_status, 'TREATMENT FAILED', 'same outcome labels as /api/tb/cases');
+    assert.strictEqual(res.body.cases[0].outcome_status_raw, 'Failed', 'original source value is retained');
     assert.deepStrictEqual(captured.params, [], 'admin is not facility-scoped');
   });
 
@@ -548,6 +598,36 @@ describe('GET /api/tb/gis/geojson', () => {
     assert.ok(res.body.outline.coordinates.length > 0);
   });
 
+  it('exposes real border-sharing neighbour names, or null without an adjacency map', async () => {
+    const geoRow = {
+      id: 1, name: 'Dela Paz', population: 50000,
+      geometry: { type: 'Polygon', coordinates: [[[121.1, 14.5], [121.11, 14.5], [121.11, 14.51], [121.1, 14.51], [121.1, 14.5]]] },
+      centroid_lon: 121.105, centroid_lat: 14.505,
+    };
+    let adjacencyRows = [{ name: 'Dela Paz', neighbours: ['Manggahan', 'Santolan'] }];
+    let callCount = 0;
+    mockQueryFn = async (sql) => {
+      // Checked first: the adjacency query also selects FROM barangays_geom,
+      // so the geometry branch below would otherwise swallow it.
+      if (sql.includes('ST_DWithin')) return { rows: adjacencyRows };
+      callCount++;
+      if (callCount === 1) return { rows: [geoRow] };
+      if (callCount === 2) return { rows: [{ barangay_name: 'Dela Paz', risk_score: 74.8, risk_class: 'High' }] };
+      return { rows: [] };
+    };
+
+    const res = await request(buildApp()).get('/api/tb/gis/geojson');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.features[0].properties.neighbours, ['Manggahan', 'Santolan']);
+
+    // No adjacency map -> null, never a fabricated "every other barangay" list.
+    adjacencyRows = [];
+    callCount = 0;
+    const res2 = await request(buildApp()).get('/api/tb/gis/geojson');
+    assert.strictEqual(res2.status, 200);
+    assert.strictEqual(res2.body.features[0].properties.neighbours, null);
+  });
+
   it('returns 500 on db error', async () => {
     mockQueryFn = async () => { throw new Error('DB fail'); };
     const res = await request(buildApp()).get('/api/tb/gis/geojson');
@@ -616,13 +696,13 @@ describe('GET /api/tb/gis/geojson', () => {
       // empty) — year-specific incidence must surface null, never 0.
       return { rows: [] };
     };
-    const res = await request(buildApp()).get('/api/tb/gis/geojson?year=2023');
+    const res = await request(buildApp()).get('/api/tb/gis/geojson?year=2024');
     const f = res.body.features.find(x => x.properties.name === 'Dela Paz');
     assert.strictEqual(f.properties.population, null, 'no exact-year population -> null, never another year\'s figure');
     assert.strictEqual(f.properties.incidence_per_100k, null, 'missing population must surface as null, never 0');
   });
 
-  it('a specific year requests THAT year\'s own snapshot (period Y+1-01-01), not the latest one (TEST F/G)', async () => {
+  it('GIS Year 2023 retrieves the RF snapshot trained on 2023 data (TEST F/G)', async () => {
     let callCount = 0;
     let riskQueryParams = null;
     mockQueryFn = async (sql, params) => {
@@ -639,11 +719,15 @@ describe('GET /api/tb/gis/geojson', () => {
       return { rows: [] };
     };
     const res = await request(buildApp()).get('/api/tb/gis/geojson?year=2023');
-    assert.deepStrictEqual(riskQueryParams, ['2024-01-01'], 'year=2023 must look up period 2024-01-01 exactly (Y+1 convention), not the latest overall period');
+    assert.deepStrictEqual(riskQueryParams, [2023], 'year=2023 must match snapshot data_year');
     const f = res.body.features.find(x => x.properties.name === 'Dela Paz');
     assert.strictEqual(f.properties.risk_class, 'Low', 'must return 2023\'s own snapshot, not a different year\'s');
     assert.strictEqual(res.body.meta.risk_assessment_period, '2024-01-01');
     assert.strictEqual(res.body.meta.requested_year, 2023);
+    assert.strictEqual(res.body.meta.data_year, 2023);
+    assert.strictEqual(res.body.meta.assessment_year, 2024);
+    assert.strictEqual(res.body.meta.assessment_period, '2024-01-01');
+    assert.strictEqual(res.body.meta.prediction_period, '2024-01-01');
     assert.strictEqual(res.body.meta.requested_year_has_snapshot, true);
   });
 
@@ -691,6 +775,45 @@ describe('GET /api/tb/gis/geojson', () => {
     assert.strictEqual(f.properties.classification_confidence, 0.82);
     assert.strictEqual(f.properties.prob_high, 0.82);
     assert.strictEqual(f.properties.rf_features.rolling_12m_incidence, 300);
+  });
+
+  it('GIS Year 2026 retrieves the current 2026 RF assessment trained on 2025 data', async () => {
+    const riskCalls = [];
+    mockQueryFn = async (sql, params) => {
+      if (sql.includes('FROM barangays_geom')) return { rows: [{ name: 'Dela Paz', population: 50000, geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] } }] };
+      if (sql.includes('FROM barangay_risk_scores')) {
+        riskCalls.push({ sql, params });
+        return { rows: [{ barangay_name: 'Dela Paz', period: '2026-01-01', risk_class: 'High', model_type: 'random_forest' }] };
+      }
+      return { rows: [] };
+    };
+    const res = await request(buildApp()).get('/api/tb/gis/geojson?year=2026');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(riskCalls[0].params, [2026]);
+    assert.match(riskCalls[0].sql, /mm\.metrics->>'data_year'/);
+    assert.strictEqual(res.body.features[0].properties.risk_class, 'High');
+    assert.deepStrictEqual({
+      data_year: res.body.meta.data_year,
+      assessment_year: res.body.meta.assessment_year,
+      assessment_period: res.body.meta.assessment_period,
+      prediction_period: res.body.meta.prediction_period,
+    }, { data_year: 2025, assessment_year: 2026, assessment_period: '2026-01-01',
+      prediction_period: '2026-01-01' });
+  });
+
+  it('withholds confidence from a saved rule-based classification', async () => {
+    let callCount = 0;
+    mockQueryFn = async () => {
+      callCount++;
+      if (callCount === 1) return { rows: [{ name: 'Dela Paz', population: 50000, geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] } }] };
+      if (callCount === 2) return { rows: [{ barangay_name: 'Dela Paz', risk_class: 'High', model_type: 'rule_based', classification_confidence: 1, prob_high: 1, period: '2026-01-01' }] };
+      return { rows: [] };
+    };
+    const res = await request(buildApp()).get('/api/tb/gis/geojson?year=2026');
+    const feature = res.body.features[0];
+    assert.strictEqual(feature.properties.model_type, 'rule_based');
+    assert.strictEqual(feature.properties.classification_confidence, null);
+    assert.strictEqual(feature.properties.prob_high, null);
   });
 
   it('marks a barangay with no risk row as No Data with no fabricated model_type (TEST D)', async () => {
@@ -756,6 +879,20 @@ describe('GET /api/tb/gis/areas', () => {
 });
 
 describe('GET /api/tb/gis/choropleth', () => {
+  it('uses assessment year 2026 to retrieve the 2026 risk period', async () => {
+    let selectedQuery;
+    mockQueryFn = async (sql, params) => {
+      selectedQuery = { sql, params };
+      return { rows: [{ name: 'Dela Paz', period: '2026-01-01', risk_class: 'High', population: null, total_cases: 0 }] };
+    };
+    const res = await request(buildApp()).get('/api/tb/gis/choropleth?year=2026');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(selectedQuery.params, [2026]);
+    assert.match(selectedQuery.sql, /mm\.metrics->>'data_year'/);
+    assert.strictEqual(res.body.assessment_year, 2026);
+    assert.strictEqual(res.body.data_year, 2025);
+    assert.strictEqual(res.body.assessment_period, '2026-01-01');
+  });
   it('returns choropleth data', async () => {
     mockQueryFn = async () => ({
       rows: [{ name: 'Dela Paz', risk_score: 74.8, risk_class: 'High', population: 50000 }],
@@ -808,5 +945,29 @@ describe('GET /api/tb/pipeline/status', () => {
     // GIS banner states derive from these
     assert.strictEqual(res.body.current_run.lastRunStatus, null);
     assert.strictEqual(res.body.current_run.lastError, null);
+  });
+});
+
+describe('GET /api/tb/evaluation/latest', () => {
+  it('returns the latest saved evaluation and current evaluation status', async () => {
+    const latestEvaluation = {
+      id: 4,
+      run_type: 'evaluation',
+      trained_at: '2026-10-05T08:00:00.000Z',
+      metrics: { arima: { mae: 4.6, mape: 8.2, steps: [{ month: '2025-11-01', actual: 120, predicted: 116, error: 4 }] } },
+      config: { method: 'ARIMA', evaluation_start: '2025-11-01', evaluation_end: '2025-12-01' },
+    };
+    mockQueryFn = async sql => sql.includes("run_type = 'evaluation_failed'")
+      ? { rows: [{ trained_at: '2026-10-06T08:00:00.000Z', error: 'model service unavailable' }] }
+      : { rows: [latestEvaluation] };
+
+    const res = await request(buildApp()).get('/api/tb/evaluation/latest');
+
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.latest_evaluation.metrics.arima.steps[0], latestEvaluation.metrics.arima.steps[0]);
+    assert.strictEqual(res.body.latest_evaluation.config.method, 'ARIMA');
+    assert.strictEqual(res.body.evaluation_status.running, false);
+    assert.strictEqual(res.body.evaluation_status.lastError, 'model service unavailable');
+    assert.strictEqual(res.body.evaluation_status.failedAt, '2026-10-06T08:00:00.000Z');
   });
 });

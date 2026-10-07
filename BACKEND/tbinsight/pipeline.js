@@ -2,7 +2,7 @@
  * TBInsight — Pipeline Orchestrator
  *
  * Runs the full prediction pipeline:
- *   1. Query L3 (monthly_case_summary) + L0 (barangays) for population
+ *   1. Group validated cases by month and load barangay populations
  *   2. Build series for Python /forecast → ARIMA predictions
  *   3. Compute RF features per barangay (rolling_12m_incidence, recent_trend,
  *      seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk)
@@ -17,15 +17,18 @@
  *   - All L4/L5/L6 writes in a single transaction (idempotent re-runs)
  *   - neighbor_risk = incidence of the barangays sharing a border (barangayAdjacency.js)
  *   - Past forecast error feeds only the weighted risk index, never the RF
- *   - Walk-forward evaluation available via POST /api/tb/evaluate (admin only)
+ *   - Walk-forward evaluation is refreshed automatically after successful
+ *     current pipeline runs and saved to model_metadata for the Forecasting UI
  */
 
 const pool = require('../db');
-const { forecast, classify, thresholds: callThresholds, healthCheck, evaluate } = require('./mlClient');
+const { forecast, classify, thresholds: callThresholds, healthCheck } = require('./mlClient');
 const {
   monthKey,
   computeRiskScore,
   classifyByTertile,
+  LOW_PERCENTILE,
+  MED_PERCENTILE,
   computeNeighborRisks,
   computeHistoricalBias,
   classifyTrend,
@@ -36,6 +39,7 @@ const { getPopulationMap, calculateAnnualizedIncidence, GEOJSON_REFERENCE_YEAR }
 const { createNotification, evaluateAllAlerts } = require('./alertEngine');
 const { lockCaseData, caseDataFingerprint } = require('./caseDataLock');
 const { loadAdjacency, neighboursOf } = require('./barangayAdjacency');
+const { pasigResidentOnly } = require('./locationScope');
 
 // Default thresholds — overridden by auto-calibration from real data on each run
 const DEFAULT_THRESHOLDS = {
@@ -126,7 +130,7 @@ function buildDenseSeries(monthlyRows, barangayNames) {
  *
  * @param {object} options
  * @param {string} options.period - Forecast period in YYYY-MM-DD format
- *   (defaults to next month from latest in monthly_case_summary)
+ *   (defaults to next month from the latest validated case)
  * @param {object} options.thresholds - Override frozen thresholds {low_max, med_max}
  * @param {number} options.forecastHorizon - Months to forecast ahead (raised to MIN_STORED_HORIZON)
  * @param {string[]} options.barangays - Optional array of barangay names to filter (if empty, all)
@@ -157,6 +161,7 @@ async function runPipeline({
     alertsCount: 0,
     thresholdMethod: 'tertile',
     thresholds: null,
+    thresholdPercentiles: null,
     mlServiceHealthy: false,
     errors: [],
   };
@@ -168,7 +173,7 @@ async function runPipeline({
     // gives the risk index's forecast-error component real values. Previously
     // this only happened if an admin manually called PUT
     // /predictions/backfill with hand-typed counts; the actual counts are
-    // already sitting in monthly_case_summary, so there is nothing to type.
+    // already sitting in the validated case records, so there is nothing to type.
     try {
       const backfilled = await _backfillActualCounts();
       if (backfilled > 0) console.log(`📈 Reconciled ${backfilled} past forecast(s) with actual case counts`);
@@ -203,13 +208,20 @@ async function runPipeline({
       console.log(`🔍 Filtered to ${barangays.length} barangays: ${barangayFilter.join(', ')}`);
     }
 
-    // ── Step 2: Query L3 monthly case summary ──
+    // ── Step 2: Load monthly cases ──
     // Fingerprint of the case set this run is based on; checked again before storing
     // (Step 9) so results computed from since-deleted/changed data are never saved.
     const startFingerprint = await caseDataFingerprint(client);
-    const monthlyResult = await client.query(
-      'SELECT barangay_name, month, case_count FROM monthly_case_summary ORDER BY month'
-    );
+    const monthlyResult = historyCutoffMonth
+      ? await client.query('SELECT barangay_name, month, case_count FROM monthly_case_summary ORDER BY month')
+      : await client.query(`
+          SELECT barangay_name, DATE_TRUNC('month', date_of_diagnosis)::date AS month,
+                 COUNT(*)::integer AS case_count
+          FROM tb_cases
+          WHERE date_of_diagnosis IS NOT NULL AND ${pasigResidentOnly()}
+          GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
+          ORDER BY month
+        `);
     // For a historical snapshot, only data up to and including the cutoff
     // month is visible — this is what makes it "as of that year" rather
     // than a relabeled copy of the current/latest assessment.
@@ -219,7 +231,7 @@ async function runPipeline({
 
     if (monthlyRows.length === 0) {
       results.status = 'no_data';
-      results.errors.push('No case data in monthly_case_summary. Import CSV first.');
+      results.errors.push('No validated case data available. Import and validate cases first.');
       return results;
     }
 
@@ -230,6 +242,10 @@ async function runPipeline({
     const { calendar, seriesByBarangay } = buildDenseSeries(monthlyRows, barangays.map(b => b.name));
     const latestMonth = calendar[calendar.length - 1];
     results.period = period || _nextMonth(latestMonth);
+    results.data_year = Number(latestMonth.slice(0, 4));
+    results.assessment_year = Number(String(results.period).slice(0, 4));
+    results.assessment_period = results.period;
+    results.prediction_period = results.period;
     console.log(`📊 Pipeline period: ${results.period} (latest data: ${latestMonth})`);
 
     // Population must be looked up PER CALENDAR YEAR, not for a single
@@ -473,11 +489,12 @@ async function runPipeline({
     // Resolved BEFORE the ML-health branch because the rule-based fallback
     // below compares against these same cut points — leaving them unset when
     // the service is down silently handed that path DEFAULT_THRESHOLDS.
-    const { thresholds: runThresholds, source: thresholdSource } = await _resolveThresholds({
+    const { thresholds: runThresholds, source: thresholdSource, percentiles: thresholdPercentiles } = await _resolveThresholds({
       thresholdsOverride, barangayIncidences, predictRows,
     });
     results.thresholds = runThresholds;
     results.thresholdSource = thresholdSource;
+    results.thresholdPercentiles = thresholdPercentiles || null;
 
     let classifyResults = [];
     if (results.mlServiceHealthy && predictRows.length > 0) {
@@ -485,14 +502,19 @@ async function runPipeline({
         const thresholds = runThresholds;
 
         // Build monthly snapshot training rows from historical data
-        const trainRows = await _buildTrainingRows(client, popMapByYear, thresholds, historyCutoffMonth, adjacency);
+        const trainRows = await _buildTrainingRows(monthlyRows, popMapByYear, adjacency);
         results.trainingRows = trainRows.length;
         console.log(`📋 Training rows: ${trainRows.length} monthly snapshots`);
 
         const classifyResponse = await classify(thresholds, trainRows, predictRows);
-        classifyResults = classifyResponse.predictions || [];
+        classifyResults = (classifyResponse.predictions || []).filter(c =>
+          c?.barangay_name && ['Low', 'Medium', 'High'].includes(c.risk_class)
+        );
         results.classifierMethod = classifyResponse.method || 'random_forest';
         results.classificationsCount = classifyResults.length;
+        if (results.classifierMethod === 'rule_based') {
+          results.errors.push(`Random Forest could not be trained from ${trainRows.length} valid training rows; rule-based fallback was used.`);
+        }
         console.log(`🏷️  Classification: ${classifyResults.length} barangays processed`);
       } catch (err) {
         console.error('❌ Classify call failed:', err.message);
@@ -500,15 +522,18 @@ async function runPipeline({
       }
     }
 
-    // Rule-based fallback if ML service is down or classify failed
-    if (classifyResults.length === 0 && predictRows.length > 0) {
-      classifyResults = _ruleBasedClassify(predictRows, runThresholds);
-      results.classifierMethod = 'rule_based';
-      results.classificationsCount = classifyResults.length;
-      console.log(`🏷️  Rule-based fallback: ${classifyResults.length} barangays classified`);
+    // Preserve every valid RF result. Fill only missing barangays with the
+    // fallback, so a partial model response cannot discard usable predictions.
+    const mergedClassifications = _mergeClassifications(
+      predictRows, classifyResults, results.classifierMethod, runThresholds
+    );
+    classifyResults = mergedClassifications.classifications;
+    results.classifierMethod = mergedClassifications.method;
+    if (mergedClassifications.fallbackCount) {
+      console.log(`🏷️  Rule-based fallback: ${mergedClassifications.fallbackCount} barangays classified`);
     }
-    const classifyByName = {};
-    for (const c of classifyResults) classifyByName[c.barangay_name] = c;
+    results.classificationsCount = classifyResults.length;
+    const classifyByName = mergedClassifications.byName;
 
     // ── Step 7: Compute risk scores ──
     // maxIncidence must ignore barangays with unavailable (null) incidence —
@@ -547,7 +572,7 @@ async function runPipeline({
       // weighted index and the classifier are two independent computations
       // that happen to run in the same loop iteration.
       const predictRow = predictRows.find(r => r.barangay_name === name);
-      const resolved = _resolveClassification(classifyByName[name], results.classifierMethod);
+      const resolved = _resolveClassification(classifyByName[name], classifyByName[name]?.model_type);
 
       return {
         barangay_name: name,
@@ -660,7 +685,7 @@ async function runPipeline({
     }
     let rfStatus;
     if (results.classifierMethod === 'random_forest') rfStatus = 'success';
-    else if (results.classifierMethod === 'rule_based') rfStatus = 'degraded';
+    else if (results.classifierMethod === 'rule_based' || results.classifierMethod === 'mixed') rfStatus = 'degraded';
     else rfStatus = 'not_run';
     const modelStatusTimestamp = new Date().toISOString();
 
@@ -679,6 +704,10 @@ async function runPipeline({
           barangaysProcessed: results.barangaysProcessed,
           dataStart: calendar[0],
           dataEnd: latestMonth,
+          data_year: results.data_year,
+          assessment_year: results.assessment_year,
+          assessment_period: results.assessment_period,
+          prediction_period: results.prediction_period,
           trainingRows: results.trainingRows ?? 0,
           classifierMethod: results.classifierMethod ?? 'rule_based',
           forecastMethods: [...arimaMethodsUsed],
@@ -695,6 +724,11 @@ async function runPipeline({
           // 'default' means nothing could be calibrated and the bands are not
           // scale-matched, which makes the run's classifications unreliable.
           thresholdSource: results.thresholdSource || null,
+          // The percentile cut points behind the thresholds above, when they
+          // were derived from this run's data (null for 'default' and for a
+          // caller-supplied override). Surfaced read-only in the UI so a
+          // classification is never read as an official DOH threshold.
+          thresholdPercentiles: results.thresholdPercentiles || null,
           period: results.period,
           historyCutoffMonth: historyCutoffMonth || null,
         }),
@@ -727,16 +761,14 @@ async function runPipeline({
 }
 
 /**
- * Backfill one risk-classification snapshot per PAST calendar year present
- * in monthly_case_summary (skipping the latest year — that one already IS
- * the current/latest assessment produced by the regular pipeline run, at
- * period = (latestYear + 1)-01-01, so recomputing it here would be
- * redundant).
+ * Backfill risk snapshots from historical data years in monthly_case_summary.
+ * Skip a data year when the current pipeline already stored its snapshot;
+ * this preserves the current RF result and avoids a duplicate assessment.
  *
  * For year Y, this re-runs the full RF pipeline using ONLY data through
  * Dec of year Y (historyCutoffMonth), storing the result at period
- * (Y+1)-01-01 — "the assessment made using data available through the end
- * of year Y". ARIMA forecasting and alert generation are skipped (out of
+ * (Y+1)-01-01. Here data_year is Y, assessment_year is Y+1, and
+ * prediction_period and assessment_period are (Y+1)-01-01. ARIMA and alerts are skipped (out of
  * scope for a retroactive risk-only snapshot; see runPipeline's
  * skipForecast/skipAlerts).
  *
@@ -750,7 +782,7 @@ async function runPipeline({
  * one-time/rare backfill operation, not something that should run on every
  * webhook sync.
  *
- * @returns {Array<{year, period, status, classifierMethod, error}>}
+ * @returns {Array<{year, data_year, assessment_year, prediction_period, status}>}
  */
 async function runHistoricalSnapshots() {
   const monthlyResult = await pool.query(
@@ -767,11 +799,29 @@ async function runHistoricalSnapshots() {
   const allYears = [...new Set(calendar.map(m => Number(m.slice(0, 4))))];
   if (allYears.length === 0) return [];
   const latestYear = Math.max(...allYears);
+  const currentRun = await pool.query(
+    `SELECT config->>'period' AS assessment_period, metrics->>'dataEnd' AS data_end
+     FROM model_metadata WHERE run_type = 'pipeline' ORDER BY trained_at DESC LIMIT 1`
+  );
+  const currentPeriod = currentRun.rows[0]?.assessment_period || null;
+  const currentDataYear = currentRun.rows[0]?.data_end
+    ? Number(String(currentRun.rows[0].data_end).slice(0, 4)) : null;
+  const currentAssessmentYear = currentPeriod ? Number(String(currentPeriod).slice(0, 4)) : null;
+  const currentSnapshot = currentPeriod ? await pool.query(
+    'SELECT EXISTS(SELECT 1 FROM barangay_risk_scores WHERE period = $1::date) AS present',
+    [currentPeriod]
+  ) : null;
+  const currentSnapshotExists = currentSnapshot?.rows[0]?.present === true;
 
   const summaries = [];
   for (const y of allYears) {
-    if (y === latestYear) {
-      summaries.push({ year: y, status: 'skipped', reason: 'covered by the current/latest assessment' });
+    const backfillPeriod = `${y + 1}-01-01`;
+    if (currentSnapshotExists &&
+        (currentDataYear === y || currentPeriod === backfillPeriod ||
+          (y === latestYear && currentAssessmentYear === y))) {
+      summaries.push({ year: y, data_year: currentDataYear, assessment_year: currentAssessmentYear,
+        assessment_period: currentPeriod, prediction_period: currentPeriod,
+        status: 'skipped', reason: 'covered by the current/latest assessment' });
       continue;
     }
     const cutoff = `${y}-12-01`;
@@ -780,6 +830,10 @@ async function runHistoricalSnapshots() {
       summaries.push({
         year: y,
         period: r.period,
+        data_year: r.data_year ?? y,
+        assessment_year: r.assessment_year ?? null,
+        assessment_period: r.assessment_period ?? null,
+        prediction_period: r.prediction_period ?? null,
         status: r.status,
         classifierMethod: r.classifierMethod || null,
         riskScoresCount: r.riskScoresCount,
@@ -799,7 +853,7 @@ async function runHistoricalSnapshots() {
 
 /**
  * Reconcile past forecasts with reality: for every model_predictions row
- * still missing actual_count, fill it in from monthly_case_summary if that
+ * still missing actual_count, fill it in from the validated cases if that
  * barangay/period's real case count has arrived since the forecast was
  * made. This is the ONLY thing that gives the risk index's forecast-error
  * component (AVG(|actual - forecasted|)) real values — without it, every
@@ -807,7 +861,7 @@ async function runHistoricalSnapshots() {
  *
  * A single bulk UPDATE rather than the old per-barangay admin-typed
  * PUT /predictions/backfill: the actual counts already exist in
- * monthly_case_summary once that month is imported, so there is nothing
+ * tb_cases once that month is imported, so there is nothing
  * for a human to type — this just joins the two tables.
  *
  * @returns {number} rows updated
@@ -815,11 +869,18 @@ async function runHistoricalSnapshots() {
 async function _backfillActualCounts() {
   const result = await pool.query(
     `UPDATE model_predictions mp
-     SET actual_count = mcs.case_count,
-         forecast_error = ABS(mcs.case_count - COALESCE(mp.forecasted_count, 0))
-     FROM monthly_case_summary mcs
-     WHERE mp.barangay_name = mcs.barangay_name
-       AND mp.period = mcs.month
+     SET actual_count = actuals.case_count,
+         forecast_error = ABS(actuals.case_count - COALESCE(mp.forecasted_count, 0))
+     FROM (
+       SELECT barangay_name,
+              DATE_TRUNC('month', date_of_diagnosis)::date AS month,
+              COUNT(*)::integer AS case_count
+       FROM tb_cases
+       WHERE date_of_diagnosis IS NOT NULL AND ${pasigResidentOnly()}
+       GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
+     ) actuals
+     WHERE mp.barangay_name = actuals.barangay_name
+       AND mp.period = actuals.month
        AND mp.actual_count IS NULL`
   );
   return result.rowCount || 0;
@@ -849,13 +910,19 @@ async function _backfillActualCounts() {
  * med_max. Falling through to them silently is what made the 2023 snapshot
  * classify 26 of 30 barangays High. The chosen source is returned so the run
  * can record it and callers can flag a snapshot that had no real basis.
+ *
+ * Alongside { thresholds, source } this returns { percentiles } — the
+ * { low_pct, med_pct } split behind data-derived cut points (null for
+ * 'override' and 'default'), recorded on the run so the UI can say what the
+ * bands mean instead of presenting them as official epidemiological values.
  */
 async function _resolveThresholds({
   thresholdsOverride, barangayIncidences, predictRows,
   // Injectable so the calibration logic can be tested without the ML service.
   callThresholds: callThresholdsFn = callThresholds,
 }) {
-  if (thresholdsOverride) return { thresholds: thresholdsOverride, source: 'override' };
+  // A caller-supplied override has no percentile basis: it is a fixed number.
+  if (thresholdsOverride) return { thresholds: thresholdsOverride, source: 'override', percentiles: null };
 
   const validIncidences = (barangayIncidences || [])
     .map(b => b.incidence_per_100k)
@@ -865,9 +932,16 @@ async function _resolveThresholds({
     try {
       const t = await callThresholdsFn(validIncidences, 'tertile');
       if (Number.isFinite(t?.low_max) && Number.isFinite(t?.med_max)) {
-        console.log(`📐 Thresholds (tertile over ${validIncidences.length} incidences): ` +
+        // Older ML responses carry no percentiles — fall back to the shared
+        // constants, which are what the service itself would have used.
+        const percentiles = {
+          low_pct: Number.isFinite(t.low_pct) ? t.low_pct : LOW_PERCENTILE * 100,
+          med_pct: Number.isFinite(t.med_pct) ? t.med_pct : MED_PERCENTILE * 100,
+        };
+        console.log(`📐 Thresholds (percentile split ${percentiles.low_pct.toFixed(1)}/${percentiles.med_pct.toFixed(1)} ` +
+                    `over ${validIncidences.length} incidences): ` +
                     `Low≤${t.low_max.toFixed(1)}, High>${t.med_max.toFixed(1)}`);
-        return { thresholds: { low_max: t.low_max, med_max: t.med_max }, source: 'tertile_incidence' };
+        return { thresholds: { low_max: t.low_max, med_max: t.med_max }, source: 'tertile_incidence', percentiles };
       }
     } catch (err) {
       console.warn(`📐 Threshold service unavailable (${err.message}) — calibrating locally`);
@@ -880,14 +954,16 @@ async function _resolveThresholds({
 
   if (featureIncidences.length >= 3) {
     const { low_max, med_max } = classifyByTertile(featureIncidences);
-    console.log(`📐 Thresholds (tertile over ${featureIncidences.length} feature incidences): ` +
+    const percentiles = { low_pct: LOW_PERCENTILE * 100, med_pct: MED_PERCENTILE * 100 };
+    console.log(`📐 Thresholds (percentile split ${percentiles.low_pct.toFixed(1)}/${percentiles.med_pct.toFixed(1)} ` +
+                `over ${featureIncidences.length} feature incidences): ` +
                 `Low≤${low_max.toFixed(1)}, High>${med_max.toFixed(1)}`);
-    return { thresholds: { low_max, med_max }, source: 'tertile_features' };
+    return { thresholds: { low_max, med_max }, source: 'tertile_features', percentiles };
   }
 
   console.warn('📐 No calibration basis — using default thresholds. Classifications from ' +
                'this run are NOT scale-matched to the data and should be treated as unreliable.');
-  return { thresholds: DEFAULT_THRESHOLDS, source: 'default' };
+  return { thresholds: DEFAULT_THRESHOLDS, source: 'default', percentiles: null };
 }
 
 /**
@@ -1016,27 +1092,10 @@ function _nextMonth(dateStr) {
  *   - neighbor_risk: average incidence of the barangays sharing a border at
  *     the month before the target (lag-1), min-max normalized within that month
  */
-async function _buildTrainingRows(_client, popMapByYear, thresholds, historyCutoffMonth, adjacency) {
-  // Fetch all monthly data (use pool directly — client is released)
-  const result = await pool.query(
-    `SELECT barangay_name, month, case_count
-     FROM monthly_case_summary
-     ORDER BY month ASC`
-  );
-
-  if (result.rows.length === 0) return [];
-
-  // For a historical snapshot, training must ONLY see data through the
-  // cutoff — this query is independent of runPipeline's own already-
-  // truncated `monthlyRows` (this function re-queries the DB itself), so
-  // without this filter every historical snapshot would silently train on
-  // the FULL dataset (including years after the one being assessed),
-  // defeating the entire point of "risk as of that year".
-  const rows = historyCutoffMonth
-    ? result.rows.filter(r => monthKey(r.month) <= historyCutoffMonth)
-    : result.rows;
+async function _buildTrainingRows(rows, popMapByYear, adjacency) {
+  // Use the same validated, already cutoff-scoped series as forecasting and
+  // current RF features. Requerying the summary can train on stale months.
   if (rows.length === 0) return [];
-
   const barangayNames = await pool.query('SELECT name FROM barangays ORDER BY name');
   const { seriesByBarangay } = buildDenseSeries(rows, barangayNames.rows.map(r => r.name));
   const adj = adjacency === undefined ? await loadAdjacency() : adjacency;
@@ -1294,6 +1353,28 @@ function _ruleBasedClassify(predictRows, thresholds) {
   });
 }
 
+function _mergeClassifications(predictRows, predictions, method, thresholds) {
+  const eligible = new Set(predictRows.map(row => row.barangay_name));
+  const saved = new Map();
+  for (const result of predictions) {
+    if (eligible.has(result?.barangay_name) && ['Low', 'Medium', 'High'].includes(result.risk_class)) {
+      saved.set(result.barangay_name, result);
+    }
+  }
+  const fallback = _ruleBasedClassify(predictRows.filter(row => !saved.has(row.barangay_name)), thresholds);
+  const hasRf = method === 'random_forest' && saved.size > 0;
+  const byName = {};
+  for (const [name, result] of saved) byName[name] = { ...result, model_type: hasRf ? 'random_forest' : 'rule_based' };
+  for (const result of fallback) byName[result.barangay_name] = { ...result, model_type: 'rule_based' };
+  return {
+    classifications: [...saved.values(), ...fallback],
+    byName,
+    fallbackCount: fallback.length,
+    method: hasRf ? (fallback.length ? 'mixed' : 'random_forest')
+      : saved.size || fallback.length ? 'rule_based' : null,
+  };
+}
+
 /**
  * Resolve the persisted risk classification fields for ONE barangay from
  * the classifier's own output — deliberately takes no risk_score/riskClass
@@ -1420,6 +1501,13 @@ async function runPipelineTracked(options = {}, trigger = 'manual') {
       console.error('Post-pipeline alert evaluation error:', alertErr.message);
     }
 
+    if (!options.historyCutoffMonth && ['completed', 'degraded'].includes(results.status)) {
+      const { runModelEvaluation } = require('./modelEvaluation');
+      runModelEvaluation().catch(evaluationErr => {
+        console.error('Automatic model evaluation failed:', evaluationErr.message);
+      });
+    }
+
     return results;
   } catch (err) {
     _runState.lastError = err.message;
@@ -1483,6 +1571,7 @@ module.exports = {
   _uniformPopMapByYear,
   _resolveClassification,
   _ruleBasedClassify,
+  _mergeClassifications,
   _resolveThresholds,
   _detectSeasonality,
   _backfillActualCounts,

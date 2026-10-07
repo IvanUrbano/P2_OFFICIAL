@@ -240,7 +240,9 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Date of diagnosis" value={fmtDate(r.date_of_diagnosis)} />
                 <Field label="Treatment started" value={fmtDate(r.date_started_treatment)} />
-                <Field label="Outcome" value={r.outcome_status ? <StatusBadge status={r.outcome_status} /> : '—'} />
+                <Field label="Case status" value={r.case_status ? <StatusBadge status={r.case_status} /> : '—'} />
+                <Field label="Treatment outcome" value={r.treatment_outcome ? <StatusBadge status={r.treatment_outcome} /> : r.case_status ? <span className="cursor-help" title={r.case_status === 'DIAGNOSED' ? 'Diagnosed, not yet on treatment — no final outcome yet' : 'Still on treatment — no final outcome yet'}>—</span> : '—'} />
+                <Field label="Source value" value={r.source_outcome_status || r.outcome_status || '—'} />
                 <Field label="Date of outcome" value={fmtDate(r.date_of_outcome)} />
                 <Field label="Registration group" value={r.registration_group} />
                 <Field label="Bacteriological status" value={r.bacteriological_status} />

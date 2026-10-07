@@ -155,8 +155,8 @@ describe('buildDashboardMetrics — ON TREATMENT', () => {
     const m = await buildDashboardMetrics(pool);
     assert.strictEqual(m.treatment.onTreatment, 2870);
     const q = pool.calls.find((c) => c.sql.includes('AS on_treatment'));
-    assert.match(q.sql, /UPPER\(TRIM\(outcome_status\)\)\s*=\s*'ON TREATMENT'/);
-    // DIAGNOSED / NOT EVALUATED are separate statuses and must not be folded in.
+    assert.match(q.sql, /case_status\s*=\s*'ON TREATMENT'/);
+    // DIAGNOSED and NOT EVALUATED must not be folded into ON TREATMENT.
     assert.ok(!/DIAGNOSED/.test(q.sql), 'DIAGNOSED is not counted as on treatment');
     assert.ok(!/NOT EVALUATED/.test(q.sql), 'NOT EVALUATED is not counted as on treatment');
   });

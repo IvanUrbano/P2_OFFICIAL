@@ -7,6 +7,7 @@ export async function getAnalyticsInsight(filters = {}) {
   if (filters.barangay) params.barangay = filters.barangay;
   if (filters.facility) params.facility = filters.facility;
   if (filters.outcome) params.outcome = filters.outcome;
+  if (filters.status) params.status = filters.status;
   if (filters.sex) params.sex = filters.sex;
   if (filters.ageGroup) params.ageGroup = filters.ageGroup;
   if (filters.bacteriological) params.bacteriological = filters.bacteriological;
@@ -49,6 +50,7 @@ export async function getDataFreshness() {
 export async function getGisInsight(filters = {}) {
   const params = {};
   if (filters.barangay) params.barangay = filters.barangay;
+  if (filters.year) params.year = filters.year;
   const res = await API.get('/api/tb/insights/gis', { params });
   return res.data;
 }

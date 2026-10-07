@@ -45,6 +45,7 @@ export default function Alert() {
 
   /* ── Data state ── */
   const [alerts, setAlerts] = useState([]);
+  const [filterOptions, setFilterOptions] = useState({ type: [], severity: [], status: [], source: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [summary, setSummary] = useState({ critical: 0, high: 0, unread: 0, today: 0 });
@@ -86,11 +87,13 @@ export default function Alert() {
       if (filterSource) params.source = filterSource;
       if (filterDate !== 'all') params.date = filterDate;
 
-      const [alertRes, countsRes] = await Promise.all([
+      const [alertRes, countsRes, optionsRes] = await Promise.all([
         API.get('/api/tb/alerts', { params, signal: controller.signal }),
         API.get('/api/tb/alerts/counts', { signal: controller.signal }),
+        API.get('/api/tb/alerts/filter-options', { signal: controller.signal }),
       ]);
       setAlerts(alertRes.data.alerts || []);
+      setFilterOptions(optionsRes.data || { severity: [], status: [], source: [] });
       setPagination(alertRes.data.pagination || { total: 0, totalPages: 1 });
       setSummary(countsRes.data || { critical: 0, high: 0, unread: 0, today: 0 });
     } catch (err) {
@@ -101,7 +104,11 @@ export default function Alert() {
     }
   }, [page, filterType, filterSeverity, filterStatus, filterBarangay, filterSource, filterDate]);
 
-  useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
+  useEffect(() => {
+    fetchAlerts();
+    window.addEventListener('focus', fetchAlerts);
+    return () => window.removeEventListener('focus', fetchAlerts);
+  }, [fetchAlerts]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -278,7 +285,7 @@ export default function Alert() {
         {/* Tabs */}
         <div style={{ borderBottom: '1px solid #E2E8F0' }}>
           <div className="flex gap-0" role="tablist" aria-label="Alert type">
-            {ALERT_TYPES.map(rt => (
+            {ALERT_TYPES.filter(rt => rt.key === 'all' || filterOptions.type?.includes(rt.key)).map(rt => (
               <button
                 key={rt.key}
                 role="tab"
@@ -308,18 +315,12 @@ export default function Alert() {
           <div className="flex items-center gap-2 flex-wrap">
             <FilterSelect label="Severity" value={filterSeverity} onChange={setFilterSeverity}>
               <option value="all">All Severities</option>
-              <option value="critical">Critical</option>
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-              <option value="info">Info</option>
+              {filterOptions.severity.map(value => <option key={value} value={value}>{SEVERITY_STYLES[value]?.label || value}</option>)}
             </FilterSelect>
 
             <FilterSelect label="Status" value={filterStatus} onChange={setFilterStatus}>
               <option value="all">All Status</option>
-              <option value="unread">Unread</option>
-              <option value="read">Read</option>
-              <option value="resolved">Resolved</option>
+              {filterOptions.status.map(value => <option key={value} value={value}>{STATUS_STYLES[value]?.label || value}</option>)}
             </FilterSelect>
 
             <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 160 }}>
@@ -329,12 +330,7 @@ export default function Alert() {
 
             <FilterSelect label="Source" value={filterSource} onChange={setFilterSource}>
               <option value="">All Sources</option>
-              <option value="gis">GIS Hotspots</option>
-              <option value="analytics">Analytics</option>
-              <option value="forecasting">Forecasting</option>
-              <option value="reports">Reports</option>
-              <option value="tb_records">TB Records</option>
-              <option value="data_integration">Data Integration</option>
+              {filterOptions.source.map(value => <option key={value} value={value}>{MODULE_LABELS[value] || value}</option>)}
             </FilterSelect>
 
             <FilterSelect label="Date" value={filterDate} onChange={setFilterDate}>

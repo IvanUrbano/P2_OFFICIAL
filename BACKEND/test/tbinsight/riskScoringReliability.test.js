@@ -28,22 +28,13 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 
-// Pure logic only: stub the DB module so requiring pipeline.js doesn't open a real
-// connection (which exits the process when no database is configured).
-const dbPath = require.resolve('../../db');
-require.cache[dbPath] = {
-  id: dbPath,
-  filename: dbPath,
-  loaded: true,
-  exports: { query: async () => ({ rows: [] }), connect: async () => ({}) },
-};
-
 const {
   DEFAULT_THRESHOLDS,
   _resolveThresholds,
   _ruleBasedClassify,
   _detectSeasonality,
 } = require('../../tbinsight/pipeline');
+const { LOW_PERCENTILE, MED_PERCENTILE } = require('../../tbinsight/scoring');
 
 /** Feature rows carrying only what the functions under test read. */
 const rows = (incidenceValues) =>
@@ -76,6 +67,45 @@ describe('threshold resolution — scale matching', () => {
     });
     assert.strictEqual(source, 'tertile_incidence');
     assert.deepStrictEqual(thresholds, { low_max: 180, med_max: 320 });
+  });
+
+  it('records the percentile basis behind data-derived cut points', async () => {
+    // From the ML service: percentiles are echoed back for the UI.
+    const fromService = await _resolveThresholds({
+      barangayIncidences: incidences([100, 200, 300, 400]),
+      predictRows: rows([500, 600, 700, 800]),
+      callThresholds: async () => ({ low_max: 180, med_max: 320, low_pct: 100 / 3, med_pct: 60 }),
+    });
+    assert.deepStrictEqual(fromService.percentiles, { low_pct: 100 / 3, med_pct: 60 });
+
+    // A response from an older ML service carries none — fall back to the
+    // shared constants, which is what the service itself would have used.
+    const stale = await _resolveThresholds({
+      barangayIncidences: incidences([100, 200, 300, 400]),
+      predictRows: rows([500, 600, 700, 800]),
+      callThresholds: async () => ({ low_max: 180, med_max: 320 }),
+    });
+    assert.deepStrictEqual(stale.percentiles, { low_pct: LOW_PERCENTILE * 100, med_pct: MED_PERCENTILE * 100 });
+    assert.strictEqual(MED_PERCENTILE, 0.60,
+      'the Moderate|High cut must stay at the 60th percentile, matching thresholds.py');
+
+    // A caller-supplied override is a fixed number with no percentile basis,
+    // and neither is the last-resort default.
+    const override = await _resolveThresholds({
+      thresholdsOverride: { low_max: 10, med_max: 20 },
+      barangayIncidences: incidences([100, 200]),
+      predictRows: rows([500, 600]),
+      callThresholds: async () => { throw new Error('must not be called'); },
+    });
+    assert.strictEqual(override.percentiles, null);
+
+    const fallback = await _resolveThresholds({
+      barangayIncidences: incidences([null, null]),
+      predictRows: rows([null, null]),
+      callThresholds: async () => { throw new Error('unavailable'); },
+    });
+    assert.strictEqual(fallback.source, 'default');
+    assert.strictEqual(fallback.percentiles, null);
   });
 
   it('passes only non-null incidences to the tertile service', async () => {
