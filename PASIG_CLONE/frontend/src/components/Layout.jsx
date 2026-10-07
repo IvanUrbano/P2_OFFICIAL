@@ -73,6 +73,12 @@ export default function Layout() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    const updatePhoto = (event) => setUser((current) => current ? { ...current, profile_photo_data: event.detail.photo } : current);
+    window.addEventListener('profile-photo-updated', updatePhoto);
+    return () => window.removeEventListener('profile-photo-updated', updatePhoto);
+  }, []);
+
   // Accounts still on a system-generated temporary password must set their own
   // before using the system: keep them on Settings > Security until they do.
   useEffect(() => {
@@ -319,7 +325,7 @@ export default function Layout() {
                 className="flex min-w-0 max-w-[180px] items-center gap-2.5 border-l border-white/15 py-1 pl-3 text-left sm:max-w-[230px] lg:max-w-[260px]"
               >
                 <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0" style={{ background: avatarColor, color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)' }}>
-                  {initials}
+                  {user.profile_photo_data ? <img src={user.profile_photo_data} alt="" className="h-full w-full rounded-full object-cover" /> : initials}
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-semibold leading-tight text-white" title={user.username}>{user.username}</p>

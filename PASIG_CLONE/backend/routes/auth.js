@@ -9,6 +9,7 @@ const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { validatePassword } = require('../utils/passwordValidator');
 const { generateTempPassword } = require('../utils/tempPasswordGenerator');
+const { validateProfilePhoto } = require('../utils/profilePhoto');
 const { logAuditEvent } = require('../utils/auditLogger');
 const { notify } = require('../services/notifications');
 const { invalidateAccount } = require('../middleware/accountState');
@@ -269,9 +270,10 @@ router.post('/login', loginLimiter, async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    // Check if password was changed within the last 24 hours
-    const recentlyChanged = user.password_changed_at &&
-      (Date.now() - new Date(user.password_changed_at).getTime()) < 24 * 60 * 60 * 1000;
+    // A user's own password change refreshes password_changed_at too. Only an
+    // outstanding temporary/admin-reset password warrants the reset notice.
+    const recentlyChanged = Boolean(user.must_change_password && user.password_changed_at &&
+      (Date.now() - new Date(user.password_changed_at).getTime()) < 24 * 60 * 60 * 1000);
 
     // Assignment context for the logged-in user: barangay (staff) + optional facility.
     let facility = null;
@@ -342,10 +344,35 @@ router.get('/profile', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'User not found.' });
     }
 
-    res.json({ user: result.rows[0] });
+    const photo = await db.authPool.query('SELECT profile_photo_data FROM users WHERE id = $1', [req.user.id]);
+    res.json({ user: { ...result.rows[0], profile_photo_data: photo.rows[0]?.profile_photo_data || null } });
   } catch (error) {
     console.error('Profile error:', error.message);
     res.status(500).json({ error: 'Failed to fetch profile.' });
+  }
+});
+
+router.put('/profile/photo', authenticate, async (req, res) => {
+  const checked = validateProfilePhoto(req.body?.photo);
+  if (checked.error) return res.status(400).json({ error: checked.error });
+  try {
+    const result = await db.authPool.query('UPDATE users SET profile_photo_data = $1 WHERE id = $2 RETURNING id', [checked.photo, req.user.id]);
+    if (!result.rows.length) return res.status(404).json({ error: 'User not found.' });
+    res.json({ profile_photo_data: checked.photo });
+  } catch (err) {
+    console.error('Profile photo update error:', err.message);
+    res.status(500).json({ error: 'Could not save profile photo.' });
+  }
+});
+
+router.delete('/profile/photo', authenticate, async (req, res) => {
+  try {
+    const result = await db.authPool.query('UPDATE users SET profile_photo_data = NULL WHERE id = $1 RETURNING id', [req.user.id]);
+    if (!result.rows.length) return res.status(404).json({ error: 'User not found.' });
+    res.json({ profile_photo_data: null });
+  } catch (err) {
+    console.error('Profile photo removal error:', err.message);
+    res.status(500).json({ error: 'Could not remove profile photo.' });
   }
 });
 

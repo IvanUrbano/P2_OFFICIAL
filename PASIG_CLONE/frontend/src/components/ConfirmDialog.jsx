@@ -15,13 +15,13 @@ function ConfirmDialog({ options, onResolve }) {
   const confirmStyle = danger
     ? { background: '#B91C1C', color: '#ffffff', border: '1px solid #B91C1C', borderRadius: 4 }
     : { background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 };
-  const hasHeaderTone = Boolean(options.headerTone);
+  const hasHeaderTone = Boolean(options.headerTone) || /^(delete|remove)\b/i.test(options.title || '');
 
   return (
     <div className="fixed inset-0 z-[1400] flex items-center justify-center px-4" style={{ background: 'rgba(0,0,0,0.4)' }} onClick={() => onResolve(false)}>
       <div role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" className="w-full max-w-sm overflow-hidden border border-gray-200 bg-white shadow-lg" style={{ borderRadius: hasHeaderTone ? 5 : 12 }} onClick={event => event.stopPropagation()}>
         {hasHeaderTone ? (
-          <div className="flex items-center justify-between px-5 py-4" style={{ background: options.headerTone }}>
+          <div className="flex items-center justify-between px-5 py-4" style={{ background: options.headerTone || '#0F2D52' }}>
             <h2 id="confirm-dialog-title" className="text-sm font-semibold text-white">{options.title}</h2>
             <ModalCloseButton onClick={() => onResolve(false)} light />
           </div>

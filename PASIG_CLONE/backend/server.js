@@ -89,6 +89,9 @@ async function start() {
     // Pre-open a few connections to both databases so the first page load doesn't pay
     // ~1.5 s of connection setup per request
     const { pool, authPool } = require('./db/pasigSchema');
+    // The account database is shared with TBInsight. Keep this one-column
+    // migration active even when bulk local migrations are skipped.
+    await authPool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_data TEXT');
     await Promise.all([
       ...Array.from({ length: 4 }, () => pool.query('SELECT 1')),
       ...Array.from({ length: 3 }, () => authPool.query('SELECT 1')),
