@@ -411,7 +411,7 @@ curl -X POST http://localhost:3000/api/tb/barangays/seed
 | Field | Table | Description |
 |---|---|---|
 | `validation_status` | `tb_cases`, `tb_cases_raw` | "Validated" / "Not Validated" (DSTB only) |
-| `itis_case_id` | `tb_cases`, `tb_cases_raw` | External STIS case ID (MN only) |
+| `itis_case_id` | `tb_cases`, `tb_cases_raw` | Retired: no longer read, written, sent or shown (the column is kept only so existing data is not lost). The Case ID (`source_case_id`) identifies a case. |
 | `source_type` | `tb_cases`, `tb_cases_raw` | "DSTB" or "MN" discriminator |
 | `location_classification` | `tb_cases`, `tb_cases_raw` | "Pasig City" or "Non-Pasig" |
 
@@ -775,7 +775,7 @@ npm test
 | `test/tbinsight/parseCaseFile.test.js` | 23 | Header matching, column mapping, validation, City/Municipality |
 | `test/tbinsight/pipeline.test.js` | 19 | Risk scoring, alert generation, features |
 | `test/tbinsight/routes.test.js` | ~33 | All major API endpoints |
-| `test/webhook.test.js` | 18 | Webhook endpoint, HMAC, idempotency, ITIS Lite, date parsing, error handling |
+| `test/webhook.test.js` | 18 | Webhook endpoint, HMAC, idempotency, ITIS field ignored, date parsing, error handling |
 
 ### Pasig Clone Backend Tests (34 tests)
 

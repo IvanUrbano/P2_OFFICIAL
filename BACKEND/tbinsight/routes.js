@@ -203,7 +203,7 @@ function staffCaseScope(user, paramIdx) {
  */
 router.get('/cases', async (req, res) => {
   try {
-    const allowedSortFields = ['id', 'barangay_name', 'age', 'date_of_diagnosis', 'screening_facility', 'source_type'];
+    const allowedSortFields = ['id', 'source_case_id', 'barangay_name', 'age', 'date_of_diagnosis', 'screening_facility', 'source_type'];
     const {
       page = 1,
       limit = 10,
@@ -239,7 +239,6 @@ router.get('/cases', async (req, res) => {
         `TRIM(c.barangay_name) ILIKE $${paramIdx}`,
         `TRIM(c.screening_facility) ILIKE $${paramIdx}`,
         `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
-        `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
         `c.case_no ILIKE $${paramIdx}`,
         `c.source_case_id ILIKE $${paramIdx}`,
         `TRIM(c.source_type) ILIKE $${paramIdx}`,
@@ -385,7 +384,6 @@ router.get('/cases', async (req, res) => {
         c.date_of_outcome,
         c.imported_at,
         c.validation_status,
-        c.itis_case_id,
         c.source_type,
         c.location_classification,
         c.residence_barangay_name,
@@ -424,7 +422,7 @@ router.get('/cases', async (req, res) => {
 /**
  * GET /api/tb/cases/analytics-dataset
  * Every case the user may see, with ONLY the fields Analytics and Forecasting compute
- * from — no identifiers (case_no, patient_no, itis_case_id, batch_id). Those pages
+ * from — no identifiers (case_no, patient_no, batch_id). Those pages
  * filter and chart client-side, so they need all rows; they used to fetch them via
  * /api/tb/cases?limit=<total>, which shipped all 25 columns (~7 MB at 8.5k cases).
  * Same access scope, outcome labels and order as /api/tb/cases.
@@ -507,7 +505,6 @@ router.get('/cases/export', async (req, res) => {
         `TRIM(c.barangay_name) ILIKE $${paramIdx}`,
         `TRIM(c.screening_facility) ILIKE $${paramIdx}`,
         `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
-        `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
         `c.case_no ILIKE $${paramIdx}`,
         `c.source_case_id ILIKE $${paramIdx}`,
         `TRIM(c.source_type) ILIKE $${paramIdx}`,
@@ -563,7 +560,7 @@ router.get('/cases/export', async (req, res) => {
     const result = await pool.query(
       `SELECT
         c.id,
-        c.itis_case_id,
+        c.source_case_id,
         c.barangay_name,
         c.age,
         c.sex,
@@ -594,13 +591,12 @@ router.get('/cases/export', async (req, res) => {
       params
     );
 
-    const headers = ['Case ID', 'ITIS Case ID', 'Barangay', 'Age', 'Sex', 'Diagnosis Date', 'Screening Date', 'Notification Date', 'Screening Facility', 'Treatment Facility', 'Source', 'Source of Patient', 'Anatomical Site', 'Registration Group', 'Bacteriologic Status', 'Treatment Start Date', 'Case Status', 'Treatment Outcome', 'Source Outcome Value', 'Outcome Date', 'Validation', 'Location', 'Residence Barangay', 'Residence City'];
+    const headers = ['Case ID', 'Barangay', 'Age', 'Sex', 'Diagnosis Date', 'Screening Date', 'Notification Date', 'Screening Facility', 'Treatment Facility', 'Source', 'Source of Patient', 'Anatomical Site', 'Registration Group', 'Bacteriologic Status', 'Treatment Start Date', 'Case Status', 'Treatment Outcome', 'Source Outcome Value', 'Outcome Date', 'Validation', 'Location', 'Residence Barangay', 'Residence City'];
     const csvRows = [headers.join(',')];
 
     for (const row of result.rows) {
       const values = [
-        row.id,
-        row.itis_case_id || '',
+        row.source_case_id || 'No Case ID',
         `"${(row.barangay_name || '').replace(/"/g, '""')}"`,
         row.age || '',
         row.sex || '',
@@ -633,6 +629,106 @@ router.get('/cases/export', async (req, res) => {
   } catch (err) {
     console.error('Cases export error:', err.message);
     res.status(500).json({ error: 'Server error exporting cases.' });
+  }
+});
+
+/**
+ * GET /api/tb/cases/:caseKey/history
+ * Case History for a single case: the append-only record of what changed on it
+ * and who changed it (written by tbinsight/caseHistory.js on every same-case
+ * outcome update).
+ *
+ * `caseKey` is the stable Case ID (tb_cases.case_no) — the same key the webhook
+ * matches a re-sent record on. A purely numeric key falls back to the internal
+ * id, so a row that was imported without a Case ID is still inspectable. It is
+ * NEVER matched by patient number: the same person can have a later, new
+ * episode, which is a different Case ID and therefore a different case with its
+ * own history. Longitudinal updates to one case never appear as a second case.
+ *
+ * A case outside a staff user's facility answers 404 rather than 403 on purpose:
+ * the frontend treats any 403 as a dead session and redirects to /login.
+ */
+router.get('/cases/:caseKey/history', async (req, res) => {
+  try {
+    const caseKey = String(req.params.caseKey || '').trim();
+    if (!caseKey) return res.status(404).json({ error: 'Case not found.' });
+
+    const numericId = /^\d+$/.test(caseKey) ? Number(caseKey) : null;
+    const params = [numericId == null ? caseKey : null, numericId];
+    const conditions = [
+      `(($1::text IS NOT NULL AND c.case_no = $1) OR ($2::bigint IS NOT NULL AND c.id = $2))`,
+    ];
+    let paramIdx = 3;
+
+    const scope = staffCaseScope(req.user, paramIdx);
+    if (scope) {
+      conditions.push(scope.sql);
+      params.push(...scope.params);
+      paramIdx += scope.params.length;
+    }
+
+    const caseResult = await pool.query(
+      `SELECT c.id, c.case_no, c.patient_no, c.source_case_id, c.batch_id,
+              c.imported_at, c.updated_at, c.case_status, c.treatment_outcome,
+              c.outcome_status, c.source_outcome_status
+         FROM tb_cases c
+        WHERE ${conditions.join(' AND ')}
+        LIMIT 1`,
+      params
+    );
+    const record = caseResult.rows[0];
+    if (!record) return res.status(404).json({ error: 'Case not found.' });
+
+    const historyResult = await pool.query(
+      `SELECT id, change_type, changed_fields, source, changed_by_user_id,
+              changed_by_label, changed_at, notes, batch_id
+         FROM case_history
+        WHERE ($1::text IS NOT NULL AND case_no = $1)
+           OR ($1::text IS NULL AND tb_case_id = $2::bigint)
+        ORDER BY changed_at DESC, id DESC
+        LIMIT 200`,
+      [record.case_no, record.id]
+    );
+
+    // Actor: the label the source system reported for a synced change, else the
+    // username of a TBInsight user (for a future manual/review edit).
+    const userIds = [...new Set(historyResult.rows.map(h => h.changed_by_user_id).filter(v => v != null))];
+    const actorNames = {};
+    if (userIds.length > 0) {
+      const users = await pool.query(
+        'SELECT id, username FROM users WHERE id = ANY($1::int[])',
+        [userIds]
+      );
+      for (const user of users.rows) actorNames[user.id] = user.username;
+    }
+
+    res.json({
+      case: {
+        id: record.id,
+        case_no: record.case_no,
+        source_case_id: record.source_case_id,
+        patient_no: record.patient_no,
+        case_status: record.case_status,
+        treatment_outcome: record.treatment_outcome,
+        outcome_status: record.treatment_outcome,
+        outcome_status_raw: record.source_outcome_status ?? record.outcome_status,
+        imported_at: record.imported_at,
+        updated_at: record.updated_at,
+      },
+      history: historyResult.rows.map(h => ({
+        id: Number(h.id),
+        change_type: h.change_type,
+        changed_fields: h.changed_fields,
+        source: h.source,
+        actor: h.changed_by_label || actorNames[h.changed_by_user_id] || null,
+        changed_at: h.changed_at,
+        batch_id: h.batch_id,
+        notes: h.notes,
+      })),
+    });
+  } catch (err) {
+    console.error('Case history error:', err.message);
+    res.status(500).json({ error: 'Server error fetching case history.' });
   }
 });
 
@@ -2595,7 +2691,7 @@ router.get('/reports/summary', async (req, res) => {
 
       // All matching case records for the detailed table
       pool.query(`
-        SELECT c.id, c.date_of_diagnosis, c.barangay_name, c.sex, c.age,
+        SELECT c.id, c.source_case_id, c.case_no, c.date_of_diagnosis, c.barangay_name, c.sex, c.age,
           COALESCE(c.registration_group, 'Unknown') AS registration_group,
           COALESCE(c.anatomical_site, 'Unknown') AS anatomical_site,
           c.case_status,

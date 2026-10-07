@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback } from "react";
 import {
   normalizeRecordOutcome, isApprovedOutcome,
 } from '../utils/outcomeStatus';
+import { describeHistoryEntry, formatHistoryTimestamp, historyActorLabel } from '../utils/caseHistory';
 import API from "../api/axios";
+import SharedFilterSelect from '../components/FilterSelect';
 
 /* --- Debounce hook --- */
 function useDebounce(value, delay = 400) {
@@ -85,32 +87,27 @@ const DetailRow = ({ label, value }) => {
   );
 };
 
-/* --- Filter select for sidebar --- */
+/* --- Filter select for advanced sidebar; shares the app-wide dropdown UI --- */
 function FilterSelect({ label, value, onChange, options, placeholder }) {
   const formatOption = (opt) => {
     if (!opt) return '';
     return opt.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
   };
   return (
-    <div className="flex flex-col gap-1.5">
-      <label className="text-[11px] font-semibold" style={{ color: '#64748B' }}>{label}</label>
-      <div className="relative">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-lg pl-3 pr-7 py-2 text-xs font-semibold outline-none transition cursor-pointer appearance-none"
-          style={{ background: '#ffffff', border: '1px solid #E2E8F0', color: value ? '#0F2D52' : '#94A3B8' }}
-        >
-          <option value="">{placeholder}</option>
-          {options.map((opt) => (
-            <option key={opt} value={opt}>
-              {formatOption(opt)}
-            </option>
-          ))}
-        </select>
-        <i className="ri-arrow-down-s-line absolute right-2 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none" style={{ color: '#64748B' }} />
-      </div>
-    </div>
+    <SharedFilterSelect
+      label={label}
+      value={value}
+      onChange={onChange}
+      style={{ width: '100%' }}
+      selectStyle={{ flex: 1, width: '100%' }}
+    >
+      <option value="">{placeholder}</option>
+      {options.map((opt) => (
+        <option key={opt} value={opt}>
+          {formatOption(opt)}
+        </option>
+      ))}
+    </SharedFilterSelect>
   );
 }
 
@@ -163,6 +160,10 @@ export default function TBRecords() {
   const [sortDirection, setSortDirection] = useState("desc");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState(null);
+  const [detailTab, setDetailTab] = useState("details");
+  const [caseHistory, setCaseHistory] = useState(null); // null = not fetched yet
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(null);
 
   /* --- Advanced Filters Modal helpers --- */
   const openAdvancedFilters = () => {
@@ -447,6 +448,37 @@ export default function TBRecords() {
     return () => { cancelled = true; };
   }, [currentPage, buildFilterParams, pagination.limit, sortField, sortDirection]);
 
+  /* --- Case History for the open record ---
+     Fetched by the stable System Reference (case_no), the same key a re-sent update is
+     matched on, so everything shown here belongs to THIS case — never to the
+     patient. A later episode of the same person is a different Case ID and a
+     different record with its own history. Falls back to the internal id for a
+     row that was imported without a System Reference. */
+  useEffect(() => {
+    setDetailTab("details");
+    setCaseHistory(null);
+    setHistoryError(null);
+    if (!selectedRecord) return undefined;
+    const key = selectedRecord.case_no || String(selectedRecord.id ?? "");
+    if (!key) return undefined;
+
+    let cancelled = false;
+    setHistoryLoading(true);
+    API.get(`/api/tb/cases/${encodeURIComponent(key)}/history`)
+      .then((res) => {
+        if (cancelled) return;
+        setCaseHistory(Array.isArray(res.data?.history) ? res.data.history : []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (import.meta.env.DEV) console.error("Failed to fetch case history:", err);
+        setCaseHistory([]);
+        setHistoryError("Case history could not be loaded.");
+      })
+      .finally(() => { if (!cancelled) setHistoryLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedRecord]);
+
   return (
     <div className="flex flex-col gap-5">
       {exportError && (
@@ -658,7 +690,7 @@ export default function TBRecords() {
               <thead>
                 <tr style={{ background: '#0F2D52' }}>
                   {[
-                    { label: "Case ID", field: "id", idx: 0 },
+                    { label: "Case ID", field: "source_case_id", idx: 0 },
                     { label: "Barangay", field: "barangay_name", idx: 1 },
                     { label: "Age", field: "age", idx: 2 },
                     { label: "Sex", field: null, idx: 3 },
@@ -735,7 +767,9 @@ export default function TBRecords() {
                     <tr key={record.id} className="hover:bg-blue-50 transition-colors"
                       style={{ borderBottom: '1px solid #E2E8F0', background: idx % 2 === 0 ? '#ffffff' : '#F8FAFC' }}>
                       <td className="pl-6 pr-3 py-2" style={{ borderRight: '1px solid #E2E8F0' }}>
-                        <span className="font-bold" style={{ color: '#0F2D52' }}>{record.source_case_id || record.case_no || String(record.id).padStart(4, "0")}</span>
+                        {record.source_case_id
+                          ? <span className="font-bold" style={{ color: '#0F2D52' }}>{record.source_case_id}</span>
+                          : <span className="italic" style={{ color: '#94A3B8' }}>No Case ID</span>}
                       </td>
                       <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.barangay_name || residenceLabel(record) || '—'}</td>
                       <td className="px-3 py-2 text-sm" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.age}</td>
@@ -999,14 +1033,35 @@ export default function TBRecords() {
             <div className="px-6 py-5 space-y-6">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Case ID</p>
-                <p className="text-2xl font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{selectedRecord.source_case_id || selectedRecord.case_no || String(selectedRecord.id).padStart(4, "0")}</p>
+                <p className="text-2xl font-extrabold mt-0.5" style={selectedRecord.source_case_id ? { color: '#0F2D52' } : { color: '#94A3B8', fontStyle: 'italic' }}>{selectedRecord.source_case_id || 'No Case ID'}</p>
+                {selectedRecord.case_no && <p className="text-xs text-slate-400 mt-1">System Reference: {selectedRecord.case_no}</p>}
                 <div className="mt-2 flex gap-2"><StatusBadge status={selectedRecord.case_status} kind="status" />{selectedRecord.treatment_outcome ? <StatusBadge status={selectedRecord.treatment_outcome} /> : <span className="text-xs text-slate-400 self-center cursor-help" title={selectedRecord.case_status === 'DIAGNOSED' ? 'Diagnosed, not yet on treatment — no final outcome yet' : 'Still on treatment — no final outcome yet'}>—</span>}</div>
                 <p className="text-xs text-slate-400 mt-1">Original source value: {selectedRecord.outcome_status_raw || '—'}</p>
               </div>
+
+              {/* Tabs: the record as it stands now, vs. the append-only history of
+                  how it got here (previous outcomes are never overwritten silently). */}
+              <div className="flex gap-1 border-b" style={{ borderColor: '#E2E8F0' }}>
+                {[['details', 'Details'], ['history', 'Case History']].map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setDetailTab(key)}
+                    className="px-3 py-2 text-[11px] font-bold -mb-px"
+                    style={detailTab === key
+                      ? { color: '#0F2D52', borderBottom: '2px solid #0F2D52' }
+                      : { color: '#94A3B8', borderBottom: '2px solid transparent' }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {detailTab === 'details' && (
+                <>
               <div>
                 <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Case Summary</h3>
                 <div className="space-y-2.5">
-                  <DetailRow label="ITIS Case ID" value={selectedRecord.itis_case_id} />
                   <DetailRow label="Source Type" value={selectedRecord.source_type} />
                   <DetailRow label="Validation Status" value={selectedRecord.validation_status} />
                 </div>
@@ -1047,6 +1102,55 @@ export default function TBRecords() {
                   <DetailRow label="Outcome Date" value={formatDate(selectedRecord.date_of_outcome)} />
                 </div>
               </div>
+                </>
+              )}
+
+              {detailTab === 'history' && (
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
+                    Case History
+                  </h3>
+                  <p className="text-[11px] mb-3" style={{ color: '#94A3B8' }}>
+                    Changes recorded against this Case ID. A later episode for the same
+                    patient is a separate Case with its own history.
+                  </p>
+
+                  {historyLoading && (
+                    <p className="text-xs" style={{ color: '#64748B' }}>Loading history…</p>
+                  )}
+
+                  {!historyLoading && historyError && (
+                    <p className="text-xs" style={{ color: '#991B1B' }}>{historyError}</p>
+                  )}
+
+                  {!historyLoading && !historyError && caseHistory && caseHistory.length === 0 && (
+                    <p className="text-xs" style={{ color: '#64748B' }}>
+                      {selectedRecord.case_no
+                        ? 'No recorded changes yet. An update appears here when the source system corrects this case.'
+                        : 'This record has no System Reference, so later updates cannot be matched to it.'}
+                    </p>
+                  )}
+
+                  {!historyLoading && !historyError && caseHistory && caseHistory.length > 0 && (
+                    <ol className="space-y-3">
+                      {caseHistory.map((entry) => {
+                        const { title, lines } = describeHistoryEntry(entry);
+                        return (
+                          <li key={entry.id} className="p-3 rounded-lg text-xs" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                            <p className="font-bold" style={{ color: '#0F2D52' }}>{title}</p>
+                            <div className="mt-1 space-y-0.5" style={{ color: '#475569' }}>
+                              {lines.map((line) => <p key={line}>{line}</p>)}
+                            </div>
+                            <p className="mt-2 text-[10px]" style={{ color: '#94A3B8' }}>
+                              {formatHistoryTimestamp(entry.changed_at)} · {entry.source || 'system'} · {historyActorLabel(entry)}
+                            </p>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

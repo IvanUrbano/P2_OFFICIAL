@@ -84,6 +84,9 @@ const READ_ENDPOINTS = [
   '/api/tb/filter-options',
   '/api/tb/cases',
   '/api/tb/cases/export',
+  // Same-case outcome updates: reading a case's history is a read like any
+  // other — 403 here would bounce the frontend to /login mid-inspection.
+  '/api/tb/cases/CS-2025-000001/history',
   '/api/tb/dashboard/summary',
   '/api/tb/dashboard/monthly',
   '/api/tb/dashboard/outcomes',

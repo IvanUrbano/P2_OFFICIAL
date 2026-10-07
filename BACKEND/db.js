@@ -172,7 +172,7 @@ const initDb = async () => {
       console.log('⚠️ Manual entry provenance migration not found, skipping.');
     }
 
-    // Duplicate detection: DSTB fingerprint + MN itis_case_id collision
+    // Duplicate detection: DSTB fingerprint
     // detection columns and one-time backfill (idempotent). Wrapped in its
     // own try/catch — a failure here (e.g. an unexpected constraint issue
     // against live data) must not prevent the unrelated migrations below
@@ -333,6 +333,18 @@ const initDb = async () => {
     const treatmentStateMigPath = path.join(__dirname, 'db', 'migrations', '031_case_status_treatment_outcome.sql');
     if (fs.existsSync(treatmentStateMigPath)) {
       await execSql(fs.readFileSync(treatmentStateMigPath, 'utf8'));
+    }
+
+    // Same-case outcome updates: case_history actor column, tb_cases.updated_at,
+    // and the MISSING_CASE_ID review flag. Migrations are registered one-by-one
+    // here (this directory is NOT scanned), so a new file needs its own block.
+    const caseHistoryWiringMigPath = path.join(__dirname, 'db', 'migrations', '032_case_history_wiring.sql');
+    if (fs.existsSync(caseHistoryWiringMigPath)) {
+      try {
+        await execSql(fs.readFileSync(caseHistoryWiringMigPath, 'utf8'));
+      } catch (caseHistoryWiringErr) {
+        console.error('❌ Case history wiring migration failed (continuing):', caseHistoryWiringErr.message);
+      }
     }
 
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,

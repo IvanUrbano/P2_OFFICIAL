@@ -971,3 +971,113 @@ describe('GET /api/tb/evaluation/latest', () => {
     assert.strictEqual(res.body.evaluation_status.failedAt, '2026-10-06T08:00:00.000Z');
   });
 });
+
+/* --- Same-case outcome updates: reading the history they leave behind --- */
+
+describe('GET /api/tb/cases/:caseKey/history', () => {
+  // Same as buildApp, but lets a test set token claims (e.g. a staff facility).
+  function appWithClaims(claims) {
+    uninstallMockDb();
+    installMockDb();
+    clearTbinsightCache();
+    const app = express();
+    const token = signToken(claims.role, claims);
+    app.use((req, _res, next) => { req.headers.authorization = `Bearer ${token}`; next(); });
+    app.use(express.json());
+    app.use('/api/tb', require('../../tbinsight/routes'));
+    return app;
+  }
+
+  const caseRow = {
+    id: 77, case_no: 'CS-2025-000042', patient_no: 'PT-000009',
+    source_case_id: 'ROS-D-2025-00042', batch_id: 'b',
+    imported_at: '2025-02-06T00:00:00Z', updated_at: '2025-06-10T00:00:00Z',
+    case_status: null, treatment_outcome: 'CURED',
+    outcome_status: 'CURED', source_outcome_status: 'CURED',
+  };
+  const historyRow = {
+    id: 5, change_type: 'status_changed',
+    changed_fields: { outcome_status: { old: 'ON TREATMENT', new: 'CURED' } },
+    source: 'webhook', changed_by_user_id: null, changed_by_label: 'ana.cruz',
+    changed_at: '2025-06-10T08:30:00Z', notes: null, batch_id: 'b',
+  };
+
+  function harness({ rows = [caseRow], history = [historyRow], users = [] } = {}) {
+    const seen = [];
+    mockQueryFn = async (sql, params) => {
+      seen.push({ sql, params });
+      if (sql.includes('FROM case_history')) return { rows: history };
+      if (sql.includes('FROM users')) return { rows: users };
+      if (sql.includes('FROM tb_cases')) return { rows };
+      return { rows: [] };
+    };
+    return seen;
+  }
+
+  it('returns the case and its history, keyed by Case ID', async () => {
+    const seen = harness();
+    const res = await request(appWithClaims({ role: 'admin' }))
+      .get('/api/tb/cases/CS-2025-000042/history');
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.case.case_no, 'CS-2025-000042');
+    assert.strictEqual(res.body.case.treatment_outcome, 'CURED');
+    assert.strictEqual(res.body.history.length, 1);
+    assert.strictEqual(res.body.history[0].change_type, 'status_changed');
+    assert.deepStrictEqual(res.body.history[0].changed_fields, {
+      outcome_status: { old: 'ON TREATMENT', new: 'CURED' },
+    });
+    assert.strictEqual(res.body.history[0].source, 'webhook');
+    assert.strictEqual(res.body.history[0].actor, 'ana.cruz');
+    // Matched on the stable Case ID, never on the patient.
+    assert.ok(seen[0].sql.includes('c.case_no = $1'));
+    assert.ok(!seen[0].sql.includes('patient_no ='), 'never matched by patient');
+    assert.deepStrictEqual(seen[0].params.slice(0, 2), ['CS-2025-000042', null]);
+    const historyQuery = seen.find(q => q.sql.includes('FROM case_history'));
+    assert.deepStrictEqual(historyQuery.params, ['CS-2025-000042', 77]);
+  });
+
+  it('falls back to the internal id for a row imported without a Case ID', async () => {
+    const seen = harness({ rows: [{ ...caseRow, case_no: null }] });
+    const res = await request(appWithClaims({ role: 'admin' })).get('/api/tb/cases/77/history');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(seen[0].params.slice(0, 2), [null, 77]);
+    const historyQuery = seen.find(q => q.sql.includes('FROM case_history'));
+    assert.deepStrictEqual(historyQuery.params, [null, 77], 'history is read by case row, not by case_no');
+  });
+
+  it('resolves a TBInsight user id to a username when there is no source-system label', async () => {
+    harness({
+      history: [{ ...historyRow, changed_by_label: null, changed_by_user_id: 9 }],
+      users: [{ id: 9, username: 'maria.santos' }],
+    });
+    const res = await request(appWithClaims({ role: 'admin' })).get('/api/tb/cases/CS-2025-000042/history');
+    assert.strictEqual(res.body.history[0].actor, 'maria.santos');
+  });
+
+  it('answers 404, never 403, for a case outside a staff member facility', async () => {
+    // The frontend redirects to /login on any 403, so "not yours" must read as
+    // "not found" rather than as a dead session.
+    const seen = [];
+    mockQueryFn = async (sql, params) => {
+      seen.push({ sql, params });
+      // Staff scope applies to the same statement, so no row comes back.
+      return { rows: [] };
+    };
+    const res = await request(appWithClaims({ role: 'staff', facility_id: 7 }))
+      .get('/api/tb/cases/CS-2025-000042/history');
+
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(res.body.error, 'Case not found.');
+    const scope = '(c.current_responsible_facility_id = $3 OR c.current_responsible_facility_id IS NULL)';
+    assert.ok(seen[0].sql.includes(scope), 'the shared staff rule is applied');
+    assert.deepStrictEqual(seen[0].params, ['CS-2025-000042', null, 7]);
+  });
+
+  it('404s for a case that does not exist and never queries history for it', async () => {
+    const seen = harness({ rows: [] });
+    const res = await request(appWithClaims({ role: 'admin' })).get('/api/tb/cases/NOPE-1/history');
+    assert.strictEqual(res.status, 404);
+    assert.ok(!seen.some(q => q.sql.includes('FROM case_history')));
+  });
+});

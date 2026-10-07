@@ -7,7 +7,7 @@ export async function exportCSV(cases) {
   const { saveAs } = await import('file-saver');
   const headers = ['Case ID', 'Date', 'Barangay', 'Sex', 'Age', 'Registration Group', 'Anatomical Site', 'Case Status', 'Treatment Outcome', 'Source Outcome Value', 'Bacteriological Status'];
   const rows = cases.map(r => [
-    r.id,
+    r.source_case_id || 'No Case ID',
     r.date_of_diagnosis ? new Date(r.date_of_diagnosis).toLocaleDateString('en-US') : '',
     r.barangay_name || '',
     r.sex || '',
@@ -48,7 +48,7 @@ export async function exportExcel(reportData) {
   if (reportData.cases?.length) {
     const recordHeaders = ['Case ID', 'Date', 'Barangay', 'Sex', 'Age', 'Registration Group', 'Case Status', 'Treatment Outcome', 'Source Outcome Value'];
     const recordRows = reportData.cases.map(r => [
-      r.id,
+      r.source_case_id || 'No Case ID',
       r.date_of_diagnosis ? new Date(r.date_of_diagnosis).toLocaleDateString('en-US') : '',
       r.barangay_name || '',
       r.sex || '',

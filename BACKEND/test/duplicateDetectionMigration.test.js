@@ -80,3 +80,54 @@ describe('Migration 018 â€” duplicate detection safety (TEST F)', () => {
     assert.ok(upper.includes('CREATE INDEX IF NOT EXISTS'));
   });
 });
+
+/* --- Migration 032 — same-case outcome updates ---
+ *
+ * A later update to an existing Case ID needs a write timestamp and a flag for
+ * rows that arrive with no Case ID (they can never be matched on a resend, so
+ * they are marked for review rather than silently merged into a neighbour).
+ * This migration must only ever ADD / FLAG — it may not rewrite or drop a case.
+ */
+const historyWiringSql = fs.readFileSync(
+  path.join(__dirname, '..', 'db', 'migrations', '032_case_history_wiring.sql'),
+  'utf8'
+);
+const historyUpper = historyWiringSql.toUpperCase();
+
+describe('Migration 032 — case history wiring safety', () => {
+  it('contains no DELETE and no DROP', () => {
+    assert.ok(!historyUpper.includes('DELETE FROM'), 'never remove cases');
+    assert.ok(!historyUpper.includes('DROP TABLE') && !historyUpper.includes('DROP COLUMN'), 'never remove history');
+  });
+
+  it('adds updated_at idempotently and backfills it from imported_at', () => {
+    assert.match(historyWiringSql, /ADD COLUMN IF NOT EXISTS\s+updated_at\s+TIMESTAMPTZ/i);
+    assert.match(historyWiringSql, /UPDATE[\s\S]*SET\s+updated_at\s*=\s*imported_at/i);
+  });
+
+  it('widens the flag-reason check so MISSING_CASE_ID can be recorded', () => {
+    assert.match(historyWiringSql, /MISSING_CASE_ID/);
+    assert.match(historyWiringSql, /DROP CONSTRAINT IF EXISTS[\s\S]*duplicate_flag_reason/i);
+  });
+
+  it('flags rows without a Case ID instead of rejecting or merging them', () => {
+    const updateBlocks = historyWiringSql.match(/UPDATE tb_cases[\s\S]*?;/gi) || [];
+    assert.ok(updateBlocks.length >= 1, 'expected the MISSING_CASE_ID backfill');
+    for (const block of updateBlocks) {
+      const setClause = block.match(/SET([\s\S]*?)(?:\bFROM\b|\bWHERE\b|;)/i)?.[1] || '';
+      const assignedColumns = [...setClause.matchAll(/(\w+)\s*=/g)].map((m) => m[1].toLowerCase());
+      for (const col of assignedColumns) {
+        assert.ok(
+          ['duplicate_status', 'duplicate_flag_reason', 'updated_at'].includes(col),
+          `032 UPDATE touched unexpected column "${col}"`
+        );
+      }
+    }
+    assert.ok(/WHERE\s+case_no\s+IS NULL/i.test(historyWiringSql), 'only unmatchable rows are flagged');
+    assert.ok(/duplicate_status\s*=\s*'possible_duplicate'/i.test(historyWiringSql));
+  });
+
+  it('never claims a duplicate is confirmed', () => {
+    assert.ok(!/duplicate_status\s*=\s*'confirmed/i.test(historyWiringSql));
+  });
+});

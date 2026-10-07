@@ -9,18 +9,15 @@ const { schedulePipelineRun } = require('./pipeline');
 const { verifyWebhookSignature } = require('../middleware/webhookAuth');
 const { flagPossibleDuplicates } = require('./duplicateFlags');
 const { lockCaseData } = require('./caseDataLock');
+const {
+  HISTORY_FIELDS, HISTORY_SELECT_SQL, diffCaseFields, classifyChange, insertCaseHistory,
+} = require('./caseHistory');
 
 /**
- * Duplicate detection (record level) has two independent signals, both
- * DETECTION-only — neither is a database uniqueness constraint, and neither
- * ever causes a record to be rejected, skipped, overwritten, or merged:
- *
- * - MN_ITIS_ID_COLLISION: two MN records share the same itis_case_id.
- *   itis_case_id is the best available MN source reference, but an audit of
- *   the live dataset found 20 itis_case_id values shared by records with
- *   materially different barangay/age/outcome — so it is NOT a guaranteed
- *   globally-unique identifier and cannot be used to auto-reject or
- *   auto-confirm. A collision is flagged for human review only.
+ * Duplicate detection (record level) is DETECTION-only: it is not a database uniqueness
+ * constraint, and never causes a record to be rejected, skipped, overwritten, or merged.
+ * The registry's ITIS number is not read, stored, sent or used for matching; the Case ID
+ * (case_no / source_case_id) is the identity of a case.
  *
  * - DSTB_FINGERPRINT_COLLISION: DSTB records have no genuine case/patient
  *   identifier anywhere in the source data (confirmed: PASIG_CLONE's parser
@@ -33,15 +30,9 @@ const { lockCaseData } = require('./caseDataLock');
  *   legitimate, distinct patients CAN share a fingerprint; a match means
  *   "needs human review," not "confirmed same case."
  *
- * Documented limitation (verbatim, per audit):
+ * Documented limitation:
  *
- * "MN records contain an ITIS case reference; however, analysis of the
- * available dataset identified collisions where the same reference occurs
- * across records with materially different attributes. Therefore, the field
- * is retained as source provenance and a duplicate-detection signal rather
- * than being treated as a guaranteed globally unique record identifier.
- *
- * DSTB records do not contain a verified stable case identifier. DSTB
+ * "DSTB records do not contain a verified stable case identifier. DSTB
  * duplicate detection therefore uses a heuristic fingerprint. Potential
  * record-level duplicates from either source are flagged for review rather
  * than silently discarded."
@@ -119,6 +110,14 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
   let claimId = null;
   try {
     const { source, batch_id, timestamp, sheets, schema_version } = req.body;
+
+    // Who is asking for this change, as the source system reported it. Optional:
+    // an older sender simply omits it and history rows keep a NULL actor label.
+    // TBInsight has no user row for a PASIG account, so it is stored as a label
+    // (case_history.changed_by_label) rather than a changed_by_user_id.
+    const actorLabel = typeof req.body.actor?.username === 'string'
+      ? req.body.actor.username.trim().slice(0, 100) || null
+      : null;
     
     console.log(`   Source: ${source}, Batch: ${batch_id}, Schema: ${schema_version}`);
     if (!sheets) {
@@ -321,10 +320,9 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
         if (validation.valid) {
           const locationClassification = isPasigResident ? 'Pasig City' : 'Non-Pasig Resident';
 
-          // Neither itis_case_id (MN) nor the DSTB fingerprint is enforced as
-          // a DB uniqueness constraint — see the doc comment on
-          // computeDstbFingerprint. Both are lookup keys used only for
-          // post-insert possible-duplicate detection below.
+          // The DSTB fingerprint is not enforced as a DB uniqueness constraint — see
+          // the doc comment on computeDstbFingerprint. It is a lookup key used only
+          // for post-insert possible-duplicate detection below.
           const dstbFingerprint = source_type === 'DSTB'
             ? computeDstbFingerprint({
               ...record,
@@ -344,7 +342,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
             record.treatment_facility, record.source_of_patient, record.anatomical_site,
             record.registration_group, record.bacteriological_status, record.date_started_treatment,
             normalizeOutcome(record.outcome_status), record.date_of_outcome, record.validation_status,
-            record.itis_case_id, source_type, locationClassification,
+            source_type, locationClassification,
             record.type, record.province, record.region,
             record.referred_to_dots, record.referral_status,
             record.microscopy_result, record.microscopy_release_date,
@@ -367,12 +365,32 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
       }
     }
 
-    const COLS = 39;
+    // Columns of the INSERT below, in order. The SQL, the placeholder math, the
+    // pre-update snapshot and the history diff are all derived from this list so
+    // they cannot drift apart from what is actually written to tb_cases.
+    const INSERT_COLUMNS = [
+      'batch_id', 'barangay_id', 'date_of_diagnosis', 'date_of_screening', 'date_of_notification',
+      'age', 'sex', 'barangay_name', 'screening_facility', 'treatment_facility',
+      'source_of_patient', 'anatomical_site', 'registration_group', 'bacteriological_status',
+      'date_started_treatment', 'outcome_status', 'date_of_outcome',
+      'validation_status', 'source_type', 'location_classification',
+      'type', 'province', 'region',
+      'referred_to_dots', 'referral_status',
+      'microscopy_result', 'microscopy_release_date',
+      'rdt_result', 'rdt_release_date', 'outcome_reason',
+      'dstb_fingerprint', 'current_responsible_facility_id',
+      'case_no', 'patient_no', 'source_case_id',
+      'residence_barangay_name', 'residence_city', 'source_outcome_status',
+    ];
+    const COL_INDEX = Object.fromEntries(INSERT_COLUMNS.map((name, idx) => [name, idx]));
+    const COLS = INSERT_COLUMNS.length;
     const chunkSize = 100;
     let insertedCount = 0;
     let updatedCount = 0;
+    let historyEntries = 0;
     const insertedDstbFingerprints = new Set();
-    const insertedMnItisCaseIds = new Set();
+    const missingCaseIds = [];
+    const historyRows = [];
     for (let i = 0; i < allValidRows.length; i += chunkSize) {
       const chunk = allValidRows.slice(i, i + chunkSize);
       const placeholders = chunk.map((_, idx) => {
@@ -380,26 +398,41 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
         return `(${Array.from({ length: COLS }, (_, c) => `$${base + c + 1}`).join(',')})`;
       }).join(', ');
       const flatParams = chunk.flat();
+
+      // Snapshot the rows this chunk may UPDATE rather than insert, matched
+      // strictly by the stable Case ID (case_no). Taken on the same transaction,
+      // so the "before" values are exactly what is about to be overwritten.
+      const chunkCaseNos = [...new Set(chunk.map(r => r[COL_INDEX.case_no]).filter(Boolean))];
+      const beforeByCaseNo = new Map();
+      if (chunkCaseNos.length > 0) {
+        const snapshot = await client.query(HISTORY_SELECT_SQL, [chunkCaseNos]);
+        for (const existing of snapshot.rows) beforeByCaseNo.set(existing.case_no, existing);
+      }
+      const chunkByCaseNo = new Map(
+        chunk.filter(r => r[COL_INDEX.case_no]).map(r => [r[COL_INDEX.case_no], r])
+      );
+      // The values this chunk is about to write for a given Case ID.
+      const incomingFor = (caseNo) => {
+        const source = chunkByCaseNo.get(caseNo);
+        if (!source) return null;
+        return Object.fromEntries(HISTORY_FIELDS.map(field => [field, source[COL_INDEX[field]]]));
+      };
+
       // case_no (PASIG's Case ID) is the only uniqueness key: a case sent again
       // updates its outcome/treatment fields in place instead of becoming a second
-      // row. Rows without a case_no (and itis_case_id / dstb_fingerprint, which are
-      // NOT unique — see the doc comment above) are always inserted; possible-
-      // duplicate detection runs as a separate, non-blocking flagging pass below.
+      // row. Rows without a case_no (and dstb_fingerprint, which is
+      // NOT unique — see the doc comment above) are always inserted; they are
+      // flagged MISSING_CASE_ID below because a resend of them cannot be matched,
+      // and possible-duplicate detection runs as a separate, non-blocking pass.
+      //
+      // OUTCOMES COME ONLY FROM THE SENDER. outcome_status is assigned from
+      // EXCLUDED (the payload) and nowhere else — never from a date, a duration,
+      // or time elapsed since treatment started. A patient stays ON TREATMENT
+      // until the source system reports a new outcome; TBInsight never decides a
+      // case is CURED because enough days have passed.
       const result = await client.query(
-        `INSERT INTO tb_cases (
-          batch_id, barangay_id, date_of_diagnosis, date_of_screening, date_of_notification,
-          age, sex, barangay_name, screening_facility, treatment_facility,
-          source_of_patient, anatomical_site, registration_group, bacteriological_status,
-          date_started_treatment, outcome_status, date_of_outcome,
-          validation_status, itis_case_id, source_type, location_classification,
-          type, province, region,
-          referred_to_dots, referral_status,
-          microscopy_result, microscopy_release_date,
-          rdt_result, rdt_release_date, outcome_reason,
-          dstb_fingerprint, current_responsible_facility_id,
-          case_no, patient_no, source_case_id,
-          residence_barangay_name, residence_city, source_outcome_status
-        ) VALUES ${placeholders}
+        `INSERT INTO tb_cases (${INSERT_COLUMNS.join(', ')})
+         VALUES ${placeholders}
         ON CONFLICT (case_no) WHERE case_no IS NOT NULL DO UPDATE SET
           barangay_id = EXCLUDED.barangay_id,
           barangay_name = EXCLUDED.barangay_name,
@@ -412,32 +445,78 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
           date_started_treatment = EXCLUDED.date_started_treatment,
           treatment_facility = EXCLUDED.treatment_facility,
           -- the Case ID users see (PASIG); kept when a resend carries none
-          source_case_id = COALESCE(EXCLUDED.source_case_id, tb_cases.source_case_id)
-        RETURNING id, dstb_fingerprint, itis_case_id, source_type, (xmax = 0) AS inserted`,
+          source_case_id = COALESCE(EXCLUDED.source_case_id, tb_cases.source_case_id),
+          updated_at = NOW()
+        RETURNING id, case_no, patient_no, dstb_fingerprint, source_type, (xmax = 0) AS inserted`,
         flatParams
       );
       for (const row of result.rows) {
-        if (row.inserted === false) { updatedCount++; continue; }
+        const caseNo = row.case_no || null;
+        const historyBase = {
+          tbCaseId: row.id, caseNo, patientNo: row.patient_no ?? null,
+          batchId: batch_id, source: 'webhook', changedByLabel: actorLabel,
+        };
+        if (row.inserted === false) {
+          updatedCount++;
+          const before = beforeByCaseNo.get(caseNo);
+          const incoming = incomingFor(caseNo);
+          if (before && incoming) {
+            // Mirror the two COALESCE(...) assignments above: a resend that
+            // carries no value keeps the stored one rather than clearing it.
+            const effective = {
+              ...incoming,
+              source_outcome_status: incoming.source_outcome_status ?? before.source_outcome_status,
+              source_case_id: incoming.source_case_id ?? before.source_case_id,
+            };
+            const diff = diffCaseFields(before, effective);
+            if (diff) {
+              historyRows.push({ ...historyBase, changeType: classifyChange(diff), changedFields: diff });
+            }
+          }
+          continue;
+        }
         insertedCount++;
+        if (caseNo) {
+          historyRows.push({ ...historyBase, changeType: 'created', changedFields: null });
+        } else {
+          // No Case ID: this row can never be matched on a resend.
+          missingCaseIds.push(row.id);
+        }
         if (row.dstb_fingerprint) insertedDstbFingerprints.add(row.dstb_fingerprint);
-        if (row.source_type === 'MN' && row.itis_case_id) insertedMnItisCaseIds.add(row.itis_case_id);
       }
     }
     importedCount = insertedCount;
 
+    // Append-only case history, written on the same transaction as the case rows:
+    // the previous values (ON TREATMENT) are preserved together with what produced
+    // the change (source='webhook') and who asked for it (the sender's actor).
+    // History can never be half-applied — it commits or rolls back with the data.
+    historyEntries = await insertCaseHistory(client, historyRows);
+
+    // A record with no Case ID cannot be matched when it is re-sent, so it is
+    // always inserted — the one remaining way a resend could create a duplicate.
+    // Never rejected, never merged, never deleted: flagged for human review only.
+    if (missingCaseIds.length > 0) {
+      await client.query(
+        `UPDATE tb_cases
+            SET duplicate_status = 'possible_duplicate', duplicate_flag_reason = 'MISSING_CASE_ID'
+          WHERE id = ANY($1::bigint[])
+            AND duplicate_flag_reason IS NULL`,
+        [missingCaseIds]
+      );
+    }
+
     // Possible-duplicate detection (never rejection). For every fingerprint
-    // or itis_case_id touched by this batch, if MORE THAN ONE tb_cases row
+    // touched by this batch, if MORE THAN ONE tb_cases row
     // now shares it (across this batch and/or earlier ones), flag every row
     // except the earliest as a possible duplicate. Never deletes, merges, or
     // blocks anything — every row keeps existing exactly as inserted; this
     // only sets a review flag and a reason.
     const flagged = await flagPossibleDuplicates(client, {
       dstbFingerprints: [...insertedDstbFingerprints],
-      mnItisCaseIds: [...insertedMnItisCaseIds],
     });
     const dstbCollisionsFlagged = flagged.dstb;
-    const mnCollisionsFlagged = flagged.mn;
-    const possibleDuplicatesFlagged = dstbCollisionsFlagged + mnCollisionsFlagged;
+    const possibleDuplicatesFlagged = dstbCollisionsFlagged;
 
     await client.query('COMMIT');
 
@@ -478,8 +557,8 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
     res.json({
       success: true,
       message: `Webhook processed: ${importedCount} imported, ${updatedCount} existing cases updated, ${possibleDuplicatesFlagged} possible duplicates flagged, ${errorCount} errors`,
-      totalRecords, importedCount, updatedCount, errorCount,
-      possibleDuplicatesFlagged, mnCollisionsFlagged, dstbCollisionsFlagged,
+      totalRecords, importedCount, updatedCount, errorCount, historyEntries,
+      possibleDuplicatesFlagged, dstbCollisionsFlagged,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
       // Every rejected record with the sender's identifiers, so PASIG can mark each one
       // for fixing (`errors` above stays a 10-item sample for older senders).
@@ -487,7 +566,7 @@ router.post('/pasig-clone', verifyWebhookSignature, async (req, res) => {
     });
 
     console.log(`✅ Webhook batch ${batch_id} completed successfully`);
-    console.log(`   📊 Total: ${totalRecords}, Imported: ${importedCount}, Possible dup flagged: ${possibleDuplicatesFlagged} (MN: ${mnCollisionsFlagged}, DSTB: ${dstbCollisionsFlagged}), Errors: ${errorCount}`);
+    console.log(`   📊 Total: ${totalRecords}, Imported: ${importedCount}, Possible dup flagged: ${possibleDuplicatesFlagged} (DSTB: ${dstbCollisionsFlagged}), Errors: ${errorCount}`);
   } catch (error) {
     try {
       await client.query('ROLLBACK');
