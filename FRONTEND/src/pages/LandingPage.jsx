@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { PASIG_CLONE_URL } from '../config/externalSystems';
 import Logo from '../../components/Logo';
 
 const FEATURES = [
@@ -8,9 +9,6 @@ const FEATURES = [
   { icon: 'ri-dashboard-3-line', title: 'Dashboard', desc: 'Monitor progress in real time' },
   { icon: 'ri-stethoscope-line', title: 'Intervention Planning', desc: 'Plan targeted and effective interventions' },
 ];
-
-const PASIG_CLONE_URL =
-  import.meta.env.VITE_PASIG_CLONE_URL || 'https://pasig-clone.onrender.com';
 
 export default function LandingPage() {
   const navigate = useNavigate();

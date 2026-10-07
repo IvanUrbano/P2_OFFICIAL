@@ -1,10 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
+import { PASIG_CLONE_URL } from '../config/externalSystems';
 import Logo from '../../components/Logo';
-
-// Pasig Clone (data import / validation / sync). Set VITE_PASIG_CLONE_URL for deployments.
-const PASIG_CLONE_URL = import.meta.env.VITE_PASIG_CLONE_URL || 'http://localhost:5174';
 
 export default function LoginPage() {
   const navigate = useNavigate();
