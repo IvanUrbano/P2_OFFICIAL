@@ -9,6 +9,7 @@ import ReadyTab from '../components/validation/ReadyTab';
 import MatchesTab from '../components/validation/MatchesTab';
 import AssignmentTab from '../components/validation/AssignmentTab';
 import IssuesTab from '../components/validation/IssuesTab';
+import { announceChange } from '../utils/notifications';
 
 const TABS = [
   { key: 'ready', title: 'Ready', desc: 'No unresolved issues' },
@@ -70,6 +71,7 @@ export default function ValidationPage() {
       });
       setBatch(id);
       setRefreshKey(k => k + 1);
+      announceChange();
     } catch (err) {
       setValidateNotice({ type: 'error', text: err.response?.data?.error || 'Validation failed.' });
     } finally {

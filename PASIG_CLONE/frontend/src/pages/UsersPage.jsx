@@ -47,14 +47,14 @@ const lockText = (u) => (u.manually_locked
   : `Locked after repeated wrong passwords, until ${formatDateTime(u.locked_until)}`);
 
 /* ─── Right-side panel, same look as TBInsight's side panels ─── */
-function SidePanel({ title, subtitle, onClose, onSubmit, footer, footerBottom = false, bottomRight = false, children }) {
+function SidePanel({ title, subtitle, onClose, onSubmit, footer, footerBottom = false, children }) {
   const Shell = onSubmit ? 'form' : 'div';
   return (
-    <div className={`fixed inset-0 z-[1200] flex ${bottomRight ? 'items-end justify-end p-4 sm:p-6' : 'justify-end'}`} onClick={onClose}>
+    <div className="fixed inset-0 z-[1200] flex justify-end" onClick={onClose}>
       <div className="absolute inset-0" style={{ background: 'rgba(15,23,42,0.28)' }} />
       <Shell
-        className={`relative flex w-full max-w-lg flex-col ${bottomRight ? 'h-[min(780px,calc(100vh-2rem))] max-h-[calc(100vh-2rem)]' : 'h-full'}`}
-        style={{ background: '#ffffff', border: '1px solid #E2E8F0', borderRadius: 5, boxShadow: '0 12px 36px rgba(15,23,42,0.18)', animation: bottomRight ? 'none' : 'slide-in-right 0.3s ease-out both' }}
+        className="relative flex h-full w-full max-w-lg flex-col"
+        style={{ background: '#ffffff', border: '1px solid #E2E8F0', borderRadius: 5, boxShadow: '0 12px 36px rgba(15,23,42,0.18)', animation: 'slide-in-right 0.3s ease-out both' }}
         onClick={(e) => e.stopPropagation()}
         onSubmit={onSubmit}
       >
@@ -441,7 +441,6 @@ export default function UsersPage() {
             </>
           )}
           footerBottom
-          bottomRight
         >
           {formError && <div className="px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.12)' }}>{formError}</div>}
           <Field label="Full Name" required>
@@ -501,7 +500,7 @@ export default function UsersPage() {
                 <tr style={{ background: '#0F2D52' }}>
                   {['Name', 'Username', 'Email', 'Role', 'Assigned Barangay', 'Status', 'Last Login', 'Created By', ''].map((h, i) => (
                     <th key={h || i} className="px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#ffffff', borderBottom: '1px solid #1E40AF', borderRight: i === 8 ? 'none' : '1px solid #1E40AF' }}>
-                      {h}
+                      {h || <span className="sr-only">Actions</span>}
                     </th>
                   ))}
                 </tr>

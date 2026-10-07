@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTheme } from '../theme';
+import { avatarColorForRole, initialsForUsername } from '../utils/userIdentity';
 
 export default function ProfilePage() {
   const { t } = useTheme();
@@ -11,9 +12,7 @@ export default function ProfilePage() {
   const displayName = storedUser?.username ?? 'User';
   const displayEmail = storedUser?.email ?? '';
   const displayPosition = storedUser?.position ?? 'System User';
-  const initials = storedUser?.username
-    ? storedUser.username.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2)
-    : 'U';
+  const initials = initialsForUsername(storedUser?.username);
 
   return (
     <div className="flex flex-col gap-5 max-w-2xl">
@@ -30,13 +29,13 @@ export default function ProfilePage() {
         <div className="flex items-center gap-4">
           <div
             className="w-14 h-14 rounded-full flex items-center justify-center text-lg font-bold shrink-0"
-            style={{ background: '#0F2D52', color: '#ffffff' }}
+            style={{ background: avatarColorForRole(userRole), color: '#ffffff' }}
           >
             {initials}
           </div>
           <div>
             <h2 className="text-base font-bold" style={{ color: t.text }}>{displayName}</h2>
-            <p className="text-xs" style={{ color: t.textSecondary }}>{displayEmail}</p>
+            {displayEmail && <p className="text-xs" style={{ color: t.textSecondary }}>{displayEmail}</p>}
             <div className="mt-1.5 flex items-center gap-2">
               <span
                 className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"

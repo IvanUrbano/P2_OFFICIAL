@@ -78,7 +78,7 @@ const RECORD_COLUMNS = [
   { label: 'Treatment Outcome', field: 'outcome' },
   { label: 'Source', field: 'source' },
   { label: 'Access', field: null },
-  { label: 'Action', field: null },
+  { label: '', field: null },
 ];
 
 const SOURCE_STYLES = {
@@ -573,7 +573,7 @@ export default function TBRecordsPage() {
                         onMouseLeave={(e) => { if (field && !isActive) e.currentTarget.style.color = '#ffffff'; }}
                       >
                         <span className="inline-flex items-center gap-1">
-                          {label}
+                          {label || <span className="sr-only">Actions</span>}
                           {field && (
                             <span className="inline-flex flex-col leading-none" style={{ gap: '1px' }}>
                               <i className="ri-arrow-up-s-line" style={{ fontSize: '8px', lineHeight: '8px', color: isActive && sort.dir === 'asc' ? '#93C5FD' : 'rgba(255,255,255,0.25)' }} />
@@ -633,8 +633,8 @@ export default function TBRecordsPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-1.5 py-2.5">
-                      <div className="inline-flex items-center gap-1">
+                    <td className="px-1.5 py-2.5 text-center">
+                      <div className="flex items-center justify-center">
                         <button
                           type="button"
                           aria-label={`More actions for ${caseIdLabel(r)}`}

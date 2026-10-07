@@ -26,6 +26,7 @@ const validationQueueRoutes = require('./routes/validationQueue');
 const manualEntryRoutes = require('./routes/manualEntry');
 const webhookRoutes = require('./routes/webhook');
 const facilitiesRoutes = require('./routes/facilities');
+const settingsRoutes = require('./routes/settings');
 const transfersRoutes = require('./routes/transfers');
  
 const app = express();
@@ -64,6 +65,7 @@ app.use('/api/data', manualEntryRoutes);
 app.use('/api/data/transfers', transfersRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/facilities', facilitiesRoutes);
+app.use('/api/settings', settingsRoutes);
  
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'pasig-clone', timestamp: new Date().toISOString() });

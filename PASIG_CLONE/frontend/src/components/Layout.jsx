@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import API from '../api/axios';
-import { SEVERITY_COLOR, TYPE_ICON, timeAgo, markRead, markAllRead, NOTIFICATIONS_CHANGED, announceChange } from '../utils/notifications';
+import { TYPE_LABEL, timeAgo, markRead, markAllRead, NOTIFICATIONS_CHANGED, announceChange } from '../utils/notifications';
+import { INACTIVITY_TIMEOUT_MS } from '../utils/session';
+import { avatarColorForRole, initialsForUsername } from '../utils/userIdentity';
 
 const NAV_ITEMS = [
   { icon: 'ri-dashboard-line', label: 'Dashboard', path: '/dashboard' },
@@ -27,7 +29,12 @@ const NAV_ACCENT = {
   '/audit-logs': '#EC4899',
 };
 
-const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;
+const IMPORT_DATE_FORMATTER = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Manila', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+});
+const IMPORT_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit', hour12: true,
+});
 
 export default function Layout() {
   const [user, setUser] = useState(null);
@@ -40,6 +47,7 @@ export default function Layout() {
   const bellRef = useRef(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [recentNotifs, setRecentNotifs] = useState([]);
+  const [bellError, setBellError] = useState(false);
   const [lastImport, setLastImport] = useState(null);
 
   // Last Import in the brand bar — refreshes on load and whenever a page announces
@@ -108,14 +116,12 @@ export default function Layout() {
   // another page announces a change).
   const fetchBellData = useCallback(async () => {
     try {
-      const [countRes, notifRes] = await Promise.all([
-        API.get('/api/auth/notifications/unread-count'),
-        API.get('/api/auth/notifications', { params: { limit: 8 } }),
-      ]);
-      setUnreadCount(countRes.data.count || 0);
-      setRecentNotifs(notifRes.data.notifications || []);
+      const res = await API.get('/api/auth/notifications', { params: { limit: 8 } });
+      setUnreadCount(res.data.unread || 0);
+      setRecentNotifs(res.data.notifications || []);
+      setBellError(false);
     } catch {
-      // silent fail — bell is non-critical
+      setBellError(true);
     }
   }, []);
 
@@ -153,26 +159,25 @@ export default function Layout() {
   if (!user) return null;
 
   const isAdmin = user.role === 'admin';
-  const initials = user.username ? user.username.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2) : 'U';
+  const initials = initialsForUsername(user.username);
+  const avatarColor = avatarColorForRole(user.role);
+  const displayEmail = user.email?.trim() || null;
+  const assignedArea = user.barangay_name ? `Brgy. ${user.barangay_name}` : user.facility_name;
   const visibleNav = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
 
   const formatImportTime = (iso) => {
     if (!iso) return 'Never';
     const d = new Date(iso);
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()} | ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+    if (Number.isNaN(d.getTime())) return '—';
+    return `${IMPORT_DATE_FORMATTER.format(d)} | ${IMPORT_TIME_FORMATTER.format(d)}`;
   };
 
   return (
     <div className="h-screen relative flex flex-col overflow-hidden">
       {/* ── Tier 1: Brand Bar ── */}
       <header className="sticky top-0 z-[1100] w-full shrink-0">
-        <div className="flex items-center justify-between px-6 lg:px-8" style={{ background: '#0B1D35', minHeight: '52px' }}>
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/facilities')}>
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.15)' }}>
-              <span className="text-sm font-extrabold" style={{ color: '#ffffff' }}>P2</span>
-            </div>
+        <div className="flex min-w-0 items-center justify-between gap-2 px-3 sm:px-6 lg:px-8" style={{ background: '#0B1D35', minHeight: '52px' }}>
+          <div className="flex items-center cursor-pointer" onClick={() => navigate('/facilities')}>
             <div className="flex items-center gap-2.5">
               <span className="text-lg font-extrabold tracking-tight" style={{ color: '#ffffff' }}>PASIG TB-IS</span>
               {!isAdmin && (user.barangay_name || user.facility_name) && (
@@ -182,12 +187,12 @@ export default function Layout() {
                 </span>
               )}
               {isAdmin && (
-                <span className="text-[11px] font-medium hidden sm:inline" style={{ color: '#64748B' }}>Tuberculosis Information System</span>
+                <span className="text-[11px] font-medium hidden xl:inline" style={{ color: '#64748B' }}>Tuberculosis Information System</span>
               )}
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-4">
             {/* Last Import */}
             <div className="hidden md:flex items-center gap-2">
               <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: 'rgba(59,130,246,0.2)' }}>
@@ -206,7 +211,7 @@ export default function Layout() {
               <button
                 onClick={toggleBell}
                 title="Notifications"
-                className="relative w-9 h-9 flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
+                className="topbar-round-button relative w-9 h-9 flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
                 style={{ background: bellOpen ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
               >
                 <i className="ri-notification-3-line text-base" />
@@ -217,7 +222,6 @@ export default function Layout() {
                       background: '#EF4444',
                       color: '#ffffff',
                       padding: '0 4px',
-                      boxShadow: '0 0 6px rgba(239,68,68,0.5)',
                     }}
                   >
                     {unreadCount > 99 ? '99+' : unreadCount}
@@ -249,33 +253,35 @@ export default function Layout() {
                     )}
                   </div>
 
-                  {recentNotifs.length === 0 ? (
+                  {bellError ? (
+                    <div className="px-4 py-6 text-center" role="alert">
+                      <p className="text-[11px]" style={{ color: '#991B1B' }}>Could not load notifications.</p>
+                      <button onClick={fetchBellData} className="text-[11px] font-semibold mt-2 hover:underline" style={{ color: '#2E6FAF' }}>Retry</button>
+                    </div>
+                  ) : recentNotifs.length === 0 ? (
                     <div className="px-4 py-8 text-center">
-                      <i className="ri-notification-off-line text-xl" style={{ color: '#CBD5E1' }} />
-                      <p className="text-[11px] mt-2" style={{ color: '#94A3B8' }}>No notifications yet</p>
+                      <p className="text-[11px] text-[#64748B]">No notifications yet.</p>
                     </div>
                   ) : (
                     <div className="max-h-80 overflow-y-auto">
-                      {recentNotifs.map((n) => {
-                        const color = SEVERITY_COLOR[n.severity] || SEVERITY_COLOR.info;
-                        return (
+                      {recentNotifs.map((n) => (
                           <button
                             type="button"
                             key={n.id}
-                            className="w-full text-left px-4 py-3 flex items-start gap-3 transition-colors hover:bg-slate-50"
-                            style={{ borderBottom: '1px solid #F1F5F9', background: n.is_read ? '#ffffff' : '#F5F9FF' }}
+                            className="w-full border-b border-[#E8EDF2] px-4 py-3 text-left flex items-start gap-3 hover:bg-[#FAFBFC]"
                             onClick={() => openNotification(n)}
                           >
-                            <i className={`${TYPE_ICON[n.type] || 'ri-notification-3-line'} text-sm mt-0.5 shrink-0`} style={{ color }} />
+                            <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.is_read ? 'bg-transparent' : 'bg-[#2E6FAF]'}`} aria-hidden="true" />
                             <div className="min-w-0 flex-1">
-                              <p className={`text-[11px] truncate ${n.is_read ? 'font-medium' : 'font-bold'}`} style={{ color: '#0F2D52' }}>{n.title}</p>
-                              {n.message && <p className="text-[10px] mt-0.5 line-clamp-2" style={{ color: '#64748B' }}>{n.message}</p>}
-                              <p className="text-[9px] mt-1" style={{ color: '#94A3B8' }}>{timeAgo(n.created_at)}</p>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[9px] font-semibold uppercase tracking-wider text-[#64748B]">{TYPE_LABEL[n.type] || 'Update'}</span>
+                                <span className="shrink-0 text-[10px] text-[#94A3B8]">{timeAgo(n.created_at)}</span>
+                              </div>
+                              <p className={`mt-1 text-[11px] leading-snug text-[#0F2D52] ${n.is_read ? 'font-medium' : 'font-semibold'}`}>{n.title}</p>
+                              {n.message && <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-[#64748B]">{n.message}</p>}
                             </div>
-                            {!n.is_read && <span className="w-2 h-2 rounded-full mt-1.5 shrink-0" style={{ background: '#2E6FAF' }} aria-label="Unread" />}
                           </button>
-                        );
-                      })}
+                      ))}
                     </div>
                   )}
 
@@ -296,75 +302,54 @@ export default function Layout() {
             <button
               onClick={() => navigate('/settings')}
               title="Settings"
-              className="w-9 h-9 hidden sm:flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
+              className="topbar-round-button w-9 h-9 hidden sm:flex items-center justify-center rounded-full cursor-pointer transition-all hover:scale-105"
               style={{ background: 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
             >
               <i className="ri-settings-3-line text-base" />
             </button>
 
-            {/* User Dropdown */}
-            <div className="relative" ref={dropdownRef}>
+            {/* Account menu */}
+            <div className="relative min-w-0" ref={dropdownRef}>
               <button
+                type="button"
+                aria-label={`Account menu for ${user.username}`}
+                aria-expanded={dropdownOpen}
+                aria-haspopup="menu"
                 onClick={() => setDropdownOpen(!dropdownOpen)}
-                className="flex items-center gap-2.5 cursor-pointer shrink-0 rounded-full pl-1 pr-3 py-1 transition-all hover:bg-white/5"
-                style={{ background: dropdownOpen ? 'rgba(255,255,255,0.1)' : 'transparent' }}
+                className="flex min-w-0 max-w-[180px] items-center gap-2.5 border-l border-white/15 py-1 pl-3 text-left sm:max-w-[230px] lg:max-w-[260px]"
               >
-                <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0" style={{ background: '#10B981', color: '#ffffff' }}>
+                <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0" style={{ background: avatarColor, color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)' }}>
                   {initials}
                 </div>
-                <div className="hidden lg:block text-left">
-                  <p className="text-xs font-bold leading-tight" style={{ color: '#ffffff' }}>{user.username}</p>
-                  <p className="text-[9px] leading-tight" style={{ color: '#64748B' }}>{user.email}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-semibold leading-tight text-white" title={user.username}>{user.username}</p>
+                  {displayEmail && <p className="mt-0.5 truncate text-[10px] leading-tight text-slate-300" title={displayEmail}>{displayEmail}</p>}
                 </div>
-                <i className="ri-arrow-down-s-line text-sm shrink-0 transition-transform" style={{ color: '#64748B', transform: dropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                <i className="ri-arrow-down-s-line text-sm shrink-0 transition-transform" style={{ color: '#CBD5E1', transform: dropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} />
               </button>
 
               {dropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-60 rounded-xl overflow-hidden z-[1200]" style={{ background: '#ffffff', border: '1px solid #E2E8F0', boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08)' }}>
-                  <div className="px-4 py-3" style={{ borderBottom: '1px solid #E2E8F0' }}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ background: '#10B981', color: '#ffffff' }}>
-                        {initials}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold truncate" style={{ color: '#0F2D52' }}>{user.username}</p>
-                        <p className="text-[10px] truncate" style={{ color: '#94A3B8' }}>{user.email}</p>
-                      </div>
+                <div className="absolute right-0 top-full z-[1200] mt-2 w-52 overflow-hidden rounded-md border border-[#DCE3EA] bg-white py-1 shadow-[0_8px_24px_rgba(11,29,53,0.12)]" role="menu" aria-label="Account actions">
+                  <div className="border-b border-[#E2E8F0] px-4 py-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[10px] text-[#64748B]">Role</span>
+                      <span className="text-xs font-medium text-[#0F2D52]">{isAdmin ? 'Admin' : 'Staff'}</span>
                     </div>
-                    <div className="mt-2 flex items-center gap-2">
-                      <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold" style={{ background: isAdmin ? 'rgba(37,99,235,0.1)' : 'rgba(0,216,246,0.15)', color: isAdmin ? '#2563EB' : '#00A9D8' }}>
-                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: isAdmin ? '#2563EB' : '#00A9D8' }} />
-                        {user.role}
-                      </span>
-                      {!isAdmin && (user.barangay_name || user.facility_name) && (
-                        <span className="text-[9px] font-medium truncate" style={{ color: '#94A3B8' }}>{(user.barangay_name ? `Brgy. ${user.barangay_name}` : user.facility_name)}</span>
-                      )}
-                      {isAdmin && (
-                        <span className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>{user.position || 'System Administrator'}</span>
-                      )}
-                    </div>
+                    {!isAdmin && assignedArea && (
+                      <p className="mt-1.5 truncate text-[10px] text-[#64748B]" title={assignedArea}>{assignedArea}</p>
+                    )}
                   </div>
-
-                  <div className="py-1">
-                    {[
-                      { icon: 'ri-user-settings-line', label: 'My Profile', color: '#2563EB', action: () => { navigate('/profile'); setDropdownOpen(false); } },
-                      ...(isAdmin ? [{ icon: 'ri-settings-3-line', label: 'Settings', color: '#64748B', action: () => { navigate('/settings'); setDropdownOpen(false); } }] : []),
-                    ].map((item) => (
-                      <button
-                        key={item.label}
-                        onClick={item.action}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-colors hover:bg-blue-50"
-                        style={{ color: '#334155' }}
-                      >
-                        <i className={`${item.icon} text-sm`} style={{ color: item.color }} />
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="py-1" style={{ borderTop: '1px solid #E2E8F0' }}>
-                    <button onClick={logout} className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-colors hover:bg-red-50" style={{ color: '#EF4444' }}>
-                      <i className="ri-logout-box-r-line text-sm" /> Sign Out
+                  <button type="button" role="menuitem" onClick={() => { navigate('/profile'); setDropdownOpen(false); }} className="block w-full px-4 py-2.5 text-left text-xs font-medium text-[#0F2D52] hover:bg-[#F1F5F9] focus-visible:bg-[#F1F5F9] focus-visible:outline-none">
+                    My Profile
+                  </button>
+                  {isAdmin && (
+                    <button type="button" role="menuitem" onClick={() => { navigate('/settings'); setDropdownOpen(false); }} className="block w-full px-4 py-2.5 text-left text-xs font-medium text-[#0F2D52] hover:bg-[#F1F5F9] focus-visible:bg-[#F1F5F9] focus-visible:outline-none">
+                      Settings
+                    </button>
+                  )}
+                  <div className="mt-1 border-t border-[#E2E8F0] pt-1">
+                    <button type="button" role="menuitem" onClick={logout} className="block w-full px-4 py-2.5 text-left text-xs font-medium text-[#475569] hover:bg-[#F1F5F9] focus-visible:bg-[#F1F5F9] focus-visible:outline-none">
+                      Sign Out
                     </button>
                   </div>
                 </div>

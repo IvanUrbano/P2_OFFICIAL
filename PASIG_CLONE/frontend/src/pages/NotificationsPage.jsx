@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
-import { SEVERITY_COLOR, TYPE_ICON, timeAgo, markRead, markUnread, markAllRead, announceChange } from '../utils/notifications';
+import { TYPE_LABEL, formatNotificationDate, markRead, markUnread, markAllRead, announceChange } from '../utils/notifications';
 
 const TABS = [
   { key: 'unread', title: 'Unread', desc: 'Still needs your attention' },
@@ -63,82 +63,89 @@ export default function NotificationsPage() {
   const pages = Math.ceil(total / PAGE_SIZE);
 
   return (
-    <div className="space-y-5">
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
-        <div className="px-6 py-4 flex flex-wrap items-center justify-between gap-3" style={{ borderBottom: '1px solid #DBEAFE' }}>
-          <div>
-            <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Notifications</h1>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Referrals, validation results, sync status and account changes that concern you.</p>
-          </div>
-          {unread > 0 && (
-            <button onClick={readAll} className="px-3 py-1.5 text-xs font-semibold" style={{ background: '#ffffff', color: '#0F2D52', border: '1px solid #CBD5E1', borderRadius: 4 }}>
-              Mark all as read
-            </button>
-          )}
+    <section className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E2E8F0] px-5 py-5 sm:px-6">
+        <div>
+          <h1 className="text-lg font-bold text-[#0F2D52]">Notifications</h1>
+          <p className="mt-1 text-xs text-[#64748B]">Updates from imports, validation, assignments and syncing.</p>
         </div>
-        <div className="flex gap-0 overflow-x-auto">
-          {TABS.map(t => (
-            <button key={t.key} onClick={() => { setTab(t.key); setPage(0); }} className="relative px-5 py-3 text-left whitespace-nowrap">
-              <p className="text-[13px] font-bold" style={{ color: tab === t.key ? '#0F2D52' : '#94A3B8' }}>
-                {t.title}
-                {t.key === 'unread' && unread > 0 && (
-                  <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[9px] font-bold px-1.5" style={{ background: tab === t.key ? 'rgba(15,45,82,0.08)' : '#F1F5F9', color: tab === t.key ? '#0F2D52' : '#64748B' }}>
-                    {unread}
+        {unread > 0 && (
+          <button type="button" onClick={readAll} className="text-xs font-semibold text-[#2E6FAF] hover:underline">
+            Mark all as read
+          </button>
+        )}
+      </header>
+
+      <nav className="flex gap-0 overflow-x-auto border-b border-[#E2E8F0]" aria-label="Notification filter">
+        {TABS.map(t => (
+          <button
+            key={t.key}
+            type="button"
+            aria-pressed={tab === t.key}
+            onClick={() => { setTab(t.key); setPage(0); }}
+            className="relative px-5 py-3 text-left whitespace-nowrap"
+          >
+            <p className="text-[13px] font-bold" style={{ color: tab === t.key ? '#0F2D52' : '#94A3B8' }}>
+              {t.title}
+              {t.key === 'unread' && unread > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[9px] font-bold px-1.5" style={{ background: tab === t.key ? 'rgba(15,45,82,0.08)' : '#F1F5F9', color: tab === t.key ? '#0F2D52' : '#64748B' }}>
+                  {unread}
+                </span>
+              )}
+            </p>
+            <p className="text-[11px] mt-0.5" style={{ color: tab === t.key ? '#64748B' : '#CBD5E1' }}>{t.desc}</p>
+            {tab === t.key && <div className="absolute bottom-0 left-0 right-0 h-[2px]" style={{ background: '#0F2D52' }} />}
+          </button>
+        ))}
+      </nav>
+
+      {error && <p className="border-b border-[#FECACA] bg-[#FEF2F2] px-5 py-3 text-xs text-[#991B1B]" role="alert">{error}</p>}
+
+      {loading ? (
+        <p className="px-6 py-12 text-center text-xs text-[#64748B]">Loading notifications…</p>
+      ) : items.length === 0 ? (
+        <p className="px-6 py-12 text-center text-xs text-[#64748B]">
+          {tab === 'unread' ? 'No unread notifications.' : 'No notifications yet.'}
+        </p>
+      ) : (
+        <div className="divide-y divide-[#E8EDF2]">
+          {items.map(n => (
+            <div key={n.id} className="flex gap-3 px-5 py-4 hover:bg-[#FAFBFC] sm:px-6">
+              <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.is_read ? 'bg-transparent' : 'bg-[#2E6FAF]'}`} aria-hidden="true" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">
+                    {TYPE_LABEL[n.type] || 'Update'}
                   </span>
-                )}
-              </p>
-              <p className="text-[11px] mt-0.5" style={{ color: tab === t.key ? '#64748B' : '#CBD5E1' }}>{t.desc}</p>
-              {tab === t.key && <div className="absolute bottom-0 left-0 right-0 h-[2px]" style={{ background: '#0F2D52' }} />}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {error && (
-        <div className="px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B' }}>{error}</div>
-      )}
-
-      <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-        {loading ? (
-          <p className="text-xs text-center py-10" style={{ color: '#94A3B8' }}>Loading…</p>
-        ) : items.length === 0 ? (
-          <div className="py-12 text-center">
-            <i className="ri-notification-off-line text-2xl" style={{ color: '#CBD5E1' }} />
-            <p className="text-xs mt-2" style={{ color: '#94A3B8' }}>{tab === 'unread' ? 'No unread notifications.' : 'No notifications yet.'}</p>
-          </div>
-        ) : (
-          <>
-            {items.map(n => {
-              const color = SEVERITY_COLOR[n.severity] || SEVERITY_COLOR.info;
-              return (
-                <div key={n.id} className="flex items-start gap-3 px-5 py-3.5" style={{ borderBottom: '1px solid #F1F5F9', background: n.is_read ? '#ffffff' : '#F5F9FF' }}>
-                  <i className={`${TYPE_ICON[n.type] || 'ri-notification-3-line'} text-base mt-0.5 shrink-0`} style={{ color }} />
-                  <button type="button" onClick={() => open(n)} className="min-w-0 flex-1 text-left">
-                    <p className={`text-xs ${n.is_read ? 'font-medium' : 'font-bold'}`} style={{ color: '#0F2D52' }}>{n.title}</p>
-                    {n.message && <p className="text-[11px] mt-0.5" style={{ color: '#64748B' }}>{n.message}</p>}
-                    <p className="text-[10px] mt-1" style={{ color: '#94A3B8' }}>
-                      {timeAgo(n.created_at)}
-                      {n.link && <span className="ml-2" style={{ color: '#2E6FAF' }}>Open →</span>}
-                    </p>
-                  </button>
-                  <button type="button" onClick={() => toggleRead(n)} className="text-[10px] font-semibold shrink-0 hover:underline" style={{ color: '#64748B' }}>
+                  <time dateTime={n.created_at} className="text-[11px] text-[#64748B]">
+                    {formatNotificationDate(n.created_at)}
+                  </time>
+                </div>
+                <button type="button" onClick={() => open(n)} className={`mt-1 block text-left text-[13px] text-[#0F2D52] hover:underline ${n.is_read ? 'font-medium' : 'font-semibold'}`}>
+                  {n.title}
+                </button>
+                {n.message && <p className="mt-1 text-xs leading-relaxed text-[#64748B]">{n.message}</p>}
+                <div className="mt-2 flex items-center gap-4">
+                  {n.link && <button type="button" onClick={() => open(n)} className="text-[11px] font-semibold text-[#2E6FAF] hover:underline">View details</button>}
+                  <button type="button" onClick={() => toggleRead(n)} className="text-[11px] text-[#64748B] hover:text-[#0F2D52] hover:underline">
                     {n.is_read ? 'Mark unread' : 'Mark read'}
                   </button>
                 </div>
-              );
-            })}
-            {pages > 1 && (
-              <div className="flex items-center justify-between px-5 py-2.5 text-[11px]" style={{ color: '#64748B' }}>
-                <span>Page {page + 1} of {pages}</span>
-                <div className="flex gap-1.5">
-                  <button disabled={page === 0} onClick={() => setPage(p => p - 1)} className="px-2.5 py-1 rounded disabled:opacity-40" style={{ border: '1px solid #E2E8F0' }}>Previous</button>
-                  <button disabled={page + 1 >= pages} onClick={() => setPage(p => p + 1)} className="px-2.5 py-1 rounded disabled:opacity-40" style={{ border: '1px solid #E2E8F0' }}>Next</button>
-                </div>
               </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {pages > 1 && !loading && (
+        <div className="flex items-center justify-between border-t border-[#E2E8F0] px-5 py-3 text-[11px] text-[#64748B] sm:px-6">
+          <span>Page {page + 1} of {pages}</span>
+          <div className="flex gap-4">
+            <button type="button" disabled={page === 0} onClick={() => setPage(p => p - 1)} className="disabled:opacity-40 hover:underline">Previous</button>
+            <button type="button" disabled={page + 1 >= pages} onClick={() => setPage(p => p + 1)} className="disabled:opacity-40 hover:underline">Next</button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }

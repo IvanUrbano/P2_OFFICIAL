@@ -5,6 +5,7 @@ const fetch = require('node-fetch');
 const { parseRegistryFile } = require('../services/multiSheetParser');
 const { calculateFileHash } = require('../utils/fileHash');
 const { logAuditEvent } = require('../utils/auditLogger');
+const notifications = require('../services/notifications');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { getCaseListScope, resolveUserScope, responsibleBarangay } = require('../policies/caseAccessPolicy');
@@ -56,10 +57,33 @@ const importIdentityClass = (body) => (String(body?.historical ?? 'true').toLowe
   ? pinService.identityClassForNewBatch()
   : 'historical');
 
+async function notifyImport(user, { filename, success, batchId, message }) {
+  try {
+    const recipients = [user.id];
+    if (!success) {
+      try { recipients.push(...(await notifications.admins())); }
+      catch (err) { console.error('[notifications] admin lookup failed:', err.message); }
+    }
+    await notifications.notify(recipients, {
+      type: success ? 'import_completed' : 'import_failed',
+      severity: success ? 'success' : 'danger',
+      actorId: user.id, includeActor: true,
+      title: `${success ? 'Import completed' : 'Import failed'}: ${filename || 'file'}`,
+      message,
+      link: success ? '/import?tab=history' : '/import',
+      entityType: batchId ? 'import_batch' : undefined,
+      entityId: batchId,
+    });
+  } catch (err) {
+    console.error('[notifications] import outcome failed:', err.message);
+  }
+}
+
 router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   const client = await db.pool.connect();
   try {
     if (!req.files || !req.files.file) {
+      await notifyImport(req.user, { success: false, message: 'No file was uploaded.' });
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
@@ -67,12 +91,14 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
     const maxSize = 500 * 1024 * 1024; // 500MB to support large imports
 
     if (file.size > maxSize) {
+      await notifyImport(req.user, { filename: file.name, success: false, message: 'The file exceeds the upload size limit.' });
       return res.status(400).json({ error: 'File too large. Maximum size is 500MB.' });
     }
 
     // Validate file extension — Excel workbooks (DSTB + MN sheets) or a CSV export of one sheet
     const ext = file.name.split('.').pop().toLowerCase();
     if (!['xlsx', 'xls', 'csv'].includes(ext)) {
+      await notifyImport(req.user, { filename: file.name, success: false, message: 'Only Excel and CSV files can be imported.' });
       return res.status(400).json({ error: 'Unsupported file type. Only .xlsx, .xls and .csv files are accepted.' });
     }
 
@@ -106,6 +132,11 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
         details: { filename: file.name, previousBatch: existingBatch.id },
       });
 
+      await notifyImport(req.user, {
+        filename: file.name, success: false,
+        message: 'This file was already imported. Check Import History before trying again.',
+      });
+
       return res.status(409).json({
         error: 'File already imported',
         isDuplicate: true,
@@ -126,6 +157,10 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
       parsed = await parseRegistryFile(file.data, file.name);
     } catch (parseErr) {
       console.error('❌ File parse error:', parseErr.message);
+      await notifyImport(req.user, {
+        filename: file.name, success: false,
+        message: 'The file could not be read. Check its format and try again.',
+      });
       return res.status(400).json({
         error: ext === 'xls'
           ? 'Could not read this .xls file. Open it in Excel and save it as .xlsx or .csv, then upload again.'
@@ -134,6 +169,10 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
     }
 
     if (parsed.totalRecords === 0) {
+      await notifyImport(req.user, {
+        filename: file.name, success: false,
+        message: 'The file contains no case rows to import.',
+      });
       return res.status(400).json({
         error: parsed.sheets.length === 0
           ? 'No header row found. The file needs column headers such as Brgy, Age, Sex and Date of Diagnosis.'
@@ -194,6 +233,11 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
 
     console.log(`✅ File imported successfully: Batch ${batchId}, ${parsed.totalRecords} records`);
 
+    await notifyImport(req.user, {
+      filename: file.name, success: true, batchId,
+      message: `${parsed.totalRecords} record${parsed.totalRecords === 1 ? '' : 's'} uploaded. Review and validate this batch before syncing.`,
+    });
+
     res.status(201).json({
       message: 'File uploaded successfully',
       batch: {
@@ -221,6 +265,10 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
       action: 'IMPORT_FILE',
       result: 'FAILURE',
       details: { filename: req.files?.file?.name || 'unknown', error: error.message },
+    });
+    await notifyImport(req.user, {
+      filename: req.files?.file?.name, success: false,
+      message: 'The import could not be completed. Try again or check the server logs.',
     });
     res.status(500).json({ error: 'Failed to process file' });
   } finally {

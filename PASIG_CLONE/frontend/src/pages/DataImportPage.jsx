@@ -6,6 +6,7 @@ import EmptyState from '../components/EmptyState';
 import ModalCloseButton from '../components/ModalCloseButton';
 import StatusBadge from '../components/StatusBadge';
 import ProgressOverlay from '../components/ProgressOverlay';
+import { announceChange } from '../utils/notifications';
 
 const cardStyle = (t) => ({
   background: t.cardSolid,
@@ -142,6 +143,7 @@ export default function DataImportPage() {
       }
     } finally {
       setUploading(false);
+      announceChange();
     }
   };
 

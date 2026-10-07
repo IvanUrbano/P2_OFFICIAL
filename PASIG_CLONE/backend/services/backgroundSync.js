@@ -11,8 +11,8 @@ const db = require('../db/pasigSchema');
 const { sendWebhook, STUCK_SYNC_MINUTES } = require('./webhookSender');
 const notifications = require('./notifications');
 
-// Sync outcome: a failure goes to the other admins too; the person who uploaded the
-// file hears either way.
+// Sync outcome reaches the uploader and the person who started it. Failures also
+// reach admins so they can retry or investigate.
 async function notifySync(batchId, result, user) {
   try {
     const batch = (await db.pool.query('SELECT filename, uploaded_by FROM import_batches WHERE id = $1', [batchId])).rows[0];
@@ -21,7 +21,7 @@ async function notifySync(batchId, result, user) {
     const n = {
       type: result.success ? 'sync_completed' : 'sync_failed',
       severity: !result.success ? 'danger' : partial ? 'warning' : 'success',
-      actorId: user.id,
+      actorId: user.id, includeActor: true,
       title: result.success
         ? `${batch.filename} synced to TBInsight${partial ? ` (${result.recordsRejected} rejected)` : ''}`
         : `Sync to TBInsight failed: ${batch.filename}`,
@@ -30,8 +30,11 @@ async function notifySync(batchId, result, user) {
         : `${result.message || 'TBInsight did not accept the records.'} Try again from Data Sync.`,
       link: '/sync-history', entityType: 'import_batch', entityId: batchId,
     };
-    const recipients = [batch.uploaded_by];
-    if (!result.success) recipients.push(...(await notifications.admins()));
+    const recipients = [batch.uploaded_by, user.id];
+    if (!result.success) {
+      try { recipients.push(...(await notifications.admins())); }
+      catch (err) { console.error('[notifications] admin lookup failed:', err.message); }
+    }
     await notifications.notify(recipients, n);
   } catch (err) {
     console.error('[notifications] sync notification failed:', err.message);

@@ -4,7 +4,8 @@
  * Recipients are resolved from the auth database's users table:
  *   - barangay staff  -> active staff whose barangay_id matches
  *   - admins          -> active admins (city-wide)
- * The acting user is never notified about their own action.
+ * The acting user is skipped by default. Operational outcomes can opt in so the
+ * uploader or sync initiator sees the result of their own action.
  *
  * Messages carry case IDs only — never patient names or dates of birth (those stay
  * behind the Records PIN). Creating a notification never fails the request that caused
@@ -37,13 +38,16 @@ function admins() {
  * Create one notification per recipient.
  * @param {number[]} userIds
  * @param {{type:string, title:string, message?:string, severity?:string, link?:string,
- *          entityType?:string, entityId?:string|number, actorId?:number}} n
+ *          entityType?:string, entityId?:string|number, actorId?:number,
+ *          includeActor?:boolean}} n
  * @returns {Promise<number>} rows created
  */
 async function notify(userIds, n) {
   try {
     const actor = n.actorId != null ? Number(n.actorId) : null;
-    const ids = [...new Set((userIds || []).map(Number))].filter(id => Number.isInteger(id) && id > 0 && id !== actor);
+    const ids = [...new Set((userIds || []).map(Number))].filter(
+      id => Number.isInteger(id) && id > 0 && (n.includeActor || id !== actor)
+    );
     if (ids.length === 0) return 0;
     const severity = SEVERITIES.has(n.severity) ? n.severity : 'info';
     const r = await db.pool.query(

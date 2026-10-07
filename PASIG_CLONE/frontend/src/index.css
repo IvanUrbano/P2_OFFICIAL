@@ -52,6 +52,10 @@ button {
   border-radius: 4px !important;
 }
 
+.topbar-round-button {
+  border-radius: 50% !important;
+}
+
 select:not(.appearance-none) {
   appearance: none;
   padding-right: 2rem;
