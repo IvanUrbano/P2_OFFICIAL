@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate, Outlet } from 'react-router-dom';
 import Topbar from './Topbar';
+import API from '../src/api/axios';
 
 const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -19,9 +20,28 @@ export default function Layout() {
     }
   }, [navigate]);
 
+  useEffect(() => {
+    let active = true;
+    const refreshProfile = () => {
+      API.get('/api/auth/profile').then(({ data }) => {
+        if (!active) return;
+        setUser((current) => ({ ...current, ...data.user }));
+        window.dispatchEvent(new CustomEvent('tbinsight-profile-refreshed', { detail: data.user }));
+      }).catch(() => {});
+    };
+    const onVisibilityChange = () => { if (document.visibilityState === 'visible') refreshProfile(); };
+    refreshProfile();
+    window.addEventListener('focus', refreshProfile);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      active = false;
+      window.removeEventListener('focus', refreshProfile);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
+
   const logout = useCallback(async () => {
     try {
-      const API = (await import('../src/api/axios')).default;
       await API.post('/api/auth/logout');
     } catch { /* ignore */ }
     localStorage.removeItem('user');

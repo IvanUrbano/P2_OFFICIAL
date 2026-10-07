@@ -81,6 +81,12 @@ export default function Settings() {
       .catch(() => setSysError(true));
   }, []);
 
+  useEffect(() => {
+    const onProfileRefresh = (event) => setProfile((current) => current ? { ...current, profile_photo_data: event.detail.profile_photo_data } : current);
+    window.addEventListener('tbinsight-profile-refreshed', onProfileRefresh);
+    return () => window.removeEventListener('tbinsight-profile-refreshed', onProfileRefresh);
+  }, []);
+
   const fetchPopReferences = async () => {
     setPopLoading(true);
     setPopError(null);
@@ -571,7 +577,7 @@ export default function Settings() {
               <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-3 mb-2">
                   <div className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ background: avatarColorForRole(profile.role), color: '#fff' }}>
-                    {initialsForUsername(profile.username)}
+                    {profile.profile_photo_data ? <img src={profile.profile_photo_data} alt="" className="h-full w-full rounded-full object-cover" /> : initialsForUsername(profile.username)}
                   </div>
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold" style={{ color: t.text }}>{profile.username}</p>

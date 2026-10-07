@@ -379,9 +379,9 @@ export default function DataIntegrationPage() {
       {batchToUndo && (
         <div className="fixed inset-0 z-[1300] flex items-center justify-center bg-[#0F2D52]/40 px-4" role="alertdialog" aria-modal="true" aria-labelledby="undo-import-title" onClick={() => !undoing && setBatchToUndo(null)}>
           <div className="relative w-full max-w-md overflow-hidden rounded-lg border border-[#DCE4ED] bg-white shadow-[0_20px_50px_rgba(15,45,82,0.2)]" onClick={(e) => e.stopPropagation()}>
-            <div className="border-b border-[#E2E8F0] px-6 py-4">
-              <h3 id="undo-import-title" className="text-base font-semibold text-[#0F2D52]">Undo import</h3>
-              <p className="mt-1 text-xs text-[#64748B]">Review the batch before removing its records.</p>
+            <div className="bg-[#0F2D52] px-6 py-4">
+              <h3 id="undo-import-title" className="text-base font-semibold text-white">Undo import</h3>
+              <p className="mt-1 text-xs text-[#B8CDE2]">Review the batch before removing its records.</p>
             </div>
             <div className="space-y-3 px-6 py-5">
               <div className="flex items-start justify-between gap-4 border-b border-[#E2E8F0] pb-2">

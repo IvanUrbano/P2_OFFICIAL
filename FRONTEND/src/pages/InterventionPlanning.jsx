@@ -923,8 +923,8 @@ export default function InterventionPlanning() {
         <div className="fixed inset-0 z-[1200] flex items-center justify-center px-4" role="alertdialog" aria-modal="true" aria-labelledby="delete-intervention-title" aria-describedby="delete-intervention-description">
           <div className="absolute inset-0 bg-[#0F2D52]/35" onClick={() => { if (!deleting) setDeleteConfirm(null); }} />
           <div className="relative w-full max-w-[440px] overflow-hidden rounded-lg border border-[#DCE4ED] bg-white shadow-[0_20px_50px_rgba(15,45,82,0.2)]">
-            <div className="border-b border-[#E2E8F0] px-6 py-4">
-              <h2 id="delete-intervention-title" className="text-base font-semibold text-[#0F2D52]">Delete intervention</h2>
+            <div className="bg-[#0F2D52] px-6 py-4">
+              <h2 id="delete-intervention-title" className="text-base font-semibold text-white">Delete intervention</h2>
             </div>
             <div id="delete-intervention-description" className="px-6 py-5">
               <p className="text-sm leading-relaxed text-[#475569]">Remove this intervention from the plan?</p>

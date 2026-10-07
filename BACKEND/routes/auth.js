@@ -216,9 +216,11 @@ const result = await pool.query(
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    // Check if password was changed within the last 24 hours
-    const recentlyChanged = user.password_changed_at &&
-      (Date.now() - new Date(user.password_changed_at).getTime()) < 24 * 60 * 60 * 1000;
+    // This notice is only for an outstanding temporary/admin-reset password.
+    // A user's own password change also updates password_changed_at, but clears
+    // must_change_password and must not show the reset notice at later logins.
+    const recentlyChanged = Boolean(user.must_change_password && user.password_changed_at &&
+      (Date.now() - new Date(user.password_changed_at).getTime()) < 24 * 60 * 60 * 1000);
 
     // Assignment context for the logged-in user: barangay (staff) + optional facility.
     let facility = null;
@@ -283,7 +285,8 @@ router.get('/profile', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'User not found.' });
     }
 
-    res.json({ user: result.rows[0] });
+    const photo = await pool.query('SELECT profile_photo_data FROM users WHERE id = $1', [req.user.id]);
+    res.json({ user: { ...result.rows[0], profile_photo_data: photo.rows[0]?.profile_photo_data || null } });
   } catch (err) {
     console.error('Profile error:', err.message);
     res.status(500).json({ error: 'Server error fetching profile.' });

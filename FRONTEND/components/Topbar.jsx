@@ -290,7 +290,7 @@ export default function Topbar({ user }) {
                   className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
                   style={{ background: avatarColor, color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)' }}
                 >
-                  {initials}
+                  {storedUser?.profile_photo_data ? <img src={storedUser.profile_photo_data} alt="" className="h-full w-full rounded-full object-cover" /> : initials}
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-semibold leading-tight text-white" title={displayName}>{displayName}</p>

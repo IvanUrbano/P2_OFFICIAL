@@ -347,6 +347,11 @@ const initDb = async () => {
       }
     }
 
+    const profilePhotoMigPath = path.join(__dirname, 'db', 'migrations', '033_user_profile_photo.sql');
+    if (fs.existsSync(profilePhotoMigPath)) {
+      await execSql(fs.readFileSync(profilePhotoMigPath, 'utf8'));
+    }
+
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,
     // undoing two earlier over-broad attempts, and keep only the Kapasigan Extension ->
     // Bagong Katipunan rename/population fix (idempotent)
@@ -416,6 +421,9 @@ pool.connect()
     } else {
       await initDb();
     }
+    // This small account migration also runs in local development when the bulk
+    // migrations are skipped, so profile photo upload works after a restart.
+    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_data TEXT');
     // Pre-open a few connections so the first page load doesn't pay connection setup
     await Promise.all(Array.from({ length: 6 }, () => pool.query('SELECT 1'))).catch(() => {});
   })
