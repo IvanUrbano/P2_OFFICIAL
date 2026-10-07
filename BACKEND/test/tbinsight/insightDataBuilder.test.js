@@ -536,6 +536,40 @@ describe('buildAnalyticsMetrics — filter isolation & resilience', () => {
 // ==================== FORECASTING METRICS ====================
 
 describe('buildForecastingMetrics', () => {
+  it('queries the latest run period with the selected horizon and barangay', async () => {
+    const calls = [];
+    const pool = { query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { rows: [] };
+    } };
+    await buildForecastingMetrics(pool, { startYear: '2025', endYear: '2025', horizon: 1, barangay: 'A' });
+    assert.match(calls[0].sql, /config->>'period'/);
+    assert.match(calls[0].sql, /mp\.period < /);
+    assert.deepStrictEqual(calls[0].params, [1, 'A']);
+    assert.doesNotMatch(calls[0].sql, /EXTRACT\(YEAR FROM mp\.period\)/);
+    assert.match(calls[3].sql, /FROM tb_cases/);
+    assert.deepStrictEqual(calls[3].params, [2025, 2025, 'A']);
+  });
+
+  it('retains a persisted forecast after its actual count arrives', async () => {
+    const pool = createMockPool([
+      { rows: [{ barangay_name: 'A', period: '2026-01-01', forecasted_count: 7, actual_count: 6, method: 'arima' }] },
+      { rows: [] }, { rows: [] },
+    ]);
+    const result = await buildForecastingMetrics(pool, { horizon: 1 });
+    assert.deepStrictEqual(result.predictedCases, { total: 7, monthlyAvg: 7, horizon: 1, available: true });
+  });
+  it('leaves growth unavailable when a forecast exists but the selected baseline is missing', async () => {
+    const pool = createMockPool([
+      { rows: [{ barangay_name: 'A', period: '2026-01-01', forecasted_count: 7, method: 'arima' }] },
+      { rows: [] }, { rows: [] },
+      { rows: [{ first_month: null, last_month: null, total_cases: null }] },
+    ]);
+    const result = await buildForecastingMetrics(pool);
+    assert.strictEqual(result.predictedCases.available, true);
+    assert.strictEqual(result.direction.growthRate, null);
+    assert.strictEqual(result.direction.trend, 'unavailable');
+  });
   it('computes increasing growth rate', async () => {
     const pool = createMockPool([
       // forecastRes
@@ -549,11 +583,11 @@ describe('buildForecastingMetrics', () => {
       { rows: [{ barangay_name: 'A', risk_class: 'Medium', risk_score: 50 }] },
       // metaRes
       { rows: [{ run_type: 'full', model_version: 'v1.0', trained_at: '2026-09-01', config: { method: 'ARIMA' } }] },
+      { rows: [{ first_month: '2025-01', last_month: '2025-12', total_cases: 600 }] },
     ]);
 
     const result = await buildForecastingMetrics(pool);
-    // forecastAvg = (80+90+70+60)/4 = 75; historicalAvg = (65+55)/2 = 60
-    // growthRate = (75-60)/60 * 100 = 25%
+    // First forecast is 80; selected historical average is 600/12 = 50.
     assert.strictEqual(result.direction.trend, 'increasing');
     assert.ok(result.direction.growthRate > 5);
   });
@@ -603,6 +637,26 @@ describe('buildForecastingMetrics', () => {
 
     const result = await buildForecastingMetrics(pool);
     assert.deepStrictEqual(result.highRiskForecastBarangays, ['A']);
+  });
+
+  it('counts distinct high-risk barangays only from the current pipeline period', async () => {
+    const calls = [];
+    const pool = { query: async (sql, params) => {
+      calls.push({ sql, params });
+      if (sql.includes('FROM barangay_risk_scores')) return { rows: [
+        { barangay_name: 'A', risk_class: 'High' },
+        { barangay_name: 'A', risk_class: 'High' },
+        { barangay_name: 'B', risk_class: 'Medium' },
+      ] };
+      return { rows: [] };
+    } };
+    const result = await buildForecastingMetrics(pool, { barangay: 'A' });
+    assert.deepStrictEqual(result.highRiskForecastBarangays, ['A']);
+    assert.match(calls[1].sql, /DISTINCT ON/);
+    assert.match(calls[1].sql, /JOIN barangays/);
+    assert.match(calls[1].sql, /brs\.period =/);
+    assert.match(calls[1].sql, /run_type = 'pipeline'/);
+    assert.deepStrictEqual(calls[1].params, ['A']);
   });
 
   it('computes confidence interval interpretation', async () => {

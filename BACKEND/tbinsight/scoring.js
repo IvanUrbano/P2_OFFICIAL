@@ -74,12 +74,23 @@ function monthKey(value) {
 }
 
 /**
- * Assign Low/Medium/High to a set of risk scores by tertile: the bottom third of scores is Low,
- * the top third High. (Fixed cutoffs on the 0-100 scale do not work here: every component is
+ * Percentile cut points shared by this fallback and the ML service's
+ * thresholds.py — the two must stay numerically identical, or a run calibrated
+ * by the fallback and one calibrated by the service would disagree on what
+ * "High" means. LOW is the bottom third; MED was lowered from 2/3 to the 60th
+ * percentile so more barangays surface as High Risk (client request) without
+ * collapsing the Moderate band.
+ */
+const LOW_PERCENTILE = 1 / 3;
+const MED_PERCENTILE = 0.60;
+
+/**
+ * Assign Low/Medium/High to a set of risk scores by percentile: the bottom third of scores is
+ * Low, the top 40% High. (Fixed cutoffs on the 0-100 scale do not work here: every component is
  * scaled by the current maximum, so scores bunch up and nearly everything lands in Medium.)
  *
  * Boundaries match the incidence thresholds: Low if score <= low_max, High if score > med_max,
- * with cut points at the 1/3 and 2/3 percentiles (linear interpolation).
+ * with cut points at the 33.3rd and 60th percentiles (linear interpolation).
  *
  * @param {number[]} scores
  * @returns {{ classes: string[], low_max: number|null, med_max: number|null }}
@@ -93,8 +104,8 @@ function classifyByTertile(scores) {
     const hi = Math.ceil(pos);
     return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
   };
-  const low_max = percentile(1 / 3);
-  const med_max = percentile(2 / 3);
+  const low_max = percentile(LOW_PERCENTILE);
+  const med_max = percentile(MED_PERCENTILE);
   const classes = scores.map(s => (s <= low_max ? 'Low' : s > med_max ? 'High' : 'Medium'));
   return { classes, low_max, med_max };
 }
@@ -408,6 +419,8 @@ module.exports = {
   monthKey,
   computeRiskScore,
   classifyByTertile,
+  LOW_PERCENTILE,
+  MED_PERCENTILE,
   computeNeighborRisks,
   computeHistoricalBias,
   classifyTrend,

@@ -7,7 +7,14 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from thresholds import classify_incidence, tertile_thresholds, jenks_thresholds, compute_thresholds
+from thresholds import (
+    LOW_PERCENTILE,
+    MED_PERCENTILE,
+    classify_incidence,
+    tertile_thresholds,
+    jenks_thresholds,
+    compute_thresholds,
+)
 
 
 def test_classify_incidence_boundaries():
@@ -19,16 +26,26 @@ def test_classify_incidence_boundaries():
     assert classify_incidence(51, low_max=20, med_max=50) == "High"
 
 
-def test_tertile_splits_30_values_into_thirds():
-    """Tertile should roughly split 30 values into thirds."""
+def test_percentile_basis_is_third_low_sixty_high():
+    """The Moderate|High cut sits at the 60th percentile (lowered from 2/3)."""
+    assert LOW_PERCENTILE == 100.0 / 3.0
+    assert MED_PERCENTILE == 60.0
+    assert LOW_PERCENTILE < MED_PERCENTILE < 100.0
+
+
+def test_tertile_lower_third_low_rest_high():
+    """low_max = 33.3 pct, med_max = 60 pct -> 10 Low / 8 Medium / 12 High."""
     inc = list(range(1, 31))  # 1..30
     t = tertile_thresholds(inc)
     assert t["method"] == "tertile"
     assert t["low_max"] < t["med_max"]
+    assert t["low_pct"] == LOW_PERCENTILE
+    assert t["med_pct"] == MED_PERCENTILE
     bands = [classify_incidence(x, t["low_max"], t["med_max"]) for x in inc]
-    # roughly 10/10/10; allow off-by-one from percentile interpolation
-    for label in ("Low", "Medium", "High"):
-        assert 9 <= bands.count(label) <= 11
+    # cut points are 10.67 (low) and 18.4 (med) after linear interpolation
+    assert bands.count("Low") == 10
+    assert bands.count("Medium") == 8
+    assert bands.count("High") == 12
 
 
 def test_jenks_returns_two_ordered_breaks():
@@ -54,6 +71,7 @@ def test_compute_thresholds_tertile():
     result = compute_thresholds(inc, method="tertile")
     assert result["method"] == "tertile"
     assert result["low_max"] < result["med_max"]
+    assert result["med_pct"] == MED_PERCENTILE
 
 
 def test_compute_thresholds_jenks():
@@ -62,12 +80,16 @@ def test_compute_thresholds_jenks():
     result = compute_thresholds(inc, method="jenks")
     assert result["method"] == "jenks"
     assert result["low_max"] < result["med_max"]
+    # Jenks natural breaks do not map to a percentile cut.
+    assert "low_pct" not in result
+    assert "med_pct" not in result
 
 
 if __name__ == "__main__":
     tests = [
         test_classify_incidence_boundaries,
-        test_tertile_splits_30_values_into_thirds,
+        test_percentile_basis_is_third_low_sixty_high,
+        test_tertile_lower_third_low_rest_high,
         test_jenks_returns_two_ordered_breaks,
         test_jenks_classifies_all_values,
         test_compute_thresholds_tertile,

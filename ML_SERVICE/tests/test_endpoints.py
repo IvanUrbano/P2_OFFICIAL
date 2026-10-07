@@ -50,7 +50,11 @@ def test_thresholds_tertile():
     body = r.json()
     assert body["method"] == "tertile"
     assert body["low_max"] < body["med_max"]
-    print(f"  PASS: test_thresholds_tertile (low={body['low_max']:.1f}, med={body['med_max']:.1f})")
+    # Percentile basis is reported so the UI can label the bands as
+    # data-derived rather than an official epidemiological threshold.
+    assert body["low_pct"] == 100.0 / 3.0
+    assert body["med_pct"] == 60.0
+    print(f"  PASS: test_thresholds_tertile (low={body['low_max']:.1f}, med={body['med_max']:.1f}, pct={body['low_pct']:.1f}/{body['med_pct']:.1f})")
 
 
 def test_thresholds_jenks():
@@ -63,6 +67,7 @@ def test_thresholds_jenks():
     body = r.json()
     assert body["method"] == "jenks"
     assert body["low_max"] < body["med_max"]
+    assert body["low_pct"] is None and body["med_pct"] is None
     print(f"  PASS: test_thresholds_jenks (low={body['low_max']:.1f}, med={body['med_max']:.1f})")
 
 

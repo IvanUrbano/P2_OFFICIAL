@@ -298,6 +298,7 @@ def evaluate_models(req: EvaluateRequest):
                 mape=round(float(np.mean(all_mape)), 2) if all_mape else None,
                 n_steps=longest["n_steps"],
                 steps=[ArimaStep(**s) for s in longest["steps"]],
+                example_barangay=longest["barangay_name"],
                 method_counts=method_counts,
                 failed_barangays=failed_barangays,
                 baseline_mae=round(float(np.mean(all_base_mae)), 4) if all_base_mae else None,

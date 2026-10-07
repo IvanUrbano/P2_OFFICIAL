@@ -323,6 +323,8 @@ function buildForecastDirection(m) {
   let text;
   if (tier === 'insufficient_data' || tier === 'none') {
     text = 'Forecast interpretation is unavailable because there is insufficient historical data for the selected series.';
+  } else if (growthRate == null) {
+    text = 'Forecast direction is unavailable because the selected historical range has no positive monthly baseline.';
   } else if (tier === 'baseline') {
     text = `Historical data is not yet long enough for full ARIMA modeling, so this is a **preliminary baseline estimate**, not a modeled forecast direction.`;
   } else if (trend === 'increasing') {
@@ -336,9 +338,9 @@ function buildForecastDirection(m) {
 }
 
 function buildPredictedCases(m) {
-  const { total, monthlyAvg, horizon } = m.predictedCases;
+  const { total, monthlyAvg, horizon, available } = m.predictedCases;
   let text;
-  if (total > 0) {
+  if (available === true || (available == null && total > 0)) {
     text = `The model projects approximately **${total}** total cases over the next ${horizon} months, averaging **${monthlyAvg}** per month.`;
   } else {
     text = 'No forecast data available for the selected parameters.';
@@ -360,7 +362,9 @@ function buildPeakPeriod(m) {
 function buildGrowthRate(m) {
   const { growthRate } = m.direction;
   let text;
-  if (growthRate > 0) {
+  if (growthRate == null) {
+    text = 'Expected growth rate is unavailable because the selected historical range has no positive monthly baseline.';
+  } else if (growthRate > 0) {
     text = `Expected growth rate: **+${growthRate}%** compared with the historical average.`;
   } else if (growthRate < 0) {
     text = `Expected growth rate: **${growthRate}%** compared with the historical average (declining).`;
@@ -374,13 +378,15 @@ function buildHighRiskAreas(m) {
   const names = m.highRiskForecastBarangays;
   const count = names.length;
   let text;
-  if (count === 0) {
-    text = 'No barangays are projected to be in the high-risk category.';
+  if (m.riskAssessmentAvailable === false) {
+    text = 'No current RF risk assessment is available for the selected barangay scope.';
+  } else if (count === 0) {
+    text = 'No barangays are classified High Risk in the current assessment.';
   } else if (count <= 5) {
-    text = `**${count}** barangay(s) remain in the high-risk category: ${names.join(', ')}.`;
+    text = `**${count}** barangay(s) are classified High Risk in the current assessment: ${names.join(', ')}.`;
   } else {
     const top4 = names.slice(0, 4).join(', ');
-    text = `**${count}** barangays remain in the high-risk category, including ${top4}.`;
+    text = `**${count}** barangays are classified High Risk in the current assessment, including ${top4}.`;
   }
   return { id: 'highRiskAreas', title: 'High-Risk Areas', text };
 }
@@ -408,7 +414,9 @@ function buildForecastOverallSummary(m) {
     };
   }
   const parts = [];
-  if (tier === 'baseline') {
+  if (m.direction.growthRate == null) {
+    parts.push('A growth comparison is unavailable because the selected historical range has no positive monthly baseline.');
+  } else if (tier === 'baseline') {
     parts.push('This is a preliminary baseline estimate, not a full ARIMA forecast, since the selected series does not yet have enough monthly history.');
   } else if (m.direction.growthRate > 5) {
     parts.push('The forecast indicates that TB activity may remain elevated in the coming months.');
@@ -420,7 +428,9 @@ function buildForecastOverallSummary(m) {
   if (m.highRiskForecastBarangays.length > 0) {
     parts.push(`${m.highRiskForecastBarangays.length} barangay(s) are projected to remain in the high-risk category.`);
   } else {
-    parts.push('No barangays are projected to be in the high-risk category.');
+    parts.push(m.riskAssessmentAvailable === false
+      ? 'No current risk assessment is available for this scope.'
+      : 'No barangays are classified High Risk in the current assessment.');
   }
   if (m.confidence.avgRelativeCIWidth > 0.6) {
     parts.push('However, the wide confidence intervals suggest that these projections should be interpreted with caution.');
@@ -484,7 +494,7 @@ function buildGisRiskOverview(m) {
     text =
       'No risk classifications have been generated for the map yet. Run the prediction pipeline to classify barangays.';
   } else {
-    text = `Across **${total}** barangays, **${rc.High || 0}** are classified **High**, **${rc.Medium || 0}** **Medium**, **${rc.Low || 0}** **Low**, and **${rc['No Data'] || 0}** have **No Data**${cov.periodYear ? ` (latest risk period: **${cov.periodYear}**)` : ''}.`;
+    text = `Across **${total}** barangays, **${rc.High || 0}** are classified **High**, **${rc.Medium || 0}** **Medium**, **${rc.Low || 0}** **Low**, and **${rc['No Data'] || 0}** have **No Data**${cov.periodYear ? ` (assessment year: **${cov.periodYear}**${cov.dataYear ? `; data year: **${cov.dataYear}**` : ''})` : ''}.`;
     if (m.focus) {
       const f = m.focus;
       text += ` Focused barangay **${f.name}** is classified **${f.risk_class}**${f.risk_score != null ? ` with a risk score of **${f.risk_score}**` : ''}${f.rank ? ` (rank ${f.rank} of ${f.total_scored} classified barangays)` : ''}.`;
@@ -613,7 +623,8 @@ function generateGisInsight(metrics, filters = {}) {
   if (filters.barangay) parts.push(filters.barangay);
   else parts.push('All Barangays');
   if (metrics.coverage && metrics.coverage.periodYear) {
-    parts.push(`Risk Period ${metrics.coverage.periodYear}`);
+    if (filters.year) parts.push(`GIS Year ${filters.year}`);
+    parts.push(`Assessment Year ${metrics.coverage.periodYear}`);
   }
 
   return {

@@ -104,6 +104,74 @@ export function buildMonthlySeries(cases) {
     });
 }
 
+function formatMonthCoverage(monthNumbers) {
+  if (monthNumbers.length === 12) return 'Full Year';
+  const ranges = [];
+  let start = monthNumbers[0];
+  let previous = start;
+  for (const month of monthNumbers.slice(1)) {
+    if (month !== previous + 1) {
+      ranges.push(start === previous ? MONTHS_SHORT[start - 1] : `${MONTHS_SHORT[start - 1]}–${MONTHS_SHORT[previous - 1]}`);
+      start = month;
+    }
+    previous = month;
+  }
+  if (monthNumbers.length) {
+    ranges.push(start === previous ? MONTHS_SHORT[start - 1] : `${MONTHS_SHORT[start - 1]}–${MONTHS_SHORT[previous - 1]}`);
+  }
+  return ranges.join(', ');
+}
+
+/**
+ * Compare each year's reported months with the same months of the prior year.
+ * A comparison is unavailable when the prior year is missing any of those
+ * months, rather than treating unreported months as zero cases.
+ */
+export function buildCaseTrendComparison(cases, { filters = {} } = {}) {
+  const years = new Map();
+  for (const record of cases || []) {
+    if (!matchesNonYearFilters(record, filters)) continue;
+    const date = parseCaseDate(record.date_of_diagnosis);
+    if (!date) continue;
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    if (!years.has(year)) years.set(year, new Map());
+    const months = years.get(year);
+    months.set(month, (months.get(month) || 0) + 1);
+  }
+
+  const yearNumbers = [...years.keys()].sort((a, b) => a - b);
+  const rows = yearNumbers.map((year) => {
+    const months = years.get(year);
+    const monthNumbers = [...months.keys()].sort((a, b) => a - b);
+    const previousMonths = years.get(year - 1);
+    const comparable = monthNumbers.length > 0
+      && previousMonths != null
+      && monthNumbers.every(month => previousMonths.has(month));
+    const casesInPeriod = monthNumbers.reduce((sum, month) => sum + months.get(month), 0);
+    const previousCasesInPeriod = comparable
+      ? monthNumbers.reduce((sum, month) => sum + previousMonths.get(month), 0)
+      : null;
+    const changePct = comparable && previousCasesInPeriod > 0
+      ? Math.round(((casesInPeriod - previousCasesInPeriod) / previousCasesInPeriod) * 1000) / 10
+      : null;
+
+    return {
+      year,
+      cases: casesInPeriod,
+      coverage: formatMonthCoverage(monthNumbers),
+      period: formatMonthCoverage(monthNumbers),
+      previousYear: year - 1,
+      comparable,
+      currentPeriodCases: casesInPeriod,
+      previousPeriodCases: previousCasesInPeriod,
+      changePct,
+    };
+  });
+  const latestPeriod = rows.length ? rows[rows.length - 1] : null;
+  return { rows, latestPeriod };
+}
+
 /**
  * Build the previous-year comparison series for a selected year.
  *

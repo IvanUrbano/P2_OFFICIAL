@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  APPROVED_OUTCOMES, CASE_STATUSES, normalizeRecordOutcome, isApprovedOutcome,
+  normalizeRecordOutcome, isApprovedOutcome,
 } from '../utils/outcomeStatus';
 import API from "../api/axios";
 
@@ -114,16 +114,8 @@ function FilterSelect({ label, value, onChange, options, placeholder }) {
   );
 }
 
-const ALL_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const ALL_YEARS = ["2026","2025","2024","2023"];
-// Shared frontend contract (src/utils/outcomeStatus.js) — the same 9
-// Excel-verified categories the API's /filter-options returns. SCREENED is not
-// among them and is therefore never offered as a filter option.
-const ALL_OUTCOME_STATUSES = APPROVED_OUTCOMES;
-const ALL_SEX_OPTIONS = ["Male", "Female"];
-const ALL_VALIDATION_STATUSES = ["Validated", "Not Validated"];
-const ALL_SOURCE_TYPES = ["DSTB", "MN"];
-const ALL_LOCATION_CLASSIFICATIONS = ["Pasig City", "Non-Pasig", "Non-Pasig Resident"];
+const monthName = (month) => new Date(2000, Number(month) - 1, 1)
+  .toLocaleDateString('en-US', { month: 'long' });
 
 // A Non-Pasig resident has no Pasig barangay — their residence arrives as free
 // text and is what the Barangay column/panel shows for those rows.
@@ -141,6 +133,10 @@ export default function TBRecords() {
   const [validationStatuses, setValidationStatuses] = useState([]);
   const [sourceTypes, setSourceTypes] = useState([]);
   const [locationClassifications, setLocationClassifications] = useState([]);
+  const [caseStatuses, setCaseStatuses] = useState([]);
+  const [availableYears, setAvailableYears] = useState([]);
+  const [availableMonths, setAvailableMonths] = useState([]);
+  const [monthsByYear, setMonthsByYear] = useState({});
   const [metrics, setMetrics] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
@@ -375,7 +371,8 @@ export default function TBRecords() {
       }
     };
     fetchBarangays();
-    return () => controller.abort();
+    window.addEventListener('focus', fetchBarangays);
+    return () => { controller.abort(); window.removeEventListener('focus', fetchBarangays); };
   }, []);
 
   /* --- Fetch facilities --- */
@@ -391,7 +388,8 @@ export default function TBRecords() {
       }
     };
     fetchFacilities();
-    return () => controller.abort();
+    window.addEventListener('focus', fetchFacilities);
+    return () => { controller.abort(); window.removeEventListener('focus', fetchFacilities); };
   }, []);
 
   /* --- Fetch filter options (sex, bacteriological status, outcome status, validation, source, location) --- */
@@ -406,19 +404,17 @@ export default function TBRecords() {
         setValidationStatuses((res.data.validation_status || []).filter(Boolean).sort());
         setSourceTypes((res.data.source_type || []).filter(Boolean).sort());
         setLocationClassifications((res.data.location_classification || []).filter(Boolean).sort());
+        setCaseStatuses(res.data.case_status || []);
+        setAvailableYears((res.data.years || []).map(String));
+        setAvailableMonths(res.data.months || []);
+        setMonthsByYear(res.data.months_by_year || {});
       } catch (err) {
-        if (err.name !== 'CanceledError') {
-          setSexStatuses(ALL_SEX_OPTIONS);
-          setBacteriologicalStatuses([]);
-          setOutcomeStatuses(ALL_OUTCOME_STATUSES);
-          setValidationStatuses(ALL_VALIDATION_STATUSES);
-          setSourceTypes(ALL_SOURCE_TYPES);
-          setLocationClassifications(ALL_LOCATION_CLASSIFICATIONS);
-        }
+        if (err.name !== 'CanceledError' && import.meta.env.DEV) console.error('Failed to fetch filter options:', err);
       }
     };
     fetchFilterOptions();
-    return () => controller.abort();
+    window.addEventListener('focus', fetchFilterOptions);
+    return () => { controller.abort(); window.removeEventListener('focus', fetchFilterOptions); };
   }, []);
 
   /* --- Fetch cases --- */
@@ -879,13 +875,13 @@ export default function TBRecords() {
                 <div className="space-y-3">
                   <FilterSelect
                     label="Year"
-                    value={pendingFilters.year || ""} onChange={(v) => updatePending('year', v)}
-                    options={ALL_YEARS} placeholder="All Years"
+                    value={pendingFilters.year || ""} onChange={(v) => setPendingFilters(prev => ({ ...prev, year: v, month: '' }))}
+                    options={availableYears} placeholder="All Years"
                   />
                   <FilterSelect
                     label="Month"
                     value={pendingFilters.month || ""} onChange={(v) => updatePending('month', v)}
-                    options={ALL_MONTHS} placeholder="All Months"
+                    options={(pendingFilters.year ? monthsByYear[pendingFilters.year] || [] : availableMonths).map(monthName)} placeholder="All Months"
                   />
                 </div>
               </div>
@@ -923,12 +919,12 @@ export default function TBRecords() {
                   <FilterSelect
                     label="Case Status"
                     value={pendingFilters.status || ""} onChange={(v) => updatePending('status', v)}
-                    options={CASE_STATUSES} placeholder="All"
+                    options={caseStatuses} placeholder="All"
                   />
                   <FilterSelect
                     label="Treatment Outcome"
                     value={pendingFilters.outcome || ""} onChange={(v) => updatePending('outcome', v)}
-                    options={outcomeStatuses.length > 0 ? outcomeStatuses : ALL_OUTCOME_STATUSES} placeholder="All"
+                    options={outcomeStatuses} placeholder="All"
                   />
                   <FilterSelect
                     label="Bacteriological Status"
@@ -938,7 +934,7 @@ export default function TBRecords() {
                   <FilterSelect
                     label="Validation Status"
                     value={pendingFilters.validation || ""} onChange={(v) => updatePending('validation', v)}
-                    options={validationStatuses.length > 0 ? validationStatuses : ALL_VALIDATION_STATUSES} placeholder="All Statuses"
+                    options={validationStatuses} placeholder="All Statuses"
                   />
                 </div>
               </div>
@@ -949,12 +945,12 @@ export default function TBRecords() {
                   <FilterSelect
                     label="Source Type"
                     value={pendingFilters.source || ""} onChange={(v) => updatePending('source', v)}
-                    options={sourceTypes.length > 0 ? sourceTypes : ALL_SOURCE_TYPES} placeholder="All Sources"
+                    options={sourceTypes} placeholder="All Sources"
                   />
                   <FilterSelect
                     label="Location"
                     value={pendingFilters.location || ""} onChange={(v) => updatePending('location', v)}
-                    options={locationClassifications.length > 0 ? locationClassifications : ALL_LOCATION_CLASSIFICATIONS} placeholder="All Locations"
+                    options={locationClassifications} placeholder="All Locations"
                   />
                 </div>
               </div>

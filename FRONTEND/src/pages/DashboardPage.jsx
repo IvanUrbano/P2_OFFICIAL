@@ -420,7 +420,7 @@ export default function DashboardPage() {
     setAlertsData(alertsRes.data?.alerts || []);
     setAlertsTotal(alertsRes.data?.pagination?.total ?? null);
     setRiskData(riskRes.data?.choropleth || []);
-    setRiskYear(riskRes.data?.year ?? null);
+    setRiskYear(riskRes.data?.assessment_year ?? riskRes.data?.year ?? null);
     setPipelineStatus(pipelineRes.data?.latest_run || null);
     setDemographicsData(demoRes.data?.demographics || []);
     setStatusSummary(statusRes.data?.summary || null);
@@ -520,20 +520,26 @@ export default function DashboardPage() {
     return riskData.filter((r) => (r.risk_class || '').toLowerCase() === 'high').length;
   }, [riskData, hasRiskData]);
 
-  /* ── Assessed-barangay denominator ──
-   * The "N / M" denominator is the number of barangays that actually carry a
-   * persisted classification in the latest snapshot — not a hardcoded 30.
+  /* ── City-wide classification breakdown ──
    * /gis/choropleth LEFT JOINs every reference barangay and COALESCEs a
-   * missing classification to 'No Data', so a snapshot that skipped a
-   * barangay would otherwise be reported as though all 30 were assessed. */
-  const assessedCount = useMemo(
-    () => riskData.filter((r) => r.risk_class && (r.risk_class || '').toLowerCase() !== 'no data').length,
-    [riskData]
-  );
-  const noAssessmentCount = useMemo(
-    () => riskData.filter((r) => !r.risk_class || (r.risk_class || '').toLowerCase() === 'no data').length,
-    [riskData]
-  );
+   * missing classification to 'No Data', so `totalBarangays` is the real
+   * number of barangays in the snapshot — not a hardcoded 30 — while
+   * `noAssessmentCount` keeps saying plainly how many were never assessed.
+   * Canonical classes are High/Medium/Low; 'Medium' is shown as "Moderate"
+   * here exactly as on the GIS page. */
+  const riskCounts = useMemo(() => {
+    const counts = { high: 0, moderate: 0, low: 0, noData: 0 };
+    riskData.forEach((r) => {
+      const rc = (r.risk_class || '').trim().toLowerCase();
+      if (rc === 'high') counts.high += 1;
+      else if (rc === 'medium' || rc === 'moderate') counts.moderate += 1;
+      else if (rc === 'low') counts.low += 1;
+      else counts.noData += 1;
+    });
+    return counts;
+  }, [riskData]);
+  const totalBarangays = riskData.length || 30;
+  const noAssessmentCount = riskCounts.noData;
 
   /* ── 5. Forecasted Cases ── */
   const forecastSummary = useMemo(() => {
@@ -1100,27 +1106,49 @@ export default function DashboardPage() {
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
-              {/* High-Risk Barangays */}
+              {/* ── City Risk Classification ──
+                  The old "{high}/{assessed}" figure read as an unexplained
+                  ratio ("10 / 24"). The count is now spelled out in words and
+                  the snapshot's full class breakdown is shown alongside it, so
+                  High/Moderate/Low can be read together. */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-alarm-warning-line text-sm" style={{ color: '#C4886A' }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>High-Risk</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>City Risk Classification</span>
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
-                  {failed.risk ? 'Unavailable' : highRiskCount == null ? 'N/A' : `${animatedHighRisk}/${assessedCount}`}
+                  {failed.risk ? 'Unavailable' : highRiskCount == null ? 'N/A' : animatedHighRisk}
                 </p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                <span
+                  className="text-[11px] font-medium mt-1"
+                  style={{ color: '#94A3B8' }}
+                  title="This represents the number of Pasig barangays classified as High Risk by the risk-classification model for the selected assessment period."
+                >
                   {failed.risk
                     ? 'Risk classification could not be loaded'
                     : highRiskCount == null
                       ? 'No risk assessment available yet'
-                      : `Of ${assessedCount} assessed barangays${riskYear ? ` (${riskYear} assessment)` : ''}`}
+                      : `of ${totalBarangays} barangays classified as High Risk`}
                 </span>
-                {!failed.risk && noAssessmentCount > 0 && (
-                  <span className="text-[10px] font-medium" style={{ color: '#B07070' }}>
-                    {noAssessmentCount} not assessed
-                  </span>
+                {!failed.risk && highRiskCount != null && (
+                  <div className="mt-2 pt-2 space-y-1" style={{ borderTop: '1px solid #F1F5F9' }}>
+                    <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: '#64748B' }}>
+                      Assessment Period: <span style={{ color: '#0F2D52' }}>{riskYear ?? 'N/A'}</span>
+                    </p>
+                    <p className="text-[11px] font-medium leading-snug" style={{ color: '#475569' }}>
+                      High Risk: <strong style={{ color: '#EF4444' }}>{riskCounts.high}</strong>
+                      <span style={{ color: '#CBD5E1' }}> · </span>
+                      Moderate Risk: <strong style={{ color: '#F97316' }}>{riskCounts.moderate}</strong>
+                      <span style={{ color: '#CBD5E1' }}> · </span>
+                      Low Risk: <strong style={{ color: '#B45309' }}>{riskCounts.low}</strong>
+                    </p>
+                    {noAssessmentCount > 0 && (
+                      <p className="text-[10px] font-medium" style={{ color: '#B07070' }}>
+                        {noAssessmentCount} not assessed
+                      </p>
+                    )}
+                  </div>
                 )}
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>

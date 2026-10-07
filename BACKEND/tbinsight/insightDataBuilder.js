@@ -15,6 +15,8 @@ const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
 const { getOutcomeFilterValues, normalizeDisplayOutcome } = require('./outcomeNormalization');
 const { pasigResidentOnly, countedCases } = require('./locationScope');
+const { gisSnapshotPeriodSql } = require('./gisSnapshot');
+const { monthKey } = require('./scoring');
 
 /**
  * Build WHERE clause fragments from filter params.
@@ -441,30 +443,41 @@ async function buildAnalyticsMetrics(pool, filters = {}) {
  */
 async function buildForecastingMetrics(pool, filters = {}) {
   const conditions = [];
-  const params = [];
-  let idx = 1;
-
-  if (filters.startYear) {
-    conditions.push(`EXTRACT(YEAR FROM mp.period) >= $${idx}`);
-    params.push(Number(filters.startYear));
-    idx++;
-  }
-  if (filters.endYear) {
-    conditions.push(`EXTRACT(YEAR FROM mp.period) <= $${idx}`);
-    params.push(Number(filters.endYear));
-    idx++;
-  }
+  const selectedHorizon = [1, 3].includes(Number(filters.horizon)) ? Number(filters.horizon) : 3;
+  const params = [selectedHorizon];
+  let idx = 2;
   if (filters.barangay) {
     conditions.push(`TRIM(mp.barangay_name) = $${idx}`);
     params.push(filters.barangay);
     idx++;
   }
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  conditions.push(`mp.period >= (SELECT (config->>'period')::date FROM model_metadata WHERE run_type = 'pipeline' ORDER BY trained_at DESC LIMIT 1)`);
+  conditions.push(`mp.period < (SELECT (config->>'period')::date FROM model_metadata WHERE run_type = 'pipeline' ORDER BY trained_at DESC LIMIT 1) + ($1::integer * INTERVAL '1 month')`);
+  const where = `WHERE ${conditions.join(' AND ')}`;
+  const historyConditions = [
+    `c.date_of_diagnosis < (SELECT (config->>'period')::date FROM model_metadata WHERE run_type = 'pipeline' ORDER BY trained_at DESC LIMIT 1)`,
+    `c.date_of_diagnosis IS NOT NULL`,
+    pasigResidentOnly('c'),
+  ];
+  const historyParams = [];
+  if (filters.startYear) {
+    historyParams.push(Number(filters.startYear));
+    historyConditions.push(`EXTRACT(YEAR FROM c.date_of_diagnosis) >= $${historyParams.length}`);
+  }
+  if (filters.endYear) {
+    historyParams.push(Number(filters.endYear));
+    historyConditions.push(`EXTRACT(YEAR FROM c.date_of_diagnosis) <= $${historyParams.length}`);
+  }
+  if (filters.barangay) {
+    historyParams.push(filters.barangay);
+    historyConditions.push(`TRIM(c.barangay_name) = $${historyParams.length}`);
+  }
 
   const [
     forecastRes,
     riskRes,
     metaRes,
+    historyRes,
   ] = await Promise.all([
     // 1. Forecast data
     pool.query(`
@@ -483,16 +496,20 @@ async function buildForecastingMetrics(pool, filters = {}) {
       ORDER BY mp.period ASC, mp.barangay_name
     `, params),
 
-    // 2. Risk classifications
+    // 2. Distinct Pasig barangays in the current pipeline's RF assessment.
+    // Historical snapshots are retained for GIS but must not be counted here.
     pool.query(`
-      SELECT
-        brs.barangay_name,
+      SELECT DISTINCT ON (TRIM(brs.barangay_name))
+        TRIM(brs.barangay_name) AS barangay_name,
         brs.risk_class,
         brs.risk_score
       FROM barangay_risk_scores brs
+      JOIN barangays b ON TRIM(b.name) = TRIM(brs.barangay_name)
       WHERE brs.risk_class IS NOT NULL
+        AND brs.period = (SELECT (config->>'period')::date FROM model_metadata
+                          WHERE run_type = 'pipeline' ORDER BY trained_at DESC LIMIT 1)
         ${filters.barangay ? `AND TRIM(brs.barangay_name) = $1` : ''}
-      ORDER BY brs.risk_score DESC
+      ORDER BY TRIM(brs.barangay_name), brs.risk_score DESC
     `, filters.barangay ? [filters.barangay] : []),
 
     // 3. Latest model metadata
@@ -502,44 +519,41 @@ async function buildForecastingMetrics(pool, filters = {}) {
       ORDER BY trained_at DESC
       LIMIT 1
     `),
+    pool.query(`
+      SELECT TO_CHAR(MIN(c.date_of_diagnosis), 'YYYY-MM') AS first_month,
+             TO_CHAR(MAX(c.date_of_diagnosis), 'YYYY-MM') AS last_month,
+             COUNT(*)::numeric AS total_cases
+      FROM tb_cases c
+      WHERE ${historyConditions.join(' AND ')}
+    `, historyParams),
   ]);
 
   const forecastRows = forecastRes.rows;
 
   // --- Direction ---
-  // Compare forecast average vs historical actual average. forecasted_count
-  // is null for insufficient-history rows (see arima_forecast.py) — those
-  // are excluded rather than coerced to 0, which would understate the
-  // average as if "0 cases" had actually been predicted.
-  const forecastedValues = forecastRows
-    .filter((r) => r.forecasted_count != null)
-    .map((r) => Number(r.forecasted_count));
-  const actualValues = forecastRows
-    .filter((r) => r.actual_count != null)
-    .map((r) => Number(r.actual_count));
-
-  const forecastAvg = forecastedValues.length > 0
-    ? forecastedValues.reduce((s, v) => s + v, 0) / forecastedValues.length
-    : 0;
-  const historicalAvg = actualValues.length > 0
-    ? actualValues.reduce((s, v) => s + v, 0) / actualValues.length
-    : 0;
-
-  const growthRate = historicalAvg > 0
-    ? Math.round(((forecastAvg - historicalAvg) / historicalAvg) * 1000) / 10
-    : 0;
-  const trendDirection = growthRate > 5 ? 'increasing'
-    : growthRate < -5 ? 'decreasing'
-    : 'stable';
+  // Compare the first modeled month to the selected historical monthly
+  // average. The calendar span includes months with zero recorded cases.
+  const firstForecastPeriod = forecastRows.find(r => r.forecasted_count != null)?.period;
+  const firstForecastTotal = firstForecastPeriod == null ? null : forecastRows
+    .filter(r => String(r.period) === String(firstForecastPeriod) && r.forecasted_count != null)
+    .reduce((sum, r) => sum + Number(r.forecasted_count), 0);
+  const history = historyRes.rows[0] || {};
+  const monthNumber = key => Number(String(key).slice(0, 4)) * 12 + Number(String(key).slice(5, 7)) - 1;
+  const historyMonths = history.first_month && history.last_month
+    ? monthNumber(history.last_month) - monthNumber(history.first_month) + 1 : 0;
+  const historicalAvg = historyMonths > 0 ? Number(history.total_cases) / historyMonths : null;
+  const growthRate = firstForecastTotal != null && historicalAvg > 0
+    ? Math.round(((firstForecastTotal - historicalAvg) / historicalAvg) * 1000) / 10 : null;
+  const trendDirection = growthRate == null ? 'unavailable'
+    : growthRate > 5 ? 'increasing' : growthRate < -5 ? 'decreasing' : 'stable';
 
   // --- Predicted cases ---
-  const totalPredicted = Math.round(forecastedValues.reduce((s, v) => s + v, 0));
-  // Only count future periods (where actual_count is null)
-  const futureForecasts = forecastRows.filter((r) => r.actual_count == null);
+  // A persisted run remains its forecast even when actuals later arrive.
+  const futureForecasts = forecastRows.filter((r) => r.forecasted_count != null);
   const futureTotal = Math.round(
     futureForecasts.reduce((s, r) => s + (r.forecasted_count != null ? Number(r.forecasted_count) : 0), 0)
   );
-  const horizon = futureForecasts.length;
+  const horizon = new Set(futureForecasts.map((r) => String(r.period).slice(0, 7))).size;
   const monthlyAvg = horizon > 0 ? Math.round(futureTotal / horizon) : 0;
 
   // --- Forecast tier for this scope: majority `method` among future rows.
@@ -589,9 +603,9 @@ async function buildForecastingMetrics(pool, filters = {}) {
 
   // --- High-risk barangays ---
   const riskRows = riskRes.rows;
-  const highRiskForecastBarangays = riskRows
+  const highRiskForecastBarangays = [...new Set(riskRows
     .filter((r) => (r.risk_class || '').toLowerCase() === 'high')
-    .map((r) => r.barangay_name);
+    .map((r) => String(r.barangay_name || '').trim()).filter(Boolean))];
 
   // --- Confidence ---
   const ciWidths = forecastRows
@@ -614,13 +628,15 @@ async function buildForecastingMetrics(pool, filters = {}) {
       total: futureTotal,
       monthlyAvg,
       horizon,
+      available: futureForecasts.length > 0,
     },
     peakPeriod: { label: peakPeriodLabel, count: peakCount },
     highRiskForecastBarangays,
+    riskAssessmentAvailable: riskRows.length > 0,
     confidence: { avgRelativeCIWidth, interpretation: ciInterpretation },
     modelInfo: {
       method: meta?.config?.method || meta?.model_version || 'ARIMA + RF',
-      horizon: filters.horizon || horizon,
+      horizon: selectedHorizon,
       barangaysProcessed,
       tier: forecastTier,
     },
@@ -647,17 +663,30 @@ async function buildForecastingMetrics(pool, filters = {}) {
  * @param {object} filters - { barangay?: string } optional focus barangay
  */
 async function buildGisMetrics(pool, filters = {}) {
-  // --- Latest risk period ---
+  // --- Risk period selected by data year, or latest for All Years ---
+  const selectedYear = Number.isInteger(Number(filters.year)) && Number(filters.year) >= 2000
+    && Number(filters.year) <= 2099 ? Number(filters.year) : null;
   const latestRes = await pool.query(
-    'SELECT MAX(period) AS period FROM barangay_risk_scores'
+    selectedYear
+      ? `SELECT s.period,
+           (SELECT COALESCE((mm.metrics->>'data_year')::integer,
+                            EXTRACT(YEAR FROM (mm.metrics->>'dataEnd')::date)::integer)
+            FROM model_metadata mm
+            WHERE (mm.config->>'period')::date = s.period
+            ORDER BY mm.trained_at DESC LIMIT 1) AS data_year
+         FROM (SELECT ${gisSnapshotPeriodSql} AS period) s`
+      : 'SELECT MAX(period) AS period FROM barangay_risk_scores',
+    selectedYear ? [selectedYear] : []
   );
-  const latestPeriod = latestRes.rows[0]?.period || null;
-  const periodYear = latestPeriod ? new Date(latestPeriod).getFullYear() : null;
-  // Snapshots are keyed by (assessment year + 1)-01-01, so the assessment
-  // year the snapshot (and its incidence) actually refers to is periodYear - 1.
-  const assessmentYear = periodYear != null ? periodYear - 1 : null;
+  const latestPeriod = latestRes.rows[0]?.period ? monthKey(latestRes.rows[0].period) : null;
+  const periodYear = latestPeriod ? Number(monthKey(latestPeriod).slice(0, 4)) : null;
+  const periodMonth = latestPeriod ? Number(monthKey(latestPeriod).slice(5, 7)) : null;
+  const snapshotDataYear = latestRes.rows[0]?.data_year != null
+    ? Number(latestRes.rows[0].data_year)
+    : periodYear == null ? null : (periodMonth === 1 ? periodYear - 1 : periodYear);
+  const caseYear = selectedYear || snapshotDataYear;
 
-  // --- Barangay rows: risk scores (latest period) + lifetime + year case counts ---
+    // --- Barangay rows: selected risk period and matching case year ---
   const rowsRes = await pool.query(
     `SELECT
        b.name,
@@ -675,6 +704,7 @@ async function buildGisMetrics(pool, filters = {}) {
         SELECT barangay_name, COUNT(*)::INTEGER AS total_cases
         FROM tb_cases
         WHERE ${pasigResidentOnly()}
+          ${selectedYear ? 'AND EXTRACT(YEAR FROM date_of_diagnosis) = $2' : ''}
         GROUP BY barangay_name
       ) tc ON tc.barangay_name = b.name
       LEFT JOIN (
@@ -686,22 +716,22 @@ async function buildGisMetrics(pool, filters = {}) {
         GROUP BY barangay_name
       ) yc ON yc.barangay_name = b.name
      ORDER BY b.name`,
-    [latestPeriod, assessmentYear]
+    [latestPeriod, caseYear]
   );
 
-  // STRICT year-matched population for the assessment year: the GeoJSON
+  // STRICT year-matched population for the selected case year: the GeoJSON
   // reference population only applies to GEOJSON_REFERENCE_YEAR; any other
   // year needs an exact barangay_population row or incidence is null (N/A).
   // Never substitute another year's population.
   const popMap = {};
-  if (assessmentYear === GEOJSON_REFERENCE_YEAR) {
+  if (caseYear === GEOJSON_REFERENCE_YEAR) {
     for (const r of rowsRes.rows) popMap[r.name] = r.population;
-  } else if (assessmentYear != null) {
+  } else if (caseYear != null) {
     try {
       const popRes = await pool.query(
         `SELECT barangay_name, population FROM barangay_population
          WHERE reference_year = $1 AND status = 'ACTIVE'`,
-        [assessmentYear]
+        [caseYear]
       );
       for (const r of popRes.rows) popMap[r.barangay_name] = r.population;
     } catch {
@@ -728,9 +758,8 @@ async function buildGisMetrics(pool, filters = {}) {
     .map((r) => r.name);
 
   // --- Incidence availability guard ---
-  // Population must exist for the ASSESSMENT year (periodYear - 1), which is
-  // the year the computed incidence actually refers to — not the snapshot's
-  // (Y+1)-01-01 period year, which never has a population reference.
+  // Population must exist for the selected case year, which can differ from
+  // both the RF data year and the stored prediction period's year.
   const withIncidence = rows.filter(
     (r) => r.incidence_per_100k !== null && r.incidence_per_100k !== undefined
   ).length;
@@ -741,7 +770,7 @@ async function buildGisMetrics(pool, filters = {}) {
     availableYears = [];
   }
   const periodYearHasPopulation =
-    assessmentYear === null ? false : availableYears.includes(assessmentYear);
+    caseYear === null ? false : availableYears.includes(caseYear);
   const incidenceAvailable =
     Boolean(latestPeriod) && withIncidence > 0 && periodYearHasPopulation;
 
@@ -853,12 +882,13 @@ async function buildGisMetrics(pool, filters = {}) {
       noDataBarangays,
       period: latestPeriod,
       periodYear,
+      dataYear: snapshotDataYear,
+      caseYear,
     },
     incidence: {
       available: incidenceAvailable,
-      // The year the incidence figures refer to (assessment year), which is
-      // what any population-reference guard must check against.
-      periodYear: assessmentYear,
+      // The year of the cases and population used for this incidence.
+      periodYear: caseYear,
       periodYearHasPopulation,
       barangaysWithIncidence: withIncidence,
     },

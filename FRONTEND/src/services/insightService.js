@@ -50,6 +50,7 @@ export async function getDataFreshness() {
 export async function getGisInsight(filters = {}) {
   const params = {};
   if (filters.barangay) params.barangay = filters.barangay;
+  if (filters.year) params.year = filters.year;
   const res = await API.get('/api/tb/insights/gis', { params });
   return res.data;
 }

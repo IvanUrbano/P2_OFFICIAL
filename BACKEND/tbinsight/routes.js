@@ -4,7 +4,8 @@ const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { rebuildAggregations } = require('./aggregateMonthly');
 const { seedAll, seedBarangaysGeom, getBarangays, findBarangay } = require('./barangays');
 const { runPipelineTracked, getPipelineRunStatus, runHistoricalSnapshots } = require('./pipeline');
-const { healthCheck: mlHealthCheck, evaluate: mlEvaluate, forecast: mlForecast } = require('./mlClient');
+const { gisSnapshotPeriodSql } = require('./gisSnapshot');
+const { healthCheck: mlHealthCheck, forecast: mlForecast } = require('./mlClient');
 const {
   createNotification, getUnreadCount, evaluateAllAlerts,
   evaluateCaseIncreaseAlerts,
@@ -14,11 +15,12 @@ const { generateAnalyticsInsight, generateForecastingInsight, generateGisInsight
 const { buildDashboardMetrics, generateDashboardInsight } = require('./dashboardInsight');
 const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 const {
-  APPROVED_OUTCOMES, CASE_STATUSES, normalizeDisplayOutcome, normalizeRecordOutcome,
+  APPROVED_OUTCOMES, normalizeDisplayOutcome, normalizeRecordOutcome,
   isApprovedOutcome, getOutcomeFilterValues, foldOutcomeCounts, SUCCESS_OUTCOMES_SQL,
 } = require('./outcomeNormalization');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
 const { pasigResidentOnly, countedCases } = require('./locationScope');
+const { loadAdjacency } = require('./barangayAdjacency');
 const {
   getPopulation, getPopulationMap, calculateAnnualizedIncidence,
   getAvailablePopulationYears, getPopulationReferences, getPopulationByYear,
@@ -79,12 +81,17 @@ router.get('/barangays', async (req, res) => {
 
 /**
  * GET /api/tb/facilities
- * List distinct screening_facility names from tb_cases
+ * List facilities actually present in validated cases, including treatment-only facilities.
  */
 router.get('/facilities', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT DISTINCT screening_facility FROM tb_cases WHERE screening_facility IS NOT NULL AND screening_facility != '' ORDER BY screening_facility`
+      `SELECT TRIM(screening_facility) AS screening_facility FROM tb_cases
+       WHERE screening_facility IS NOT NULL AND TRIM(screening_facility) != ''
+       UNION
+       SELECT TRIM(treatment_facility) AS screening_facility FROM tb_cases
+       WHERE treatment_facility IS NOT NULL AND TRIM(treatment_facility) != ''
+       ORDER BY screening_facility`
     );
     res.json({ facilities: result.rows.map(r => ({ name: r.screening_facility })) });
   } catch (err) {
@@ -99,14 +106,17 @@ router.get('/facilities', async (req, res) => {
  */
 router.get('/filter-options', async (req, res) => {
   try {
-    const [sexRes, bactRes, outcomeRes, validationRes, sourceTypeRes, locationRes] = await Promise.all([
+    const [sexRes, bactRes, outcomeRes, validationRes, sourceTypeRes, locationRes, statusRes, periodRes] = await Promise.all([
       pool.query(`SELECT DISTINCT TRIM(sex) as sex FROM tb_cases WHERE sex IS NOT NULL AND TRIM(sex) != '' ORDER BY sex`),
       pool.query(`SELECT DISTINCT TRIM(bacteriological_status) as bacteriological_status FROM tb_cases WHERE bacteriological_status IS NOT NULL AND TRIM(bacteriological_status) != '' ORDER BY bacteriological_status`),
       pool.query(`SELECT DISTINCT treatment_outcome AS outcome_status FROM tb_cases WHERE treatment_outcome IS NOT NULL ORDER BY outcome_status`),
       pool.query(`SELECT DISTINCT TRIM(validation_status) as validation_status FROM tb_cases WHERE validation_status IS NOT NULL AND TRIM(validation_status) != '' ORDER BY validation_status`),
       pool.query(`SELECT DISTINCT TRIM(source_type) as source_type FROM tb_cases WHERE source_type IS NOT NULL AND TRIM(source_type) != '' ORDER BY source_type`),
       pool.query(`SELECT DISTINCT TRIM(location_classification) as location_classification FROM tb_cases WHERE location_classification IS NOT NULL AND TRIM(location_classification) != '' ORDER BY location_classification`),
+      pool.query(`SELECT DISTINCT TRIM(case_status) AS case_status FROM tb_cases WHERE case_status IS NOT NULL AND TRIM(case_status) != '' ORDER BY case_status`),
+      pool.query(`SELECT DISTINCT EXTRACT(YEAR FROM date_of_diagnosis)::int AS year, EXTRACT(MONTH FROM date_of_diagnosis)::int AS month FROM tb_cases WHERE date_of_diagnosis IS NOT NULL ORDER BY year DESC, month`),
     ]);
+    const periods = periodRes.rows;
     res.json({
       sex: sexRes.rows.map(r => r.sex),
       bacteriological_status: bactRes.rows.map(r => r.bacteriological_status),
@@ -115,7 +125,10 @@ router.get('/filter-options', async (req, res) => {
         .filter(v => v != null)
         .filter((v, i, arr) => arr.indexOf(v) === i)  // dedupe
         .sort((a, b) => APPROVED_OUTCOMES.indexOf(a) - APPROVED_OUTCOMES.indexOf(b)),
-      case_status: CASE_STATUSES,
+      case_status: statusRes.rows.map(r => r.case_status),
+      years: [...new Set(periods.map(r => r.year))],
+      months: [...new Set(periods.map(r => r.month))].sort((a, b) => a - b),
+      months_by_year: Object.fromEntries([...new Set(periods.map(r => r.year))].map(year => [year, periods.filter(r => r.year === year).map(r => r.month).sort((a, b) => a - b)])),
       validation_status: validationRes.rows.map(r => r.validation_status),
       source_type: sourceTypeRes.rows.map(r => r.source_type),
       location_classification: locationRes.rows.map(r => r.location_classification),
@@ -817,7 +830,7 @@ router.get('/dashboard/monthly', async (req, res) => {
     }
     const result = await pool.query(`
       SELECT barangay_name,
-             DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
+             TO_CHAR(DATE_TRUNC('month', date_of_diagnosis), 'YYYY-MM-DD') AS month,
              COUNT(*)::INTEGER AS case_count
       FROM tb_cases
       ${filters}
@@ -834,10 +847,21 @@ router.get('/dashboard/monthly', async (req, res) => {
 /**
  * GET /api/tb/dashboard/barangay/:name
  * Per-barangay breakdown: monthly cases, demographics, outcomes
+ * Query: ?year=YYYY (optional) — scopes case_status_counts only.
  */
 router.get('/dashboard/barangay/:name', async (req, res) => {
   try {
     const { name } = req.params;
+
+    // Optional ?year=YYYY scopes ONLY case_status_counts (the "On Treatment"
+    // figure) by diagnosis year, matching the Analytics KPI definition:
+    // cases diagnosed in year Y that are currently on treatment. Monthly,
+    // demographics and outcomes stay all-time — they are historical
+    // breakdowns, not period metrics, and are rendered as such.
+    const yearInt = req.query.year ? parseInt(req.query.year, 10) : null;
+    const statusYear = yearInt && !isNaN(yearInt) && yearInt >= 2000 && yearInt <= 2099
+      ? yearInt
+      : null;
 
     // Get barangay info — try barangays table first, then barangays_geom
     let barangay = await findBarangay(name).catch(() => null);
@@ -898,7 +922,9 @@ router.get('/dashboard/barangay/:name', async (req, res) => {
     const statusCounts = await pool.query(
       `SELECT case_status, COUNT(*)::INTEGER AS total FROM tb_cases
        WHERE LOWER(barangay_name) = LOWER($1) AND case_status IS NOT NULL
-       GROUP BY case_status`, [name]
+         ${statusYear !== null ? 'AND EXTRACT(YEAR FROM date_of_diagnosis) = $2' : ''}
+       GROUP BY case_status`,
+      statusYear !== null ? [name, statusYear] : [name]
     );
     let outcomesRows = [];
     try {
@@ -1159,22 +1185,12 @@ router.get('/gis/geojson', async (req, res) => {
       ORDER BY name
     `);
 
-    // Risk classification is a SNAPSHOT keyed by assessment period, one per
-    // calendar year (see pipeline.js:runHistoricalSnapshots): year Y's
-    // snapshot is stored at period (Y+1)-01-01 — "the assessment made using
-    // data available through the end of year Y". The current/latest year's
-    // snapshot naturally lands on that same convention, so no special
-    // casing is needed for it.
+    // Resolve GIS Year to the snapshot trained on that data year. Its saved
+    // prediction period can fall in the following calendar year.
     //
-    // A specific year filter must resolve to THAT year's own snapshot, or
-    // to "No Data" if it doesn't exist yet — never silently substitute a
-    // different year's snapshot (that would misrepresent one year's risk
-    // as another's, which is exactly the bug this replaces: previously
-    // every specific-year selection showed "No Data" because the query
-    // required an exact match against a period that only ever existed for
-    // the current year; the fix isn't to always show the latest snapshot
-    // regardless of year — it's to actually compute and store one snapshot
-    // per year, and look each one up by its own period).
+    // A specific year selects the snapshot whose data_year matches it.
+    // The current assessment remains selectable by assessment_year when
+    // there is no snapshot trained on that year's data yet.
     //
     // No year filter ("All Years") shows the latest overall snapshot.
     // incidence_per_100k is intentionally NOT coalesced to 0 — null means
@@ -1188,29 +1204,34 @@ router.get('/gis/geojson', async (req, res) => {
          COALESCE(norm_neighbor_risk, 0) as norm_neighbor_risk,
          COALESCE(norm_forecast_error, 0) as norm_forecast_error,
          model_type, model_version, classification_confidence,
-         prob_low, prob_medium, prob_high, features, period`;
+         prob_low, prob_medium, prob_high, features, period::text AS period,
+         (SELECT COALESCE((mm.metrics->>'data_year')::integer,
+                          EXTRACT(YEAR FROM (mm.metrics->>'dataEnd')::date)::integer)
+          FROM model_metadata mm
+          WHERE (mm.config->>'period')::date = barangay_risk_scores.period
+          ORDER BY mm.trained_at DESC LIMIT 1) AS snapshot_data_year`;
     const riskQ = isValidYear
       ? pool.query(
-          `SELECT ${riskSelect} FROM barangay_risk_scores WHERE period = $1::date`,
-          [`${yearInt + 1}-01-01`]
+          `SELECT ${riskSelect} FROM barangay_risk_scores
+           WHERE period = ${gisSnapshotPeriodSql}`,
+          [yearInt]
         )
       : pool.query(
           `SELECT ${riskSelect} FROM barangay_risk_scores WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)`
         );
 
-    // Effective incidence year — ONLY from an explicit ?year filter.
-    // Snapshots are keyed by (assessment year + 1)-01-01 (period 2026-01-01
-    // = assessed through end of 2025). With no year selected ("All Years")
-    // there is NO single year for cases/population: incidence stays null
+    // Effective incidence year comes from the explicit ?year filter.
+    // With no year selected ("All Years") there is no single year for cases/population:
+    // incidence stays null
     // (rendered N/A) rather than dividing lifetime totals by one year's
     // population. The latest snapshot is still used below for risk class /
     // confidence, but clearly labeled as the latest assessment in the UI.
     const incidenceYear = isValidYear ? yearInt : null;
 
-    // Forecasts follow the SAME per-year exact lookup as risk (Y+1-01-01):
+    // Forecasts use the selected snapshot's stored prediction period:
     // a historical snapshot deliberately skips ARIMA (see
     // pipeline.js:runHistoricalSnapshots), so a past year genuinely has no
-    // forecast — showing 0 for it is honest, not a bug. Previously this
+    // forecast. Previously this
     // always showed the latest (e.g. 2026) forecast regardless of the
     // selected year, which misattributed today's forecast to a historical
     // view.
@@ -1221,8 +1242,9 @@ router.get('/gis/geojson', async (req, res) => {
              confidence_lower, confidence_upper`;
     const forecastQ = isValidYear
       ? pool.query(
-          `SELECT ${forecastSelect} FROM model_predictions WHERE period = $1::date`,
-          [`${yearInt + 1}-01-01`]
+          `SELECT ${forecastSelect} FROM model_predictions
+           WHERE period = ${gisSnapshotPeriodSql}`,
+          [yearInt]
         )
       : pool.query(
           `SELECT ${forecastSelect} FROM model_predictions
@@ -1270,7 +1292,21 @@ router.get('/gis/geojson', async (req, res) => {
     const [geoResult, riskResult, forecastResult, caseResult, popResult] =
       await Promise.all([geoQ, riskQ, forecastQ, caseQ, popQ]);
 
+    // Real border-sharing neighbours (barangayAdjacency.js: ST_DWithin 50 m).
+    // Awaits AFTER the main queries on purpose — it is an optional enrichment,
+    // it swallows its own errors (returns null), and keeping it last leaves
+    // the call order of the queries above unchanged. Null means "no adjacency
+    // map available": every feature then carries neighbours: null and the UI
+    // hides the Neighboring Barangay Context block rather than falling back to
+    // "every other barangay", which would be a fabricated neighbour list.
+    const adjacency = await loadAdjacency();
+
     const riskAssessmentPeriod = riskResult.rows[0]?.period || null;
+    const assessmentYear = riskAssessmentPeriod ? Number(String(riskAssessmentPeriod).slice(0, 4)) : null;
+    const periodMonth = riskAssessmentPeriod ? Number(String(riskAssessmentPeriod).slice(5, 7)) : null;
+    const dataYear = riskResult.rows[0]?.snapshot_data_year != null
+      ? Number(riskResult.rows[0].snapshot_data_year)
+      : assessmentYear == null ? null : (periodMonth === 1 ? assessmentYear - 1 : assessmentYear);
     // Distinguishes "All Years showing the latest snapshot" from "this
     // specific year has no snapshot at all yet" for the frontend's label.
     const requestedYearHasSnapshot = isValidYear ? riskResult.rows.length > 0 : null;
@@ -1342,13 +1378,19 @@ router.get('/gis/geojson', async (req, res) => {
           model_version: risk.model_version || null,
           // Real confidence only when model_type is 'random_forest' — the
           // rule-based fallback never populates these (see pipeline.js).
-          classification_confidence: risk.classification_confidence ?? null,
-          prob_low: risk.prob_low ?? null,
-          prob_medium: risk.prob_medium ?? null,
-          prob_high: risk.prob_high ?? null,
+          classification_confidence: risk.model_type === 'random_forest' ? risk.classification_confidence ?? null : null,
+          prob_low: risk.model_type === 'random_forest' ? risk.prob_low ?? null : null,
+          prob_medium: risk.model_type === 'random_forest' ? risk.prob_medium ?? null : null,
+          prob_high: risk.model_type === 'random_forest' ? risk.prob_high ?? null : null,
           // The actual RF input values used for this classification —
           // "indicators used," never presented as a causal explanation.
           rf_features: risk.features ?? null,
+          // Real border-sharing neighbours by name (sorted in SQL), or null
+          // when no adjacency map exists. The client resolves each name to
+          // its own risk_class from THIS same payload — neighbour names only,
+          // never a copied or re-derived classification. This is context for
+          // the neighbour_risk RF input; it says nothing about transmission.
+          neighbours: adjacency?.[row.name] ?? null,
           // LEGACY pipeline value: annualized latest-calendar-month
           // calculation ((latest month × 12) / population × 100k). NOT the
           // authoritative year-specific incidence — see incidence_per_100k
@@ -1377,12 +1419,14 @@ router.get('/gis/geojson', async (req, res) => {
       type: 'FeatureCollection',
       name: 'pasig_barangays',
       features,
-      // Risk/forecast fields always reflect this period, regardless of the
-      // requested `year` (a case-data filter — see comment above). The
-      // frontend uses this to label risk data "Latest Risk Assessment
-      // (period)" rather than implying it belongs to the selected year.
+    // The prediction period is the saved assessment. Training data year and selected
+      // case/incidence year are separate values in this metadata.
       meta: {
         risk_assessment_period: riskAssessmentPeriod,
+        assessment_period: riskAssessmentPeriod,
+        prediction_period: riskAssessmentPeriod,
+        assessment_year: assessmentYear,
+        data_year: dataYear,
         requested_year: isValidYear ? yearInt : null,
         requested_year_has_snapshot: requestedYearHasSnapshot,
         // Year that cases/population/incidence are locked to — null in
@@ -1403,13 +1447,20 @@ router.get('/gis/geojson', async (req, res) => {
 
 /**
  * GET /api/tb/gis/years
- * Returns distinct years available in monthly_case_summary for the year filter dropdown.
+ * Returns years with validated Pasig barangay cases or saved RF assessments.
+ * A model assessment is selectable even before case data arrives for its year.
  */
 router.get('/gis/years', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT DISTINCT EXTRACT(YEAR FROM month)::INTEGER AS year
-      FROM monthly_case_summary
+      SELECT year FROM (
+        SELECT DISTINCT EXTRACT(YEAR FROM date_of_diagnosis)::INTEGER AS year
+        FROM tb_cases
+        WHERE date_of_diagnosis IS NOT NULL AND ${pasigResidentOnly()}
+        UNION
+        SELECT DISTINCT EXTRACT(YEAR FROM period)::INTEGER AS year
+        FROM barangay_risk_scores
+      ) available_years
       ORDER BY year DESC
     `);
     res.json({ years: result.rows.map(r => r.year) });
@@ -1488,19 +1539,17 @@ router.get('/gis/areas', async (req, res) => {
  */
 router.get('/gis/choropleth', async (req, res) => {
   try {
-    // Year contract: risk snapshot, case count, and population must all
-    // correspond to the SAME year — never mixed across years.
-    // If ?year=YYYY is provided, use it. Otherwise default to the latest
-    // risk-assessment year.
+    // Year selects matching case/population data and its RF snapshot by
+    // data_year. If no data-year snapshot exists, the current assessment
+    // remains accessible by assessment_year. Without a year, use the latest
+    // risk assessment and report its data/assessment years separately.
     const requestedYear = req.query.year ? parseInt(req.query.year, 10) : null;
     const validRequestedYear = requestedYear && !isNaN(requestedYear) &&
       requestedYear >= 2000 && requestedYear <= 2099;
 
-    // Derive the effective year when no valid year was requested. Risk
-    // snapshots are keyed by (assessment year + 1)-01-01 — a snapshot stored
-    // at period 2026-01-01 IS the assessment made through end of 2025 — so
-    // the latest period's year minus 1 is the assessment year that the risk
-    // snapshot, cases, and population below must all be locked to.
+    // Derive the assessment year when no valid year was requested. A
+    // snapshot stored at period 2026-01-01 is the 2026 assessment,
+    // trained on data through 2025. The period's year is the assessment year.
     const periodYearResult = await pool.query(
       `SELECT EXTRACT(YEAR FROM MAX(period))::INTEGER AS y FROM barangay_risk_scores`
     );
@@ -1509,7 +1558,7 @@ router.get('/gis/choropleth', async (req, res) => {
     if (validRequestedYear) {
       effectiveYear = requestedYear;
     } else if (latestPeriodYear) {
-      effectiveYear = latestPeriodYear - 1;
+      effectiveYear = latestPeriodYear;
     } else {
       effectiveYear = new Date().getFullYear();
     }
@@ -1534,11 +1583,16 @@ router.get('/gis/choropleth', async (req, res) => {
         COALESCE(brs.norm_trend, 0) as norm_trend,
         COALESCE(brs.norm_neighbor_risk, 0) as norm_neighbor_risk,
         COALESCE(brs.norm_forecast_error, 0) as norm_forecast_error,
-        brs.period,
+        brs.period::text AS period,
+        (SELECT COALESCE((mm.metrics->>'data_year')::integer,
+                         EXTRACT(YEAR FROM (mm.metrics->>'dataEnd')::date)::integer)
+         FROM model_metadata mm
+         WHERE (mm.config->>'period')::date = brs.period
+         ORDER BY mm.trained_at DESC LIMIT 1) AS snapshot_data_year,
         COALESCE(tc.total_cases, 0) as total_cases
       FROM barangays b
       LEFT JOIN barangay_risk_scores brs ON b.name = brs.barangay_name
-        AND brs.period = $2::date
+        AND brs.period = ${gisSnapshotPeriodSql}
       LEFT JOIN (
         SELECT barangay_name, COUNT(*)::INTEGER as total_cases
         FROM tb_cases
@@ -1551,7 +1605,7 @@ router.get('/gis/choropleth', async (req, res) => {
         ON b.name = bp.barangay_name
         AND bp.reference_year = $1 AND bp.status = 'ACTIVE'`}
       ORDER BY b.name`,
-      [effectiveYear, `${effectiveYear + 1}-01-01`]
+      [effectiveYear]
     );
 
     // Year-specific incidence: same-year cases over same-year population ×
@@ -1563,7 +1617,14 @@ router.get('/gis/choropleth', async (req, res) => {
       incidence_per_100k: computeYearIncidence(r.total_cases, r.population),
     }));
 
-    res.json({ choropleth, year: effectiveYear });
+    const assessmentPeriod = result.rows.find(r => r.period)?.period || null;
+    const periodMonth = assessmentPeriod ? Number(String(assessmentPeriod).slice(5, 7)) : null;
+    const assessmentYear = assessmentPeriod ? Number(String(assessmentPeriod).slice(0, 4)) : null;
+    const dataYear = result.rows.find(r => r.snapshot_data_year != null)?.snapshot_data_year;
+    res.json({ choropleth, year: effectiveYear, assessment_year: assessmentYear,
+      data_year: assessmentPeriod ? (dataYear != null ? Number(dataYear)
+        : periodMonth === 1 ? assessmentYear - 1 : assessmentYear) : null,
+      assessment_period: assessmentPeriod, prediction_period: assessmentPeriod });
   } catch (err) {
     console.error('Choropleth error:', err.message);
     res.status(500).json({ error: 'Server error fetching choropleth data.' });
@@ -1586,7 +1647,7 @@ router.get('/forecasts', async (req, res) => {
     if (hasPredictions) {
       let query = `
         SELECT
-          barangay_name, period, forecasted_count,
+          barangay_name, period::text AS period, forecasted_count,
           confidence_lower, confidence_upper,
           risk_class, incidence_per_100k, model_version,
           actual_count, forecast_error, method
@@ -1597,7 +1658,7 @@ router.get('/forecasts', async (req, res) => {
       if (barangay) {
         query = `
           SELECT
-            barangay_name, period, forecasted_count,
+            barangay_name, period::text AS period, forecasted_count,
             confidence_lower, confidence_upper,
             risk_class, incidence_per_100k, model_version,
             actual_count, forecast_error, method
@@ -1724,8 +1785,11 @@ router.get('/predictions/risk', async (req, res) => {
     const result = await pool.query(`
       SELECT
         barangay_name, period, risk_class, model_type, model_version,
-        incidence_per_100k, risk_score, classification_confidence,
-        prob_low, prob_medium, prob_high
+        incidence_per_100k, risk_score,
+        CASE WHEN model_type = 'random_forest' THEN classification_confidence END AS classification_confidence,
+        CASE WHEN model_type = 'random_forest' THEN prob_low END AS prob_low,
+        CASE WHEN model_type = 'random_forest' THEN prob_medium END AS prob_medium,
+        CASE WHEN model_type = 'random_forest' THEN prob_high END AS prob_high
       FROM barangay_risk_scores
       WHERE risk_class IS NOT NULL
       ORDER BY period DESC, barangay_name
@@ -1846,6 +1910,22 @@ router.get('/alerts', async (req, res) => {
   } catch (err) {
     console.error('Alerts fetch error:', err.message);
     res.status(500).json({ error: 'Server error fetching alerts.' });
+  }
+});
+
+router.get('/alerts/filter-options', async (req, res) => {
+  try {
+    const type = req.query.type === 'notification' ? 'notification' : null;
+    const result = await pool.query(`
+      SELECT DISTINCT type, severity, status, source_module
+      FROM alerts
+      WHERE ($1::text IS NULL OR type = $1)
+    `, [type]);
+    const values = key => [...new Set(result.rows.map(row => row[key]).filter(Boolean))].sort();
+    res.json({ type: values('type'), severity: values('severity'), status: values('status'), source: values('source_module') });
+  } catch (err) {
+    console.error('Alert filter options error:', err.message);
+    res.status(500).json({ error: 'Server error fetching alert filter options.' });
   }
 });
 
@@ -2134,9 +2214,8 @@ router.post('/pipeline', authenticateToken, authorizeRoles('admin'), async (req,
 
 /**
  * POST /api/tb/pipeline/historical
- * Admin-only backfill: computes one risk-classification snapshot per PAST
- * calendar year in monthly_case_summary (the latest year is already
- * covered by the regular /pipeline run). Each snapshot uses ONLY data
+ * Admin-only backfill: computes risk snapshots for historical data years
+ * not already covered by the current pipeline assessment. Each uses data
  * through that year's December, so it reflects what the classifier would
  * have said "as of" that year — not a copy of the current assessment.
  *
@@ -2240,111 +2319,12 @@ router.get('/evaluation/latest', async (req, res) => {
 router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req, res) => {
   try {
     const { min_train: minTrain = 24 } = req.body || {};
-
-    // Fetch historical data (same as pipeline)
-    const monthlyResult = await pool.query(
-      'SELECT barangay_name, month, case_count FROM monthly_case_summary ORDER BY month'
-    );
-    if (monthlyResult.rows.length === 0) {
-      return res.status(400).json({ error: 'No historical data available for evaluation.' });
-    }
-
-    // Get barangay population
-    const barangaysResult = await pool.query('SELECT name, population FROM barangays ORDER BY name');
-    const populationMap = {};
-    for (const row of barangaysResult.rows) {
-      populationMap[row.name] = row.population;
-    }
-
-    // Auto-calibrate thresholds
-    const barangayIncidences = [];
-    const byBarangay = {};
-    for (const row of monthlyResult.rows) {
-      if (!byBarangay[row.barangay_name]) byBarangay[row.barangay_name] = [];
-      byBarangay[row.barangay_name].push(row);
-    }
-    for (const [name, months] of Object.entries(byBarangay)) {
-      const totalCases = months.reduce((sum, m) => sum + m.case_count, 0);
-      const pop = populationMap[name] || 0;
-      const annualized = (totalCases / months.length) * 12;
-      const incidence = (annualized / pop) * 100_000;
-      barangayIncidences.push(incidence);
-    }
-
-    let thresholds;
-    try {
-      const { thresholds: callThresholds } = require('./mlClient');
-      const thresholdResult = await callThresholds(barangayIncidences, 'tertile');
-      thresholds = { low_max: thresholdResult.low_max, med_max: thresholdResult.med_max };
-    } catch {
-      thresholds = { low_max: 150.0, med_max: 350.0 };
-    }
-
-    // Build training rows with the SAME feature pipeline the classifier uses
-    // at prediction time (pipeline.buildTrainingRows): 12-month window mean,
-    // window slope, seasonality from pre-target data only, lag-1 cross-section
-    // of bordering barangays normalized identically.
-    // Replaces an inline builder that diverged from the train/predict code
-    // (un-normalized neighbor scale, target-month seasonality, bias fixed at 0).
-    const { _buildTrainingRows, buildDenseSeries } = require('./pipeline');
-    const { getPopulationMap } = require('./populationService');
-
-    const allMonths = [...new Set(monthlyResult.rows.map(r => r.month.toISOString().slice(0, 10)))].sort();
-    // Per-year population map, matching pipeline.js: training labels span
-    // every year present in the data, so a single reportingYear (e.g. only
-    // the latest year) would null out every row outside that one year.
-    const dataYears = [...new Set(allMonths.map(m => Number(m.slice(0, 4))))];
-    const popMapByYear = {};
-    for (const y of dataYears) {
-      popMapByYear[y] = await getPopulationMap(y);
-    }
-    const trainRows = await _buildTrainingRows(null, popMapByYear, thresholds);
-
-    // ARIMA walk-forward input: dense zero-filled calendar (missing months are
-    // 0, not absent) — the same series shape the pipeline sends to /forecast.
-    const barangayNamesRes = await pool.query('SELECT name FROM barangays ORDER BY name');
-    const { seriesByBarangay } = buildDenseSeries(monthlyResult.rows, barangayNamesRes.rows.map(r => r.name));
-    const series = Object.values(seriesByBarangay).flat();
-
-    // Call Python /evaluate
-    const result = await mlEvaluate(series, trainRows, thresholds, minTrain);
-
-    // Store evaluation results in model_metadata
-    try {
-      await pool.query(
-        `INSERT INTO model_metadata (run_type, model_version, training_months, metrics, config)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [
-          'evaluation',
-          'arima-v1.0-rf-v1.0',
-          trainRows.length,
-          JSON.stringify({
-            arima: {
-              mae: result.arima.mae,
-              mape: result.arima.mape,
-              n_steps: result.arima.n_steps,
-              method_counts: result.arima.method_counts || {},
-              failed_barangays: result.arima.failed_barangays || [],
-            },
-            rf: {
-              accuracy: result.rf.accuracy,
-              f1_macro: result.rf.f1_macro,
-              precision: result.rf.precision,
-              recall: result.rf.recall,
-              n_steps: result.rf.n_steps,
-            },
-          }),
-          JSON.stringify({ thresholds, min_train: minTrain, period: allMonths[allMonths.length - 1] }),
-        ]
-      );
-    } catch (metaErr) {
-      console.error('Failed to store evaluation metadata:', metaErr.message);
-    }
-
-    res.json({ message: 'Evaluation completed.', evaluation: result });
+    const evaluation = await runModelEvaluation(minTrain);
+    res.json({ message: 'Evaluation completed.', evaluation });
   } catch (err) {
     console.error('Evaluate error:', err.message);
-    res.status(500).json({ error: 'Evaluation failed. See server logs for details.' });
+    const status = err.message === 'No historical data available for evaluation.' ? 400 : 500;
+    res.status(status).json({ error: err.message || 'Evaluation failed. See server logs for details.' });
   }
 });
 
@@ -2891,6 +2871,17 @@ router.get('/interventions', async (req, res) => {
   }
 });
 
+router.get('/interventions/filter-options', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT DISTINCT priority, intervention_type, status FROM interventions');
+    const values = key => [...new Set(result.rows.map(row => row[key]).filter(Boolean))].sort();
+    res.json({ priority: values('priority'), type: values('intervention_type'), status: values('status') });
+  } catch (err) {
+    console.error('Intervention filter options error:', err.message);
+    res.status(500).json({ error: 'Server error fetching intervention filter options.' });
+  }
+});
+
 /**
  * GET /api/tb/interventions/counts
  * Summary counts: total, pending, in_progress, completed, overdue
@@ -3214,13 +3205,14 @@ router.get('/insights/forecasting', async (req, res) => {
 /**
  * GET /api/tb/insights/gis
  * Generate NLG-based GIS/map insight from risk scores + case distribution.
- * Query params: barangay (optional highlight)
+ * Query params: barangay (optional highlight), year (optional data year)
  */
 router.get('/insights/gis', async (req, res) => {
   try {
-    const { barangay } = req.query;
+    const { barangay, year } = req.query;
     const filters = {};
     if (barangay) filters.barangay = barangay;
+    if (year) filters.year = year;
 
     const metrics = await buildGisMetrics(pool, filters);
     const insight = generateGisInsight(metrics, filters);

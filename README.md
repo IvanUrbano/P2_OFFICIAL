@@ -664,12 +664,13 @@ nearest year that does, purely so the classifier always has a real number
 to run on — this fallback is a modeling convenience and must never be read
 as a reported incidence for that year.
 
-**Target labels**: incidence tertiles, auto-calibrated **per pipeline run**
-from that run's own incidence distribution (`ML_SERVICE/thresholds.py`,
-tertile method) — not a fixed cutoff, and not an official epidemiological
-threshold. **These are data-derived model classification boundaries and
-must not be presented as official DOH epidemiological thresholds unless
-separately validated.**
+**Target labels**: incidence bands, auto-calibrated **per pipeline run**
+from that run's own incidence distribution (`ML_SERVICE/thresholds.py`) —
+the Moderate→High cut sits at the run's **60th percentile** (Low→Moderate
+stays at the 33.3rd) — not a fixed cutoff, and not an official
+epidemiological threshold. **These are data-derived model classification
+boundaries and must not be presented as official DOH epidemiological
+thresholds unless separately validated.**
 
 **Configuration**: `n_estimators=300, max_depth=8, class_weight="balanced"`
 
@@ -685,11 +686,13 @@ used — so a fallback result is never presentable as an RF result.
 ### Historical Risk Snapshots (per-year)
 
 `barangay_risk_scores` is keyed by assessment period, one snapshot per
-calendar year: year Y's snapshot is stored at period `(Y+1)-01-01` — "the
-assessment made using data available through the end of year Y". The
-current/latest year's snapshot is produced automatically by the regular
-pipeline run and lands on this same period by construction, so GIS's Year
-filter needs no special case for it.
+calendar year: a snapshot trained on data through the end of year **Y**
+(data year) is stored at period `(Y+1)-01-01`, so its **assessment year**
+is the period's own year (`Y+1`). The GIS Year filter selects a snapshot
+by its **data year** first (the year of cases it was trained on) and
+falls back to the assessment year when no data-year snapshot exists yet;
+the API reports both (`meta.data_year` / `meta.assessment_year`), and
+"All Years" always uses the latest snapshot.
 
 Snapshots for **past** years are not computed automatically — an admin
 triggers them once via Forecasting → **Backfill Historical Risk
@@ -794,7 +797,7 @@ pytest
 
 | Test File | Tests | What's Tested |
 |---|---|---|
-| `tests/test_thresholds.py` | 6 | Classification boundaries, tertile splits |
+| `tests/test_thresholds.py` | 6 | Classification boundaries, percentile cuts (33.3 / 60) |
 | `tests/test_arima.py` | 14 | Fallback detection, forecasting, trends |
 | `tests/test_rf.py` | 16 | Feature validation, RF prediction, evaluation |
 | `tests/test_calibration.py` | 10 | Threshold auto-calibration edge cases |

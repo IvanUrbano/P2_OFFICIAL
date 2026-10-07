@@ -170,7 +170,7 @@ describe('GET /api/tb/gis/geojson — year-specific incidence', () => {
     assert.strictEqual(f.properties.legacy_pipeline_incidence, 0);
   });
 
-  it('E/G: year=2024 looks up risk period 2025-01-01, cases 2024, population 2024 (never 2025)', async () => {
+  it('E/G: year=2024 selects the snapshot by data_year 2024, cases 2024, population 2024 (never 2025)', async () => {
     mockQueryFn = makeDispatcher({
       geo: [{ id: 1, name: 'San Nicolas', population: 2724, geometry: POLY, centroid_lon: 0.5, centroid_lat: 0.5 }],
       risk: [{ barangay_name: 'San Nicolas', risk_score: 60, risk_class: 'High', incidence_per_100k: 3551.61, model_type: 'random_forest', trend_direction: 'Stable', period: '2025-01-01' }],
@@ -185,7 +185,8 @@ describe('GET /api/tb/gis/geojson — year-specific incidence', () => {
     const caseQ = capturedQueries.find(q => q.sql.includes('FROM tb_cases'));
     const popQ = capturedQueries.find(q => q.sql.includes('FROM barangay_population'));
     assert.ok(riskQ, 'risk snapshot must be queried');
-    assert.deepStrictEqual(riskQ.params, ['2025-01-01'], 'G: risk snapshot for 2024 is period 2025-01-01 (Y+1)');
+    assert.deepStrictEqual(riskQ.params, [2024], 'G: snapshot lookup is keyed by the selected data year');
+    assert.match(riskQ.sql, /mm\.metrics->>'data_year'/, 'G: snapshot resolved by data_year, not a hardcoded Y+1 period');
     assert.deepStrictEqual(caseQ.params, [2024], 'G: cases must be filtered to the selected year');
     assert.ok(popQ, 'E: 2024 must query barangay_population');
     assert.deepStrictEqual(popQ.params, [2024], 'E/G: population must be the exact selected year');
@@ -305,9 +306,9 @@ describe('GET /api/tb/gis/choropleth — year contract', () => {
 
     const mainQ = capturedQueries.find(q => q.sql.includes('COALESCE(brs.risk_score'));
     assert.ok(mainQ, 'main choropleth query must run');
-    assert.deepStrictEqual(mainQ.params, [2024, '2025-01-01'], 'G: cases year + risk period both derived from 2024');
+    assert.deepStrictEqual(mainQ.params, [2024], 'G: single selected year keys cases + population + snapshot');
     assert.ok(mainQ.sql.includes('EXTRACT(YEAR FROM date_of_diagnosis) = $1'), 'G: cases filtered to selected year');
-    assert.ok(mainQ.sql.includes('brs.period = $2::date'), 'G: risk snapshot read from same year (Y+1 period)');
+    assert.match(mainQ.sql, /mm\.metrics->>'data_year'/, 'G: risk snapshot resolved by data_year, not a hardcoded Y+1 period');
     assert.ok(mainQ.sql.includes('bp.reference_year = $1'), 'E: population joined on exact selected year');
     assert.ok(!mainQ.sql.includes('b.population'), 'E: never fall back to 2025 GeoJSON population');
 
@@ -315,24 +316,28 @@ describe('GET /api/tb/gis/choropleth — year contract', () => {
     assert.strictEqual(row.population, 2703);
     assert.strictEqual(row.incidence_per_100k, 2589.72, 'same-year cases / same-year population');
     assert.strictEqual(row.legacy_pipeline_incidence, 3551.61, 'legacy exposed under its own key');
+    assert.strictEqual(res.body.assessment_year, 2025, 'data year 2024 -> 2025 assessment snapshot');
+    assert.strictEqual(res.body.data_year, 2024);
   });
 
-  it('G: no year param defaults to the latest risk-assessment year (period Y+1)', async () => {
+  it('G: no year param defaults to the latest assessment year (the period year itself)', async () => {
     mockQueryFn = makeDispatcher({
-      periodYear: 2026, // snapshot stored at 2026-01-01 -> assessment year 2025
+      periodYear: 2026, // latest snapshot period 2026-01-01 -> assessment year 2026
       choroplethMain: [{
         name: 'San Nicolas', centroid_lon: 0.5, centroid_lat: 0.5,
-        population: 2724, // b.population (2025 GeoJSON)
+        population: 2724, // bp.population (2026 exact-year)
         risk_score: 41, risk_class: 'Low', legacy_pipeline_incidence: 0,
         trend_direction: 'Stable', period: '2026-01-01', total_cases: 17,
       }],
     });
     const res = await request(buildApp()).get('/api/tb/gis/choropleth');
-    assert.strictEqual(res.body.year, 2025, 'latest period 2026-01-01 => assessment year 2025');
+    assert.strictEqual(res.body.year, 2026, 'latest period 2026-01-01 => assessment year 2026');
+    assert.strictEqual(res.body.assessment_year, 2026);
+    assert.strictEqual(res.body.data_year, 2025, 'Jan-period snapshot was trained on the prior data year');
 
     const mainQ = capturedQueries.find(q => q.sql.includes('COALESCE(brs.risk_score'));
-    assert.deepStrictEqual(mainQ.params, [2025, '2026-01-01'], 'G: everything locked to 2025');
-    assert.ok(!mainQ.sql.includes('bp.reference_year'), 'F: reference year uses GeoJSON population, no bp join');
+    assert.deepStrictEqual(mainQ.params, [2026], 'G: everything keyed to the latest period year');
+    assert.ok(mainQ.sql.includes('bp.reference_year'), '2026 is not the GeoJSON reference year -> exact-year population join');
 
     const row = res.body.choropleth[0];
     assert.strictEqual(row.incidence_per_100k, 624.08, '17 / 2724 * 100k');

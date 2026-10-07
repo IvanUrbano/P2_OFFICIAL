@@ -26,6 +26,10 @@ class ThresholdResponse(BaseModel):
     method: str
     low_max: float
     med_max: float
+    # Percentile cut points, reported only by methods that use them
+    # (the "tertile" method). Jenks natural breaks do not map to a percentile.
+    low_pct: Optional[float] = None
+    med_pct: Optional[float] = None
 
 
 # ==================== /forecast ====================
@@ -198,6 +202,7 @@ class ArimaEvaluation(BaseModel):
     mape: Optional[float] = None
     n_steps: int = 0
     steps: list[ArimaStep] = []
+    example_barangay: Optional[str] = None
     # Steps per method across ALL barangays evaluated, e.g.
     # {"arima": 520, "seasonal_naive": 50} — lets callers report how much of
     # the MAE/MAPE comes from real ARIMA fits vs fallback models.
