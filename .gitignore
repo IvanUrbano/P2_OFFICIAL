@@ -32,6 +32,7 @@ BACKEND/backups/
 *.bak
 
 # Python
+.venv/
 __pycache__/
 *.py[cod]
 *.pyc
