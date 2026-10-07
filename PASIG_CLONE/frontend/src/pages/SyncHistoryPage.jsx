@@ -181,14 +181,14 @@ export default function SyncHistoryPage() {
       {selected && (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40" onClick={() => setSelected(null)}>
           <div className="mx-4 flex max-h-[80vh] w-full max-w-[440px] flex-col overflow-hidden border border-gray-200 bg-white shadow-xl" style={{ borderRadius: 5 }} onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+            <div className="flex items-center justify-between bg-[#0F2D52] px-5 py-4">
               <div>
-                <h2 className="text-sm font-semibold" style={{ color: '#0F2D52' }}>Sync details</h2>
-                <p className="mt-0.5 text-[11px]" style={{ color: '#64748B' }}>
+                <h2 className="text-sm font-semibold text-white">Sync details</h2>
+                <p className="mt-0.5 text-[11px] text-[#CBD5E1]">
                   {selected.status === 'sent' ? 'This batch was sent successfully.' : 'This batch could not be sent.'}
                 </p>
               </div>
-              <ModalCloseButton onClick={() => setSelected(null)} />
+              <ModalCloseButton onClick={() => setSelected(null)} light />
             </div>
             <dl className="space-y-3 overflow-y-auto p-5">
               <div>
