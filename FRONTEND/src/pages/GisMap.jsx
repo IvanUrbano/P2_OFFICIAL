@@ -762,7 +762,7 @@ export default function GisMap() {
         // predicted class \u2014 only shown when it actually came from RF.
         const confidenceRow = p.model_type === 'random_forest' && p.classification_confidence != null
           ? `<div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
-              <span style="font-size: 10px; color: #94A3B8;">Classification Confidence</span>
+              <span style="font-size: 10px; color: #94A3B8;">Model confidence</span>
               <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${Math.round(p.classification_confidence * 100)}%</span>
             </div>`
           : '';

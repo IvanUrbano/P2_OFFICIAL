@@ -235,3 +235,15 @@ if __name__ == "__main__":
         print("All tests passed!")
     else:
         sys.exit(1)
+
+
+def test_labels_use_the_risk_threshold_percentiles():
+    """RF labels cut at the same percentiles as the thresholds: 30 barangays -> 10 / 8 / 12."""
+    from rf_classifier import derive_labels, band_for_rank
+    from thresholds import LOW_PERCENTILE, MED_PERCENTILE
+
+    labels = derive_labels([{"month": "2026-01-01", "incidence": float(i)} for i in range(30)], 0, 0)
+    assert {b: labels.count(b) for b in ("Low", "Medium", "High")} == {"Low": 10, "Medium": 8, "High": 12}
+    assert labels[:10] == ["Low"] * 10 and labels[-12:] == ["High"] * 12
+    assert band_for_rank(LOW_PERCENTILE / 100 - 1e-9) == "Low"
+    assert band_for_rank(MED_PERCENTILE / 100) == "High"

@@ -340,6 +340,7 @@ export default function Forecasting() {
   const [monthlyData, setMonthlyData] = useState([]);
   const [forecastsData, setForecastsData] = useState([]);
   const [backtestData, setBacktestData] = useState([]);
+  const [backtestEvaluatedAt, setBacktestEvaluatedAt] = useState(null);
   const [barangays, setBarangays] = useState([]);
   const [casesData, setCasesData] = useState([]);
   const [pipelineStatus, setPipelineStatus] = useState(null);
@@ -451,6 +452,7 @@ export default function Forecasting() {
       setCasesData(allCasesRes.data.cases || []);
       setPipelineStatus(pipelineRes.data.latest_run || null);
       setBacktestData(backtestRes.data.data || []);
+      setBacktestEvaluatedAt(backtestRes.data.evaluated_at || null);
     } catch (err) {
       if (import.meta.env.DEV) console.error('Forecasting fetch error:', err);
       setError('Failed to load analytics data. Make sure the backend is running.');
@@ -495,6 +497,7 @@ export default function Forecasting() {
     setEndYear(current => years.includes(current) ? current : (years[years.length - 1] || ''));
     setForecastsData(freshForecasts.data.forecasts || []);
     setBacktestData(freshAvp.data.data || []);
+    setBacktestEvaluatedAt(freshAvp.data.evaluated_at || null);
     setPipelineStatus(freshPipeline.data.latest_run || null);
     setCasesData(freshCases.data.cases || []);
     return years;
@@ -1612,10 +1615,10 @@ export default function Forecasting() {
                 <div className="flex items-center gap-3">
                   <div>
                     <h3 className="text-sm font-semibold text-[#0F2D52]">Actual and predicted cases</h3>
-                    <p className="mt-1 text-xs text-[#64748B]">See how earlier predictions compared with cases reported later.</p>
-                    {!pipelineStatus && (
-                      <p className="text-[10px] mt-0.5 font-medium" style={{ color: '#D97706' }}>
-                        Showing a simple seasonal comparison until saved model results are available.
+                    <p className="mt-1 text-xs text-[#64748B]">Each month was predicted by the forecasting model using only the records before it, then compared with the cases reported later.</p>
+                    {backtestEvaluatedAt && (
+                      <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>
+                        From the model test saved {new Date(backtestEvaluatedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}.
                       </p>
                     )}
                   </div>
@@ -1674,7 +1677,7 @@ export default function Forecasting() {
                     </ResponsiveContainer>
                   </div>
                 ) : (
-                  <p className="py-12 text-center text-xs text-[#64748B]">No comparison data available.</p>
+                  <p className="py-12 text-center text-xs text-[#64748B]">No saved model test yet. It is created automatically after the analysis pipeline runs.</p>
                 )}
                 <ChartInsight text={accuracyInsight(avpChartData)} plain />
               </div>

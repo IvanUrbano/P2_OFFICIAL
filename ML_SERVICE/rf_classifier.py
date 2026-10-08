@@ -31,6 +31,7 @@ from sklearn.metrics import (
     confusion_matrix,
 )
 
+from thresholds import LOW_PERCENTILE, MED_PERCENTILE
 from config import (
     RF_LARGE_SAMPLE,
     RF_MAX_DEPTH,
@@ -122,15 +123,28 @@ def _vec(features: dict) -> list[float]:
     return [float(features.get(f, 0)) for f in FEATURES]
 
 
+def band_for_rank(q: float) -> str:
+    """
+    Band for a position 0 (lowest) .. 1 (highest) among the barangays of one
+    month: below LOW_PERCENTILE Low, at or above MED_PERCENTILE High.
+    pipeline.js prev_category applies the same cut points.
+    """
+    if q < LOW_PERCENTILE / 100:
+        return "Low"
+    return "High" if q >= MED_PERCENTILE / 100 else "Medium"
+
+
 def derive_labels(train: list[dict], low_max: float, med_max: float) -> list[str]:
     """
     Label each training row Low/Medium/High by its rank WITHIN its own month.
 
-    Each month's barangays are ranked by incidence and cut into thirds, so every
-    month contributes the same number of each band and the labels are balanced by
-    construction. This is what "tertile" was always meant to denote, and it is the
-    relative question the risk map actually asks: which barangays are the worst
-    affected right now.
+    Each month's barangays are ranked by incidence and cut at the same
+    percentiles as the risk thresholds (thresholds.LOW_PERCENTILE /
+    MED_PERCENTILE: bottom third Low, top 40% High, 30 barangays -> 10 / 8 / 12),
+    so the Random Forest and the rule-based fallback agree on what "High" means.
+    Every month contributes the same mix of bands, and it is the relative
+    question the risk map actually asks: which barangays are the worst affected
+    right now.
 
     The previous approach applied one pair of absolute cut points to every row.
     Those cut points were calibrated from a single month's cross-section and then
@@ -142,7 +156,7 @@ def derive_labels(train: list[dict], low_max: float, med_max: float) -> list[str
     Rows without a 'month' fall back to the absolute cut points, which keeps older
     callers and the /classify contract working.
 
-    Note this makes the band explicitly relative: about a third of barangays are
+    Note this makes the band explicitly relative: about 40% of barangays are
     always High, and a barangay moves band only by moving relative to the others.
     """
     rows_with_month = [r for r in train if r.get("month")]
@@ -169,7 +183,7 @@ def derive_labels(train: list[dict], low_max: float, med_max: float) -> list[str
         n = len(order)
         for rank, i in enumerate(order):
             q = rank / (n - 1) if n > 1 else 0.0
-            labels[i] = "Low" if q < 1 / 3 else ("High" if q >= 2 / 3 else "Medium")
+            labels[i] = band_for_rank(q)
     return labels
 
 

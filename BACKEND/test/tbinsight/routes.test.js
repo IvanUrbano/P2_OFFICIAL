@@ -999,6 +999,48 @@ describe('GET /api/tb/evaluation/latest', () => {
   });
 });
 
+describe('GET /api/tb/forecast/backtest', () => {
+  const evaluation = {
+    model_version: 'arima-v1.1-rf-v1.1',
+    trained_at: '2026-10-08T08:00:00.000Z',
+    per_barangay: [
+      { barangay_name: 'Bagong Ilog', steps: [
+        { month: '2025-11-01', actual: 10, predicted: 8, method: 'arima' },
+        { month: '2025-12-01', actual: 6, predicted: 7, method: 'arima' },
+      ] },
+      { barangay_name: 'Pinagbuhatan', steps: [{ month: '2025-11-01', actual: 30, predicted: 33 }] },
+    ],
+  };
+
+  it("serves the saved model evaluation's predictions, not a seasonal stand-in", async () => {
+    let sql = '';
+    mockQueryFn = async q => { sql = q; return { rows: [evaluation] }; };
+    const res = await request(buildApp()).get('/api/tb/forecast/backtest');
+
+    assert.strictEqual(res.status, 200);
+    assert.match(sql, /run_type = 'evaluation'/);
+    assert.doesNotMatch(sql, /monthly_case_summary|tb_cases/);
+    assert.strictEqual(res.body.source, 'model_evaluation');
+    assert.strictEqual(res.body.evaluated_at, evaluation.trained_at);
+    assert.strictEqual(res.body.data.length, 3);
+    assert.deepStrictEqual(res.body.data[0], {
+      barangay_name: 'Bagong Ilog', period: '2025-11-01', actual_count: 10, predicted_count: 8, error: 2, method: 'arima',
+    });
+  });
+
+  it('filters to one barangay', async () => {
+    mockQueryFn = async () => ({ rows: [evaluation] });
+    const res = await request(buildApp()).get('/api/tb/forecast/backtest?barangay=Pinagbuhatan');
+    assert.deepStrictEqual(res.body.data.map(r => r.predicted_count), [33]);
+  });
+
+  it('returns nothing (source none) before an evaluation saved per-barangay months', async () => {
+    mockQueryFn = async () => ({ rows: [{ trained_at: '2026-01-01T00:00:00.000Z', per_barangay: null }] });
+    const res = await request(buildApp()).get('/api/tb/forecast/backtest');
+    assert.deepStrictEqual(res.body, { data: [], source: 'none', evaluated_at: null, model_version: null });
+  });
+});
+
 /* --- Same-case outcome updates: reading the history they leave behind --- */
 
 describe('GET /api/tb/cases/:caseKey/history', () => {

@@ -2439,88 +2439,55 @@ router.post('/evaluate', authenticateToken, authorizeRoles('admin'), async (req,
 
 /**
  * GET /api/tb/forecast/backtest
- * Walk-forward backtest: for each month, predict using value from 12 months ago (seasonal naive).
- * Returns per-barangay per-period actual vs predicted for historical validation.
+ * Past predictions of the forecasting model next to the cases reported later,
+ * per barangay and month, for the "Actual and predicted cases" chart.
+ *
+ * Read from the latest saved walk-forward evaluation (POST /evaluate via
+ * modelEvaluation.js): each month was predicted by the same forecast the
+ * pipeline uses, fitted only on the months before it. Nothing is recomputed
+ * here. Before an evaluation that saved per-barangay months exists, the list is
+ * empty (source 'none') rather than filled with a different method — an
+ * earlier version showed "same month last year" under this title.
  */
 router.get('/forecast/backtest', async (req, res) => {
   try {
     const { barangay } = req.query;
-    const SEASONAL_PERIOD = 12;
+    const result = await pool.query(
+      `SELECT model_version, trained_at, metrics->'arima'->'per_barangay' AS per_barangay
+       FROM model_metadata
+       WHERE run_type = 'evaluation'
+       ORDER BY trained_at DESC
+       LIMIT 1`
+    );
+    const evaluation = result.rows[0];
+    const perBarangay = Array.isArray(evaluation?.per_barangay) ? evaluation.per_barangay : [];
 
-    // Try monthly_case_summary first, fall back to tb_cases directly
-    const countResult = await pool.query('SELECT COUNT(*) FROM monthly_case_summary');
-    const hasSummary = parseInt(countResult.rows[0].count) > 0;
-
-    let query;
-    const params = [];
-    if (hasSummary) {
-      query = `
-        SELECT barangay_name, month, case_count
-        FROM monthly_case_summary
-        ORDER BY barangay_name, month
-      `;
-      if (barangay) {
-        query = `
-          SELECT barangay_name, month, case_count
-          FROM monthly_case_summary
-          WHERE barangay_name = $1
-          ORDER BY barangay_name, month
-        `;
-        params.push(barangay);
-      }
-    } else {
-      query = `
-        SELECT
-          barangay_name,
-          DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
-          COUNT(*)::INTEGER AS case_count
-        FROM tb_cases
-        WHERE date_of_diagnosis IS NOT NULL
-        AND ${pasigResidentOnly()}
-      `;
-      if (barangay) {
-        query += ` AND barangay_name = $1`;
-        params.push(barangay);
-      }
-      query += `
-        GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
-        ORDER BY barangay_name, month
-      `;
-    }
-    const result = await pool.query(query, params);
-
-    // Group by barangay
-    const byBarangay = {};
-    for (const row of result.rows) {
-      const name = row.barangay_name;
-      if (!byBarangay[name]) byBarangay[name] = [];
-      byBarangay[name].push({
-        month: row.month.toISOString().slice(0, 10),
-        case_count: row.case_count,
-      });
-    }
-
-    // For each barangay, produce backtest predictions (seasonal naive)
-    const backtestRows = [];
-
-    for (const [name, pts] of Object.entries(byBarangay)) {
-      if (pts.length <= SEASONAL_PERIOD) continue;
-      for (let i = SEASONAL_PERIOD; i < pts.length; i++) {
-        const actual = pts[i].case_count;
-        const predicted = pts[i - SEASONAL_PERIOD].case_count;
-        backtestRows.push({
-          barangay_name: name,
-          period: pts[i].month,
+    const data = [];
+    for (const b of perBarangay) {
+      if (barangay && b.barangay_name !== barangay) continue;
+      for (const step of b.steps || []) {
+        const actual = Number(step.actual);
+        const predicted = Number(step.predicted);
+        if (!step.month || !Number.isFinite(actual) || !Number.isFinite(predicted)) continue;
+        data.push({
+          barangay_name: b.barangay_name,
+          period: String(step.month).slice(0, 10),
           actual_count: actual,
           predicted_count: predicted,
           error: Math.abs(actual - predicted),
+          method: step.method || 'arima',
         });
       }
     }
 
-    res.json({ data: backtestRows });
+    res.json({
+      data,
+      source: data.length > 0 ? 'model_evaluation' : 'none',
+      evaluated_at: data.length > 0 ? evaluation.trained_at : null,
+      model_version: data.length > 0 ? evaluation.model_version : null,
+    });
   } catch (err) {
-    console.error('Backtest error:', err.message);
+    console.error('Forecast backtest fetch error:', err.message);
     res.status(500).json({ error: 'Server error generating backtest data.' });
   }
 });

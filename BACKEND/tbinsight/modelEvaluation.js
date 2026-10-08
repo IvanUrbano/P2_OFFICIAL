@@ -5,7 +5,7 @@ const { monthKey } = require('./scoring');
 const { pasigResidentOnly } = require('./locationScope');
 
 const MIN_TRAIN_MONTHS = 24;
-const MODEL_VERSION = 'arima-v1.0-rf-v1.0';
+const MODEL_VERSION = 'arima-v1.1-rf-v1.1';
 
 let evaluationStatus = {
   running: false,

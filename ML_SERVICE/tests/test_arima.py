@@ -210,3 +210,38 @@ def test_walk_forward_scores_three_month_totals():
     assert first["actual_3m"] == sum(counts[24:27])
     assert first["baseline_3m"] == round(first["baseline"] * 3, 2)
     assert r["n_steps_3m"] == 4 and r["mae_3m"] is not None and r["wape_3m"] is not None
+
+
+def test_walk_forward_searches_orders_only_when_needed(monkeypatch):
+    """
+    The order search runs on the first step, when the series reaches 24 months
+    (seasonal models become possible), every 12 steps after that, and after a
+    failed fit; every other step refits the chosen orders.
+    """
+    import arima_forecast as af
+
+    calls = []  # (training length, "search" | "refit")
+
+    class FakeModel:
+        def predict(self, n_periods, return_conf_int, alpha):
+            return np.full(n_periods, 5.0), np.full((n_periods, 2), [4.0, 6.0])
+
+    def fake_fit_model(values, template=None):
+        calls.append((len(values), "search" if template is None else "refit"))
+        if template is None and len(values) == 20:
+            raise ValueError("search failed")  # e.g. pmdarima's seasonal test on a short series
+        if template is not None and len(values) == 30:
+            raise ValueError("refit failed")
+        return FakeModel()
+
+    monkeypatch.setattr(af, "_fit_model", fake_fit_model)
+    result = af.walk_forward_arima([5] * 50, min_train=20)
+
+    searches = [n for n, kind in calls if kind == "search"]
+    assert result["n_steps"] == 30
+    # 20: search fails -> fallback forecast; 21: searches again; 24: seasonal
+    # models become possible; 30: the refit fails, so it searches on the spot,
+    # which starts a new 12-step run; 42: 12 steps later.
+    assert searches == [20, 21, 24, 30, 42]
+    assert sum(1 for _, kind in calls if kind == "refit") == 26
+    assert result["method_counts"] == {"arima": 29, af.FALLBACK_METHOD: 1}

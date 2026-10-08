@@ -49,7 +49,7 @@ const DEFAULT_THRESHOLDS = {
 
 // Single source of truth for the combined model version string persisted
 // alongside every forecast/risk row this run produces.
-const MODEL_VERSION = 'arima-v1.0-rf-v1.0';
+const MODEL_VERSION = 'arima-v1.1-rf-v1.1';
 
 // Mirrors ML_SERVICE/config.py's ARIMA_MIN_HISTORY_NONSEASONAL. Below this
 // many monthly observations, no forecast method (ARIMA or fallback) has
@@ -1099,7 +1099,7 @@ function _nextMonth(dateStr) {
  * using rolling 12-month windows. With 30 barangays × 24+ valid months = 720+ rows.
  *
  * Each row: { features: {7 features}, incidence: float, month }
- * Labels derived in Python by ranking barangays into thirds within each month.
+ * Labels derived in Python by ranking barangays within each month (bottom third Low, top 40% High).
  *
  * Features are computed with rolling windows to prevent data leakage:
  *   - rolling_12m_incidence: annualized cases from the 12-month lookback window
@@ -1274,8 +1274,8 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
  *   - incidence_rank: position of rolling_12m_incidence among the barangays
  *     that month, 0 (lowest) to 1 (highest)
  *   - prev_category: the band the last 3 months would get under the label
- *     rule (thirds by rank): 0 Low, 1 Medium, 2 High
- * The labels are relative (thirds within a month), so the model needs inputs
+ *     rule (bottom third Low, top 40% High): 0 Low, 1 Medium, 2 High
+ * The labels are relative (bands within a month), so the model needs inputs
  * on the same relative scale. Both read only months before the target.
  * A row with unknown incidence gets the middle (0.5 / 1) rather than Low.
  *
@@ -1283,6 +1283,8 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
  * buildFeatureRow, so the two stay identical.
  */
 function addCrossSectionFeatures(rows) {
+  // Same cut points as the RF labels (rf_classifier.band_for_rank) and the
+  // risk thresholds: bottom third Low, top 40% High.
   const positions = key => {
     const known = rows.filter(r => r.features[key] != null).sort((a, b) => a.features[key] - b.features[key]);
     const pos = new Map();
@@ -1294,7 +1296,7 @@ function addCrossSectionFeatures(rows) {
   for (const r of rows) {
     r.features.incidence_rank = rank12.has(r) ? rank12.get(r) : 0.5;
     const q = rank3.has(r) ? rank3.get(r) : 0.5;
-    r.features.prev_category = q < 1 / 3 ? 0 : q >= 2 / 3 ? 2 : 1;
+    r.features.prev_category = q < LOW_PERCENTILE ? 0 : q >= MED_PERCENTILE ? 2 : 1;
   }
   return rows;
 }

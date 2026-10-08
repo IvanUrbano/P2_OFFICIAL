@@ -368,7 +368,7 @@ describe('GisMap.jsx risk-ranking UI contract (source assertions)', () => {
   const srcPath = path.join(__dirname, '..', '..', 'FRONTEND', 'src', 'pages', 'GisMap.jsx');
   const src = fs.readFileSync(srcPath, 'utf8');
   const rankStart = src.indexOf('{/* ── Risk Distribution ── */}');
-  const rankEnd = src.indexOf('{/* ── NLG GIS Insight Panel ── */}');
+  const rankEnd = src.indexOf('{/* ── Barangay profile drawer ── */}');
   const ranking = src.slice(rankStart, rankEnd);
   const memoStart = src.indexOf('const riskRankingData = React.useMemo');
   const memoEnd = src.indexOf('}, [data]);', memoStart);
@@ -380,21 +380,23 @@ describe('GisMap.jsx risk-ranking UI contract (source assertions)', () => {
     assert.ok(!ranking.includes('risk_score'), 'no risk_score reference at all in ranking');
   });
 
-  it('J: case label is "total cases", never "active"', () => {
-    assert.ok(ranking.includes('total cases'), 'shows "total cases"');
-    assert.ok(!ranking.includes('} active'), 'never shows "active"');
+  it('J: case label is total cases, never "active"', () => {
+    assert.ok(ranking.includes('formatNum(barangay.total_cases)}</strong> cases'), 'shows the total case count');
+    assert.ok(!/\bactive\b/i.test(ranking), 'never shows "active"');
   });
 
-  it('K: Classification Confidence only when actual RF confidence exists, exact label', () => {
+  it('K: confidence only when an actual RF confidence exists, one label everywhere', () => {
     assert.ok(
-      ranking.includes("const hasRfConfidence = b.model_type === 'random_forest' && b.classification_confidence != null"),
+      ranking.includes("const hasRfConfidence = barangay.model_type === 'random_forest' && barangay.classification_confidence != null"),
       'display guarded by model_type + non-null confidence'
     );
     assert.ok(ranking.includes('hasRfConfidence ?'), 'value rendered through the guard ternary');
-    assert.ok(ranking.includes('Classification Confidence'), 'exact label used');
+    assert.ok(ranking.includes('model confidence'), 'card label');
     assert.ok(!/\bRisk Score\b/.test(ranking), 'no "Risk Score" label in ranking');
+    // Same figure, same name on the map tooltip, cards and profile drawer.
+    assert.ok(!src.includes('Classification Confidence'), 'no second name for the same figure');
+    assert.ok(src.includes("p.model_type === 'random_forest' && p.classification_confidence != null"), 'map tooltip guarded the same way');
   });
-
   it('fix 3: clinical subtitles replaced by count-based neutral labels', () => {
     assert.ok(memoStart > 0 && memoEnd > memoStart, 'riskRankingData memo located');
     assert.ok(!memo.includes('Immediate Action Required'), 'old subtitle removed');
@@ -405,44 +407,31 @@ describe('GisMap.jsx risk-ranking UI contract (source assertions)', () => {
     assert.ok(!ranking.includes('sec.subtitle'), 'no subtitle render in the table');
   });
 
-  it('M: ranking does not imply RF generated rank 1-30; All Years RF columns renamed; per-100k hidden', () => {
-    assert.ok(ranking.includes('Risk-Classified Barangays'), 'header states classification, not a generated ranking');
+  it('M: ranking states a classification grouping; All Years context; per-100k hidden', () => {
+    assert.ok(ranking.includes('Barangay risk classifications'), 'header states classification, not a generated ranking');
     assert.ok(!ranking.includes('Risk-Ranked Barangays'), 'old header removed');
     assert.ok(
-      ranking.includes('Grouped by latest Random Forest risk classification and ordered by total cases within each group'),
+      ranking.includes('Grouped by the latest saved risk assessment and ordered by total cases within each group'),
       'All Years helper documents grouping + total-cases ordering'
     );
     assert.ok(
-      ranking.includes('Grouped by Random Forest risk classification and ordered by'),
-      'helper text documents the grouping + ordering rule'
+      ranking.includes('Grouped by saved risk assessment and ordered by ${filterYear} incidence within each group'),
+      'specific-year helper documents grouping + incidence ordering'
     );
-    assert.ok(ranking.includes('Latest Risk Assessment ('), 'All Years column renamed to Latest Risk Assessment + year');
-    assert.ok(ranking.includes('Latest Classification Confidence'), 'All Years column renamed to Latest Classification Confidence');
     assert.ok(ranking.includes('All Years combines available TB records from'), 'context line uses dynamic year range');
     assert.ok(ranking.includes('Incidence per 100,000 is available only when a specific year is selected'), 'context line explains per-100k availability');
     assert.ok(ranking.includes('caseYearRange'), 'year range is dynamic, not hardcoded');
     assert.ok(ranking.includes('classifiedBarangays'), 'counter uses classified/total');
+    assert.ok(ranking.includes('{filterYear ? ('), 'per-100k shown only for a specific year');
     assert.ok(
-      ranking.includes("{filterYear && <span className=\"text-right\">per 100k</span>}") ||
-      ranking.includes('filterYear && <span className="text-right">per 100k</span>'),
-      'per-100k header column hidden in All Years'
+      ranking.includes("barangay.incidence_per_100k != null ? formatNum(barangay.incidence_per_100k) : 'N/A'"),
+      'null incidence renders as N/A, never a fabricated number'
     );
     assert.ok(
-      ranking.includes('{filterYear && ('),
-      'per-100k data cell hidden in All Years'
-    );
-    assert.ok(
-      ranking.includes('How strongly the Random Forest model supports the assigned risk classification'),
+      ranking.includes('Model support for this risk label; not the chance of developing TB.'),
       'confidence tooltip explains RF predict_proba, not TB probability'
     );
-    assert.ok(
-      ranking.includes("sec.key === 'No Data' ? 'No Assessment'"),
-      'No Assessment badge, never No Data Risk'
-    );
-    assert.ok(
-      ranking.includes('b.incidence_per_100k != null ? formatNum'),
-      'null incidence renders as N/A, never a fabricated number (specific-year path)'
-    );
+    assert.ok(ranking.includes("section.key === 'No Data' ? 'no assessment'"), 'No Assessment, never No Data Risk');
     // Memo-level: section construction
     assert.ok(memo.includes('No Assessment —'), 'section label renamed No Data -> No Assessment');
     assert.ok(
@@ -510,8 +499,12 @@ describe('GET /api/tb/gis/geojson — absent forecast', () => {
     );
     assert.ok(src.includes('snapshotClassifier'), 'rule-based share must be derived from the features');
     assert.ok(
-      src.includes('Rule-based fallback — not model-classified'),
+      src.includes('Risk levels use a rule-based fallback for this assessment.'),
       'an all-fallback snapshot must say so without opening a barangay'
+    );
+    assert.ok(
+      src.includes('barangays use a rule-based risk fallback.'),
+      'a partly rule-based snapshot says how many'
     );
   });
 });

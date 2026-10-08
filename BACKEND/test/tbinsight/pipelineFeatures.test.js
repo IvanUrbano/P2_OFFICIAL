@@ -507,6 +507,19 @@ describe('neighbor_risk with real (bordering) neighbours', () => {
   });
 });
 
+describe('addCrossSectionFeatures', () => {
+  it('bands prev_category at the risk-threshold percentiles, like the RF labels (10 / 8 / 12)', () => {
+    const rows = Array.from({ length: 30 }, (_, i) => ({
+      barangay_name: `B${i}`, features: { rolling_12m_incidence: i, incidence_3m: i },
+    }));
+    addCrossSectionFeatures(rows);
+    const count = c => rows.filter(r => r.features.prev_category === c).length;
+    assert.deepStrictEqual([count(0), count(1), count(2)], [10, 8, 12]);
+    assert.strictEqual(rows[9].features.prev_category, 0);
+    assert.strictEqual(rows[18].features.prev_category, 2);
+  });
+});
+
 describe('dropUnfinishedMonth', () => {
   const rows = [{ month: '2026-08-01' }, { month: '2026-09-01' }, { month: '2026-10-01' }];
 

@@ -16,7 +16,7 @@ if not ML_API_KEY:
 
 # ==================== MODEL CONFIG ====================
 
-MODEL_VERSION = "arima-v1.0-rf-v1.0"
+MODEL_VERSION = "arima-v1.1-rf-v1.1"  # v1.1: city-combined ARIMA, 10 RF features, 33/60 bands
 
 # Worker processes for per-barangay ARIMA fits (1 = serial). Defaults to up to 4 cores.
 ML_N_JOBS = int(os.environ.get("ML_N_JOBS", "0")) or min(4, os.cpu_count() or 1)
@@ -47,6 +47,14 @@ ARIMA_SHARE_WINDOW = 12
 # months ahead). Single barangay-months are mostly chance; over 3 months much of
 # that cancels out, so this is the figure planning should read.
 ARIMA_EVAL_TOTAL_MONTHS = 3
+
+# Walk-forward evaluation runs the full auto_arima order search for a series
+# once, then refits that same order on each following month's data, searching
+# again every ARIMA_EVAL_RESELECT_MONTHS steps (and whenever the series reaches
+# ARIMA_MIN_HISTORY, where the search switches to seasonal models). The search
+# is the slow part: on Lambda, where fits run one at a time, searching every
+# month took ~10 minutes and the backend's 5-minute limit cut the run off.
+ARIMA_EVAL_RESELECT_MONTHS = 12
 
 # Random Forest settings (tuned for ~700+ monthly snapshot training samples).
 # Chosen by walk-forward grid search over depth, tree count and split/leaf minima

@@ -19,10 +19,11 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from pmdarima import auto_arima
+from pmdarima import ARIMA, auto_arima
 
 from config import (
     ARIMA_COMBINE_CITY,
+    ARIMA_EVAL_RESELECT_MONTHS,
     ARIMA_EVAL_TOTAL_MONTHS,
     ARIMA_LEADING_TRIM_SHARE,
     ARIMA_LOG_TRANSFORM,
@@ -152,28 +153,46 @@ def _fit_arima(values):
     )
 
 
-def _fit_predict(values, horizon: int):
+def _fit_model(values, template=None):
     """
-    Fit ARIMA and forecast `horizon` months: (mean, lower, upper) arrays, 95% CI.
+    Fit on the modelling scale (log(1 + cases) with ARIMA_LOG_TRANSFORM).
+    Without `template` this runs the auto_arima order search; with one, it
+    refits `template`'s exact orders on `values` (no search, far faster).
+    """
+    values = np.clip(np.asarray(values, dtype=float), 0, None)
+    if ARIMA_LOG_TRANSFORM:
+        values = np.log1p(values)
+    if template is None:
+        return _fit_arima(values)
+    return ARIMA(
+        order=template.order,
+        seasonal_order=template.seasonal_order,
+        with_intercept=template.with_intercept,
+        suppress_warnings=True,
+    ).fit(values)
 
-    With ARIMA_LOG_TRANSFORM the model is fitted on log(1 + cases). Converting
+
+def _predict_model(model, horizon: int):
+    """
+    Forecast `horizon` months from a fitted model: (mean, lower, upper), 95% CI.
+
+    With ARIMA_LOG_TRANSFORM the model works on log(1 + cases). Converting
     the log forecast straight back gives the median, which sits below the mean
     for skewed counts, so the usual lognormal correction exp(sigma^2 / 2) is
     applied to the point forecast (sigma read off the log-scale interval).
     The interval bounds are quantiles and convert back directly.
     """
-    values = np.clip(np.asarray(values, dtype=float), 0, None)
-    if not ARIMA_LOG_TRANSFORM:
-        model = _fit_arima(values)
-        mean, ci = model.predict(n_periods=horizon, return_conf_int=True, alpha=0.05)
-        ci = np.asarray(ci)
-        return np.asarray(mean, dtype=float), ci[:, 0], ci[:, 1]
-
-    model = _fit_arima(np.log1p(values))
     mu, ci = model.predict(n_periods=horizon, return_conf_int=True, alpha=0.05)
     mu, ci = np.asarray(mu, dtype=float), np.asarray(ci, dtype=float)
+    if not ARIMA_LOG_TRANSFORM:
+        return mu, ci[:, 0], ci[:, 1]
     sigma = (ci[:, 1] - ci[:, 0]) / (2 * 1.96)
     return np.expm1(mu + sigma ** 2 / 2), np.expm1(ci[:, 0]), np.expm1(ci[:, 1])
+
+
+def _fit_predict(values, horizon: int):
+    """Fit ARIMA (full order search) and forecast `horizon` months: (mean, lower, upper)."""
+    return _predict_model(_fit_model(values), horizon)
 
 
 def city_shares(counts_by_name: dict, end: int) -> dict:
@@ -461,20 +480,50 @@ def backtest_mae(
         return float(np.mean(np.abs(actual - np.asarray(fallback["forecasted_count"]))))
 
 
-def _forecast_ahead(train, horizon: int = ARIMA_EVAL_TOTAL_MONTHS) -> tuple[list[float], str]:
+class _WalkForwardFitter:
     """
-    Forecast `horizon` months from one fit for a walk-forward step:
-    (predictions, method). Month 1 is scored on its own; all `horizon`
-    months are summed for the multi-month total, so the total costs no
-    extra fit. The method is recorded so steps that fell back (ARIMA fit
-    failure -> seasonal_naive / exponential_smoothing) are transparent
-    instead of silently reported as ARIMA metrics.
+    Forecasts one series step by step for walk-forward evaluation, reusing the
+    order the auto_arima search chose instead of searching every month.
+
+    The search runs on the first step, then again after ARIMA_EVAL_RESELECT_MONTHS
+    steps, whenever the series reaches ARIMA_MIN_HISTORY months (where _fit_arima
+    switches from non-seasonal to seasonal models), and after any failed fit. In
+    between, the chosen orders are refitted on that step's full training data,
+    so each forecast still only uses months before the one it predicts.
     """
-    try:
-        return [max(0.0, float(v)) for v in _fit_predict(train, horizon)[0]], "arima"
-    except Exception:
-        fallback = _fallback_forecast(pd.Series(train, dtype=float), horizon)
-        return [float(v) for v in fallback["forecasted_count"]], str(fallback.get("method") or "seasonal_naive")
+
+    def __init__(self):
+        self.template = None
+        self.seasonal = None
+        self.age = 0
+
+    def forecast(self, train, horizon: int = ARIMA_EVAL_TOTAL_MONTHS) -> tuple[list[float], str]:
+        """
+        Forecast `horizon` months for one step: (predictions, method). Month 1
+        is scored on its own; all `horizon` months are summed for the
+        multi-month total, so the total costs no extra fit. The method is
+        recorded so steps that fell back (ARIMA fit failure -> seasonal_naive /
+        exponential_smoothing) are transparent instead of reported as ARIMA.
+        """
+        seasonal = len(train) >= ARIMA_MIN_HISTORY
+        if self.template is not None and (seasonal != self.seasonal or self.age >= ARIMA_EVAL_RESELECT_MONTHS):
+            self.template = None
+        try:
+            model = None
+            if self.template is not None:
+                try:
+                    model = _fit_model(train, self.template)
+                except Exception:
+                    self.template = None
+            if model is None:
+                model = _fit_model(train)
+                self.template, self.seasonal, self.age = model, seasonal, 0
+            self.age += 1
+            return [max(0.0, float(v)) for v in _predict_model(model, horizon)[0]], "arima"
+        except Exception:
+            self.template = None
+            fallback = _fallback_forecast(pd.Series(train, dtype=float), horizon)
+            return [float(v) for v in fallback["forecasted_count"]], str(fallback.get("method") or "seasonal_naive")
 
 
 def _pooled(steps: list[dict], actual: str, predicted: str, baseline: str) -> dict:
@@ -557,14 +606,12 @@ def walk_forward_arima(
     base_errors = []
     base_pct_errors = []
 
+    fitter = _WalkForwardFitter()
     for i in range(min_train, len(counts)):
         train = counts[:i]
         actual = float(counts[i])
 
-        # Record which model produced each step so evaluations that fall back
-        # (ARIMA fit failure -> seasonal_naive / exponential_smoothing) are
-        # transparent instead of silently reported as ARIMA metrics.
-        ahead, method = _forecast_ahead(train)
+        ahead, method = fitter.forecast(train)
         if city_preds is not None:
             k = i - min_train
             ahead = [max(0.0, (p + c * shares[k]) / 2) for p, c in zip(ahead, city_preds[k])]
@@ -696,7 +743,8 @@ def walk_forward_all(counts_by_name: dict, min_train: int) -> dict:
     city_preds, shares = None, {}
     if ARIMA_COMBINE_CITY and n > min_train:
         city = np.sum([np.asarray(counts_by_name[b], dtype=float) for b in names], axis=0)
-        city_preds = [_forecast_ahead(city[:i])[0] for i in range(min_train, n)]
+        city_fitter = _WalkForwardFitter()
+        city_preds = [city_fitter.forecast(city[:i])[0] for i in range(min_train, n)]
         share_by_step = [city_shares(counts_by_name, i) for i in range(min_train, n)]
         shares = {b: [s[b] for s in share_by_step] for b in names}
 
