@@ -48,18 +48,17 @@ export default function ReadyTab({ batch, batches, canSync = false }) {
                         </td>
                         <td className={td} style={{ color: '#475569' }}>{b.sync_status || 'not synced'}</td>
                         <td className={`${td} text-right whitespace-nowrap`}>
-                          {canSync ? (
+                          {(canSync || b.can_sync) ? (
                             <button
                               onClick={() => navigate(`/sync?batchId=${b.id}`)}
-                              disabled={blocked}
-                              title={blocked ? 'Resolve the possible matches in this batch first' : ''}
+                                                            title={blocked ? 'Records with an undecided possible match are held back and sent once decided' : ''}
                               className="px-3 py-1.5 text-[11px] font-semibold disabled:opacity-40"
                               style={primaryBtn}
                             >
                               {b.sync_status === 'synced' ? 'Re-sync' : 'Sync'}
                             </button>
                           ) : (
-                            <span className="text-[10px]" style={{ color: '#94A3B8' }} title="An administrator syncs batches to TBInsight.">Sync: admin</span>
+                            <span className="text-[10px]" style={{ color: '#94A3B8' }} title="Only the uploader or an administrator syncs a batch to TBInsight.">Sync: uploader</span>
                           )}
                         </td>
                       </tr>
@@ -70,7 +69,7 @@ export default function ReadyTab({ batch, batches, canSync = false }) {
             </div>
           </div>
           <p className="text-[10px] mt-1.5" style={{ color: '#94A3B8' }}>
-            Syncing needs every possible match in the batch decided. Rows with data issues and records without a Pasig barangay are not sent; an unmapped facility name does not hold a record back.
+            Records with an undecided possible match are held back and sent automatically once it is decided. Rows with data issues and records without a Pasig barangay are not sent; an unmapped facility name does not hold a record back.
           </p>
         </div>
       )}

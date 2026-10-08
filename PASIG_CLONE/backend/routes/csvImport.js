@@ -14,7 +14,7 @@ const { PASIG_BARANGAYS } = require('../services/dataCleaner');
 const { CASE_ID_RE, normalizeCaseId } = require('../services/caseIds');
 const { startBackgroundSync, SYNC_STARTED } = require('../services/backgroundSync');
 const { NEEDS_LOCATION, NEEDS_FACILITY } = require('../services/validationQueue');
-const { logReviews } = require('../services/caseFollowUp');
+const { logReviews, resyncSyncedCases } = require('../services/caseFollowUp');
 const pinService = require('../services/pinService');
 const { withUserNames } = require('../services/userNames');
 const config = require('../config');
@@ -337,6 +337,7 @@ router.get('/import-history', authenticate, authorizeRoles('admin', 'staff'), as
       importedAt: b.created_at,
       validatedAt: b.validated_at,
       syncedAt: b.synced_at,
+      canSync: req.user.role === 'admin' || Number(b.uploaded_by) === Number(req.user.id),
       isArchived: b.is_archived,
       archivedBy: b.archived_by_username || null,
       archivedAt: b.archived_at || null,
@@ -1115,7 +1116,10 @@ router.post('/records/:id/resolve-match', authenticate, authorizeRoles('admin', 
       result: 'SUCCESS',
       details: { resolution: result.resolution, caseNo: result.caseNo, candidate: row.match_candidate_case_no },
     });
-    res.json({ message: 'Match resolved.', ...result });
+    // The batch may already be synced without this record (held back while undecided):
+    // send it now that it has a decision.
+    const sync = await resyncSyncedCases([result.caseNo], req.user, 'Possible match decided').catch(() => null);
+    res.json({ message: 'Match resolved.', ...result, sync });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     if (error.status) return res.status(error.status).json({ error: error.message });
@@ -1156,6 +1160,7 @@ router.post('/records/resolve-matches', authenticate, authorizeRoles('admin', 's
   }
   const byId = new Map(rows.map(r => [Number(r.id), r]));
   const result = { resolved: 0, counts: { same_case: 0, new_episode: 0, different_person: 0 }, failed: [] };
+  const resolvedCaseNos = [];
 
   const client = await db.pool.connect();
   try {
@@ -1181,6 +1186,7 @@ router.post('/records/resolve-matches', authenticate, authorizeRoles('admin', 's
         }]);
         await client.query('COMMIT');
         result.resolved++;
+        resolvedCaseNos.push(r.caseNo);
         result.counts[r.resolution]++;
       } catch (err) {
         await client.query('ROLLBACK').catch(() => {});
@@ -1190,6 +1196,12 @@ router.post('/records/resolve-matches', authenticate, authorizeRoles('admin', 's
     }
   } finally {
     client.release();
+  }
+
+  const resolvedNos = [...new Set(resolvedCaseNos)].filter(Boolean);
+  if (resolvedNos.length) {
+    try { result.sync = await resyncSyncedCases(resolvedNos, req.user, 'Possible matches decided'); }
+    catch (err) { console.error('Re-sync after bulk match resolve failed:', err.message); }
   }
 
   await logAuditEvent({

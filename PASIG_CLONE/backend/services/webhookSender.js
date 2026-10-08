@@ -202,8 +202,11 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [], actor = null } 
 
     const recordsResult = await db.getValidatedCases(batchId);
 
+    // A record with an undecided possible match is held back, not the whole batch: a file
+    // can span barangays, and the matches in another barangay are not the sender's to
+    // decide. Each one is sent on its own once someone decides it (resolve-match re-sends).
     const pendingMatches = recordsResult.rows.filter(r => r.match_status === 'pending').length;
-    if (pendingMatches > 0) {
+    if (pendingMatches > 0 && pendingMatches === recordsResult.rows.length) {
       throw new Error(
         `This batch has ${pendingMatches} possible patient match${pendingMatches === 1 ? '' : 'es'} to review first. ` +
         'Open Validation → Possible Matches.'
@@ -213,7 +216,7 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [], actor = null } 
     // Records that are cases in their own right. A record confirmed as the "same case"
     // as an earlier one is not itself a case: its update was applied to that earlier
     // case, which is re-sent below and updated in TBInsight by its Case ID.
-    const ownCases = recordsResult.rows.filter(r => !r.merged_into_case_no);
+    const ownCases = recordsResult.rows.filter(r => !r.merged_into_case_no && r.match_status !== 'pending');
     const resendCaseNos = new Set([
       ...recordsResult.rows.map(r => r.merged_into_case_no).filter(Boolean),
       ...extraCaseNos,

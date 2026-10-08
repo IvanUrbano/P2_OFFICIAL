@@ -185,6 +185,8 @@ router.get('/summary', authenticate, authorizeRoles('admin', 'staff'), async (re
           open_items: c.matches + c.location + openIssues + facNames,
           // Who may press "Validate" (writes batch metadata): the uploader or an admin.
           can_validate: req.user.role === 'admin' || (b.uploaded_by != null && Number(b.uploaded_by) === Number(req.user.id)),
+          // Same rule for syncing the batch to TBInsight.
+          can_sync: req.user.role === 'admin' || (b.uploaded_by != null && Number(b.uploaded_by) === Number(req.user.id)),
         };
       })
       .filter(b => b.status === 'uploaded' || b.counts.ready + b.open_items > 0);

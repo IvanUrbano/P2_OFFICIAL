@@ -26,9 +26,7 @@ const C = {
   line: '#F1F5F9',
 };
 
-/* Full-width card header bar — edge-to-edge on top of the card: white, bold,
-   uppercase, letter-spaced label; optional secondary tag right-aligned in
-   muted light-gray (e.g. BRGY: ROSARIO). Replaces inset h2 + separator lines. */
+/* Shared dark-blue header for dashboard detail cards. */
 function CardHeader({ title, tag }) {
   return (
     <div className="shrink-0 flex items-center justify-between gap-3 px-5 py-3" style={{ background: C.brand }}>
@@ -255,7 +253,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ─── Detail section: 2×2 card block + status card of the same length ─── */}
+      {/* Operational details */}
       <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-6 lg:items-stretch">
         {/* Pending Actions */}
         <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-2">
@@ -314,15 +312,15 @@ export default function DashboardPage() {
           <CardFooter label="View all imports" onClick={() => navigate('/import?tab=history')} />
         </section>
 
-        {/* Recent Activity — spans both rows, same length as the 2×2 block */}
+        {/* Recent Activity */}
         <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-2">
-          <CardHeader title="Recent Activity" />
+          <CardHeader title="Recent Activity" tag={activity.length > 5 ? 'Latest 5' : null} />
           <div className="flex-1 px-5 py-3">
             {activity.length === 0 ? (
               <p className="py-5 text-[13px]" style={{ color: C.sub }}>No recent activity.</p>
             ) : (
               <div>
-                {activity.slice(0, 4).map((ev, i) => (
+                {activity.slice(0, 5).map((ev, i) => (
                   <div key={ev.id} className={`py-3 ${i > 0 ? 'border-t border-[#E8EDF2]' : ''}`}>
                     <p className="text-[13px] leading-snug" style={{ color: C.text }}>{ev.text}</p>
                     <p className="mt-1 text-[11px]" style={{ color: C.faint }}>{timeAgoFull(ev.createdAt)}</p>

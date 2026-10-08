@@ -483,7 +483,7 @@ export default function DataImportPage() {
                       <td className="px-3 py-2.5">
                         <div className="flex flex-wrap gap-1">
                           <button onClick={() => openDetails(b.id)} className="px-2 py-1 text-[10px] font-semibold rounded cursor-pointer" style={{ color: '#2E6FAF' }}>View</button>
-                          {!b.isArchived && b.status === 'validated' && b.syncStatus !== 'synced' && isAdmin && (
+                          {!b.isArchived && b.status === 'validated' && b.syncStatus !== 'synced' && (isAdmin || b.canSync) && (
                             <button onClick={() => navigate(`/sync?batchId=${b.id}`)} className="px-2 py-1 text-[10px] font-semibold rounded cursor-pointer" style={{ color: '#10B981' }}>Sync</button>
                           )}
                           {!b.isArchived && (b.status === 'validated' || b.syncStatus === 'synced') && isAdmin && (
