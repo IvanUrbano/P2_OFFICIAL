@@ -19,6 +19,7 @@ let queuedEvaluation = false;
 let queuedMinTrain = MIN_TRAIN_MONTHS;
 
 async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
+  const { _buildTrainingRows, buildDenseSeries, dropUnfinishedMonth } = require('./pipeline');
   const monthlyResult = await pool.query(
     `SELECT barangay_name, DATE_TRUNC('month', date_of_diagnosis)::date AS month,
             COUNT(*)::integer AS case_count
@@ -27,6 +28,8 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
      GROUP BY barangay_name, DATE_TRUNC('month', date_of_diagnosis)
      ORDER BY month`
   );
+  // Same rule as the pipeline: a month still in progress is not scored.
+  monthlyResult.rows = dropUnfinishedMonth(monthlyResult.rows);
   if (monthlyResult.rows.length === 0) {
     throw new Error('No historical data available for evaluation.');
   }
@@ -56,7 +59,6 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
     thresholds = { low_max: 150.0, med_max: 350.0 };
   }
 
-  const { _buildTrainingRows, buildDenseSeries } = require('./pipeline');
   const dataYears = [...new Set(monthlyResult.rows.map(row => Number(monthKey(row.month).slice(0, 4))))];
   const popMapByYear = {};
   for (const year of dataYears) popMapByYear[year] = await getPopulationMap(year);
@@ -80,6 +82,9 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
     barangay_name: b.barangay_name,
     mae: b.mae ?? null,
     mape: b.mape ?? null,
+    rmse: b.rmse ?? null,
+    wape: b.wape ?? null,
+    skill: b.skill ?? null,
     n_steps: b.n_steps ?? 0,
     method_counts: b.method_counts || {},
     steps: (b.steps || [])
@@ -87,6 +92,7 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
         month: calendar[Number(step.test_month) - 1] || null,
         actual: step.actual,
         predicted: step.predicted,
+        baseline: step.baseline ?? null,
         method: step.method || 'arima',
       }))
       .filter(step => step.month),
@@ -115,6 +121,10 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
       failed_barangays: result.arima?.failed_barangays || [],
       baseline_mae: result.arima?.baseline_mae ?? null,
       baseline_mape: result.arima?.baseline_mape ?? null,
+      rmse: result.arima?.rmse ?? null,
+      wape: result.arima?.wape ?? null,
+      baseline_wape: result.arima?.baseline_wape ?? null,
+      skill: result.arima?.skill ?? null,
       steps,
       example_barangay: result.arima?.example_barangay || null,
       per_barangay: perBarangay,
@@ -124,6 +134,11 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
       f1_macro: result.rf?.f1_macro ?? null,
       precision: result.rf?.precision || {},
       recall: result.rf?.recall || {},
+      kappa: result.rf?.kappa ?? null,
+      baseline_accuracy: result.rf?.baseline_accuracy ?? null,
+      baseline_kappa: result.rf?.baseline_kappa ?? null,
+      persistence_accuracy: result.rf?.persistence_accuracy ?? null,
+      persistence_kappa: result.rf?.persistence_kappa ?? null,
       n_steps: result.rf?.n_steps ?? 0,
     },
   };

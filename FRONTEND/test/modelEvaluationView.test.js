@@ -130,7 +130,17 @@ test('error stats skip zero-actual months for MAPE and handle nothing', () => {
   const s = errorStats([{ actual: 10, predicted: 8 }, { actual: 0, predicted: 2 }]);
   assert.equal(s.mae, 2);          // (2 + 2) / 2
   assert.equal(s.mape, 20);        // only the first month counts: 2 / 10
-  assert.deepEqual(errorStats([]), { mae: null, mape: null });
+  assert.equal(s.wape, 40);        // zero month still counts: (2 + 2) / (10 + 0)
+  assert.equal(s.skill, null);     // no baseline saved (older record)
+  assert.deepEqual(errorStats([]), { mae: null, mape: null, wape: null, skill: null });
+});
+
+test('skill compares the error with the saved 12-month-average baseline', () => {
+  const s = errorStats([
+    { actual: 10, predicted: 9, baseline: 6 },   // model off by 1, baseline by 4
+    { actual: 4, predicted: 5, baseline: 4 },    // model off by 1, baseline by 0
+  ]);
+  assert.equal(s.skill, 1 - 2 / 4);              // 50% less error than the baseline
 });
 
 test('method names are readable', () => {

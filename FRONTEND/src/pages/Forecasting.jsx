@@ -250,13 +250,14 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
 
               {view.state === 'ready' && (
                 <>
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-0">
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-5 md:gap-0">
                     <EvalMetric label="Average error" value={view.mae == null ? '—' : `${Number(view.mae).toFixed(1)} cases`} />
-                    <EvalMetric label="Average % error" value={view.mape == null ? '—' : `${Number(view.mape).toFixed(1)}%`} />
+                    <EvalMetric label="Cases missed (WAPE)" value={view.wape == null ? '—' : `${Number(view.wape).toFixed(1)}%`} />
+                    <EvalMetric label="vs. 12-month average" value={view.skill == null ? '—' : `${view.skill >= 0 ? '+' : ''}${(Number(view.skill) * 100).toFixed(1)}%`} />
                     <EvalMetric label="Method" value={view.method} />
                     <EvalMetric label="Months tested" value={evaluationPeriod} />
                   </div>
-                  <p className="mt-3 text-[11px] leading-relaxed text-[#475569]">These values show how far earlier predictions were from reported cases. Smaller errors mean the predictions were closer.</p>
+                  <p className="mt-3 text-[11px] leading-relaxed text-[#475569]">These values show how far earlier predictions were from reported cases. Cases missed is the total difference as a share of all reported cases. "vs. 12-month average" compares the error with simply predicting each barangay's average of the past 12 months: above 0% means the model did better than that.</p>
 
                   <h3 className="text-[11px] font-bold mt-4" style={{ color: '#0F2D52' }}>Past predictions compared with reported cases — {view.rowsLabel}</h3>
                   {view.rows.length > 0 ? (
@@ -284,7 +285,7 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
                       </div>
                       <p className="text-[10px] mt-1.5" style={{ color: '#94A3B8' }}>
                         {view.scope === 'overall'
-                          ? `Each row adds up the actual and predicted cases of the ${view.barangaysEvaluated} barangays tested that month. MAE and MAPE above are the average of each barangay's own error.`
+                          ? `Each row adds up the actual and predicted cases of the ${view.barangaysEvaluated} barangays tested that month. Average error above is the average of each barangay's own error; cases missed is pooled over all of them.`
                           : 'Each row is a month the model predicted from the records before it, then compared with the cases actually recorded.'}
                       </p>
                     </>

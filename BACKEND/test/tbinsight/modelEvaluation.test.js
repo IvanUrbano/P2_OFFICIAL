@@ -66,7 +66,7 @@ describe('modelEvaluation', () => {
           steps: [{ test_month: 2, actual: 105, predicted: 100, error: 5, method: 'arima' }],
           per_barangay: [{
             barangay_name: 'Dela Paz', mae: 5, mape: 4.76, n_steps: 1, method_counts: { arima: 1 },
-            steps: [{ train_size: 1, test_month: 2, actual: 105, predicted: 100, error: 5, method: 'arima' }],
+            steps: [{ train_size: 1, test_month: 2, actual: 105, predicted: 100, error: 5, baseline: 98, method: 'arima' }],
           }],
         },
         rf: { accuracy: 0.8, steps: [{ large: 'detail intentionally not persisted' }] },
@@ -79,6 +79,7 @@ describe('modelEvaluation', () => {
         assert.strictEqual(rows.length, 2);
         return [{ month: '2025-11-01' }];
       },
+      dropUnfinishedMonth: rows => rows,
       buildDenseSeries: () => ({
         calendar: ['2025-11-01', '2025-12-01'],
         seriesByBarangay: { 'Dela Paz': [{ month: '2025-11-01' }, { month: '2025-12-01' }] },
@@ -100,7 +101,7 @@ describe('modelEvaluation', () => {
       assert.strictEqual(savedMetrics.arima.per_barangay[0].barangay_name, 'Dela Paz');
       assert.strictEqual(savedMetrics.arima.per_barangay[0].mae, 5);
       assert.deepStrictEqual(savedMetrics.arima.per_barangay[0].steps, [
-        { month: '2025-12-01', actual: 105, predicted: 100, method: 'arima' },
+        { month: '2025-12-01', actual: 105, predicted: 100, baseline: 98, method: 'arima' },
       ]);
       assert.strictEqual(savedConfig.method, 'ARIMA');
       assert.strictEqual(savedConfig.evaluation_start, '2025-12-01');

@@ -154,11 +154,13 @@ BACKEND/
 - **Date column**: `date_of_diagnosis` is the ARIMA time key
 - **Incidence formula**: (cases ÷ population) × 100,000
 - **Risk thresholds**: Tertiles on 3-year window (not absolute WHO thresholds)
-- **RF features (7)**: rolling_12m_incidence, recent_trend, seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk (historical_bias removed: it measured ARIMA error, not TB risk, and added nothing in walk-forward evaluation)
-- **RF labels**: barangays ranked into thirds within each month (training rows carry `month` through the ML API)
+- **RF features (10)**: rolling_12m_incidence, incidence_3m, recent_trend, seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk, incidence_rank, prev_category. Lags are incidence per 100k, not raw counts. incidence_rank (0-1) and prev_category (0/1/2, the band of the last 3 months) are ranks against the other barangays that month, added by `addCrossSectionFeatures` to training AND prediction rows (historical_bias removed: it measured ARIMA error, not TB risk)
+- **RF labels**: barangays ranked into thirds within each month on the average incidence of the target month and the 2 after it (`LABEL_HORIZON_MONTHS = 3`; training rows carry `month` through the ML API)
 - **Neighbor risk**: average incidence (month t-1) of the barangays sharing a border — PostGIS `ST_DWithin` 50 m on `barangays_geom` (`tbinsight/barangayAdjacency.js`), normalized to 0-1
 - **Forecast horizon**: every pipeline run stores at least 3 months so the 1- and 3-month views both have data
-- **Evaluation**: `/evaluate` reports a reference next to each model (12-month average for ARIMA, ranked 12-month incidence for RF)
+- **Forecast method**: each barangay's own ARIMA averaged with a city-first forecast (ARIMA on the city total × the barangay's share of the last 12 months) — `ARIMA_COMBINE_CITY`. A log(1 + cases) transform exists behind `ARIMA_LOG_TRANSFORM` but is OFF: it made walk-forward error worse on this data
+- **Unfinished month**: the live pipeline and the evaluation drop the current calendar month (Philippine time) via `dropUnfinishedMonth` — a partial month reads as a drop
+- **Evaluation**: `/evaluate` reports a reference next to each model. ARIMA: MAE, RMSE, WAPE and skill (1 − MAE ÷ 12-month-average MAE; > 0 beats it); MAPE is still returned but not shown. RF: accuracy, macro-F1, quadratic-weighted kappa, against ranked 12-month incidence and against last-3-months band carried forward
 - **Risk classification (authoritative)**: Random Forest's own predicted class, persisted with model_type/model_version/classification_confidence in `barangay_risk_scores` — this is what GIS displays
 - **Legacy weighted risk_score**: 45% incidence + 25% trend + 20% neighbor risk + 10% forecast error — a separate analytical index only, does NOT determine risk_class or GIS color
 - **Alert rules**: Rule-based — escalation (Medium→High), danger (High), surge (>30% increase)

@@ -45,7 +45,7 @@ from models import (
     RfEvaluation,
     RfStep,
 )
-from arima_forecast import parallel_map, forecast_all, compute_trend, detect_seasonality, backtest_mae, walk_forward_arima, _walk_forward_arima_job
+from arima_forecast import parallel_map, forecast_all, compute_trend, detect_seasonality, backtest_mae, walk_forward_all
 from rf_classifier import (
     train_and_predict,
     classify_risk_simple,
@@ -254,21 +254,21 @@ def evaluate_models(req: EvaluateRequest):
         df = pd.DataFrame([pt.model_dump() for pt in req.series])
         df["month"] = pd.to_datetime(df["month"])
 
-        # Each barangay's walk-forward is fully independent (own counts, own
-        # fits) — run them across worker processes the same way /forecast
-        # already parallelizes forecast_barangay, instead of one at a time.
-        # _walk_forward_arima_job catches its own exceptions so one
-        # barangay's failure can't abort every other (already-good) result.
-        jobs = []
-        for name in df["barangay_name"].unique():
-            barangay_df = df[df["barangay_name"] == name].sort_values("month")
-            counts = barangay_df["case_count"].tolist()
-            # Shorter series get a proportionally smaller warm-up so they can still be evaluated
-            min_train = min(req.min_train, max(ARIMA_MIN_HISTORY_NONSEASONAL, len(counts) // 2))
-            if len(counts) > min_train:
-                jobs.append((name, counts, min_train))
-
-        raw_results = parallel_map(_walk_forward_arima_job, jobs)
+        # The same dense calendar forecast_all uses, so the city-first part of
+        # the forecast can be evaluated alongside each barangay's own ARIMA.
+        # walk_forward_all runs the barangays across worker processes, and each
+        # job catches its own exceptions so one failure can't abort the rest.
+        wide = df.pivot_table(
+            index="month", columns="barangay_name", values="case_count",
+            aggfunc="sum", fill_value=0,
+        ).sort_index()
+        # Shorter series get a proportionally smaller warm-up so they can still be evaluated
+        min_train = min(req.min_train, max(ARIMA_MIN_HISTORY_NONSEASONAL, len(wide) // 2))
+        raw_results = []
+        if len(wide) > min_train:
+            raw_results = list(walk_forward_all(
+                {name: wide[name].tolist() for name in wide.columns}, min_train
+            ).values())
         arima_results = [r for r in raw_results if r.get("error") is None]
         failed_barangays = [
             {"barangay_name": r["barangay_name"], "error": r["error"]}
@@ -286,6 +286,14 @@ def evaluate_models(req: EvaluateRequest):
             all_mape = [r["mape"] for r in arima_results if r["mape"] is not None]
             all_base_mae = [r["baseline_mae"] for r in arima_results if r.get("baseline_mae") is not None]
             all_base_mape = [r["baseline_mape"] for r in arima_results if r.get("baseline_mape") is not None]
+            # RMSE and WAPE are pooled over every barangay-month step (not an
+            # average of per-barangay values), so busy barangays weigh in fully.
+            all_steps = [s for r in arima_results for s in r["steps"]]
+            err = np.array([s["actual"] - s["predicted"] for s in all_steps], dtype=float)
+            base_err = np.array([s["actual"] - s["baseline"] for s in all_steps], dtype=float)
+            total_actual = float(sum(s["actual"] for s in all_steps))
+            mae_all = float(np.mean(all_mae)) if all_mae else None
+            base_mae_all = float(np.mean(all_base_mae)) if all_base_mae else None
             # Use the first (longest) barangay's steps for detailed output
             longest = max(arima_results, key=lambda r: r["n_steps"])
             # Steps per method across ALL barangays: shows how much of the
@@ -304,11 +312,18 @@ def evaluate_models(req: EvaluateRequest):
                 failed_barangays=failed_barangays,
                 baseline_mae=round(float(np.mean(all_base_mae)), 4) if all_base_mae else None,
                 baseline_mape=round(float(np.mean(all_base_mape)), 2) if all_base_mape else None,
+                rmse=round(float(np.sqrt(np.mean(err ** 2))), 4) if err.size else None,
+                wape=round(float(np.abs(err).sum()) / total_actual * 100, 2) if total_actual > 0 else None,
+                baseline_wape=round(float(np.abs(base_err).sum()) / total_actual * 100, 2) if total_actual > 0 else None,
+                skill=round(1 - mae_all / base_mae_all, 4) if mae_all is not None and base_mae_all else None,
                 per_barangay=[
                     ArimaBarangayEvaluation(
                         barangay_name=r["barangay_name"],
                         mae=r["mae"],
                         mape=r["mape"],
+                        rmse=r.get("rmse"),
+                        wape=r.get("wape"),
+                        skill=r.get("skill"),
                         n_steps=r["n_steps"],
                         method_counts=r.get("method_counts") or {},
                         steps=[ArimaStep(**s) for s in r["steps"]],
@@ -344,6 +359,10 @@ def evaluate_models(req: EvaluateRequest):
             steps=[RfStep(**s) for s in rf_result["steps"]],
             baseline_accuracy=rf_result.get("baseline_accuracy"),
             baseline_f1_macro=rf_result.get("baseline_f1_macro"),
+            kappa=rf_result.get("kappa"),
+            baseline_kappa=rf_result.get("baseline_kappa"),
+            persistence_accuracy=rf_result.get("persistence_accuracy"),
+            persistence_kappa=rf_result.get("persistence_kappa"),
         )
 
         return EvaluateResponse(

@@ -126,6 +126,23 @@ function buildDenseSeries(monthlyRows, barangayNames) {
 }
 
 /**
+ * Drop case rows from the month that has not finished yet (Philippine time).
+ *
+ * A month still in progress holds only part of its cases, so it reads as a
+ * sudden drop: forecasts fitted on it come out low and the RF sees a falling
+ * barangay that isn't falling. Forecasting therefore starts from the current
+ * month instead of after it. Historical (cutoff) runs never reach this month.
+ *
+ * @param {Array} monthlyRows - [{month, ...}]
+ * @param {Date} [now]
+ */
+function dropUnfinishedMonth(monthlyRows, now = new Date()) {
+  const manila = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const current = `${manila.getUTCFullYear()}-${String(manila.getUTCMonth() + 1).padStart(2, '0')}-01`;
+  return monthlyRows.filter(r => monthKey(r.month) < current);
+}
+
+/**
  * Run the full prediction pipeline.
  *
  * @param {object} options
@@ -227,7 +244,7 @@ async function runPipeline({
     // than a relabeled copy of the current/latest assessment.
     const monthlyRows = historyCutoffMonth
       ? monthlyResult.rows.filter(r => monthKey(r.month) <= historyCutoffMonth)
-      : monthlyResult.rows;
+      : dropUnfinishedMonth(monthlyResult.rows);
 
     if (monthlyRows.length === 0) {
       results.status = 'no_data';
@@ -474,7 +491,7 @@ async function runPipeline({
     const rfMaxLen = Math.max(0, ...allLens);
     const rfWindow = _featureWindow(rfMaxLen);
     const rfNeighborRisks = _neighborRisksAt(seriesByBarangay, popMapByYear, rfMaxLen - 1, adjacency);
-    const predictRows = barangays.map(b =>
+    const predictRows = addCrossSectionFeatures(barangays.map(b =>
       buildFeatureRow({
         name: b.name,
         t: (seriesByBarangay[b.name] || []).length,
@@ -483,7 +500,7 @@ async function runPipeline({
         window: rfWindow,
         neighborRisks: rfNeighborRisks,
       })
-    );
+    ));
 
     // ── Step 6: Auto-calibrate thresholds and call Python /classify ──
     // Resolved BEFORE the ML-health branch because the rule-based fallback
@@ -1220,7 +1237,7 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
   const meanCount = windowCounts.length > 0
     ? windowCounts.reduce((a, b) => a + b, 0) / windowCounts.length
     : 0;
-  const lag = k => (t - k >= 0 ? months[t - k].case_count : 0);
+  const count = k => (t - k >= 0 ? months[t - k].case_count : 0);
 
   // Population for the window feature: the calendar year of the most
   // recent month actually in the window — never the future target month's
@@ -1232,18 +1249,54 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
   const refYear = refIdx >= 0 ? Number(months[refIdx].month.slice(0, 4)) : null;
   const pop = refYear != null ? _popForFeature(popMapByYear, name, refYear) : null;
 
+  // Lags are incidence, not raw counts: the label is incidence, and 5 cases
+  // in a barangay of 1,000 is not the same risk as 5 cases in one of 50,000.
+  const recent3 = (count(1) + count(2) + count(3)) / 3;
+
   return {
     barangay_name: name,
     features: {
       rolling_12m_incidence: _computeIncidence(meanCount, pop),
+      incidence_3m: _computeIncidence(recent3, pop),
       recent_trend: _linearSlope(windowCounts),
       seasonality_flag: _detectSeasonality(months.slice(0, t)) ? 1 : 0,
-      lag_1m: lag(1),
-      lag_2m: lag(2),
-      lag_3m: lag(3),
+      lag_1m: _computeIncidence(count(1), pop),
+      lag_2m: _computeIncidence(count(2), pop),
+      lag_3m: _computeIncidence(count(3), pop),
       neighbor_risk: neighborRisks[name] || 0,
     },
   };
+}
+
+/**
+ * Add the two cross-sectional features to ONE month's feature rows (every
+ * barangay, same target month), in place:
+ *   - incidence_rank: position of rolling_12m_incidence among the barangays
+ *     that month, 0 (lowest) to 1 (highest)
+ *   - prev_category: the band the last 3 months would get under the label
+ *     rule (thirds by rank): 0 Low, 1 Medium, 2 High
+ * The labels are relative (thirds within a month), so the model needs inputs
+ * on the same relative scale. Both read only months before the target.
+ * A row with unknown incidence gets the middle (0.5 / 1) rather than Low.
+ *
+ * Training rows AND prediction rows both go through this, after
+ * buildFeatureRow, so the two stay identical.
+ */
+function addCrossSectionFeatures(rows) {
+  const positions = key => {
+    const known = rows.filter(r => r.features[key] != null).sort((a, b) => a.features[key] - b.features[key]);
+    const pos = new Map();
+    known.forEach((r, i) => pos.set(r, known.length > 1 ? i / (known.length - 1) : 0.5));
+    return pos;
+  };
+  const rank12 = positions('rolling_12m_incidence');
+  const rank3 = positions('incidence_3m');
+  for (const r of rows) {
+    r.features.incidence_rank = rank12.has(r) ? rank12.get(r) : 0.5;
+    const q = rank3.has(r) ? rank3.get(r) : 0.5;
+    r.features.prev_category = q < 1 / 3 ? 0 : q >= 2 / 3 ? 2 : 1;
+  }
+  return rows;
 }
 
 /**
@@ -1278,9 +1331,18 @@ function buildTrainingRows(seriesByBarangay, popMapByYear, adjacency = null) {
   for (let i = window; i < maxLen; i++) {
     // neighbor_risk cross-section at the month BEFORE the target (lag-1)
     const neighborRisks = _neighborRisksAt(seriesByBarangay, popMapByYear, i - 1, adjacency);
+    // Features for every barangay this month first, so the ranks are taken
+    // across all of them — same set as at prediction time.
+    const featureRows = new Map();
     for (const name of names) {
+      if (seriesByBarangay[name].length <= i) continue;
+      featureRows.set(name, buildFeatureRow({
+        name, t: i, seriesByBarangay, popMapByYear, window, neighborRisks,
+      }));
+    }
+    addCrossSectionFeatures([...featureRows.values()]);
+    for (const [name, row] of featureRows) {
       const months = seriesByBarangay[name];
-      if (months.length <= i) continue;
       // Label incidence is STRICT: the case count occurred in this exact
       // calendar year, so it must be matched against that exact year's
       // population — never a fallback year. Missing population → no label
@@ -1311,9 +1373,6 @@ function buildTrainingRows(seriesByBarangay, popMapByYear, adjacency = null) {
       const incidence = _computeIncidence(meanCases, pop);
       if (incidence == null) continue;
 
-      const row = buildFeatureRow({
-        name, t: i, seriesByBarangay, popMapByYear, window, neighborRisks,
-      });
       row.month = months[i].month;
       row.incidence = incidence;
       trainRows.push(row);
@@ -1561,8 +1620,10 @@ module.exports = {
   MODEL_VERSION,
   MIN_STORED_HORIZON,
   buildDenseSeries,
+  dropUnfinishedMonth,
   buildTrainingRows,
   buildFeatureRow,
+  addCrossSectionFeatures,
   _buildTrainingRows,
   _featureWindow,
   _neighborRisksAt,

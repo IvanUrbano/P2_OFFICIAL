@@ -30,6 +30,19 @@ ARIMA_LEADING_TRIM_SHARE = 0.2      # Drop leading months whose city-wide total 
                                     # share of the median month (stray old records)
 ARIMA_SPARSE_THRESHOLD = 0.5  # If >50% zeros in series, use fallback
 
+# Fit ARIMA on log(1 + cases) and convert back. Meant for small, skewed counts
+# whose noise grows with the level. OFF: on the Pasig data (about 12 cases per
+# barangay-month) walk-forward error got worse with it, both alone (MAE 2.59 ->
+# 2.67) and combined with the city-first forecast (2.43 -> 2.45). Set
+# ARIMA_LOG_TRANSFORM=1 to re-test if the data changes.
+ARIMA_LOG_TRANSFORM = os.environ.get("ARIMA_LOG_TRANSFORM", "0") == "1"
+
+# Average each barangay's own ARIMA forecast with a "city-first" forecast: one
+# ARIMA on the city-wide total, split by each barangay's share of the last
+# ARIMA_SHARE_WINDOW months. The city total is far smoother than any barangay.
+ARIMA_COMBINE_CITY = os.environ.get("ARIMA_COMBINE_CITY", "1") == "1"
+ARIMA_SHARE_WINDOW = 12
+
 # Random Forest settings (tuned for ~700+ monthly snapshot training samples).
 # Chosen by walk-forward grid search over depth, tree count and split/leaf minima
 # against the balanced relative-tertile labels (see rf_classifier.derive_labels):

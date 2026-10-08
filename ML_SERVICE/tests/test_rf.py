@@ -17,16 +17,19 @@ from rf_classifier import (
 )
 
 
-def test_features_are_the_fixed_seven():
-    """FEATURES should contain the 7 fixed features (historical_bias removed)."""
+def test_features_are_the_fixed_ten():
+    """FEATURES: the original 7 (historical_bias removed) plus incidence_3m and the two ranks."""
     assert FEATURES == [
         "rolling_12m_incidence",
+        "incidence_3m",
         "recent_trend",
         "seasonality_flag",
         "lag_1m",
         "lag_2m",
         "lag_3m",
         "neighbor_risk",
+        "incidence_rank",
+        "prev_category",
     ]
 
 

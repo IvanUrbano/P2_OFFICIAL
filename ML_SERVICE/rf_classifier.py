@@ -4,8 +4,9 @@ TBInsight ML Service — Random Forest Classifier
 Predicts Low/Medium/High risk classes from historical/current case-data
 features only. Independent of ARIMA: no feature here is derived from a
 forecast, so RF classification does not require ARIMA to run or succeed.
-Uses 7 features: rolling incidence, trend, seasonality, three monthly lags and
-the incidence of the barangays that share a border (neighbor_risk).
+Uses 10 features: 12- and 3-month incidence, trend, seasonality, three monthly
+lags (as incidence), the incidence of the barangays that share a border
+(neighbor_risk), and two ranks against the other barangays that month.
 
 Design spec:
   - Labels derived from incidence tertiles, auto-calibrated per run from the
@@ -23,6 +24,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
+    cohen_kappa_score,
     f1_score,
     precision_score,
     recall_score,
@@ -42,7 +44,7 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# Fixed feature order (7 features). historical_bias (past ARIMA error) was removed:
+# Fixed feature order (10 features). historical_bias (past ARIMA error) was removed:
 # it measured the forecaster rather than TB risk, contributed nothing in
 # walk-forward evaluation, and tied the classifier to ARIMA output.
 # Training and prediction rows MUST supply this exact key set, in any order
@@ -56,12 +58,15 @@ FEATURES = [
                                # window of ACTUAL past case counts — never an
                                # ARIMA forecast. See buildFeatureRow in
                                # pipeline.js for the exact calculation.
+    "incidence_3m",           # annualized incidence of the last 3 months
     "recent_trend",
     "seasonality_flag",
-    "lag_1m",
+    "lag_1m",                 # lags are incidence per 100k (not raw counts)
     "lag_2m",
     "lag_3m",
     "neighbor_risk",  # mean incidence of the barangays sharing a border, month t-1
+    "incidence_rank",         # rank of rolling_12m_incidence that month, 0..1
+    "prev_category",          # band of the last 3 months (0 Low, 1 Medium, 2 High)
 ]
 
 _BANDS = ["Low", "Medium", "High"]
@@ -317,6 +322,7 @@ def walk_forward_rf(
     all_actuals = []
     all_predicted = []
     all_baseline = []
+    all_persistence = []
 
     # Reorder rows from barangay-first to time-first grouping
     # _buildTrainingRows produces: [B1-M1, B1-M2, ..., B1-M36, B2-M1, B2-M2, ...]
@@ -394,6 +400,12 @@ def walk_forward_rf(
             med_max,
         )
         all_baseline.extend(y_test_base)
+        # Second reference: the band of the last 3 months carries over unchanged.
+        all_persistence.extend(
+            _BANDS[int(r["features"].get("prev_category", 1))] if "prev_category" in r["features"]
+            else base
+            for r, base in zip(test_data, y_test_base)
+        )
 
         # Record step results
         correct = sum(1 for a, p in zip(y_test_actual, y_test_pred) if a == p)
@@ -428,6 +440,17 @@ def walk_forward_rf(
     rec = recall_score(all_actuals, all_predicted, average=None, labels=all_classes, zero_division=0)
     cm = confusion_matrix(all_actuals, all_predicted, labels=all_classes)
 
+    # Quadratic-weighted kappa: agreement beyond chance, where calling a High
+    # barangay Low costs four times as much as calling it Medium.
+    band_index = {c: i for i, c in enumerate(all_classes)}
+
+    def kappa(predicted):
+        return round(float(cohen_kappa_score(
+            [band_index[c] for c in all_actuals],
+            [band_index[c] for c in predicted],
+            weights="quadratic",
+        )), 4)
+
     result = {
         "steps": steps,
         "accuracy": round(float(accuracy), 4),
@@ -443,10 +466,14 @@ def walk_forward_rf(
         "baseline_f1_macro": round(float(
             f1_score(all_actuals, all_baseline, average="macro", zero_division=0)
         ), 4),
+        "kappa": kappa(list(all_predicted)),
+        "baseline_kappa": kappa(all_baseline),
+        "persistence_accuracy": round(float(accuracy_score(all_actuals, all_persistence)), 4),
+        "persistence_kappa": kappa(all_persistence),
     }
 
     logger.info(
         f"RF walk-forward: {len(steps)} steps, accuracy={result['accuracy']}, "
-        f"f1_macro={result['f1_macro']}"
+        f"f1_macro={result['f1_macro']}, kappa={result['kappa']}"
     )
     return result

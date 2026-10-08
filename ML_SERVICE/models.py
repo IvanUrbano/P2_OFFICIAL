@@ -191,6 +191,8 @@ class ArimaStep(BaseModel):
     actual: float
     predicted: float
     error: float
+    # The 12-month-average reference forecast for the same month.
+    baseline: Optional[float] = None
     # 'arima' when the real model fit produced this step; the fallback method
     # name ('seasonal_naive' / 'exponential_smoothing') otherwise.
     method: str = "arima"
@@ -201,6 +203,9 @@ class ArimaBarangayEvaluation(BaseModel):
     barangay_name: str
     mae: Optional[float] = None
     mape: Optional[float] = None
+    rmse: Optional[float] = None
+    wape: Optional[float] = None
+    skill: Optional[float] = None
     n_steps: int = 0
     method_counts: dict[str, int] = {}
     steps: list[ArimaStep] = []
@@ -224,6 +229,13 @@ class ArimaEvaluation(BaseModel):
     # numbers can be read against a simple reference instead of in isolation.
     baseline_mae: Optional[float] = None
     baseline_mape: Optional[float] = None
+    # MAPE breaks on months with 0-2 cases (and skips zero months); these don't.
+    # rmse: punishes big misses. wape: total |error| / total actual cases, in %.
+    # skill: 1 - mae / baseline_mae; above 0 means better than the 12-month average.
+    rmse: Optional[float] = None
+    wape: Optional[float] = None
+    baseline_wape: Optional[float] = None
+    skill: Optional[float] = None
     # Every evaluated barangay's own result. `mae`/`mape` above are the mean of these, and `steps`
     # are only the longest barangay's; callers that need a Barangay or Year filter read this list.
     per_barangay: list[ArimaBarangayEvaluation] = []
@@ -252,6 +264,12 @@ class RfEvaluation(BaseModel):
     # incidence into thirds) — the reference the RF has to beat.
     baseline_accuracy: Optional[float] = None
     baseline_f1_macro: Optional[float] = None
+    # Quadratic-weighted kappa (a Low<->High miss costs more than an adjacent one)
+    kappa: Optional[float] = None
+    baseline_kappa: Optional[float] = None
+    # Second reference: last 3 months' band carried forward unchanged.
+    persistence_accuracy: Optional[float] = None
+    persistence_kappa: Optional[float] = None
 
 
 class EvaluateResponse(BaseModel):

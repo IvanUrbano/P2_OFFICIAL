@@ -4,7 +4,9 @@
 //
 // What is saved:
 //   metrics.arima.mae / mape        overall figures: the mean of each evaluated barangay's own MAE / MAPE
-//   metrics.arima.per_barangay[]    each barangay's MAE / MAPE and every tested month (actual, predicted)
+//   metrics.arima.wape / skill      pooled over every tested barangay-month (newer records only)
+//   metrics.arima.per_barangay[]    each barangay's MAE / MAPE and every tested month (actual, predicted,
+//                                   and, in newer records, the 12-month-average baseline)
 //   metrics.arima.steps[]           (older records) the monthly rows of ONE barangay only
 //   config.method / evaluation_*    method label and the first / last month tested
 //
@@ -36,14 +38,31 @@ function countMethods(steps) {
   return counts;
 }
 
-/** MAE and MAPE over a list of { actual, predicted } months. MAPE skips months with 0 actual cases. */
+/**
+ * Error figures over a list of { actual, predicted, baseline? } months.
+ *   mae    average cases off per month
+ *   mape   average % off per month; skips months with 0 actual cases and blows up on 1-2 case months
+ *   wape   total cases off / total actual cases, in % — safe with small and zero months
+ *   skill  1 - (error / error of the 12-month average); above 0 beats that simple reference.
+ *          Only when every month carries its baseline (older records don't).
+ */
 export function errorStats(steps) {
   const valid = steps.filter((s) => finite(s.actual) && finite(s.predicted));
-  if (valid.length === 0) return { mae: null, mape: null };
+  if (valid.length === 0) return { mae: null, mape: null, wape: null, skill: null };
   const abs = valid.map((s) => Math.abs(Number(s.actual) - Number(s.predicted)));
   const pct = valid.filter((s) => Number(s.actual) > 0)
     .map((s) => Math.abs(Number(s.actual) - Number(s.predicted)) / Number(s.actual));
-  return { mae: mean(abs), mape: pct.length ? mean(pct) * 100 : null };
+  const sum = (xs) => xs.reduce((t, v) => t + v, 0);
+  const totalActual = sum(valid.map((s) => Number(s.actual)));
+  const baseAbs = valid.every((s) => finite(s.baseline))
+    ? sum(valid.map((s) => Math.abs(Number(s.actual) - Number(s.baseline))))
+    : null;
+  return {
+    mae: mean(abs),
+    mape: pct.length ? mean(pct) * 100 : null,
+    wape: totalActual > 0 ? (sum(abs) / totalActual) * 100 : null,
+    skill: baseAbs ? 1 - sum(abs) / baseAbs : null,
+  };
 }
 
 const toRows = (steps) => steps
@@ -95,7 +114,7 @@ export function buildEvaluationView(record, filters = {}) {
     let saved;
     if (hit) {
       steps = hit.steps;
-      saved = { mae: hit.mae, mape: hit.mape };
+      saved = { mae: hit.mae, mape: hit.mape, wape: hit.wape, skill: hit.skill };
     } else if (perBarangay.length === 0 && arima.example_barangay && same(arima.example_barangay, barangay)) {
       steps = legacySteps; // an older record kept this one barangay's months
       saved = null;
@@ -117,6 +136,8 @@ export function buildEvaluationView(record, filters = {}) {
       state: 'ready',
       mae: useSaved ? Number(saved.mae) : computed.mae,
       mape: useSaved && finite(saved.mape) ? Number(saved.mape) : computed.mape,
+      wape: useSaved && finite(saved.wape) ? Number(saved.wape) : computed.wape,
+      skill: useSaved && finite(saved.skill) ? Number(saved.skill) : computed.skill,
       method: methodLabel(countMethods(inScope)),
       periodStart: w.start,
       periodEnd: w.end,
@@ -139,6 +160,7 @@ export function buildEvaluationView(record, filters = {}) {
     const perStats = scoped.map((b) => errorStats(b.inScope));
     const maes = perStats.map((s) => s.mae).filter(finite);
     const mapes = perStats.map((s) => s.mape).filter(finite);
+    const pooled = errorStats(allSteps);
 
     // City-wide monthly totals: actual and predicted summed over the barangays tested that month.
     const byMonth = new Map();
@@ -155,6 +177,8 @@ export function buildEvaluationView(record, filters = {}) {
       state: 'ready',
       mae: !narrowed && finite(arima.mae) ? Number(arima.mae) : mean(maes),
       mape: !narrowed && finite(arima.mape) ? Number(arima.mape) : mean(mapes),
+      wape: !narrowed && finite(arima.wape) ? Number(arima.wape) : pooled.wape,
+      skill: !narrowed && finite(arima.skill) ? Number(arima.skill) : pooled.skill,
       method: !narrowed && config.method ? config.method : methodLabel(countMethods(allSteps)),
       periodStart: w.start,
       periodEnd: w.end,
@@ -177,6 +201,8 @@ export function buildEvaluationView(record, filters = {}) {
     exampleBarangay: arima.example_barangay || null,
     mae: finite(arima.mae) ? Number(arima.mae) : null,
     mape: finite(arima.mape) ? Number(arima.mape) : null,
+    wape: finite(arima.wape) ? Number(arima.wape) : null,
+    skill: finite(arima.skill) ? Number(arima.skill) : null,
     method: config.method || methodLabel(arima.method_counts),
     periodStart: savedWindow.start,
     periodEnd: savedWindow.end,

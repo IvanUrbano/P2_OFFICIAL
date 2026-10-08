@@ -22,7 +22,10 @@ from joblib import Parallel, delayed
 from pmdarima import auto_arima
 
 from config import (
+    ARIMA_COMBINE_CITY,
     ARIMA_LEADING_TRIM_SHARE,
+    ARIMA_LOG_TRANSFORM,
+    ARIMA_SHARE_WINDOW,
     ARIMA_MIN_HISTORY,
     ARIMA_MIN_HISTORY_NONSEASONAL,
     FALLBACK_METHOD,
@@ -148,6 +151,48 @@ def _fit_arima(values):
     )
 
 
+def _fit_predict(values, horizon: int):
+    """
+    Fit ARIMA and forecast `horizon` months: (mean, lower, upper) arrays, 95% CI.
+
+    With ARIMA_LOG_TRANSFORM the model is fitted on log(1 + cases). Converting
+    the log forecast straight back gives the median, which sits below the mean
+    for skewed counts, so the usual lognormal correction exp(sigma^2 / 2) is
+    applied to the point forecast (sigma read off the log-scale interval).
+    The interval bounds are quantiles and convert back directly.
+    """
+    values = np.clip(np.asarray(values, dtype=float), 0, None)
+    if not ARIMA_LOG_TRANSFORM:
+        model = _fit_arima(values)
+        mean, ci = model.predict(n_periods=horizon, return_conf_int=True, alpha=0.05)
+        ci = np.asarray(ci)
+        return np.asarray(mean, dtype=float), ci[:, 0], ci[:, 1]
+
+    model = _fit_arima(np.log1p(values))
+    mu, ci = model.predict(n_periods=horizon, return_conf_int=True, alpha=0.05)
+    mu, ci = np.asarray(mu, dtype=float), np.asarray(ci, dtype=float)
+    sigma = (ci[:, 1] - ci[:, 0]) / (2 * 1.96)
+    return np.expm1(mu + sigma ** 2 / 2), np.expm1(ci[:, 0]), np.expm1(ci[:, 1])
+
+
+def city_shares(counts_by_name: dict, end: int) -> dict:
+    """Each barangay's share of city cases over the ARIMA_SHARE_WINDOW months before `end`."""
+    window = {n: float(np.sum(c[max(0, end - ARIMA_SHARE_WINDOW):end])) for n, c in counts_by_name.items()}
+    total = sum(window.values())
+    return {name: (v / total if total > 0 else 1 / len(window)) for name, v in window.items()}
+
+
+def city_forecast(counts_by_name: dict, horizon: int) -> dict:
+    """
+    City-first forecast: ARIMA on the city-wide monthly total, split across
+    barangays by their recent share of cases. Returns {name: (mean, lower, upper)}.
+    """
+    city = np.sum([np.asarray(c, dtype=float) for c in counts_by_name.values()], axis=0)
+    mean, lower, upper = _fit_predict(city, horizon)
+    shares = city_shares(counts_by_name, len(city))
+    return {name: (mean * sh, lower * sh, upper * sh) for name, sh in shares.items()}
+
+
 def _fallback_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
     """Fallback for series too short or too sparse for ARIMA (see FALLBACK_METHOD)."""
     if FALLBACK_METHOD == "seasonal_naive":
@@ -168,19 +213,13 @@ def _arima_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
     24+-month seasonal fit.
     """
     try:
-        model = _fit_arima(series.values)
-
-        forecast, conf_int = model.predict(
-            n_periods=forecast_horizon,
-            return_conf_int=True,
-            alpha=0.05,  # 95% confidence interval
-        )
+        forecast, lower, upper = _fit_predict(series.values, forecast_horizon)
 
         method = "arima" if len(series) >= ARIMA_MIN_HISTORY else "arima_nonseasonal"
         return {
             "forecasted_count": [max(0, float(v)) for v in forecast],
-            "confidence_lower": [max(0, float(c[0])) for c in conf_int],
-            "confidence_upper": [float(c[1]) for c in conf_int],
+            "confidence_lower": [max(0, float(v)) for v in lower],
+            "confidence_upper": [float(v) for v in upper],
             "method": method,
         }
     except Exception as e:
@@ -319,6 +358,14 @@ def forecast_all(
 
     jobs = [(name, wide[name].astype(float), forecast_horizon) for name in wide.columns]
     results = parallel_map(forecast_barangay, jobs)
+
+    if ARIMA_COMBINE_CITY and len(wide) >= ARIMA_MIN_HISTORY_NONSEASONAL:
+        try:
+            city = city_forecast({n: wide[n].values for n in wide.columns}, forecast_horizon)
+            for name, result in zip(wide.columns, results):
+                _combine_with_city(result, city[name])
+        except Exception as e:
+            logger.warning(f"City-first forecast failed, keeping per-barangay forecasts: {e}")
     for barangay_name, result in zip(wide.columns, results):
         n_preds = len(result["predictions"])
         logger.info(
@@ -327,6 +374,17 @@ def forecast_all(
         )
 
     return results
+
+
+def _combine_with_city(result: dict, city: tuple) -> None:
+    """Average a barangay's own forecast with its city-first share, in place."""
+    mean, lower, upper = city
+    for i, p in enumerate(result["predictions"]):
+        if p["yhat"] is None or i >= len(mean):
+            continue
+        p["yhat"] = max(0.0, (p["yhat"] + float(mean[i])) / 2)
+        p["yhat_lower"] = max(0.0, (p["yhat_lower"] + float(lower[i])) / 2)
+        p["yhat_upper"] = (p["yhat_upper"] + float(upper[i])) / 2
 
 
 def compute_trend(series: pd.Series, window: int = 12) -> float:
@@ -394,9 +452,7 @@ def backtest_mae(
     actual = np.asarray(counts[-horizon:], dtype=float)
 
     try:
-        model = _fit_arima(train)
-        forecast = model.predict(n_periods=horizon)
-        forecast = np.asarray(forecast, dtype=float)
+        forecast, _, _ = _fit_predict(train, horizon)
         return float(np.mean(np.abs(actual - forecast)))
     except Exception:
         # If ARIMA fails on the train set, score the fallback method instead
@@ -404,10 +460,26 @@ def backtest_mae(
         return float(np.mean(np.abs(actual - np.asarray(fallback["forecasted_count"]))))
 
 
+def _one_step(train) -> tuple[float, str]:
+    """
+    One-month-ahead forecast for a walk-forward step: (prediction, method).
+    The method is recorded so steps that fell back (ARIMA fit failure ->
+    seasonal_naive / exponential_smoothing) are transparent instead of
+    silently reported as ARIMA metrics.
+    """
+    try:
+        return max(0.0, float(_fit_predict(train, 1)[0][0])), "arima"
+    except Exception:
+        fallback = _fallback_forecast(pd.Series(train, dtype=float), 1)
+        return float(fallback["forecasted_count"][0]), str(fallback.get("method") or "seasonal_naive")
+
+
 def walk_forward_arima(
     counts: list[int],
     min_train: int = 24,
     seasonal_m: int = 12,
+    city_preds: Optional[list[float]] = None,
+    shares: Optional[list[float]] = None,
 ) -> dict:
     """
     Walk-forward evaluation for ARIMA forecasting.
@@ -419,13 +491,20 @@ def walk_forward_arima(
         counts: Monthly case counts (full historical series)
         min_train: Minimum months of training before testing starts (default 24)
         seasonal_m: Seasonal period (12 for monthly)
+        city_preds / shares: per step, the city-first forecast for the test month
+            and this barangay's share of it (see walk_forward_all). When given,
+            each prediction is the average of the barangay's own ARIMA and its
+            city share, the same combination forecast_all produces.
 
     Returns:
         {
             "steps": [{"train_size": int, "test_month": int, "actual": float,
                        "predicted": float, "error": float, "method": str}],
             "mae": float,
-            "mape": float,
+            "mape": float,             # kept for older readers; WAPE is the headline
+            "rmse": float,
+            "wape": float,             # sum |error| / sum actual, in %
+            "skill": float,            # 1 - mae / baseline_mae (> 0 beats the baseline)
             "n_steps": int,
             "method_counts": {"arima": int, "<fallback_method>": int, ...},
             "baseline_mae": float,   # same steps, forecast = mean of the last 12 months
@@ -437,6 +516,9 @@ def walk_forward_arima(
             "steps": [],
             "mae": None,
             "mape": None,
+            "rmse": None,
+            "wape": None,
+            "skill": None,
             "n_steps": 0,
             "method_counts": {},
             "baseline_mae": None,
@@ -456,14 +538,10 @@ def walk_forward_arima(
         # Record which model produced each step so evaluations that fall back
         # (ARIMA fit failure -> seasonal_naive / exponential_smoothing) are
         # transparent instead of silently reported as ARIMA metrics.
-        method = "arima"
-        try:
-            model = _fit_arima(train)
-            predicted = max(0.0, float(model.predict(n_periods=1)[0]))
-        except Exception:
-            fallback = _fallback_forecast(pd.Series(train, dtype=float), 1)
-            predicted = float(fallback["forecasted_count"][0])
-            method = str(fallback.get("method") or "seasonal_naive")
+        predicted, method = _one_step(train)
+        if city_preds is not None:
+            k = i - min_train
+            predicted = max(0.0, (predicted + city_preds[k] * shares[k]) / 2)
 
         error = abs(actual - predicted)
         errors.append(error)
@@ -485,6 +563,7 @@ def walk_forward_arima(
             "actual": actual,
             "predicted": round(predicted, 2),
             "error": round(error, 2),
+            "baseline": round(baseline, 2),
             "method": method,
         })
 
@@ -492,6 +571,10 @@ def walk_forward_arima(
     mape = round(float(np.mean(pct_errors) * 100), 2) if pct_errors else None
     baseline_mae = round(float(np.mean(base_errors)), 4) if base_errors else None
     baseline_mape = round(float(np.mean(base_pct_errors) * 100), 2) if base_pct_errors else None
+    rmse = round(float(np.sqrt(np.mean(np.square(errors)))), 4) if errors else None
+    total_actual = float(sum(s["actual"] for s in steps))
+    wape = round(float(np.sum(errors)) / total_actual * 100, 2) if total_actual > 0 else None
+    skill = round(1 - mae / baseline_mae, 4) if mae is not None and baseline_mae else None
 
     method_counts: dict[str, int] = {}
     for s in steps:
@@ -505,6 +588,9 @@ def walk_forward_arima(
         "steps": steps,
         "mae": mae,
         "mape": mape,
+        "rmse": rmse,
+        "wape": wape,
+        "skill": skill,
         "n_steps": len(steps),
         "method_counts": method_counts,
         "baseline_mae": baseline_mae,
@@ -512,7 +598,13 @@ def walk_forward_arima(
     }
 
 
-def _walk_forward_arima_job(barangay_name: str, counts: list[int], min_train: int) -> dict:
+def _walk_forward_arima_job(
+    barangay_name: str,
+    counts: list[int],
+    min_train: int,
+    city_preds: Optional[list[float]] = None,
+    shares: Optional[list[float]] = None,
+) -> dict:
     """
     Wraps walk_forward_arima for use with parallel_map — same unmodified
     evaluation logic, just run per-barangay across worker processes.
@@ -529,7 +621,7 @@ def _walk_forward_arima_job(barangay_name: str, counts: list[int], min_train: in
     be lost too.
     """
     try:
-        result = walk_forward_arima(counts, min_train=min_train)
+        result = walk_forward_arima(counts, min_train=min_train, city_preds=city_preds, shares=shares)
         result["barangay_name"] = barangay_name
         result["error"] = None
         return result
@@ -544,3 +636,28 @@ def _walk_forward_arima_job(barangay_name: str, counts: list[int], min_train: in
             "n_steps": 0,
             "method_counts": {},
         }
+
+
+def walk_forward_all(counts_by_name: dict, min_train: int) -> dict:
+    """
+    Walk-forward evaluation of the forecast exactly as forecast_all produces it.
+
+    All series must share one calendar (forecast_all's dense, zero-filled frame).
+    With ARIMA_COMBINE_CITY the city-wide total gets its own walk-forward first
+    (one fit per test month), and each barangay's step is then scored on the
+    average of its own ARIMA and its share of that city forecast, the share
+    taken from the months before the test month only.
+
+    Returns {barangay_name: _walk_forward_arima_job result}.
+    """
+    names = list(counts_by_name)
+    n = len(counts_by_name[names[0]]) if names else 0
+    city_preds, shares = None, {}
+    if ARIMA_COMBINE_CITY and n > min_train:
+        city = np.sum([np.asarray(counts_by_name[b], dtype=float) for b in names], axis=0)
+        city_preds = [_one_step(city[:i])[0] for i in range(min_train, n)]
+        share_by_step = [city_shares(counts_by_name, i) for i in range(min_train, n)]
+        shares = {b: [s[b] for s in share_by_step] for b in names}
+
+    jobs = [(b, list(counts_by_name[b]), min_train, city_preds, shares.get(b)) for b in names]
+    return dict(zip(names, parallel_map(_walk_forward_arima_job, jobs)))

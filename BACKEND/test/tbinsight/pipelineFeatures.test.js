@@ -18,7 +18,8 @@ require.cache[dbPath] = {
 };
 
 const {
-  buildDenseSeries, buildTrainingRows, buildFeatureRow, _featureWindow, _neighborRisksAt,
+  buildDenseSeries, buildTrainingRows, buildFeatureRow, addCrossSectionFeatures, dropUnfinishedMonth,
+  _featureWindow, _neighborRisksAt,
   _uniformPopMapByYear, _popFor, _popForFeature, _resolveClassification, _ruleBasedClassify,
   _mergeClassifications,
   runHistoricalSnapshots,
@@ -189,10 +190,29 @@ describe('buildTrainingRows', () => {
       B: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
     };
     const rows = build(counts, { A: 1000, B: 1000 });
-    // First target month is index 6 (window 6): lag_1m is month 5 (=0), lag_2m month 4 (=8)
-    const first = rows.find(r => r.features.lag_2m === 8);
+    // First target month is index 6 (window 6): lag_1m is month 5 (=0), lag_2m month 4 (=8).
+    // Lags are annualized incidence: 8 cases / 1,000 people -> 8 * 12 / 1000 * 100k = 96,000.
+    const asIncidence = cases => (cases * 12 / 1000) * 100000;
+    const first = rows.find(r => r.barangay_name === 'A' && r.features.lag_2m === asIncidence(8));
     assert.ok(first, 'lag_2m should read the calendar month two back, zeros included');
     assert.strictEqual(first.features.lag_1m, 0);
+    assert.strictEqual(first.features.lag_3m, 0);
+  });
+
+  it('expresses lags as incidence, so equal counts in unequal populations differ', () => {
+    const rows = build({ A: twelve(5), B: twelve(5) }, { A: 1000, B: 100000 });
+    const a = rows.find(r => r.barangay_name === 'A');
+    const b = rows.find(r => r.barangay_name === 'B' && r.month === a.month);
+    assert.ok(Math.abs(a.features.lag_1m - 100 * b.features.lag_1m) < 1e-6);
+    assert.strictEqual(a.features.incidence_3m, a.features.lag_1m);
+  });
+
+  it('ranks barangays against each other within the month', () => {
+    const rows = build({ A: twelve(40), B: twelve(10), C: twelve(5) }, { A: 100000, B: 100000, C: 100000 });
+    const month = rows[0].month;
+    const at = name => rows.find(r => r.barangay_name === name && r.month === month).features;
+    assert.deepStrictEqual([at('C').incidence_rank, at('B').incidence_rank, at('A').incidence_rank], [0, 0.5, 1]);
+    assert.deepStrictEqual([at('C').prev_category, at('B').prev_category, at('A').prev_category], [0, 1, 2]);
   });
 
   it('emits rows month-major so walk-forward evaluation can group by month', () => {
@@ -228,9 +248,10 @@ describe('feature parity & leakage (train vs predict)', () => {
     for (const [n, s] of Object.entries(seriesByBarangay)) truncated[n] = s.slice(0, T);
     const window = _featureWindow(T);
     const neighborRisks = _neighborRisksAt(truncated, popMap, T - 1);
-    const predictRow = buildFeatureRow({
-      name: 'A', t: T, seriesByBarangay: truncated, popMapByYear: popMap, window, neighborRisks,
-    });
+    const predictRows = addCrossSectionFeatures(Object.keys(truncated).map(name => buildFeatureRow({
+      name, t: T, seriesByBarangay: truncated, popMapByYear: popMap, window, neighborRisks,
+    })));
+    const predictRow = predictRows.find(r => r.barangay_name === 'A');
 
     assert.deepStrictEqual(predictRow.features, trainRow.features);
     assert.strictEqual(predictRow.features.seasonality_flag, 1, 'seasonal series should flag seasonality');
@@ -479,8 +500,24 @@ describe('neighbor_risk with real (bordering) neighbours', () => {
     assert.ok(rows.length > 0);
     for (const r of rows) {
       assert.deepStrictEqual(Object.keys(r.features).sort(), [
-        'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk', 'recent_trend', 'rolling_12m_incidence', 'seasonality_flag',
+        'incidence_3m', 'incidence_rank', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk', 'prev_category',
+        'recent_trend', 'rolling_12m_incidence', 'seasonality_flag',
       ]);
     }
+  });
+});
+
+describe('dropUnfinishedMonth', () => {
+  const rows = [{ month: '2026-08-01' }, { month: '2026-09-01' }, { month: '2026-10-01' }];
+
+  it('drops the month still in progress and keeps finished ones', () => {
+    const kept = dropUnfinishedMonth(rows, new Date('2026-10-08T03:00:00Z'));
+    assert.deepStrictEqual(kept.map(r => r.month), ['2026-08-01', '2026-09-01']);
+  });
+
+  it('uses Philippine time at the month boundary', () => {
+    // 2026-09-30 17:00 UTC is already 1 October 01:00 in Manila: September has finished.
+    const kept = dropUnfinishedMonth(rows, new Date('2026-09-30T17:00:00Z'));
+    assert.deepStrictEqual(kept.map(r => r.month), ['2026-08-01', '2026-09-01']);
   });
 });
