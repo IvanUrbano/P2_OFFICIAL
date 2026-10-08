@@ -33,8 +33,10 @@ services:
         sync: false
         # Set manually — must match ML Service's ML_API_KEY
       - key: ML_SERVICE_URL
-        value: https://tb-system-ml.onrender.com
         sync: false
+        # Set manually — the ML service runs on AWS Lambda (deployed by
+        # .github/workflows/deploy-ml-lambda.yml): its Function URL,
+        # https://<id>.lambda-url.us-west-2.on.aws (no trailing slash)
 
   # ==================== Pasig Clone Backend ====================
   - type: web
