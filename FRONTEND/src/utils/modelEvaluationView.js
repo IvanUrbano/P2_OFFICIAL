@@ -5,6 +5,8 @@
 // What is saved:
 //   metrics.arima.mae / mape        overall figures: the mean of each evaluated barangay's own MAE / MAPE
 //   metrics.arima.wape / skill      pooled over every tested barangay-month (newer records only)
+//   metrics.arima.*_3m              the same for 3-month totals; steps carry actual_3m / predicted_3m /
+//                                   baseline_3m (absent for the last 2 months tested, and in older records)
 //   metrics.arima.per_barangay[]    each barangay's MAE / MAPE and every tested month (actual, predicted,
 //                                   and, in newer records, the 12-month-average baseline)
 //   metrics.arima.steps[]           (older records) the monthly rows of ONE barangay only
@@ -63,6 +65,14 @@ export function errorStats(steps) {
     wape: totalActual > 0 ? (sum(abs) / totalActual) * 100 : null,
     skill: baseAbs ? 1 - sum(abs) / baseAbs : null,
   };
+}
+
+/** The same figures for the 3-month totals carried on each step (null when none were saved). */
+export function totalStats(steps) {
+  const rows = steps
+    .filter((s) => finite(s.actual_3m) && finite(s.predicted_3m))
+    .map((s) => ({ actual: s.actual_3m, predicted: s.predicted_3m, baseline: s.baseline_3m }));
+  return { ...errorStats(rows), months: rows.length };
 }
 
 const toRows = (steps) => steps
@@ -134,6 +144,7 @@ export function buildEvaluationView(record, filters = {}) {
     return {
       ...base,
       state: 'ready',
+      total3m: totalStats(inScope),
       mae: useSaved ? Number(saved.mae) : computed.mae,
       mape: useSaved && finite(saved.mape) ? Number(saved.mape) : computed.mape,
       wape: useSaved && finite(saved.wape) ? Number(saved.wape) : computed.wape,
@@ -172,9 +183,13 @@ export function buildEvaluationView(record, filters = {}) {
       byMonth.set(k, cur);
     });
     const w = firstLast(allSteps);
+    const t3 = totalStats(allSteps);
     return {
       ...base,
       state: 'ready',
+      total3m: narrowed || !finite(arima.wape_3m)
+        ? t3
+        : { ...t3, mae: Number(arima.mae_3m), wape: Number(arima.wape_3m), skill: finite(arima.skill_3m) ? Number(arima.skill_3m) : t3.skill },
       mae: !narrowed && finite(arima.mae) ? Number(arima.mae) : mean(maes),
       mape: !narrowed && finite(arima.mape) ? Number(arima.mape) : mean(mapes),
       wape: !narrowed && finite(arima.wape) ? Number(arima.wape) : pooled.wape,
@@ -198,6 +213,7 @@ export function buildEvaluationView(record, filters = {}) {
     ...base,
     state: 'ready',
     legacyOverall: true,
+    total3m: { mae: finite(arima.mae_3m) ? Number(arima.mae_3m) : null, wape: finite(arima.wape_3m) ? Number(arima.wape_3m) : null, skill: finite(arima.skill_3m) ? Number(arima.skill_3m) : null, months: 0 },
     exampleBarangay: arima.example_barangay || null,
     mae: finite(arima.mae) ? Number(arima.mae) : null,
     mape: finite(arima.mape) ? Number(arima.mape) : null,

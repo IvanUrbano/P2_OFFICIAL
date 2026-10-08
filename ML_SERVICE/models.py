@@ -193,6 +193,10 @@ class ArimaStep(BaseModel):
     error: float
     # The 12-month-average reference forecast for the same month.
     baseline: Optional[float] = None
+    # The next 3 months as one total, from the same fit (absent near the end).
+    actual_3m: Optional[float] = None
+    predicted_3m: Optional[float] = None
+    baseline_3m: Optional[float] = None
     # 'arima' when the real model fit produced this step; the fallback method
     # name ('seasonal_naive' / 'exponential_smoothing') otherwise.
     method: str = "arima"
@@ -206,6 +210,9 @@ class ArimaBarangayEvaluation(BaseModel):
     rmse: Optional[float] = None
     wape: Optional[float] = None
     skill: Optional[float] = None
+    mae_3m: Optional[float] = None
+    wape_3m: Optional[float] = None
+    skill_3m: Optional[float] = None
     n_steps: int = 0
     method_counts: dict[str, int] = {}
     steps: list[ArimaStep] = []
@@ -236,6 +243,11 @@ class ArimaEvaluation(BaseModel):
     wape: Optional[float] = None
     baseline_wape: Optional[float] = None
     skill: Optional[float] = None
+    # The same, scoring each 3-month total (pooled over every barangay step).
+    mae_3m: Optional[float] = None
+    wape_3m: Optional[float] = None
+    baseline_wape_3m: Optional[float] = None
+    skill_3m: Optional[float] = None
     # Every evaluated barangay's own result. `mae`/`mape` above are the mean of these, and `steps`
     # are only the longest barangay's; callers that need a Barangay or Year filter read this list.
     per_barangay: list[ArimaBarangayEvaluation] = []

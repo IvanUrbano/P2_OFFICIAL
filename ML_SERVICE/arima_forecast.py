@@ -23,6 +23,7 @@ from pmdarima import auto_arima
 
 from config import (
     ARIMA_COMBINE_CITY,
+    ARIMA_EVAL_TOTAL_MONTHS,
     ARIMA_LEADING_TRIM_SHARE,
     ARIMA_LOG_TRANSFORM,
     ARIMA_SHARE_WINDOW,
@@ -460,18 +461,37 @@ def backtest_mae(
         return float(np.mean(np.abs(actual - np.asarray(fallback["forecasted_count"]))))
 
 
-def _one_step(train) -> tuple[float, str]:
+def _forecast_ahead(train, horizon: int = ARIMA_EVAL_TOTAL_MONTHS) -> tuple[list[float], str]:
     """
-    One-month-ahead forecast for a walk-forward step: (prediction, method).
-    The method is recorded so steps that fell back (ARIMA fit failure ->
-    seasonal_naive / exponential_smoothing) are transparent instead of
-    silently reported as ARIMA metrics.
+    Forecast `horizon` months from one fit for a walk-forward step:
+    (predictions, method). Month 1 is scored on its own; all `horizon`
+    months are summed for the multi-month total, so the total costs no
+    extra fit. The method is recorded so steps that fell back (ARIMA fit
+    failure -> seasonal_naive / exponential_smoothing) are transparent
+    instead of silently reported as ARIMA metrics.
     """
     try:
-        return max(0.0, float(_fit_predict(train, 1)[0][0])), "arima"
+        return [max(0.0, float(v)) for v in _fit_predict(train, horizon)[0]], "arima"
     except Exception:
-        fallback = _fallback_forecast(pd.Series(train, dtype=float), 1)
-        return float(fallback["forecasted_count"][0]), str(fallback.get("method") or "seasonal_naive")
+        fallback = _fallback_forecast(pd.Series(train, dtype=float), horizon)
+        return [float(v) for v in fallback["forecasted_count"]], str(fallback.get("method") or "seasonal_naive")
+
+
+def _pooled(steps: list[dict], actual: str, predicted: str, baseline: str) -> dict:
+    """MAE / WAPE / skill over steps that carry the three given fields."""
+    rows = [s for s in steps if s.get(actual) is not None]
+    if not rows:
+        return {"mae": None, "wape": None, "skill": None, "baseline_mae": None, "n_steps": 0}
+    err = np.array([abs(s[actual] - s[predicted]) for s in rows])
+    base = np.array([abs(s[actual] - s[baseline]) for s in rows])
+    total = float(sum(s[actual] for s in rows))
+    return {
+        "mae": round(float(err.mean()), 4),
+        "wape": round(float(err.sum()) / total * 100, 2) if total > 0 else None,
+        "skill": round(1 - float(err.sum()) / float(base.sum()), 4) if base.sum() > 0 else None,
+        "baseline_mae": round(float(base.mean()), 4),
+        "n_steps": len(rows),
+    }
 
 
 def walk_forward_arima(
@@ -491,10 +511,14 @@ def walk_forward_arima(
         counts: Monthly case counts (full historical series)
         min_train: Minimum months of training before testing starts (default 24)
         seasonal_m: Seasonal period (12 for monthly)
-        city_preds / shares: per step, the city-first forecast for the test month
-            and this barangay's share of it (see walk_forward_all). When given,
-            each prediction is the average of the barangay's own ARIMA and its
-            city share, the same combination forecast_all produces.
+        city_preds / shares: per step, the city-first forecasts for the next
+            ARIMA_EVAL_TOTAL_MONTHS months and this barangay's share of them (see
+            walk_forward_all). When given, each prediction is the average of the
+            barangay's own ARIMA and its city share, as forecast_all produces.
+
+    Each step also scores the next ARIMA_EVAL_TOTAL_MONTHS months as one total
+    (actual_3m / predicted_3m / baseline_3m) when those months exist; the
+    *_3m metrics summarize them.
 
     Returns:
         {
@@ -509,6 +533,8 @@ def walk_forward_arima(
             "method_counts": {"arima": int, "<fallback_method>": int, ...},
             "baseline_mae": float,   # same steps, forecast = mean of the last 12 months
             "baseline_mape": float,
+            "mae_3m", "wape_3m", "skill_3m", "baseline_mae_3m", "n_steps_3m":
+                the same, for the 3-month totals
         }
     """
     if len(counts) <= min_train:
@@ -538,10 +564,11 @@ def walk_forward_arima(
         # Record which model produced each step so evaluations that fall back
         # (ARIMA fit failure -> seasonal_naive / exponential_smoothing) are
         # transparent instead of silently reported as ARIMA metrics.
-        predicted, method = _one_step(train)
+        ahead, method = _forecast_ahead(train)
         if city_preds is not None:
             k = i - min_train
-            predicted = max(0.0, (predicted + city_preds[k] * shares[k]) / 2)
+            ahead = [max(0.0, (p + c * shares[k]) / 2) for p, c in zip(ahead, city_preds[k])]
+        predicted = ahead[0]
 
         error = abs(actual - predicted)
         errors.append(error)
@@ -557,7 +584,7 @@ def walk_forward_arima(
             pct_errors.append(error / actual)
             base_pct_errors.append(base_error / actual)
 
-        steps.append({
+        step = {
             "train_size": len(train),
             "test_month": i + 1,
             "actual": actual,
@@ -565,7 +592,14 @@ def walk_forward_arima(
             "error": round(error, 2),
             "baseline": round(baseline, 2),
             "method": method,
-        })
+        }
+        # The next ARIMA_EVAL_TOTAL_MONTHS months as one total, from the same fit.
+        h = ARIMA_EVAL_TOTAL_MONTHS
+        if i + h <= len(counts) and len(ahead) >= h:
+            step["actual_3m"] = float(sum(counts[i:i + h]))
+            step["predicted_3m"] = round(float(sum(ahead[:h])), 2)
+            step["baseline_3m"] = round(baseline * h, 2)
+        steps.append(step)
 
     mae = round(float(np.mean(errors)), 4) if errors else None
     mape = round(float(np.mean(pct_errors) * 100), 2) if pct_errors else None
@@ -575,6 +609,8 @@ def walk_forward_arima(
     total_actual = float(sum(s["actual"] for s in steps))
     wape = round(float(np.sum(errors)) / total_actual * 100, 2) if total_actual > 0 else None
     skill = round(1 - mae / baseline_mae, 4) if mae is not None and baseline_mae else None
+
+    total_3m = _pooled(steps, "actual_3m", "predicted_3m", "baseline_3m")
 
     method_counts: dict[str, int] = {}
     for s in steps:
@@ -595,6 +631,11 @@ def walk_forward_arima(
         "method_counts": method_counts,
         "baseline_mae": baseline_mae,
         "baseline_mape": baseline_mape,
+        "mae_3m": total_3m["mae"],
+        "wape_3m": total_3m["wape"],
+        "skill_3m": total_3m["skill"],
+        "baseline_mae_3m": total_3m["baseline_mae"],
+        "n_steps_3m": total_3m["n_steps"],
     }
 
 
@@ -655,7 +696,7 @@ def walk_forward_all(counts_by_name: dict, min_train: int) -> dict:
     city_preds, shares = None, {}
     if ARIMA_COMBINE_CITY and n > min_train:
         city = np.sum([np.asarray(counts_by_name[b], dtype=float) for b in names], axis=0)
-        city_preds = [_one_step(city[:i])[0] for i in range(min_train, n)]
+        city_preds = [_forecast_ahead(city[:i])[0] for i in range(min_train, n)]
         share_by_step = [city_shares(counts_by_name, i) for i in range(min_train, n)]
         shares = {b: [s[b] for s in share_by_step] for b in names}
 

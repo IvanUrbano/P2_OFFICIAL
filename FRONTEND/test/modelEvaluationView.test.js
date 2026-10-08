@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildEvaluationView, errorStats, methodLabel } from '../src/utils/modelEvaluationView.js';
+import { buildEvaluationView, errorStats, methodLabel, totalStats } from '../src/utils/modelEvaluationView.js';
 
 // A saved evaluation: two barangays tested on Dec 2025 and Jan 2026 (so two calendar years).
 const step = (month, actual, predicted, method = 'arima') => ({ month, actual, predicted, method });
@@ -147,4 +147,17 @@ test('method names are readable', () => {
   assert.equal(methodLabel({ arima: 3 }), 'ARIMA');
   assert.equal(methodLabel({ arima: 3, exponential_smoothing: 1 }), 'ARIMA + exponential smoothing');
   assert.equal(methodLabel({}), '—');
+});
+
+test('3-month totals are scored from the steps that carry them', () => {
+  const t = totalStats([
+    { actual: 4, predicted: 4, actual_3m: 12, predicted_3m: 10, baseline_3m: 15 },
+    { actual: 5, predicted: 4, actual_3m: 18, predicted_3m: 19, baseline_3m: 15 },
+    { actual: 3, predicted: 4 },                  // last months tested: no 3-month total
+  ]);
+  assert.equal(t.months, 2);
+  assert.equal(t.mae, 1.5);                       // (2 + 1) / 2
+  assert.equal(t.wape, 10);                       // 3 / 30
+  assert.equal(t.skill, 1 - 3 / 6);               // baseline off by 3 + 3
+  assert.equal(totalStats([{ actual: 1, predicted: 1 }]).wape, null);
 });

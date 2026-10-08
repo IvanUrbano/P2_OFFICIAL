@@ -194,3 +194,19 @@ if __name__ == "__main__":
         print("All tests passed!")
     else:
         sys.exit(1)
+
+
+def test_walk_forward_scores_three_month_totals():
+    """Each step also carries the next 3 months as one total, from the same fit."""
+    from arima_forecast import walk_forward_arima
+
+    rng = np.random.default_rng(0)
+    counts = [int(v) for v in rng.poisson(10, 30)]
+    r = walk_forward_arima(counts, min_train=24)
+    with_total = [s for s in r["steps"] if "actual_3m" in s]
+    assert len(r["steps"]) == 6
+    assert len(with_total) == 4  # the last 2 tested months have no full 3 months after them
+    first = with_total[0]
+    assert first["actual_3m"] == sum(counts[24:27])
+    assert first["baseline_3m"] == round(first["baseline"] * 3, 2)
+    assert r["n_steps_3m"] == 4 and r["mae_3m"] is not None and r["wape_3m"] is not None

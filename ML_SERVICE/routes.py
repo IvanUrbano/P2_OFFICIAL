@@ -45,7 +45,7 @@ from models import (
     RfEvaluation,
     RfStep,
 )
-from arima_forecast import parallel_map, forecast_all, compute_trend, detect_seasonality, backtest_mae, walk_forward_all
+from arima_forecast import parallel_map, forecast_all, compute_trend, detect_seasonality, backtest_mae, walk_forward_all, _pooled
 from rf_classifier import (
     train_and_predict,
     classify_risk_simple,
@@ -293,6 +293,9 @@ def evaluate_models(req: EvaluateRequest):
             base_err = np.array([s["actual"] - s["baseline"] for s in all_steps], dtype=float)
             total_actual = float(sum(s["actual"] for s in all_steps))
             mae_all = float(np.mean(all_mae)) if all_mae else None
+            total_3m = _pooled(all_steps, "actual_3m", "predicted_3m", "baseline_3m")
+            base_3m = [s for s in all_steps if s.get("actual_3m") is not None]
+            sum_3m = float(sum(s["actual_3m"] for s in base_3m))
             base_mae_all = float(np.mean(all_base_mae)) if all_base_mae else None
             # Use the first (longest) barangay's steps for detailed output
             longest = max(arima_results, key=lambda r: r["n_steps"])
@@ -316,6 +319,12 @@ def evaluate_models(req: EvaluateRequest):
                 wape=round(float(np.abs(err).sum()) / total_actual * 100, 2) if total_actual > 0 else None,
                 baseline_wape=round(float(np.abs(base_err).sum()) / total_actual * 100, 2) if total_actual > 0 else None,
                 skill=round(1 - mae_all / base_mae_all, 4) if mae_all is not None and base_mae_all else None,
+                mae_3m=total_3m["mae"],
+                wape_3m=total_3m["wape"],
+                baseline_wape_3m=round(
+                    sum(abs(s["actual_3m"] - s["baseline_3m"]) for s in base_3m) / sum_3m * 100, 2
+                ) if sum_3m > 0 else None,
+                skill_3m=total_3m["skill"],
                 per_barangay=[
                     ArimaBarangayEvaluation(
                         barangay_name=r["barangay_name"],
@@ -324,6 +333,9 @@ def evaluate_models(req: EvaluateRequest):
                         rmse=r.get("rmse"),
                         wape=r.get("wape"),
                         skill=r.get("skill"),
+                        mae_3m=r.get("mae_3m"),
+                        wape_3m=r.get("wape_3m"),
+                        skill_3m=r.get("skill_3m"),
                         n_steps=r["n_steps"],
                         method_counts=r.get("method_counts") or {},
                         steps=[ArimaStep(**s) for s in r["steps"]],

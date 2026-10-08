@@ -43,6 +43,11 @@ ARIMA_LOG_TRANSFORM = os.environ.get("ARIMA_LOG_TRANSFORM", "0") == "1"
 ARIMA_COMBINE_CITY = os.environ.get("ARIMA_COMBINE_CITY", "1") == "1"
 ARIMA_SHARE_WINDOW = 12
 
+# Evaluation also scores the forecast as a 3-month TOTAL (the pipeline stores 3
+# months ahead). Single barangay-months are mostly chance; over 3 months much of
+# that cancels out, so this is the figure planning should read.
+ARIMA_EVAL_TOTAL_MONTHS = 3
+
 # Random Forest settings (tuned for ~700+ monthly snapshot training samples).
 # Chosen by walk-forward grid search over depth, tree count and split/leaf minima
 # against the balanced relative-tertile labels (see rf_classifier.derive_labels):

@@ -85,6 +85,9 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
     rmse: b.rmse ?? null,
     wape: b.wape ?? null,
     skill: b.skill ?? null,
+    mae_3m: b.mae_3m ?? null,
+    wape_3m: b.wape_3m ?? null,
+    skill_3m: b.skill_3m ?? null,
     n_steps: b.n_steps ?? 0,
     method_counts: b.method_counts || {},
     steps: (b.steps || [])
@@ -93,6 +96,12 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
         actual: step.actual,
         predicted: step.predicted,
         baseline: step.baseline ?? null,
+        // Next-3-months total starting this month (absent for the last 2 months tested)
+        ...(step.actual_3m != null && {
+          actual_3m: step.actual_3m,
+          predicted_3m: step.predicted_3m,
+          baseline_3m: step.baseline_3m,
+        }),
         method: step.method || 'arima',
       }))
       .filter(step => step.month),
@@ -125,6 +134,10 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
       wape: result.arima?.wape ?? null,
       baseline_wape: result.arima?.baseline_wape ?? null,
       skill: result.arima?.skill ?? null,
+      mae_3m: result.arima?.mae_3m ?? null,
+      wape_3m: result.arima?.wape_3m ?? null,
+      baseline_wape_3m: result.arima?.baseline_wape_3m ?? null,
+      skill_3m: result.arima?.skill_3m ?? null,
       steps,
       example_barangay: result.arima?.example_barangay || null,
       per_barangay: perBarangay,

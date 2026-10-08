@@ -257,6 +257,17 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
                     <EvalMetric label="Method" value={view.method} />
                     <EvalMetric label="Months tested" value={evaluationPeriod} />
                   </div>
+                  {view.total3m?.wape != null && (
+                    <div className="mt-3 rounded px-3 py-2.5" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                      <p className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>3-month totals</p>
+                      <div className="mt-1 grid grid-cols-3 gap-3">
+                        <EvalMetric label="Average error" value={`${Number(view.total3m.mae).toFixed(1)} cases`} />
+                        <EvalMetric label="Cases missed (WAPE)" value={`${Number(view.total3m.wape).toFixed(1)}%`} />
+                        <EvalMetric label="vs. 12-month average" value={view.total3m.skill == null ? '—' : `${view.total3m.skill >= 0 ? '+' : ''}${(Number(view.total3m.skill) * 100).toFixed(1)}%`} />
+                      </div>
+                      <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>The same forecasts scored as a total over the next 3 months. Single months jump up and down by chance; over 3 months much of that evens out, so this is the better guide for planning supplies and staff.</p>
+                    </div>
+                  )}
                   <p className="mt-3 text-[11px] leading-relaxed text-[#475569]">These values show how far earlier predictions were from reported cases. Cases missed is the total difference as a share of all reported cases. "vs. 12-month average" compares the error with simply predicting each barangay's average of the past 12 months: above 0% means the model did better than that.</p>
 
                   <h3 className="text-[11px] font-bold mt-4" style={{ color: '#0F2D52' }}>Past predictions compared with reported cases — {view.rowsLabel}</h3>
