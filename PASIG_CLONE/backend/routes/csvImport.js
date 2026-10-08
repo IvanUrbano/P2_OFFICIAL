@@ -5,14 +5,16 @@ const fetch = require('node-fetch');
 const { parseRegistryFile } = require('../services/multiSheetParser');
 const { calculateFileHash } = require('../utils/fileHash');
 const { logAuditEvent } = require('../utils/auditLogger');
+const notifications = require('../services/notifications');
 const db = require('../db/pasigSchema');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { getCaseListScope, resolveUserScope, responsibleBarangay } = require('../policies/caseAccessPolicy');
 const { ACTIONS, can, assertCaseAction, casePermissions, referralPermissions } = require('../policies/permissions');
 const { PASIG_BARANGAYS } = require('../services/dataCleaner');
+const { CASE_ID_RE, normalizeCaseId } = require('../services/caseIds');
 const { startBackgroundSync, SYNC_STARTED } = require('../services/backgroundSync');
 const { NEEDS_LOCATION, NEEDS_FACILITY } = require('../services/validationQueue');
-const { logReviews } = require('../services/caseFollowUp');
+const { logReviews, resyncSyncedCases } = require('../services/caseFollowUp');
 const pinService = require('../services/pinService');
 const { withUserNames } = require('../services/userNames');
 const config = require('../config');
@@ -55,10 +57,33 @@ const importIdentityClass = (body) => (String(body?.historical ?? 'true').toLowe
   ? pinService.identityClassForNewBatch()
   : 'historical');
 
+async function notifyImport(user, { filename, success, batchId, message }) {
+  try {
+    const recipients = [user.id];
+    if (!success) {
+      try { recipients.push(...(await notifications.admins())); }
+      catch (err) { console.error('[notifications] admin lookup failed:', err.message); }
+    }
+    await notifications.notify(recipients, {
+      type: success ? 'import_completed' : 'import_failed',
+      severity: success ? 'success' : 'danger',
+      actorId: user.id, includeActor: true,
+      title: `${success ? 'Import completed' : 'Import failed'}: ${filename || 'file'}`,
+      message,
+      link: success ? '/import?tab=history' : '/import',
+      entityType: batchId ? 'import_batch' : undefined,
+      entityId: batchId,
+    });
+  } catch (err) {
+    console.error('[notifications] import outcome failed:', err.message);
+  }
+}
+
 router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   const client = await db.pool.connect();
   try {
     if (!req.files || !req.files.file) {
+      await notifyImport(req.user, { success: false, message: 'No file was uploaded.' });
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
@@ -66,12 +91,14 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
     const maxSize = 500 * 1024 * 1024; // 500MB to support large imports
 
     if (file.size > maxSize) {
+      await notifyImport(req.user, { filename: file.name, success: false, message: 'The file exceeds the upload size limit.' });
       return res.status(400).json({ error: 'File too large. Maximum size is 500MB.' });
     }
 
     // Validate file extension — Excel workbooks (DSTB + MN sheets) or a CSV export of one sheet
     const ext = file.name.split('.').pop().toLowerCase();
     if (!['xlsx', 'xls', 'csv'].includes(ext)) {
+      await notifyImport(req.user, { filename: file.name, success: false, message: 'Only Excel and CSV files can be imported.' });
       return res.status(400).json({ error: 'Unsupported file type. Only .xlsx, .xls and .csv files are accepted.' });
     }
 
@@ -105,6 +132,11 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
         details: { filename: file.name, previousBatch: existingBatch.id },
       });
 
+      await notifyImport(req.user, {
+        filename: file.name, success: false,
+        message: 'This file was already imported. Check Import History before trying again.',
+      });
+
       return res.status(409).json({
         error: 'File already imported',
         isDuplicate: true,
@@ -125,6 +157,10 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
       parsed = await parseRegistryFile(file.data, file.name);
     } catch (parseErr) {
       console.error('❌ File parse error:', parseErr.message);
+      await notifyImport(req.user, {
+        filename: file.name, success: false,
+        message: 'The file could not be read. Check its format and try again.',
+      });
       return res.status(400).json({
         error: ext === 'xls'
           ? 'Could not read this .xls file. Open it in Excel and save it as .xlsx or .csv, then upload again.'
@@ -133,6 +169,10 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
     }
 
     if (parsed.totalRecords === 0) {
+      await notifyImport(req.user, {
+        filename: file.name, success: false,
+        message: 'The file contains no case rows to import.',
+      });
       return res.status(400).json({
         error: parsed.sheets.length === 0
           ? 'No header row found. The file needs column headers such as Brgy, Age, Sex and Date of Diagnosis.'
@@ -193,6 +233,11 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
 
     console.log(`✅ File imported successfully: Batch ${batchId}, ${parsed.totalRecords} records`);
 
+    await notifyImport(req.user, {
+      filename: file.name, success: true, batchId,
+      message: `${parsed.totalRecords} record${parsed.totalRecords === 1 ? '' : 's'} uploaded. Review and validate this batch before syncing.`,
+    });
+
     res.status(201).json({
       message: 'File uploaded successfully',
       batch: {
@@ -220,6 +265,10 @@ router.post('/import', importLimiter, authenticate, authorizeRoles('admin', 'sta
       action: 'IMPORT_FILE',
       result: 'FAILURE',
       details: { filename: req.files?.file?.name || 'unknown', error: error.message },
+    });
+    await notifyImport(req.user, {
+      filename: req.files?.file?.name, success: false,
+      message: 'The import could not be completed. Try again or check the server logs.',
     });
     res.status(500).json({ error: 'Failed to process file' });
   } finally {
@@ -288,6 +337,7 @@ router.get('/import-history', authenticate, authorizeRoles('admin', 'staff'), as
       importedAt: b.created_at,
       validatedAt: b.validated_at,
       syncedAt: b.synced_at,
+      canSync: req.user.role === 'admin' || Number(b.uploaded_by) === Number(req.user.id),
       isArchived: b.is_archived,
       archivedBy: b.archived_by_username || null,
       archivedAt: b.archived_at || null,
@@ -604,8 +654,7 @@ const RECORD_SORT_COLUMNS = {
   patient_no: 'p.patient_no',
   // Case ID shown to users (file / generated Case ID; internal case_no for older records)
   case: 'COALESCE(v.source_case_id, v.case_no)',
-  // Names sort only operational records (historical names are never exposed, not even
-  // through ordering); everything else falls back to Patient #.
+  // Locked-state sorting excludes historical names; unlocked sorting is built below.
   patient: `CASE WHEN v.identity_class = 'operational' THEN v.last_name END, CASE WHEN v.identity_class = 'operational' THEN v.first_name END, p.patient_no`,
   barangay: 'v.barangay_name',
   date: 'v.date_of_diagnosis',
@@ -623,7 +672,7 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 50), 200);
     const offset = (page - 1) * limit;
-    const view = ['all', 'matches', 'unassigned'].includes(req.query.view) ? req.query.view : 'all';
+    const view = ['all', 'matches', 'unassigned', 'archived'].includes(req.query.view) ? req.query.view : 'all';
     const isAdmin = req.user.role === 'admin';
     if (view === 'unassigned' && !isAdmin) {
       return res.status(403).json({ error: 'Needs Assignment is available to admins only.' });
@@ -632,16 +681,17 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
     const userScope = await resolveUserScope(req.user);
     const scope = getCaseListScope(req.user, userScope, 'v');
     const params = [...scope.params];
-    const base = `v.is_archived = false AND ${scope.where}`;
+    const base = scope.where;
     const viewSql = {
       // Validated records only: same rule as the Dashboard's Validated KPI (TB_RECORDS_LISTED).
-      all: TB_RECORDS_LISTED,
-      matches: `v.match_status = 'pending'`,
+      all: `v.is_archived = false AND ${TB_RECORDS_LISTED}`,
+      matches: `v.is_archived = false AND v.match_status = 'pending'`,
       // Same definition as the Validation page's Needs Assignment tab.
       // Same number as Validation -> Needs Assignment and the Dashboard: records whose
       // LOCATION is undecided. Unmapped facility names are counted per name on the
       // Validation page, not per record here.
-      unassigned: `v.match_status <> 'pending' AND v.merged_into_case_no IS NULL AND ${NEEDS_LOCATION}`,
+      unassigned: `v.is_archived = false AND v.match_status <> 'pending' AND v.merged_into_case_no IS NULL AND ${NEEDS_LOCATION}`,
+      archived: 'v.is_archived = true',
     };
 
     let filters = '';
@@ -671,24 +721,31 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
       filters += ` AND v.treatment_outcome = $${params.length}`;
     }
     const namesUnlocked = pinService.isUnlocked(req);
+    const namesEnabled = pinService.namesEnabled();
     if (req.query.search) {
       params.push(`%${req.query.search}%`);
       const s = `$${params.length}`;
-      // Searching by name is only allowed once names are unlocked with the records PIN —
-      // otherwise a locked user could still find out whether a person is in the system.
-      // Only ever matches operational records: historical names are de-identified, so a
-      // search must not reveal that a name exists among them.
-      const nameClauses = namesUnlocked && pinService.namesEnabled()
-        ? `(v.identity_class = 'operational' AND (v.last_name ILIKE ${s} OR v.first_name ILIKE ${s} OR v.middle_name ILIKE ${s}
+      // Name search follows the same visibility rules as returned record identities.
+      const searchableIdentity = namesUnlocked
+        ? (namesEnabled ? `v.identity_class IN ('historical', 'operational')` : `v.identity_class = 'historical'`)
+        : null;
+      const nameClauses = searchableIdentity
+        ? `(${searchableIdentity} AND (v.last_name ILIKE ${s} OR v.first_name ILIKE ${s} OR v.middle_name ILIKE ${s}
            OR (v.last_name || ', ' || v.first_name) ILIKE ${s})) OR `
         : '';
       filters += ` AND (${nameClauses}v.source_case_id ILIKE ${s} OR v.case_no ILIKE ${s}
-        OR v.barangay_name ILIKE ${s} OR v.treatment_facility ILIKE ${s} OR v.itis_case_id ILIKE ${s})`;
+        OR v.barangay_name ILIKE ${s} OR v.treatment_facility ILIKE ${s})`;
     }
 
     const from = 'FROM validated_tb_cases v LEFT JOIN patients p ON p.id = v.patient_id';
     const where = `${base} AND ${viewSql[view]}${filters}`;
-    const sortCols = RECORD_SORT_COLUMNS[req.query.sort] || RECORD_SORT_COLUMNS.id;
+    const identitySortClass = namesEnabled ? `v.identity_class IN ('historical', 'operational')` : `v.identity_class = 'historical'`;
+    const identitySort = namesUnlocked
+      ? `CASE WHEN ${identitySortClass} THEN v.last_name END, CASE WHEN ${identitySortClass} THEN v.first_name END, p.patient_no`
+      : RECORD_SORT_COLUMNS.patient;
+    const sortCols = req.query.sort === 'patient'
+      ? identitySort
+      : RECORD_SORT_COLUMNS[req.query.sort] || RECORD_SORT_COLUMNS.id;
     const sortDir = String(req.query.dir || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
     const orderBy = sortCols.split(', ').map(c => `${c} ${sortDir}`).join(', ');
 
@@ -697,7 +754,7 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
     const countView = async (key) =>
       (await db.pool.query(`SELECT COUNT(*)::int AS n ${from} WHERE ${base} AND ${viewSql[key]}`,
         scope.params)).rows[0].n;
-    const [countResult, dataResult, allCount, matchCount, unassignedCount] = await Promise.all([
+    const [countResult, dataResult, allCount, matchCount, unassignedCount, archivedCount] = await Promise.all([
       db.pool.query(`SELECT COUNT(*)::int AS total ${from} WHERE ${where}`, params),
       db.pool.query(
         `SELECT v.*, p.patient_no ${from} WHERE ${where}
@@ -707,8 +764,9 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
       countView('all'),
       countView('matches'),
       isAdmin ? countView('unassigned') : Promise.resolve(null),
+      countView('archived'),
     ]);
-    const counts = { all: allCount, matches: matchCount, unassigned: unassignedCount };
+    const counts = { all: allCount, matches: matchCount, unassigned: unassignedCount, archived: archivedCount };
 
     // Each row carries the user's permissions on it (policies/permissions.js), including
     // why they can see it (permissions.basis: primary / referred_in / referred_out).
@@ -832,12 +890,13 @@ router.get('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
 // and the diagnosis date anchors the Case ID / episode. Patient identity (names, date of
 // birth, sex) can be corrected only while the Records PIN is unlocked.
 const EDITABLE_CASE_FIELDS = [
-  'outcome_status', 'date_of_outcome', 'outcome_reason', 'date_started_treatment', 'date_of_notification',
+  'source_case_id',
+  'outcome_status', 'date_of_outcome', 'outcome_reason', 'date_started_treatment', 'date_of_notification', 'date_of_screening',
   'treatment_facility', 'screening_facility', 'registration_group', 'bacteriological_status',
-  'anatomical_site', 'source_of_patient', 'itis_case_id',
+  'anatomical_site', 'source_of_patient',
 ];
 const EDITABLE_IDENTITY_FIELDS = ['last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth', 'sex'];
-const CASE_DATE_FIELDS = new Set(['date_of_outcome', 'date_started_treatment', 'date_of_notification', 'date_of_birth', 'date_of_diagnosis']);
+const CASE_DATE_FIELDS = new Set(['date_of_outcome', 'date_started_treatment', 'date_of_notification', 'date_of_screening', 'date_of_birth', 'date_of_diagnosis']);
 
 router.put('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   const client = await db.pool.connect();
@@ -857,11 +916,16 @@ router.put('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
     if (record.is_archived || record.merged_into_case_no) {
       return res.status(409).json({ error: 'Archived or merged records cannot be edited.' });
     }
-    if (record.match_status === 'pending') {
-      return res.status(409).json({ error: 'Decide this record\'s possible match (Validation) before editing it.' });
-    }
 
     const changes = req.body?.changes || {};
+    if (record.match_status === 'pending') {
+      // A pending row's Case ID is the one thing worth correcting before the decision is
+      // made — it is what the file asserted, and it may be wrong.
+      const keys = Object.keys(changes);
+      if (!(keys.length > 0 && keys.every(k => k === 'source_case_id'))) {
+        return res.status(409).json({ error: 'Decide this record\'s possible match (Validation) before editing it. Only its Case ID can be corrected while it is undecided.' });
+      }
+    }
     const unlocked = pinService.isUnlocked(req);
     const touchesIdentity = EDITABLE_IDENTITY_FIELDS.some(f => Object.prototype.hasOwnProperty.call(changes, f));
     // Historical names/DOB are de-identified and never modified (also guarded in the
@@ -876,17 +940,44 @@ router.put('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
     const unknown = Object.keys(changes).filter(f => !allowed.includes(f));
     if (unknown.length) return res.status(400).json({ error: `These fields cannot be edited here: ${unknown.join(', ')}.` });
 
+    // The Case ID is the case's identity: keep the file's format and never let two cases
+    // carry the same one (unique index, migration 019).
+    if (Object.prototype.hasOwnProperty.call(changes, 'source_case_id')) {
+      const wanted = normalizeCaseId(changes.source_case_id);
+      if (wanted && !CASE_ID_RE.test(wanted)) {
+        const msg = `Case ID must look like ROS-D-2025-00042 (got "${String(changes.source_case_id).trim()}")`;
+        return res.status(422).json({ error: msg, errors: [msg], error_fields: ['source_case_id'] });
+      }
+      if (wanted) {
+        const clash = (await db.pool.query(
+          `SELECT case_no FROM validated_tb_cases
+           WHERE upper(source_case_id) = upper($1) AND id <> $2
+             AND is_archived = false AND merged_into_case_no IS NULL`,
+          [wanted, record.id]
+        )).rows[0];
+        if (clash) {
+          return res.status(409).json({ error: `Case ID ${wanted} already belongs to case ${clash.case_no}. Open that case instead, or give this one a different Case ID.` });
+        }
+      }
+    }
+
     // Current values as plain strings (dates as YYYY-MM-DD), then apply the changes and
     // normalize them the same way an import would.
     const current = {};
     for (const [k, v] of Object.entries(record)) current[k] = CASE_DATE_FIELDS.has(k) ? ymd(v) : v;
     const merged = { ...current };
     for (const [f, v] of Object.entries(changes)) merged[f] = v === '' || v === undefined ? null : v;
+    if (Object.prototype.hasOwnProperty.call(changes, 'source_case_id')) {
+      merged.source_case_id = normalizeCaseId(changes.source_case_id);
+    }
     const { record: cleaned } = cleanRecord(merged);
     // Records saved before Age was required may lack it — editing them must still work.
+    // Same for the Case ID on batches uploaded before it was required (migration 018).
     const { identityRuleFor } = require('../services/validator');
+    const batch = (await db.pool.query('SELECT case_id_required FROM import_batches WHERE id = $1', [record.batch_id])).rows[0];
     const validation = validateRecord(cleaned, record.source_type, await getValidBarangays(),
-      { ...identityRuleFor(record.identity_class), legacyMissingAge: record.age === null || record.age === undefined });
+      { ...identityRuleFor(record.identity_class), legacyMissingAge: record.age === null || record.age === undefined,
+        requireCaseId: batch?.case_id_required !== false });
     if (!validation.valid) {
       return res.status(422).json({ error: 'Please fix these problems.', errors: validation.errors });
     }
@@ -950,10 +1041,10 @@ router.put('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
 // ==================== LIMITED CASE LOOKUP ====================
 router.post('/records/lookup', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
-    const { itis_case_id } = req.body;
+    const caseId = normalizeCaseId(req.body?.case_id);
 
-    if (!itis_case_id) {
-      return res.status(400).json({ error: 'ITIS Case ID is required for lookup.' });
+    if (!caseId) {
+      return res.status(400).json({ error: 'Case ID is required for lookup.' });
     }
 
     // Search by stable identifier only — NOT demographics
@@ -961,9 +1052,9 @@ router.post('/records/lookup', authenticate, authorizeRoles('admin', 'staff'), a
       `SELECT id, barangay_name, responsible_barangay, current_responsible_facility_id,
               screening_facility, treatment_facility, source_type, date_of_diagnosis
        FROM validated_tb_cases
-       WHERE itis_case_id = $1 AND is_archived = false
+       WHERE upper(source_case_id) = $1 AND is_archived = false
        LIMIT 5`,
-      [itis_case_id]
+      [caseId]
     );
 
     if (result.rows.length === 0) {
@@ -1025,7 +1116,10 @@ router.post('/records/:id/resolve-match', authenticate, authorizeRoles('admin', 
       result: 'SUCCESS',
       details: { resolution: result.resolution, caseNo: result.caseNo, candidate: row.match_candidate_case_no },
     });
-    res.json({ message: 'Match resolved.', ...result });
+    // The batch may already be synced without this record (held back while undecided):
+    // send it now that it has a decision.
+    const sync = await resyncSyncedCases([result.caseNo], req.user, 'Possible match decided').catch(() => null);
+    res.json({ message: 'Match resolved.', ...result, sync });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     if (error.status) return res.status(error.status).json({ error: error.message });
@@ -1066,6 +1160,7 @@ router.post('/records/resolve-matches', authenticate, authorizeRoles('admin', 's
   }
   const byId = new Map(rows.map(r => [Number(r.id), r]));
   const result = { resolved: 0, counts: { same_case: 0, new_episode: 0, different_person: 0 }, failed: [] };
+  const resolvedCaseNos = [];
 
   const client = await db.pool.connect();
   try {
@@ -1091,6 +1186,7 @@ router.post('/records/resolve-matches', authenticate, authorizeRoles('admin', 's
         }]);
         await client.query('COMMIT');
         result.resolved++;
+        resolvedCaseNos.push(r.caseNo);
         result.counts[r.resolution]++;
       } catch (err) {
         await client.query('ROLLBACK').catch(() => {});
@@ -1100,6 +1196,12 @@ router.post('/records/resolve-matches', authenticate, authorizeRoles('admin', 's
     }
   } finally {
     client.release();
+  }
+
+  const resolvedNos = [...new Set(resolvedCaseNos)].filter(Boolean);
+  if (resolvedNos.length) {
+    try { result.sync = await resyncSyncedCases(resolvedNos, req.user, 'Possible matches decided'); }
+    catch (err) { console.error('Re-sync after bulk match resolve failed:', err.message); }
   }
 
   await logAuditEvent({
@@ -1195,6 +1297,39 @@ router.patch('/records/:id/archive', authenticate, authorizeRoles('admin', 'staf
   } catch (error) {
     console.error('Error archiving record:', error);
     res.status(500).json({ error: 'Failed to archive record' });
+  }
+});
+
+// ==================== RESTORE ARCHIVED RECORD (admin only) ====================
+router.patch('/records/:id/restore', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const found = await db.pool.query(
+      'SELECT id, is_archived FROM validated_tb_cases WHERE id = $1',
+      [id]
+    );
+    if (found.rows.length === 0) return res.status(404).json({ error: 'Record not found' });
+    if (!found.rows[0].is_archived) {
+      return res.status(409).json({ error: 'This record is not archived.' });
+    }
+
+    const result = await db.restoreRecord(id);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Record not found' });
+
+    await logAuditEvent({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'RESTORE_RECORD',
+      resourceType: 'validated_tb_cases',
+      resourceId: id,
+      result: 'SUCCESS',
+      details: { recordId: id },
+    });
+
+    res.json({ message: 'Record restored successfully', record: result.rows[0] });
+  } catch (error) {
+    console.error('Error restoring record:', error);
+    res.status(500).json({ error: 'Failed to restore record' });
   }
 });
 

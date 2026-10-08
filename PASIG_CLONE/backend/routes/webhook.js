@@ -15,12 +15,22 @@ const sendLimiter = rateLimit({
 });
 
 // Starts the sync and answers immediately (202); the page follows it via GET /status.
-router.post('/send', sendLimiter, authenticate, authorizeRoles('admin'), async (req, res) => {
+// Admins may sync any batch; staff may sync the batches they uploaded. The whole file is
+// sent whatever barangays it contains (the batch is the unit, as with validation).
+router.post('/send', sendLimiter, authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
   try {
     const { batchId } = req.body;
 
     if (!batchId) {
       return res.status(400).json({ error: 'batchId is required' });
+    }
+
+    if (req.user.role !== 'admin') {
+      const owner = (await db.pool.query('SELECT uploaded_by FROM import_batches WHERE id = $1', [batchId])).rows[0];
+      if (!owner) return res.status(404).json({ error: 'Batch not found' });
+      if (Number(owner.uploaded_by) !== Number(req.user.id)) {
+        return res.status(403).json({ error: 'Only the uploader or an administrator can sync this batch.' });
+      }
     }
 
     const claim = await claimBatchForSync(batchId, req.user.id);

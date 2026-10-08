@@ -218,10 +218,14 @@ describe('buildDashboardMetrics — Random Forest risk', () => {
     assert.strictEqual(m.riskCounts.noData, 0);
   });
 
-  it('derives the assessment year as the snapshot period year minus one', async () => {
+  it('reports the snapshot period year as the assessment year (same as the GIS pages)', async () => {
+    // A snapshot stored at period 2026-10-01, trained on data through September 2026, is the
+    // 2026 assessment. It used to be shown as "2025" (period year minus one).
     const m = await buildDashboardMetrics(createPool(healthyOptions()));
-    // A snapshot stored at period 2026-01-01 IS the assessment through 2025.
-    assert.strictEqual(m.riskCounts.assessmentYear, 2025);
+    assert.strictEqual(m.riskCounts.assessmentYear, 2026);
+    const text = generateDashboardInsight(m).sections.find((s) => s.id === 'riskSituation').text;
+    assert.match(text, /\(2026 assessment\)/);
+    assert.ok(!/2025 assessment/.test(text));
   });
 
   it('excludes unassessed barangays from the denominator instead of calling them Low Risk', async () => {
@@ -315,6 +319,59 @@ describe('buildDashboardMetrics — annual coverage and YoY', () => {
     assert.match(m.annual.yoyUnavailableReason, /2024/);
   });
 
+  it('compares a year still in progress with the SAME months of the year before, never its full total', async () => {
+    // Live shape: 2026 has data through September (3,264 cases); Jan–Sep 2025 was 3,284 of 4,326.
+    const m = await buildDashboardMetrics(createPool(healthyOptions({
+      yearly: [
+        { year: 2024, case_count: 4284, months_covered: 12, last_month: 12, ytd_cases: 3273 },
+        { year: 2025, case_count: 4326, months_covered: 12, last_month: 12, ytd_cases: 3284 },
+        { year: 2026, case_count: 3264, months_covered: 9, last_month: 9, ytd_cases: 3264 },
+      ],
+    })));
+    assert.strictEqual(m.annual.inProgressYear, 2026);
+    assert.deepStrictEqual(m.annual.yearToDate, {
+      year: 2026, throughMonth: 9, cases: 3264, priorYear: 2025, priorCases: 3284, changePercent: -0.6,
+    });
+    // The full-year comparison now runs between the two years that actually ran to December.
+    assert.strictEqual(m.annual.latestCompleteYear, 2025);
+    assert.strictEqual(m.annual.previousYear, 2024);
+    assert.strictEqual(m.annual.yoyChangePercent, 1);
+
+    const insight = generateDashboardInsight(m);
+    const text = insight.sections.find((s) => s.id === 'caseActivity').text;
+    assert.match(text, /Year to date \(January–September\), \*\*2026\*\* recorded \*\*3,264\*\* cases/);
+    assert.match(text, /about the same as\*\* the same months of 2025 \(3,284 cases\)/);   // -0.6%: under 1%
+    assert.ok(!/24\.5%/.test(text), 'the false "24.5% lower" is gone');
+    assert.match(insight.meta.basedOn, /2026 is year to date \(through September\)/);
+  });
+
+  it('says "about the same" when the year-to-date change is under 1%', async () => {
+    const m = await buildDashboardMetrics(createPool(healthyOptions({
+      yearly: [
+        { year: 2025, case_count: 4326, months_covered: 12, last_month: 12, ytd_cases: 3284 },
+        { year: 2026, case_count: 3270, months_covered: 9, last_month: 9, ytd_cases: 3270 },
+      ],
+    })));
+    const text = generateDashboardInsight(m).sections.find((s) => s.id === 'caseActivity').text;
+    assert.match(text, /\*\*about the same as\*\* the same months of 2025/);
+  });
+
+  it('states when the same months of the previous year are not available', async () => {
+    const m = await buildDashboardMetrics(createPool(healthyOptions({
+      yearly: [{ year: 2026, case_count: 900, months_covered: 8, last_month: 8, ytd_cases: 900 }],
+    })));
+    assert.strictEqual(m.annual.yearToDate.changePercent, undefined);
+    const text = generateDashboardInsight(m).sections.find((s) => s.id === 'caseActivity').text;
+    assert.match(text, /not available for comparison/);
+    assert.ok(!/% (higher|lower) than/.test(text.split('**2026**')[1] || ''));
+  });
+
+  it('a year that runs to December is still compared year over year', async () => {
+    const m = await buildDashboardMetrics(createPool(healthyOptions()));
+    assert.strictEqual(m.annual.yearToDate, null);
+    assert.strictEqual(m.annual.inProgressYear, null);
+  });
+
   it('treats the completeness threshold as a month-coverage rule', () => {
     assert.strictEqual(typeof MIN_MONTHS_FOR_COMPLETE_YEAR, 'number');
     assert.ok(MIN_MONTHS_FOR_COMPLETE_YEAR > 1, 'a single month is never a complete year');
@@ -350,9 +407,9 @@ describe('buildDashboardMetrics — forecast tiers', () => {
     assert.strictEqual(m.forecast.total, 429);
   });
 
-  it('never relabels a fallback method as ARIMA', async () => {
+  it('never relabels a fallback method as ARIMA: a forecast with no ARIMA barangay is a Baseline Forecast', async () => {
     const forecast = [
-      { barangay_name: 'A', forecasted_count: 10, method: 'arima', period_year: 2026, period_month: 3 },
+      { barangay_name: 'A', forecasted_count: 10, method: 'seasonal-naive-fallback', period_year: 2026, period_month: 3 },
       { barangay_name: 'B', forecasted_count: 5, method: 'seasonal-naive-fallback', period_year: 2026, period_month: 3 },
     ];
     const m = await buildDashboardMetrics(createPool(healthyOptions({ forecast })));
@@ -362,6 +419,39 @@ describe('buildDashboardMetrics — forecast tiers', () => {
     const text = generateDashboardInsight(m).sections.find((s) => s.id === 'forecastSignal').text;
     assert.match(text, /Baseline Forecast/);
     assert.match(text, /not ARIMA/);
+    assert.ok(!/fewer than 24/.test(text), 'the 24-observation claim is gone');
+  });
+
+  it('one sparse barangay does not relabel the whole forecast: ARIMA for most, named exceptions', async () => {
+    // Live shape: 28 ARIMA barangays (359 cases) and 2 sparse ones on exponential smoothing (0.6).
+    const forecast = [
+      ...Array.from({ length: 28 }, (_, i) => ({ barangay_name: `B${i + 1}`, forecasted_count: 359 / 28, method: 'arima', period_year: 2026, period_month: 10 })),
+      { barangay_name: 'Bagong Katipunan', forecasted_count: 0.13, method: 'exponential_smoothing', period_year: 2026, period_month: 10 },
+      { barangay_name: 'Santa Rosa', forecasted_count: 0.47, method: 'exponential_smoothing', period_year: 2026, period_month: 10 },
+    ];
+    const m = await buildDashboardMetrics(createPool(healthyOptions({ forecast })));
+    assert.strictEqual(m.forecast.tier, 'mixed');
+    assert.strictEqual(m.forecast.tierLabel, 'ARIMA Forecast');
+    assert.strictEqual(m.forecast.arimaBarangays, 28);
+    assert.deepStrictEqual(m.forecast.fallbackBarangays, ['Bagong Katipunan', 'Santa Rosa']);
+    assert.strictEqual(m.forecast.fallbackTotal, 0.6);
+
+    const text = generateDashboardInsight(m).sections.find((s) => s.id === 'forecastSignal').text;
+    assert.match(text, /\*\*ARIMA Forecast\*\*/);
+    assert.match(text, /28 barangay\(s\) use ARIMA/);
+    assert.match(text, /Bagong Katipunan, Santa Rosa/);
+    assert.match(text, /too sparse for ARIMA/);
+    assert.ok(!/Baseline Forecast/.test(text));
+    assert.ok(!/fewer than 24/.test(text));
+  });
+
+  it('reads ONE forecast month: the first one after the latest recorded case', async () => {
+    const pool = createPool(healthyOptions());
+    await buildDashboardMetrics(pool);
+    const q = pool.calls.find((c) => c.sql.includes('model_predictions'));
+    assert.match(q.sql, /SELECT MIN\(period\) FROM model_predictions/);
+    assert.match(q.sql, /period > \(SELECT MAX\(date_of_diagnosis\)/);
+    assert.match(q.sql, /SELECT MAX\(period\) FROM model_predictions/, 'falls back to the newest period');
   });
 
   it('produces no predictive wording when history is insufficient', async () => {
@@ -402,7 +492,7 @@ describe('generateDashboardInsight — response shape', () => {
   it('is concise — not the seven-section Analytics narrative', async () => {
     const m = await buildDashboardMetrics(createPool(healthyOptions()));
     const insight = generateDashboardInsight(m);
-    assert.ok(insight.sections.length <= 4, `expected at most 4 sections, got ${insight.sections.length}`);
+    assert.ok(insight.sections.length <= 5, `expected at most 5 sections, got ${insight.sections.length}`);
     const ids = insight.sections.map((s) => s.id);
     // None of the Analytics-only section ids leak in.
     for (const analyticsOnly of ['highestLowest', 'significantChanges', 'demographics', 'overallSummary']) {
@@ -485,5 +575,38 @@ describe('buildDashboardMetrics — read-only', () => {
     await buildDashboardMetrics(pool);
     assert.ok(pool.calls.some((c) => c.sql.includes('barangay_risk_scores')), 'RF class read from its table');
     assert.ok(pool.calls.some((c) => c.sql.includes('model_predictions')), 'forecast read from its table');
+  });
+});
+
+describe('generateDashboardInsight — map interpretation', () => {
+  const base = (over) => ({
+    summary: { totalCases: 100 },
+    riskCounts: { high: 4, medium: 3, low: 2, noData: 0, assessed: 9, assessmentYear: 2026 },
+    highRiskBarangays: ['A', 'B', 'C', 'D'],
+    mapPattern: { clusters: [['A', 'B', 'C']], isolated: ['D'] },
+    unavailable: [],
+    ...over,
+  });
+  const text = (m) => generateDashboardInsight(m).sections.find((s) => s.id === 'mapInterpretation')?.text;
+
+  it('describes the connected High Risk group and isolated barangays', () => {
+    const t = text(base());
+    assert.match(t, /\*\*3\*\* of the \*\*4\*\* High Risk barangays are connected/);
+    assert.match(t, /A, B, C/);
+    assert.match(t, /High Risk without a High Risk neighbour: D/);
+  });
+
+  it('says scattered when no High Risk barangays touch', () => {
+    const t = text(base({ mapPattern: { clusters: [], isolated: ['A', 'B', 'C', 'D'] } }));
+    assert.match(t, /scattered/);
+  });
+
+  it('makes no spatial claim when border data is unavailable', () => {
+    assert.strictEqual(text(base({ mapPattern: null })), undefined);
+  });
+
+  it('reports no High Risk area when none exist', () => {
+    const t = text(base({ riskCounts: { high: 0, medium: 3, low: 6, noData: 0, assessed: 9, assessmentYear: 2026 }, highRiskBarangays: [] }));
+    assert.match(t, /No barangay is classified High Risk/);
   });
 });

@@ -44,7 +44,8 @@ describe('planIdentities', () => {
   const juan = { last_name: 'Dela Cruz', first_name: 'Juan', date_of_birth: '1990-01-01' };
 
   it('a new person becomes a new case', () => {
-    assert.deepEqual(planIdentities([{ ...juan, date_of_diagnosis: '2025-01-05' }], []), [{ kind: 'new' }]);
+    assert.deepEqual(planIdentities([{ ...juan, date_of_diagnosis: '2025-01-05' }], []),
+      [{ kind: 'new', matchedBy: null, conflict: false }]);
   });
 
   it('a person already in the system is held as a possible match, never merged', () => {
@@ -84,6 +85,51 @@ describe('planIdentities', () => {
     const existing = [{ ...juan, case_no: 'CS-2024-000001', date_of_diagnosis: '2024-02-01' }];
     const [p] = planIdentities([{ ...juan, date_of_birth: '1991-01-01', date_of_diagnosis: '2025-01-05' }], existing);
     assert.equal(p.kind, 'new');
+  });
+
+  it('a row whose Case ID points at a case joins THAT case, not one found by name', () => {
+    const existing = [
+      { ...juan, case_no: 'CS-2024-000001', date_of_diagnosis: '2024-02-01', source_case_id: 'ROS-D-2024-00001' },
+      { case_no: 'CS-2025-000007', last_name: 'Santos', first_name: 'Ana', date_of_birth: '1988-05-04',
+        date_of_diagnosis: '2025-01-05', source_case_id: 'ROS-D-2025-00042' },
+    ];
+    const [p] = planIdentities(
+      [{ ...juan, date_of_diagnosis: '2024-02-01', source_case_id: 'ROS-D-2025-00042' }],
+      existing
+    );
+    assert.equal(p.kind, 'pending');
+    assert.equal(p.matchedBy, 'case_id');
+    assert.deepEqual(p.candidate, { case_no: 'CS-2025-000007' });
+    assert.equal(p.conflict, true, 'the Case ID belongs to a different patient');
+  });
+
+  it('a Case ID match on the same patient is compatible even when the date was corrected', () => {
+    const existing = [{ ...juan, case_no: 'CS-2025-000007', date_of_diagnosis: '2025-01-05', source_case_id: 'ROS-D-2025-00042' }];
+    const [p] = planIdentities([{ ...juan, date_of_diagnosis: '2025-02-11', source_case_id: 'ROS-D-2025-00042' }], existing);
+    assert.equal(p.matchedBy, 'case_id');
+    assert.equal(p.conflict, false);
+  });
+
+  it('a de-identified row joins its Case ID when the diagnosis date agrees', () => {
+    const existing = [{ case_no: 'CS-2025-000007', date_of_diagnosis: '2025-01-05', source_case_id: 'ROS-D-2025-00042' }];
+    const [p] = planIdentities([{ date_of_diagnosis: '2025-01-05', source_case_id: 'ROS-D-2025-00042' }], existing);
+    assert.equal(p.matchedBy, 'case_id');
+    assert.equal(p.conflict, false);
+  });
+
+  it('the same Case ID twice in one file: same patient merges, a different patient conflicts', () => {
+    const rows = [
+      { ...juan, date_of_diagnosis: '2025-01-05', source_case_id: 'ROS-D-2025-00042' },
+      { ...juan, date_of_diagnosis: '2025-01-05', source_case_id: 'ROS-D-2025-00042' },
+      { last_name: 'Santos', first_name: 'Ana', date_of_birth: '1988-05-04',
+        date_of_diagnosis: '2025-01-05', source_case_id: 'ROS-D-2025-00042' },
+    ];
+    const plan = planIdentities(rows, []);
+    assert.equal(plan[1].kind, 'pending');
+    assert.equal(plan[1].matchedBy, 'case_id');
+    assert.equal(plan[1].conflict, false, 'same patient, same date -> the later row is a report of the first');
+    assert.equal(plan[2].kind, 'pending');
+    assert.equal(plan[2].conflict, true, 'a different patient claiming the same Case ID is for a person to decide');
   });
 });
 

@@ -196,6 +196,16 @@ class ArimaStep(BaseModel):
     method: str = "arima"
 
 
+class ArimaBarangayEvaluation(BaseModel):
+    """One barangay's own walk-forward result (its metrics and every month it was tested on)."""
+    barangay_name: str
+    mae: Optional[float] = None
+    mape: Optional[float] = None
+    n_steps: int = 0
+    method_counts: dict[str, int] = {}
+    steps: list[ArimaStep] = []
+
+
 class ArimaEvaluation(BaseModel):
     """ARIMA walk-forward evaluation result."""
     mae: Optional[float] = None
@@ -214,6 +224,9 @@ class ArimaEvaluation(BaseModel):
     # numbers can be read against a simple reference instead of in isolation.
     baseline_mae: Optional[float] = None
     baseline_mape: Optional[float] = None
+    # Every evaluated barangay's own result. `mae`/`mape` above are the mean of these, and `steps`
+    # are only the longest barangay's; callers that need a Barangay or Year filter read this list.
+    per_barangay: list[ArimaBarangayEvaluation] = []
 
 
 class RfStep(BaseModel):

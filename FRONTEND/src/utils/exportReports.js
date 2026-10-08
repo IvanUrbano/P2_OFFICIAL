@@ -7,7 +7,7 @@ export async function exportCSV(cases) {
   const { saveAs } = await import('file-saver');
   const headers = ['Case ID', 'Date', 'Barangay', 'Sex', 'Age', 'Registration Group', 'Anatomical Site', 'Case Status', 'Treatment Outcome', 'Source Outcome Value', 'Bacteriological Status'];
   const rows = cases.map(r => [
-    r.id,
+    r.source_case_id || 'No Case ID',
     r.date_of_diagnosis ? new Date(r.date_of_diagnosis).toLocaleDateString('en-US') : '',
     r.barangay_name || '',
     r.sex || '',
@@ -24,66 +24,45 @@ export async function exportCSV(cases) {
   saveAs(blob, `TBInsight_Report_${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
-export async function exportExcel(reportData) {
-  if (!reportData) return;
+export async function exportExcel(report, reportData) {
+  if (!report) return;
   const XLSX = await import('xlsx');
   const wb = XLSX.utils.book_new();
 
-  // Summary sheet
-  const summaryRows = [
-    ['Report Type', reportData.report?.type || ''],
-    ['Reporting Period', reportData.report?.period || ''],
-    ['Coverage', reportData.report?.coverage || ''],
-    ['Generated', reportData.report?.generatedAt ? new Date(reportData.report.generatedAt).toLocaleString() : ''],
-    [],
-    ['Total Cases', reportData.summary?.totalCases ?? ''],
-    ['Diagnosed', reportData.summary?.diagnosedCases ?? ''],
-    ['On Treatment', reportData.summary?.onTreatmentCases ?? ''],
-    ['Treatment Success Rate', reportData.summary?.successRate != null ? `${reportData.summary.successRate}%` : 'N/A'],
-  ];
-  const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
-  XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+  // One sheet block-by-block, so the workbook says exactly what the on-screen report says.
+  const sheetRows = [[report.headerTitle], [report.subtitle], []];
+  for (const block of report.blocks) {
+    sheetRows.push([block.title.toUpperCase()]);
+    if (block.kind === 'kv') block.rows.forEach(r => sheetRows.push(r));
+    else if (block.kind === 'table') {
+      sheetRows.push(block.headers);
+      if (block.rows.length) block.rows.forEach(r => sheetRows.push(r));
+      else sheetRows.push([block.emptyText || 'No data available for this period.']);
+    } else block.items.forEach((t, i) => sheetRows.push([block.kind === 'list' ? `${i + 1}. ${t}` : t]));
+    sheetRows.push([]);
+  }
+  const ws = XLSX.utils.aoa_to_sheet(sheetRows);
+  ws['!cols'] = [{ wch: 52 }, { wch: 18 }, { wch: 18 }, { wch: 22 }, { wch: 12 }, { wch: 12 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Report');
 
-  // TB Records sheet
-  if (reportData.cases?.length) {
-    const recordHeaders = ['Case ID', 'Date', 'Barangay', 'Sex', 'Age', 'Registration Group', 'Case Status', 'Treatment Outcome', 'Source Outcome Value'];
-    const recordRows = reportData.cases.map(r => [
-      r.id,
+  // Record-level detail for the same period and coverage
+  const cases = reportData?.cases || [];
+  if (cases.length) {
+    const recordHeaders = ['Case ID', 'Date of Diagnosis', 'Barangay', 'Sex', 'Age', 'Registration Group', 'Anatomical Site', 'Bacteriological Status', 'Case Status', 'Treatment Outcome', 'Source Outcome Value'];
+    const recordRows = cases.map(r => [
+      r.source_case_id || 'No Case ID',
       r.date_of_diagnosis ? new Date(r.date_of_diagnosis).toLocaleDateString('en-US') : '',
       r.barangay_name || '',
       r.sex || '',
       r.age ?? '',
       r.registration_group || '',
+      r.anatomical_site || '',
+      r.bacteriological_status || '',
       r.case_status || '',
       r.outcome_status || '',
       r.source_outcome_status || '',
     ]);
-    const wsRecords = XLSX.utils.aoa_to_sheet([recordHeaders, ...recordRows]);
-    XLSX.utils.book_append_sheet(wb, wsRecords, 'TB Records');
-  }
-
-  // Treatment Outcomes sheet
-  if (reportData.outcomes?.length) {
-    const outcomeHeaders = ['Outcome', 'Count', 'Percentage'];
-    const outcomeRows = reportData.outcomes.map(r => [r.outcome_status, r.count, `${r.percentage}%`]);
-    const wsOutcomes = XLSX.utils.aoa_to_sheet([outcomeHeaders, ...outcomeRows]);
-    XLSX.utils.book_append_sheet(wb, wsOutcomes, 'Treatment Outcomes');
-  }
-
-  // Barangay Analysis sheet
-  if (reportData.barangayDistribution?.length) {
-    const brgyHeaders = ['Barangay', 'Cases', 'Population', 'Incidence Rate'];
-    const brgyRows = reportData.barangayDistribution.map(r => [r.barangay, r.cases, r.population, r.incidence != null ? `${r.incidence}/100k` : 'N/A']);
-    const wsBrgy = XLSX.utils.aoa_to_sheet([brgyHeaders, ...brgyRows]);
-    XLSX.utils.book_append_sheet(wb, wsBrgy, 'Barangay Analysis');
-  }
-
-  // Forecast sheet
-  if (reportData.forecast?.available) {
-    const fcHeaders = ['Forecasted Cases', 'Forecast Period'];
-    const fcRows = [[reportData.forecast.forecastedCases, reportData.forecast.period]];
-    const wsFc = XLSX.utils.aoa_to_sheet([fcHeaders, ...fcRows]);
-    XLSX.utils.book_append_sheet(wb, wsFc, 'Forecast');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([recordHeaders, ...recordRows]), 'TB Records');
   }
 
   XLSX.writeFile(wb, `TBInsight_Report_${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -158,12 +137,15 @@ export async function exportPDF(report) {
     y += 5;
   }
 
-  function addTable(headers, rows) {
+  function addTable(headers, rows, textColumns = [0]) {
     checkPage(20);
+    const columnStyles = {};
+    headers.forEach((_, i) => { if (!textColumns.includes(i)) columnStyles[i] = { halign: 'right' }; });
     doc.autoTable({
       startY: y,
       head: [headers],
       body: rows,
+      columnStyles,
       theme: 'grid',
       headStyles: { fillColor: NAVY, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
       bodyStyles: { fontSize: 8, textColor: BLACK },
@@ -209,91 +191,32 @@ export async function exportPDF(report) {
 
   addHeader();
 
-  // Summary KPIs
-  if (report.kpis?.length > 0) {
-    addSectionTitle('Summary');
-    const kpiRows = report.kpis.map(k => [k.label, String(k.value)]);
-    addKeyValueTable(kpiRows);
-  }
-
-  // Treatment Outcomes
-  if (report.tables?.length > 0) {
-    for (const table of report.tables) {
-      addSectionTitle(table.title);
-      addTable(table.headers, table.rows);
-    }
-  }
-
-  // Sex Distribution
-  if (report.sideBySide?.length > 0) {
-    for (const section of report.sideBySide) {
-      addSectionTitle(section.title);
-      addTable(section.headers, section.rows);
-    }
-  }
-
-  // Age Distribution
-  if (report.ageGroups?.length > 0) {
-    addSectionTitle('Age Distribution');
-    addTable(
-      ['Age Group', 'Count', 'Percentage'],
-      report.ageGroups.map(r => [r.age_group, String(r.count), `${r.percentage}%`])
-    );
-  }
-
-  // Case Profile
-  if (report.caseProfile) {
-    addSectionTitle('Case Profile');
-    addKeyValueTable([
-      ['New Cases', String(report.caseProfile.newCases)],
-      ['Relapse / Recapture', String(report.caseProfile.relapse)],
-      ['Pulmonary', String(report.caseProfile.pulmonary)],
-      ['Extra-pulmonary', String(report.caseProfile.extraPulmonary)],
-    ]);
-  }
-
-  // Forecast
-  if (report.forecast?.available) {
-    addSectionTitle('Forecast');
-    addKeyValueTable([
-      ['Forecasted Cases', String(report.forecast.forecastedCases)],
-      ['Forecast Period', report.forecast.period || ''],
-    ]);
-  }
-
-  // TB Case Trend
-  if (report.trend?.length > 0) {
-    addSectionTitle('TB Case Trend');
-    addTable(
-      ['Month', 'Cases'],
-      report.trend.map(r => [r.label, String(r.cases)])
-    );
-  }
-
-  // Barangay Distribution
-  if (report.barangayDistribution?.length > 0) {
-    addSectionTitle('TB Cases by Barangay');
-    addTable(
-      ['Barangay', 'Cases'],
-      report.barangayDistribution.map(r => [r.barangay, String(r.cases)])
-    );
-  }
-
-  // Recommendations
-  if (report.recommendations?.length > 0) {
-    addSectionTitle('Recommendations');
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(...BLACK);
-    report.recommendations.forEach((rec, i) => {
-      checkPage(10);
-      const lines = doc.splitTextToSize(`${i + 1}. ${rec}`, contentWidth);
-      lines.forEach(line => {
-        doc.text(line, margin, y);
-        y += 4;
+  for (const block of report.blocks) {
+    addSectionTitle(block.title);
+    if (block.kind === 'kv') {
+      addKeyValueTable(block.rows);
+    } else if (block.kind === 'table') {
+      if (block.rows.length === 0) {
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(...GRAY);
+        doc.text(block.emptyText || 'No data available for this period.', margin, y);
+        y += 8;
+      } else {
+        addTable(block.headers, block.rows.map(r => r.map(String)), block.textColumns || [0]);
+      }
+    } else {
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(...BLACK);
+      block.items.forEach((item, i) => {
+        const lines = doc.splitTextToSize(block.kind === 'list' ? `${i + 1}. ${item}` : item, contentWidth);
+        checkPage(lines.length * 4 + 4);
+        lines.forEach(line => { doc.text(line, margin, y); y += 4; });
+        y += 2;
       });
-      y += 2;
-    });
+      y += 4;
+    }
   }
 
   // Signature block

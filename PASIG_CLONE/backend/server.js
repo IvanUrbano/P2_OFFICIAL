@@ -26,6 +26,7 @@ const validationQueueRoutes = require('./routes/validationQueue');
 const manualEntryRoutes = require('./routes/manualEntry');
 const webhookRoutes = require('./routes/webhook');
 const facilitiesRoutes = require('./routes/facilities');
+const settingsRoutes = require('./routes/settings');
 const transfersRoutes = require('./routes/transfers');
  
 const app = express();
@@ -64,6 +65,7 @@ app.use('/api/data', manualEntryRoutes);
 app.use('/api/data/transfers', transfersRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/facilities', facilitiesRoutes);
+app.use('/api/settings', settingsRoutes);
  
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'pasig-clone', timestamp: new Date().toISOString() });
@@ -87,6 +89,9 @@ async function start() {
     // Pre-open a few connections to both databases so the first page load doesn't pay
     // ~1.5 s of connection setup per request
     const { pool, authPool } = require('./db/pasigSchema');
+    // The account database is shared with TBInsight. Keep this one-column
+    // migration active even when bulk local migrations are skipped.
+    await authPool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_data TEXT');
     await Promise.all([
       ...Array.from({ length: 4 }, () => pool.query('SELECT 1')),
       ...Array.from({ length: 3 }, () => authPool.query('SELECT 1')),

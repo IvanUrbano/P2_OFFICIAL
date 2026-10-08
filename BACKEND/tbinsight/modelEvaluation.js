@@ -73,6 +73,24 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
     ...step,
     month: calendar[Number(step.test_month) - 1] || null,
   }));
+  // Every evaluated barangay's own result with dated months, so the Forecasting page can show
+  // results for one barangay or a year range from what is SAVED (viewing never reruns the model).
+  // Kept compact: month, actual, predicted, method — the error is derived when read.
+  const perBarangay = (evaluation.arima?.per_barangay || []).map(b => ({
+    barangay_name: b.barangay_name,
+    mae: b.mae ?? null,
+    mape: b.mape ?? null,
+    n_steps: b.n_steps ?? 0,
+    method_counts: b.method_counts || {},
+    steps: (b.steps || [])
+      .map(step => ({
+        month: calendar[Number(step.test_month) - 1] || null,
+        actual: step.actual,
+        predicted: step.predicted,
+        method: step.method || 'arima',
+      }))
+      .filter(step => step.month),
+  }));
   const result = {
     ...evaluation,
     arima: { ...evaluation.arima, steps },
@@ -99,6 +117,7 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
       baseline_mape: result.arima?.baseline_mape ?? null,
       steps,
       example_barangay: result.arima?.example_barangay || null,
+      per_barangay: perBarangay,
     },
     rf: {
       accuracy: result.rf?.accuracy ?? null,

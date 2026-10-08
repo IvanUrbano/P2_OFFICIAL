@@ -58,7 +58,6 @@ function matchHeader(normalized) {
   if (normalized.includes('registration')) return 'registration_group';
   if (normalized.includes('bacteriological') || normalized.includes('bacteriologic')) return 'bacteriological_status';
   if (normalized.includes('validation')) return 'validation_status';
-  if (normalized.includes('itis') && normalized.includes('lite')) return 'itis_case_id';
   if (normalized.includes('source') && normalized.includes('type')) return 'source_type';
   if (normalized.includes('outcome') && !normalized.includes('date') && !normalized.includes('reason')) return 'outcome_status';
   if (normalized === 'type') return 'type';
@@ -335,7 +334,8 @@ function detectSheetType(sheetName, headers = []) {
   if (name === 'DSTB' || name.includes('DSTB') || name.includes('B-MODE')) return 'DSTB';
   if (name === 'MN' || name === 'M-N' || name.includes('MICROSCOPIC')) return 'MN';
 
-  // Fallback: check headers for MN-specific columns (itis_case_id present = MN)
+  // Fallback: check headers for MN-specific columns (an "ITIS Lite" column marks an MN
+  // file; the ITIS number itself is not read)
   const headerStr = headers.map(h => String(h || '').toLowerCase()).join(' ');
   if (headerStr.includes('itis') && headerStr.includes('lite')) return 'MN';
 

@@ -1,23 +1,23 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import API from '../api/axios';
+import { CASE_STATUS_OPTIONS as CASE_STATUSES, OUTCOME_OPTIONS as OUTCOMES, optionsFor, CASE_ID_RE, normalizeCaseId, CASE_ID_HINT } from '../utils/caseOptions';
 
-const CASE_STATUSES = ['DIAGNOSED', 'ON TREATMENT'];
-const OUTCOMES = ['CURED', 'TREATMENT COMPLETED', 'TREATMENT FAILED', 'LOST TO FOLLOW-UP', 'DIED', 'NOT EVALUATED', 'EXCLUDED'];
-
+// Same field set and order as Add TB Record (dropdowns share caseOptions.js).
 const CASE_FIELDS = [
+  { key: 'source_case_id', label: 'Case ID', type: 'caseid' },
   { key: 'case_status', label: 'Case status', type: 'status' },
   { key: 'treatment_outcome', label: 'Treatment outcome', type: 'outcome' },
   { key: 'date_of_outcome', label: 'Date of outcome', type: 'date' },
   { key: 'outcome_reason', label: 'Outcome reason', type: 'text' },
+  { key: 'date_of_screening', label: 'Date of screening', type: 'date' },
   { key: 'date_started_treatment', label: 'Treatment started', type: 'date' },
   { key: 'date_of_notification', label: 'Date of notification', type: 'date' },
   { key: 'treatment_facility', label: 'Treatment facility', type: 'facility' },
   { key: 'screening_facility', label: 'Screening facility', type: 'facility' },
-  { key: 'registration_group', label: 'Registration group', type: 'text' },
-  { key: 'bacteriological_status', label: 'Bacteriological status', type: 'text' },
-  { key: 'anatomical_site', label: 'Anatomical site', type: 'text' },
-  { key: 'source_of_patient', label: 'Source of patient', type: 'text' },
-  { key: 'itis_case_id', label: 'ITIS case no.', type: 'text' },
+  { key: 'registration_group', label: 'Registration group', type: 'select' },
+  { key: 'bacteriological_status', label: 'Bacteriological status', type: 'select' },
+  { key: 'anatomical_site', label: 'Anatomical site', type: 'select' },
+  { key: 'source_of_patient', label: 'Source of patient', type: 'select' },
 ];
 const IDENTITY_FIELDS = [
   { key: 'last_name', label: 'Last name', type: 'text' },
@@ -54,6 +54,10 @@ export default function CaseEditForm({ record, identityUnlocked, deidentified, f
   const [touched, setTouched] = useState({});
   const [errors, setErrors] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [options, setOptions] = useState({});
+  useEffect(() => {
+    API.get('/api/data/manual-options').then(r => setOptions(r.data || {})).catch(() => {});
+  }, []);
 
   const setValue = (k, v) => {
     setValues(x => ({ ...x, [k]: v, ...(v && k === 'case_status' ? { treatment_outcome: '' } : v && k === 'treatment_outcome' ? { case_status: '' } : {}) }));
@@ -65,6 +69,20 @@ export default function CaseEditForm({ record, identityUnlocked, deidentified, f
     const changes = Object.fromEntries(Object.keys(touched).filter(k => !['case_status', 'treatment_outcome'].includes(k)).map(k => [k, values[k]]));
     if (touched.case_status || touched.treatment_outcome) changes.outcome_status = values.treatment_outcome || values.case_status || null;
     if (Object.keys(changes).length === 0) { onCancel(); return; }
+    if (changes.source_case_id !== undefined) {
+      changes.source_case_id = normalizeCaseId(changes.source_case_id);
+      if (changes.source_case_id && !CASE_ID_RE.test(changes.source_case_id)) {
+        setErrors([`Case ID must look like ROS-D-2025-00042 (got "${changes.source_case_id}")`]);
+        return;
+      }
+      if (!changes.source_case_id) { setErrors(['Case ID cannot be left blank — it identifies this TB case.']); return; }
+    }
+    const dx = record.date_of_diagnosis ? String(record.date_of_diagnosis).slice(0, 10) : null;
+    const outcomeDate = values.date_of_outcome;
+    const dateErrors = [];
+    if (outcomeDate && dx && outcomeDate < dx) dateErrors.push('Date of Outcome cannot be earlier than Date of Diagnosis');
+    if (outcomeDate && values.date_started_treatment && outcomeDate < values.date_started_treatment) dateErrors.push('Date of Outcome cannot be earlier than Date Started Treatment');
+    if (dateErrors.length) { setErrors(dateErrors); return; }
     setSaving(true);
     setErrors([]);
     try {
@@ -88,6 +106,18 @@ export default function CaseEditForm({ record, identityUnlocked, deidentified, f
         <option value="">— not set —</option>
         {[...new Set([...(f.type === 'status' ? CASE_STATUSES : OUTCOMES), values[f.key]].filter(Boolean))].map(o => <option key={o} value={o}>{o}</option>)}
       </FormSelect>
+    );
+    if (f.type === 'select') return (
+      <FormSelect {...common}>
+        <option value="">—</option>
+        {[...new Set([...optionsFor(options, f.key), values[f.key]].filter(Boolean))].map(o => <option key={o} value={o}>{o}</option>)}
+      </FormSelect>
+    );
+    if (f.type === 'caseid') return (
+      <>
+        <input type="text" {...common} onChange={e => setValue(f.key, e.target.value.toUpperCase())} className={`${inputClass} font-mono`} placeholder="ROS-D-2025-00042" autoComplete="off" />
+        <span className="block text-[10px] mt-1" style={{ color: '#94A3B8' }}>{CASE_ID_HINT}</span>
+      </>
     );
     if (f.type === 'facility') return (<><input type="text" list="case-edit-facilities" {...common} /></>);
     return <input type="text" {...common} />;

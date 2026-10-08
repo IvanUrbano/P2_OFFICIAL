@@ -1,5 +1,5 @@
-// Patient name for display. Historical records are de-identified by the server
-// (names/DOB never sent — identity_deidentified: true); show that plainly.
+// Patient name for display. The server de-identifies historical records until the
+// user's Records PIN is unlocked; show that plainly when identity is unavailable.
 export const DEIDENTIFIED = 'De-identified';
 
 export function patientName(r, { short = false } = {}) {

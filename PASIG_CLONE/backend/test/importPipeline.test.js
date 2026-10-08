@@ -56,13 +56,13 @@ describe('column mapping (real registry headers)', () => {
     assert.equal(byHeader['Outcome Reason'], 'outcome_reason');
     assert.equal(byHeader['Date Started Tx'], 'date_started_treatment');
     assert.equal(byHeader['Bacteriologic Status'], 'bacteriological_status');
-    assert.equal(byHeader['ITIS Lite Case No.'], 'itis_case_id');
+    assert.equal(byHeader['ITIS Lite Case No.'], undefined, 'the ITIS column is ignored');
     assert.equal(byHeader['Microscopy Release Date'], 'microscopy_release_date');
     assert.equal(byHeader['RDT Result'], 'rdt_result');
     assert.equal(byHeader['Referred to DOTS'], 'referred_to_dots');
     assert.equal(byHeader['Referral Status'], 'referral_status');
     assert.equal(byHeader['Type'], 'type');
-    assert.equal(Object.keys(map).length, MN_HEADERS.length - 1, 'all columns except No. are mapped');
+    assert.equal(Object.keys(map).length, MN_HEADERS.length - 2, 'all columns except No. and the ignored ITIS column are mapped');
   });
 });
 
@@ -138,7 +138,7 @@ describe('CSV parsing', () => {
     assert.equal(parsed.mnCount, 1);
     assert.equal(parsed.dstbCount, 0);
     const r = parsed.sheets[0].records[0];
-    assert.equal(r.itis_case_id, 'ITIS-0001');
+    assert.equal(r.itis_case_id, undefined);
     assert.equal(r.outcome_status, 'On treatment');
     assert.equal(r.outcome_reason, 'n/a');
   });
@@ -231,7 +231,7 @@ describe('cleaning', () => {
 });
 
 describe('clean + validate', () => {
-  const person = { last_name: '  dela   cruz ', first_name: 'Maria', date_of_birth: '1963-05-20' };
+  const person = { last_name: '  dela   cruz ', first_name: 'Maria', date_of_birth: '1963-05-20', source_case_id: 'ROS-D-2025-00001' };
 
   it('accepts a messy but valid Pasig record after cleaning', async () => {
     const valid = await getValidBarangays();

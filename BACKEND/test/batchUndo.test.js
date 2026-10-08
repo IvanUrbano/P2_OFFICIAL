@@ -211,9 +211,9 @@ describe('DELETE /api/tb/integration/batches/:batchId', () => {
 
   it('releases duplicate flags pointing into the batch, then re-flags those groups among remaining rows', async () => {
     releasedRows = [
-      { source_type: 'DSTB', dstb_fingerprint: 'fp-a', itis_case_id: null },
-      { source_type: 'DSTB', dstb_fingerprint: 'fp-a', itis_case_id: null },
-      { source_type: 'MN', dstb_fingerprint: null, itis_case_id: 'ITIS-1' },
+      { source_type: 'DSTB', dstb_fingerprint: 'fp-a' },
+      { source_type: 'DSTB', dstb_fingerprint: 'fp-a' },
+      { source_type: 'MN', dstb_fingerprint: null },
     ];
     const res = await request(buildApp())
       .delete(`/api/tb/integration/batches/${BATCH}`)
@@ -229,9 +229,8 @@ describe('DELETE /api/tb/integration/batches/:batchId', () => {
 
     assert.deepStrictEqual(reflagParams, [
       { reason: 'DSTB', params: [['fp-a']] },
-      { reason: 'MN', params: [['ITIS-1']] },
     ]);
-    assert.deepStrictEqual(res.body.duplicateFlags, { released: 3, reflagged: 2 });
+    assert.deepStrictEqual(res.body.duplicateFlags, { released: 3, reflagged: 1 });
   });
 
   it('rolls back the deletion if the audit row cannot be written', async () => {

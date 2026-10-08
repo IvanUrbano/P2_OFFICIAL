@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import API from '../../api/axios';
 import EmptyState from '../EmptyState';
 import SidePanel, { primaryBtn, secondaryBtn } from '../SidePanel';
-import { fmtDate, Notice, th, thStyle, td } from './shared';
+import { fmtDate, Notice } from './shared';
 import { can } from '../../utils/permissions';
 import LocationReviewPanel from './LocationReviewPanel';
 import { useConfirmDialog } from '../ConfirmDialog';
@@ -188,7 +188,7 @@ export default function AssignmentTab({ batch, refreshKey, onChanged }) {
       )}
 
       {/* ── Location ── */}
-      <section className="px-5 pt-4">
+      <section className="mx-5 mt-4 p-4" style={{ background: '#F5F8FB', border: '1px solid #E8EDF2', borderRadius: 4 }}>
         <h3 className="text-xs font-bold" style={{ color: '#0F2D52' }}>Patient location <span className="font-normal" style={{ color: '#94A3B8' }}>· {data.locations.reduce((n, l) => n + l.records, 0).toLocaleString()} records</span></h3>
         <p className="text-[11px] mt-0.5 mb-2" style={{ color: '#64748B' }}>
           Missing, unknown or non-Pasig barangays, grouped by what the file says. Records in a group can belong to different barangays, so each is reviewed and assigned on its own; the facility never decides the barangay. Clearly non-Pasig cities can be classified as Outside Pasig.
@@ -196,38 +196,39 @@ export default function AssignmentTab({ batch, refreshKey, onChanged }) {
         {data.locations.length === 0 ? (
           <p className="text-[11px] py-3" style={{ color: '#94A3B8' }}>Every record has a Pasig barangay or a confirmed outside-Pasig location.</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg" style={{ border: '1px solid #E2E8F0' }}>
-            <table className="w-full">
-              <thead><tr>{['Barangay in file', 'City in file', 'Records', 'Diagnosed', 'Resolve'].map(h => <th key={h} className={th} style={thStyle}>{h}</th>)}</tr></thead>
-              <tbody>
-                {data.locations.map(l => {
-                  const k = locKey(l);
-                  return (
-                    <tr key={k} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                      <td className={td} style={{ color: l.barangay_text ? '#0F2D52' : '#94A3B8' }}>{l.barangay_text || '(blank)'}</td>
-                      <td className={td} style={{ color: l.city_text ? '#475569' : '#94A3B8' }}>{l.city_text || '(blank)'}</td>
-                      <td className={td} style={{ color: '#0F2D52' }}>{l.records.toLocaleString()}</td>
-                      <td className={`${td} whitespace-nowrap`} style={{ color: '#64748B' }}>{fmtDate(l.first_dx)}{l.last_dx && l.last_dx !== l.first_dx ? ` – ${fmtDate(l.last_dx)}` : ''}</td>
-                      <td className={td}>
-                        {canAssign ? (
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <button onClick={() => setReviewGroup(l)} className="px-2.5 py-1.5 text-[11px] font-semibold" style={primaryBtn}>Review Records</button>
-                            {nonPasigCity(l) && (
-                              <button disabled={busy === `loc:${k}`} onClick={() => classifyOutside(l)} className="px-2.5 py-1.5 text-[11px] font-medium disabled:opacity-50" style={secondaryBtn}>Outside Pasig</button>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-[10px] font-semibold" style={{ color: '#B45309' }}>
-                            ⚠ Requires Administrator Review
-                            <span className="block font-normal" style={{ color: '#94A3B8' }}>Barangay could not be matched.</span>
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div style={{ borderTop: '1px solid rgba(15,45,82,0.04)', borderBottom: '1px solid rgba(15,45,82,0.04)' }}>
+            {data.locations.map(l => {
+              const k = locKey(l);
+              return (
+                <div key={k} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-3 py-3" style={{ borderBottom: '1px solid rgba(15,45,82,0.04)' }}>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold" style={{ color: l.barangay_text ? '#334155' : '#64748B' }}>
+                      {l.barangay_text || 'No barangay listed'}
+                      <span className="mx-1.5 font-normal" style={{ color: '#94A3B8' }}>·</span>
+                      <span className="font-normal">{l.city_text || 'No city listed'}</span>
+                    </p>
+                    <p className="mt-1 text-[11px]" style={{ color: '#64748B' }}>
+                      {l.records.toLocaleString()} record{l.records === 1 ? '' : 's'}
+                      <span className="mx-1.5">·</span>
+                      Diagnosed {fmtDate(l.first_dx)}{l.last_dx && l.last_dx !== l.first_dx ? ` – ${fmtDate(l.last_dx)}` : ''}
+                    </p>
+                  </div>
+                  {canAssign ? (
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button onClick={() => setReviewGroup(l)} className="px-3 py-1.5 text-[11px] font-semibold" style={primaryBtn}>Review Records</button>
+                      {nonPasigCity(l) && (
+                        <button disabled={busy === `loc:${k}`} onClick={() => classifyOutside(l)} className="px-3 py-1.5 text-[11px] font-medium disabled:opacity-50" style={secondaryBtn}>Outside Pasig</button>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-[11px] sm:text-right" style={{ color: '#64748B' }}>
+                      Admin review required
+                      <span className="block text-[10px]" style={{ color: '#94A3B8' }}>Barangay could not be matched.</span>
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </section>
@@ -250,34 +251,30 @@ export default function AssignmentTab({ batch, refreshKey, onChanged }) {
         {data.facilities.length === 0 ? (
           <p className="text-[11px] py-3" style={{ color: '#94A3B8' }}>Every facility name is mapped to the registry.</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg" style={{ border: '1px solid #E2E8F0' }}>
-            <table className="w-full">
-              <thead><tr>{['Facility name in records', 'Used as', 'Records', canMap ? 'Resolution' : 'Suggested'].map(h => <th key={h} className={th} style={thStyle}>{h}</th>)}</tr></thead>
-              <tbody>
-                {data.facilities.map(f => (
-                  <tr key={f.alias_norm} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                    <td className={td} style={{ color: '#0F2D52' }}>{f.facility_text}</td>
-                    <td className={td} style={{ color: '#64748B' }}>{(f.fields || []).join(', ')}</td>
-                    <td className={td} style={{ color: '#0F2D52' }}>{f.records.toLocaleString()}</td>
-                    <td className={td}>
-                      {canMap ? (
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <button onClick={() => openResolve(f)} className="px-2.5 py-1.5 text-[11px] font-semibold" style={primaryBtn}>Resolve</button>
-                          <span className="text-[10px]" style={{ color: '#94A3B8' }}>
-                            {f.suggestion ? `suggested: ${f.suggestion.name}` : 'no suggestion'}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-[10px] font-semibold" style={{ color: '#B45309' }}>
-                          ⚠ Requires Administrator Review
-                          <span className="block font-normal" style={{ color: '#64748B' }}>Suggested: {f.suggestion?.name || '—'}</span>
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div style={{ borderTop: '1px solid rgba(15,45,82,0.04)', borderBottom: '1px solid rgba(15,45,82,0.04)' }}>
+            {data.facilities.map(f => (
+              <div key={f.alias_norm} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-3 py-3" style={{ borderBottom: '1px solid rgba(15,45,82,0.04)' }}>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold break-words" style={{ color: '#334155' }}>{f.facility_text}</p>
+                  <p className="mt-1 text-[11px]" style={{ color: '#64748B' }}>
+                    Used as: {(f.fields || []).join(', ') || '—'}
+                    <span className="mx-1.5">·</span>
+                    {f.records.toLocaleString()} record{f.records === 1 ? '' : 's'}
+                  </p>
+                  {f.suggestion && (
+                    <p className="mt-1 text-[11px]" style={{ color: '#64748B' }}>Suggested facility: <span className="font-medium" style={{ color: '#334155' }}>{f.suggestion.name}</span></p>
+                  )}
+                </div>
+                {canMap ? (
+                  <button onClick={() => openResolve(f)} className="self-start sm:self-auto px-3 py-1.5 text-[11px] font-semibold shrink-0" style={primaryBtn}>Resolve</button>
+                ) : (
+                  <span className="text-[11px] sm:text-right shrink-0" style={{ color: '#64748B' }}>
+                    Admin review required
+                    {!f.suggestion && <span className="block text-[10px]" style={{ color: '#94A3B8' }}>No suggested facility.</span>}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </section>

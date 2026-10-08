@@ -4,7 +4,8 @@
 -- TBInsight), so there is no foreign key across databases. Messages carry case IDs
 -- only — never patient names or dates of birth.
 --
---   type          referral_received | referral_accepted | referral_rejected | referral_cancelled
+--   type          import_completed | import_failed | validation_issues | assignment_needed
+--                 | referral_received | referral_accepted | referral_rejected | referral_cancelled
 --                 | case_assigned | validation_summary | sync_failed | sync_completed
 --                 | account_updated
 --   severity      info | success | warning | danger

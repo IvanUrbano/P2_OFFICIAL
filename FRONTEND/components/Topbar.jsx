@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import Logo from './Logo';
 import API from '../src/api/axios';
+import { avatarColorForRole, initialsForUsername } from '../src/utils/userIdentity';
+import { getPrefs, onPrefsChange } from '../src/utils/preferences';
 
 const NAV_ITEMS = [
   { icon: 'ri-pie-chart-fill', label: 'Dashboard', path: '/dashboard' },
@@ -35,6 +37,8 @@ export default function Topbar({ user }) {
   const [bellOpen, setBellOpen] = useState(false);
   const bellRef = useRef(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [showBellCount, setShowBellCount] = useState(() => getPrefs().bellCount);
+  useEffect(() => onPrefsChange(() => setShowBellCount(getPrefs().bellCount)), []);
   const [recentNotifs, setRecentNotifs] = useState([]);
 
   const storedUser = user ?? (() => {
@@ -42,14 +46,12 @@ export default function Topbar({ user }) {
     return s ? JSON.parse(s) : null;
   })();
 
-  const userRole = storedUser?.role || 'Admin';
-  const isAdmin = userRole === 'admin';
-  const initials = storedUser?.username
-    ? storedUser.username.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2)
-    : 'AD';
+  const userRole = storedUser?.role || 'admin';
+  const isAdmin = userRole.toLowerCase() === 'admin';
+  const initials = initialsForUsername(storedUser?.username);
+  const avatarColor = avatarColorForRole(userRole);
   const displayName = storedUser?.username ?? 'System Admin';
-  const displayEmail = storedUser?.email ?? 'admin@pasigcity.gov.ph';
-  const displayPosition = storedUser?.position ?? 'System Administrator';
+  const displayEmail = storedUser?.email?.trim() || null;
   // Staff accounts are assigned to a barangay (login returns it as `barangay`); older
   // accounts may only have a facility.
   const staffBarangay = storedUser?.barangay?.name || storedUser?.barangay_name || null;
@@ -113,7 +115,7 @@ export default function Topbar({ user }) {
       <header className="sticky top-0 z-[1100] w-full shrink-0">
         {/* ── Tier 1: Logo + User Bar ── */}
         <div
-          className="flex items-center justify-between px-6 lg:px-8"
+          className="flex min-w-0 items-center justify-between gap-2 px-3 sm:px-6 lg:px-8"
           style={{ background: '#0B1D35', minHeight: '52px' }}
         >
           {/* Left: Logo */}
@@ -126,14 +128,14 @@ export default function Topbar({ user }) {
               <span className="text-lg font-extrabold tracking-tight" style={{ color: '#ffffff' }}>
                 TBInsight
               </span>
-              <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>
+              <span className="hidden text-[11px] font-medium xl:inline" style={{ color: '#64748B' }}>
                 Pasig City TB Surveillance
               </span>
             </div>
           </div>
 
           {/* Right: Last Synced + Icons + User */}
-          <div className="flex items-center gap-4">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-4">
             {/* Last Synced */}
             <div className="hidden md:flex items-center gap-2">
               <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: 'rgba(59,130,246,0.2)' }}>
@@ -156,7 +158,7 @@ export default function Topbar({ user }) {
                 style={{ background: bellOpen ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.08)', color: '#CBD5E1' }}
               >
                 <i className="ri-notification-3-line text-base" />
-                {unreadCount > 0 && (
+                {showBellCount && unreadCount > 0 && (
                   <span
                     className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full flex items-center justify-center text-[9px] font-bold"
                     style={{
@@ -274,102 +276,73 @@ export default function Topbar({ user }) {
               <i className="ri-settings-3-line text-base" />
             </button>
 
-            {/* User Avatar + Dropdown */}
-            <div className="relative" ref={dropdownRef}>
+            {/* Account menu */}
+            <div className="relative min-w-0" ref={dropdownRef}>
               <button
+                type="button"
+                aria-label={`Account menu for ${displayName}`}
+                aria-expanded={dropdownOpen}
+                aria-haspopup="menu"
                 onClick={() => setDropdownOpen(!dropdownOpen)}
-                className="flex items-center gap-2.5 cursor-pointer shrink-0 rounded-full pl-1 pr-3 py-1 transition-all hover:bg-white/5"
-                style={{
-                  background: dropdownOpen ? 'rgba(255,255,255,0.1)' : 'transparent',
-                }}
+                className="flex min-w-0 max-w-[180px] items-center gap-2.5 border-l border-white/15 py-1 pl-3 text-left sm:max-w-[230px] lg:max-w-[260px]"
               >
                 <div
                   className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
-                  style={{ background: '#10B981', color: '#ffffff' }}
+                  style={{ background: avatarColor, color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)' }}
                 >
-                  {initials}
+                  {storedUser?.profile_photo_data ? <img src={storedUser.profile_photo_data} alt="" className="h-full w-full rounded-full object-cover" /> : initials}
                 </div>
-                <div className="hidden lg:block text-left">
-                  <p className="text-xs font-bold leading-tight" style={{ color: '#ffffff' }}>{displayName}</p>
-                  <p className="text-[9px] leading-tight" style={{ color: '#64748B' }}>
-                    {!isAdmin && displayFacility ? displayFacility : displayEmail}
-                  </p>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-semibold leading-tight text-white" title={displayName}>{displayName}</p>
+                  {displayEmail && <p className="mt-0.5 truncate text-[10px] leading-tight text-slate-300" title={displayEmail}>{displayEmail}</p>}
                 </div>
                 <i
                   className="ri-arrow-down-s-line text-sm shrink-0 transition-transform"
-                  style={{ color: '#64748B', transform: dropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                  style={{ color: '#CBD5E1', transform: dropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
                 />
               </button>
 
               {dropdownOpen && (
                 <div
-                  className="absolute right-0 top-full mt-2 w-60 rounded-xl overflow-hidden z-[1200]"
-                  style={{
-                    background: '#ffffff',
-                    border: '1px solid #E2E8F0',
-                    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08)',
-                  }}
+                  className="absolute right-0 top-full z-[1200] mt-2 w-52 overflow-hidden rounded-md border border-[#DCE3EA] bg-white py-1 shadow-[0_8px_24px_rgba(11,29,53,0.12)]"
+                  role="menu"
+                  aria-label="Account actions"
                 >
-                  <div className="px-4 py-3" style={{ borderBottom: '1px solid #E2E8F0' }}>
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-                        style={{ background: '#10B981', color: '#ffffff' }}
-                      >
-                        {initials}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold truncate" style={{ color: '#0F2D52' }}>{displayName}</p>
-                        <p className="text-[10px] truncate" style={{ color: '#94A3B8' }}>{displayEmail}</p>
-                        {!isAdmin && displayFacility && (
-                          <p className="text-[10px] font-semibold truncate flex items-center gap-1" style={{ color: '#0F2D52' }}>
-                            <i className={staffBarangay ? 'ri-map-pin-line' : 'ri-hospital-line'} /> {displayFacility}
-                          </p>
-                        )}
-                      </div>
+                  <div className="border-b border-[#E2E8F0] px-4 py-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[10px] text-[#64748B]">Role</span>
+                      <span className="text-xs font-medium text-[#0F2D52]">{isAdmin ? 'Admin' : 'Staff'}</span>
                     </div>
-                    <div className="mt-2 flex items-center gap-2">
-                      <span
-                        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold"
-                        style={{
-                          background: isAdmin ? 'rgba(37,99,235,0.1)' : 'rgba(0,216,246,0.15)',
-                          color: isAdmin ? '#2563EB' : '#00A9D8',
-                        }}
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: isAdmin ? '#2563EB' : '#00A9D8' }} />
-                        {userRole}
-                      </span>
-                      <span className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>{displayPosition}</span>
-                    </div>
+                    {!isAdmin && displayFacility && (
+                      <p className="mt-1.5 truncate text-[10px] text-[#64748B]" title={displayFacility}>{displayFacility}</p>
+                    )}
                   </div>
 
-                  <div className="py-1">
-                    {[
-                      { icon: 'ri-user-settings-line', label: 'My Profile', color: '#2563EB', action: () => { navigate('/profile'); setDropdownOpen(false); } },
-                      ...(isAdmin ? [
-                        { icon: 'ri-settings-3-line', label: 'Settings', color: '#64748B', action: () => { navigate('/settings'); setDropdownOpen(false); } },
-                      ] : []),
-
-                    ].map((item) => (
-                      <button
-                        key={item.label}
-                        onClick={item.action}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-colors hover:bg-blue-50"
-                        style={{ color: '#334155' }}
-                      >
-                        <i className={`${item.icon} text-sm`} style={{ color: item.color }} />
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="py-1" style={{ borderTop: '1px solid #E2E8F0' }}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => { navigate('/profile'); setDropdownOpen(false); }}
+                    className="block w-full px-4 py-2.5 text-left text-xs font-medium text-[#0F2D52] hover:bg-[#F1F5F9] focus-visible:bg-[#F1F5F9] focus-visible:outline-none"
+                  >
+                    My Profile
+                  </button>
+                  {isAdmin && (
                     <button
-                      onClick={handleLogout}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-colors hover:bg-red-50"
-                      style={{ color: '#EF4444' }}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => { navigate('/settings'); setDropdownOpen(false); }}
+                      className="block w-full px-4 py-2.5 text-left text-xs font-medium text-[#0F2D52] hover:bg-[#F1F5F9] focus-visible:bg-[#F1F5F9] focus-visible:outline-none"
                     >
-                      <i className="ri-logout-box-r-line text-sm" />
+                      Settings
+                    </button>
+                  )}
+                  <div className="mt-1 border-t border-[#E2E8F0] pt-1">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={handleLogout}
+                      className="block w-full px-4 py-2.5 text-left text-xs font-medium text-[#475569] hover:bg-[#F1F5F9] focus-visible:bg-[#F1F5F9] focus-visible:outline-none"
+                    >
                       Sign Out
                     </button>
                   </div>

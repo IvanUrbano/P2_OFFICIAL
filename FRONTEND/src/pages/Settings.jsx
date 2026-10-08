@@ -1,21 +1,28 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import { useTheme } from '../theme';
 import ProgressOverlay from '../components/ProgressOverlay';
+import ModalCloseButton from '../components/ModalCloseButton';
+import { avatarColorForRole, initialsForUsername } from '../utils/userIdentity';
+import {
+  PreferencesCard, RoleAccessCard, SecurityOptionsCard, SyncStatusPanel,
+  ModelStatusPanel, NotificationSettings, SystemInfoPanel,
+} from '../components/SettingsPanels';
 
 const TABS = [
-  { key: 'general', label: 'General', desc: 'System information and account settings' },
-  { key: 'security', label: 'Security', desc: 'Password and security settings' },
-  { key: 'population', label: 'Population Reference Data', desc: 'Population reference data for incidence indicators' },
-];
-
-const ADMIN_TABS = [
-  { key: 'maintenance', label: 'Model & Data Maintenance', desc: 'Model and data maintenance' },
+  { key: 'general', label: 'General', desc: 'Profile, preferences and access' },
+  { key: 'security', label: 'Account & Security', desc: 'Password and sign-in protection' },
+  { key: 'sync', label: 'Data Synchronization', desc: 'PASIG TB-IS connection status' },
+  { key: 'analytics', label: 'Analytics & Forecasting', desc: 'Model status, rules and population data' },
+  { key: 'notifications', label: 'Notifications', desc: 'Alert preferences and rules' },
+  { key: 'system', label: 'System Information', desc: 'Services and versions' },
 ];
 
 
 export default function Settings() {
   const { t } = useTheme();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('general');
   const [profile, setProfile] = useState(null);
   const [form, setForm] = useState({ username: '', email: '' });
@@ -74,6 +81,12 @@ export default function Settings() {
       .catch(() => setSysError(true));
   }, []);
 
+  useEffect(() => {
+    const onProfileRefresh = (event) => setProfile((current) => current ? { ...current, profile_photo_data: event.detail.profile_photo_data } : current);
+    window.addEventListener('tbinsight-profile-refreshed', onProfileRefresh);
+    return () => window.removeEventListener('tbinsight-profile-refreshed', onProfileRefresh);
+  }, []);
+
   const fetchPopReferences = async () => {
     setPopLoading(true);
     setPopError(null);
@@ -89,8 +102,10 @@ export default function Settings() {
 
   const handleTabChange = (key) => {
     setActiveTab(key);
-    if (key === 'population') fetchPopReferences();
-    if (key === 'maintenance') fetchLastBackfillRun();
+    if (key === 'analytics') {
+      fetchPopReferences();
+      if (profile?.role === 'admin') fetchLastBackfillRun();
+    }
   };
 
   const fetchLastBackfillRun = async () => {
@@ -487,12 +502,20 @@ export default function Settings() {
     }
   };
 
+  const handleSignOut = async () => {
+    try { await API.post('/api/auth/logout'); } catch { /* sign out locally regardless */ }
+    localStorage.removeItem('user');
+    localStorage.removeItem('tbinsight_session');
+    sessionStorage.removeItem('csrf_token');
+    navigate('/login');
+  };
+
   const inputCls = "w-full rounded-lg px-3 py-2 text-[13px] outline-none";
   const inputStyle = { background: t.inputBg, border: `1px solid ${t.inputBorder}`, color: t.text };
   const labelCls = "block text-[11px] font-semibold mb-1";
   const labelStyle = { color: t.textSecondary };
   const isAdmin = profile?.role === 'admin';
-  const visibleTabs = isAdmin ? [...TABS, ...ADMIN_TABS] : TABS;
+  const visibleTabs = TABS;
 
   return (
     <div className="space-y-6">
@@ -500,19 +523,16 @@ export default function Settings() {
         open={validatingPop}
         title="Validating population data"
         detail="Reading the reference information and checking each barangay's population."
-        icon="ri-shield-check-line"
       />
       <ProgressOverlay
         open={savingPop}
         title="Importing population data"
         detail="Saving the population values for each barangay."
-        icon="ri-upload-cloud-2-line"
       />
       <ProgressOverlay
         open={historicalLoading}
         title="Backfilling historical risk snapshots"
         detail="Classifying risk once for each past year so the GIS year filter has its own assessment per year."
-        icon="ri-history-line"
         note="This can take several minutes. Keep this page open until it finishes."
       />
       {/* Page header + tab navigation */}
@@ -556,12 +576,12 @@ export default function Settings() {
             {profile ? (
               <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-3 mb-2">
-                  <div className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold" style={{ background: '#0F2D52', color: '#fff' }}>
-                    {(profile.username || '?').slice(0, 2).toUpperCase()}
+                  <div className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ background: avatarColorForRole(profile.role), color: '#fff' }}>
+                    {profile.profile_photo_data ? <img src={profile.profile_photo_data} alt="" className="h-full w-full rounded-full object-cover" /> : initialsForUsername(profile.username)}
                   </div>
-                  <div>
-                    <p className="text-sm font-semibold" style={{ color: t.text }}>{profile.username}</p>
-                    <p className="text-xs" style={{ color: t.textSecondary }}>{profile.email}</p>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold" style={{ color: t.text }}>{profile.username}</p>
+                    {profile.email && <p className="truncate text-xs" style={{ color: t.textSecondary }}>{profile.email}</p>}
                   </div>
                 </div>
                 <div>
@@ -592,35 +612,15 @@ export default function Settings() {
             )}
           </div>
 
-          {/* System */}
-          <div style={cardStyle(t)} className="p-5">
-            <h2 className="text-sm font-bold mb-4" style={{ color: t.text }}>System Information</h2>
-            {sysError ? (
-              <p className="text-xs" style={{ color: '#991B1B' }}>Cannot reach the API server. Is the backend running?</p>
-            ) : !sys ? (
-              <p className="text-xs" style={{ color: t.textMuted }}>Loading...</p>
-            ) : (
-              <div className="space-y-3">
-                {[
-                  { label: 'Status', value: sys.status === 'ok' ? 'Online' : 'Degraded', color: sys.status === 'ok' ? '#047857' : '#92400E' },
-                  { label: 'Database', value: sys.database === 'connected' ? 'Connected' : 'Disconnected', color: sys.database === 'connected' ? '#047857' : '#991B1B' },
-                  { label: 'Version', value: sys.version || '\u2014' },
-                  { label: 'Server Time', value: sys.timestamp ? new Date(sys.timestamp).toLocaleTimeString() : '\u2014' },
-                ].map((item) => (
-                  <div key={item.label} className="flex justify-between py-2" style={{ borderBottom: `1px solid ${t.border}` }}>
-                    <span className="text-xs" style={{ color: t.textSecondary }}>{item.label}</span>
-                    <span className="text-xs font-semibold" style={{ color: item.color || t.text }}>{item.value}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <PreferencesCard />
+          <RoleAccessCard role={profile?.role} />
         </div>
       )}
 
       {/* Security Tab */}
       {activeTab === 'security' && (
-        <div style={cardStyle(t)} className="p-5 max-w-lg">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        <div style={cardStyle(t)} className="p-5">
           <h2 className="text-sm font-bold mb-4" style={{ color: t.text }}>Change Password</h2>
           <div className="flex flex-col gap-3">
             <div>
@@ -655,11 +655,18 @@ export default function Settings() {
             </div>
           </div>
         </div>
+        <SecurityOptionsCard profile={profile} onSignOut={handleSignOut} />
+        </div>
       )}
 
-      {/* Population Reference Data Tab */}
-      {activeTab === 'population' && (
+      {activeTab === 'sync' && <SyncStatusPanel isAdmin={isAdmin} />}
+      {activeTab === 'notifications' && <NotificationSettings />}
+      {activeTab === 'system' && <SystemInfoPanel sys={sys} sysError={sysError} />}
+
+      {/* Analytics & Forecasting: model status, read-only rules, population reference data */}
+      {activeTab === 'analytics' && (
         <div className="flex flex-col gap-6">
+          <ModelStatusPanel />
           {/* Info Card */}
           <div style={cardStyle(t)} className="p-5">
             <h2 className="text-sm font-bold mb-1" style={{ color: t.text }}>Population Reference Data</h2>
@@ -726,7 +733,12 @@ export default function Settings() {
               </div>
             )}
 
-            <div className="mt-4 flex items-center gap-2">
+            {!isAdmin && (
+              <p className="text-[11px] mt-3" style={{ color: t.textMuted }}>
+                <i className="ri-lock-line" /> Population reference data can be added or edited by an Admin only.
+              </p>
+            )}
+            {isAdmin && <div className="mt-4 flex items-center gap-2">
               <button onClick={handleInitAddPop} className="px-4 py-2 text-xs font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer" style={{ background: '#0F2D52', color: '#fff' }}>
                 <i className="ri-add-line text-sm" /> Add Population Reference
               </button>
@@ -736,7 +748,7 @@ export default function Settings() {
               <button onClick={() => handleDownloadTemplate('csv')} className="px-4 py-2 text-xs font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer" style={{ border: `1px solid ${t.border}`, color: t.text, background: 'transparent' }}>
                 <i className="ri-download-line text-sm" /> Download CSV Template
               </button>
-            </div>
+            </div>}
           </div>
 
           {/* View Year Detail */}
@@ -744,9 +756,7 @@ export default function Settings() {
             <div style={cardStyle(t)} className="p-5">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-bold" style={{ color: t.text }}>{viewingYear} Population Reference</h3>
-                <button onClick={() => setViewingYear(null)} className="text-xs cursor-pointer" style={{ color: t.textMuted }}>
-                  <i className="ri-close-line" />
-                </button>
+                <ModalCloseButton onClick={() => setViewingYear(null)} />
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
@@ -754,7 +764,7 @@ export default function Settings() {
                     <tr style={{ borderBottom: `1px solid ${t.border}` }}>
                       <th className="text-left px-3 py-2 font-bold uppercase text-[10px]" style={{ color: t.textMuted }}>Barangay</th>
                       <th className="text-left px-3 py-2 font-bold uppercase text-[10px]" style={{ color: t.textMuted }}>Population</th>
-                      {viewingData[0]?.storage_type === 'database' && (
+                      {isAdmin && viewingData[0]?.storage_type === 'database' && (
                         <th className="text-left px-3 py-2 font-bold uppercase text-[10px]" style={{ color: t.textMuted }}>Actions</th>
                       )}
                     </tr>
@@ -775,7 +785,7 @@ export default function Settings() {
                             Number(row.population).toLocaleString()
                           )}
                         </td>
-                        {row.storage_type === 'database' && (
+                        {isAdmin && row.storage_type === 'database' && (
                           <td className="px-3 py-2">
                             {editingRecord?.barangay_name !== row.barangay_name && (
                               <button onClick={() => { setEditingRecord(row); setEditPopValue(String(row.population)); }}
@@ -802,9 +812,7 @@ export default function Settings() {
                     <i className="ri-group-line text-lg" style={{ color: '#0F2D52' }} />
                     <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Add Population Reference</h3>
                   </div>
-                  <button onClick={() => setShowAddPop(false)} className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded cursor-pointer">
-                    <i className="ri-close-line text-lg" />
-                  </button>
+                  <ModalCloseButton onClick={() => setShowAddPop(false)} />
                 </div>
 
                 <div className="p-5 space-y-4">
@@ -980,7 +988,7 @@ export default function Settings() {
       )}
 
       {/* Model & Data Maintenance Tab (admin only) */}
-      {activeTab === 'maintenance' && isAdmin && (
+      {activeTab === 'analytics' && isAdmin && (
         <div style={cardStyle(t)} className="p-5">
           <h2 className="text-sm font-bold mb-1" style={{ color: t.text }}>Model & Data Maintenance</h2>
           <p className="text-xs mb-4" style={{ color: t.textSecondary }}>

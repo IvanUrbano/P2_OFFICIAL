@@ -4,7 +4,7 @@ import { can } from '../utils/permissions';
 import { primaryBtn, secondaryBtn } from './SidePanel';
 import { patientName } from '../utils/patientName';
 import { useConfirmDialog } from './ConfirmDialog';
-import { caseIdOf } from '../utils/caseId';
+import { caseIdLabel } from '../utils/caseId';
 
 const fmtDate = (v) => (v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
 const fullName = (r) => patientName(r, { short: true });
@@ -127,8 +127,8 @@ export default function IncomingReferrals({ user, onOpenRecord, onCountChange })
             <thead>
               {/* Same navy header as the All Records table (not sortable — this list is client-side). */}
               <tr style={{ background: '#0F2D52' }}>
-                {['Case', 'Patient', 'From', isAdmin ? 'To' : null, 'Reason', 'Status', 'Sent', ''].filter(Boolean).map(h => (
-                  <th key={h} className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#ffffff', borderBottom: '1px solid #1E40AF' }}>{h}</th>
+                {['Case', 'Patient', 'From', isAdmin ? 'To' : null, 'Reason', 'Status', 'Sent', 'Actions'].filter(Boolean).map(h => (
+                  <th key={h} className={`px-4 py-2.5 ${h === 'Actions' ? 'text-right' : 'text-left'} text-[10px] font-bold uppercase tracking-wider whitespace-nowrap`} style={{ color: '#ffffff', borderBottom: '1px solid #1E40AF' }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -139,9 +139,9 @@ export default function IncomingReferrals({ user, onOpenRecord, onCountChange })
                   <tr key={t.id} style={{ borderBottom: '1px solid #F1F5F9', background: can(t, 'accept') ? '#FFFDF5' : 'transparent' }}>
                     <td className="px-4 py-3 text-xs font-mono">
                       {can(t, 'viewCase') ? (
-                        <button onClick={() => onOpenRecord?.(t.validated_case_id)} className="underline" style={{ color: '#0F2D52' }}>{caseIdOf(t) || `#${t.validated_case_id}`}</button>
+                        <button onClick={() => onOpenRecord?.(t.validated_case_id)} className="underline" style={{ color: '#0F2D52' }}>{caseIdLabel(t)}</button>
                       ) : (
-                        <span style={{ color: '#475569' }} title="Opens after your barangay accepts the referral">{caseIdOf(t) || `#${t.validated_case_id}`}</span>
+                        <span style={{ color: '#475569' }} title="Opens after your barangay accepts the referral">{caseIdLabel(t)}</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs" style={{ color: '#0F2D52' }}>

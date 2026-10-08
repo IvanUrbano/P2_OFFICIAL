@@ -172,7 +172,7 @@ const initDb = async () => {
       console.log('⚠️ Manual entry provenance migration not found, skipping.');
     }
 
-    // Duplicate detection: DSTB fingerprint + MN itis_case_id collision
+    // Duplicate detection: DSTB fingerprint
     // detection columns and one-time backfill (idempotent). Wrapped in its
     // own try/catch — a failure here (e.g. an unexpected constraint issue
     // against live data) must not prevent the unrelated migrations below
@@ -335,6 +335,23 @@ const initDb = async () => {
       await execSql(fs.readFileSync(treatmentStateMigPath, 'utf8'));
     }
 
+    // Same-case outcome updates: case_history actor column, tb_cases.updated_at,
+    // and the MISSING_CASE_ID review flag. Migrations are registered one-by-one
+    // here (this directory is NOT scanned), so a new file needs its own block.
+    const caseHistoryWiringMigPath = path.join(__dirname, 'db', 'migrations', '032_case_history_wiring.sql');
+    if (fs.existsSync(caseHistoryWiringMigPath)) {
+      try {
+        await execSql(fs.readFileSync(caseHistoryWiringMigPath, 'utf8'));
+      } catch (caseHistoryWiringErr) {
+        console.error('❌ Case history wiring migration failed (continuing):', caseHistoryWiringErr.message);
+      }
+    }
+
+    const profilePhotoMigPath = path.join(__dirname, 'db', 'migrations', '033_user_profile_photo.sql');
+    if (fs.existsSync(profilePhotoMigPath)) {
+      await execSql(fs.readFileSync(profilePhotoMigPath, 'utf8'));
+    }
+
     // Restore the 30 Pasig barangay polygons to their original, already-correct shapes,
     // undoing two earlier over-broad attempts, and keep only the Kapasigan Extension ->
     // Bagong Katipunan rename/population fix (idempotent)
@@ -404,6 +421,9 @@ pool.connect()
     } else {
       await initDb();
     }
+    // This small account migration also runs in local development when the bulk
+    // migrations are skipped, so profile photo upload works after a restart.
+    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_data TEXT');
     // Pre-open a few connections so the first page load doesn't pay connection setup
     await Promise.all(Array.from({ length: 6 }, () => pool.query('SELECT 1'))).catch(() => {});
   })

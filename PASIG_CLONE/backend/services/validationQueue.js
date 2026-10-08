@@ -17,6 +17,7 @@
  */
 
 const { UPDATE_FIELDS } = require('./matchResolution');
+const { matchIdentity, suggestionForMatch } = require('./patientIdentity');
 
 /**
  * JS mirror of SQL norm_facility(): drop a trailing program tag (the "- IDOTS" /
@@ -64,15 +65,8 @@ const norm = (v) => String(v ?? '').trim().toLowerCase();
  * Sub-type of a possible match, comparing the incoming record with the existing case.
  * @returns {{ category, suggestion, changes: [{field, existing, incoming}] }}
  */
-function categorizeMatch(row, candidate) {
-  if (!candidate) {
-    return { category: 'missing_candidate', suggestion: 'different_person', changes: [] };
-  }
-  const sameDx = ymd(row.date_of_diagnosis) && ymd(row.date_of_diagnosis) === ymd(candidate.date_of_diagnosis);
-  if (!sameDx) {
-    return { category: 'new_episode', suggestion: 'new_episode', changes: [] };
-  }
-  const changes = UPDATE_FIELDS
+function fieldChanges(row, candidate) {
+  return UPDATE_FIELDS
     .map((field) => {
       const isDate = field.startsWith('date_');
       const incoming = isDate ? ymd(row[field]) : row[field];
@@ -81,7 +75,28 @@ function categorizeMatch(row, candidate) {
     })
     // Only a value the incoming record actually has can update the case (same_case uses COALESCE).
     .filter((c) => c.incoming !== null && c.incoming !== '' && norm(c.incoming) !== norm(c.existing));
+}
 
+function categorizeMatch(row, candidate) {
+  if (!candidate) {
+    return { category: 'missing_candidate', suggestion: 'different_person', changes: [] };
+  }
+  const meta = matchIdentity(row, candidate);
+  // A Case ID that identifies the case makes this row a report of that case,
+  // regardless of the diagnosis date. A Case ID that contradicts the patient it
+  // points at is never offered as "same case".
+  if (meta.matchedBy === 'case_id') {
+    if (meta.conflict) return { category: 'new_episode', suggestion: 'different_person', changes: [] };
+    const changes = fieldChanges(row, candidate);
+    if (changes.length === 0) return { category: 'duplicate', suggestion: 'same_case', changes };
+    const outcomeChanged = changes.some((c) => c.field === 'outcome_status' || c.field === 'date_of_outcome');
+    return { category: outcomeChanged ? 'changed_outcome' : 'case_update', suggestion: 'same_case', changes };
+  }
+  const sameDx = ymd(row.date_of_diagnosis) && ymd(row.date_of_diagnosis) === ymd(candidate.date_of_diagnosis);
+  if (!sameDx) {
+    return { category: 'new_episode', suggestion: 'new_episode', changes: [] };
+  }
+  const changes = fieldChanges(row, candidate);
   if (changes.length === 0) return { category: 'duplicate', suggestion: 'same_case', changes };
   const outcomeChanged = changes.some((c) => c.field === 'outcome_status' || c.field === 'date_of_outcome');
   return { category: outcomeChanged ? 'changed_outcome' : 'case_update', suggestion: 'same_case', changes };

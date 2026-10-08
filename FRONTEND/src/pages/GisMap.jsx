@@ -3,13 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+  LineChart, Line, BarChart, Bar,
   CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import API from '../api/axios';
-import AiInsightPanel from '../components/AiInsightPanel';
+import AnalyticsInsightPanel from '../components/AnalyticsInsightPanel';
 import FilterSelect from '../components/FilterSelect';
 import RiskClassificationGuide from '../components/RiskClassificationGuide';
+import ModalCloseButton from '../components/ModalCloseButton';
 import { getGisInsight } from '../services/insightService';
 
 const RISK_COLORS = {
@@ -277,9 +278,9 @@ function escapeHtml(str) {
 
 function DetailRow({ label, value }) {
   return (
-    <div className="flex items-center justify-between">
-      <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>{label}</span>
-      <span className="text-[12px] font-bold" style={{ color: '#0F2D52' }}>{value != null ? value : '\u2014'}</span>
+    <div className="flex items-center justify-between gap-3 border-b border-[#E2E8F0] py-3">
+      <span className="text-xs text-[#64748B]">{label}</span>
+      <span className="text-sm font-semibold text-[#0F2D52]">{value != null ? value : '\u2014'}</span>
     </div>
   );
 }
@@ -363,6 +364,8 @@ export default function GisMap() {
   const [gisInsight, setGisInsight] = useState(null);
   const [gisInsightLoading, setGisInsightLoading] = useState(false);
   const [gisInsightError, setGisInsightError] = useState(null);
+  const [gisInsightScope, setGisInsightScope] = useState(null);
+  const [showMapInterpretation, setShowMapInterpretation] = useState(false);
   const [pipelineRun, setPipelineRun] = useState(null);
   // Latest completed pipeline run — carries the threshold cut points and their
   // source, shown read-only in the modal's Why panel.
@@ -370,20 +373,44 @@ export default function GisMap() {
   const [pipelineRefreshTick, setPipelineRefreshTick] = useState(0);
   const wasRunningRef = useRef(false);
   const closeButtonRef = useRef(null);
+  const mapInsightCloseRef = useRef(null);
+  const gisInsightRequestRef = useRef(0);
+
+  const resetGisInsight = () => {
+    gisInsightRequestRef.current += 1;
+    setGisInsight(null);
+    setGisInsightScope(null);
+    setGisInsightError(null);
+    setGisInsightLoading(false);
+  };
 
   const handleGenerateGisInsight = useCallback(async () => {
+    const requestId = ++gisInsightRequestRef.current;
     try {
       setGisInsightLoading(true);
       setGisInsightError(null);
       const insight = await getGisInsight({ barangay: filterBarangay || undefined, year: filterYear || undefined });
+      if (requestId !== gisInsightRequestRef.current) return;
       setGisInsight(insight);
+      setGisInsightScope(`${filterBarangay}|${filterYear}`);
     } catch (err) {
+      if (requestId !== gisInsightRequestRef.current) return;
       if (import.meta.env.DEV) console.error('GIS insight generation failed:', err);
       setGisInsightError('Unable to generate insight.');
     } finally {
-      setGisInsightLoading(false);
+      if (requestId === gisInsightRequestRef.current) setGisInsightLoading(false);
     }
   }, [filterBarangay, filterYear]);
+
+  useEffect(() => {
+    if (!showMapInterpretation) return;
+    mapInsightCloseRef.current?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setShowMapInterpretation(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showMapInterpretation]);
 
   // Auto-focus close button when modal opens and handle Escape key
   useEffect(() => {
@@ -555,9 +582,6 @@ export default function GisMap() {
       );
     });
     const allBarangays = [...groups.High, ...groups.Medium, ...groups.Low, ...groups['No Data']];
-    const mid = Math.ceil(allBarangays.length / 2);
-    const leftHalf = allBarangays.slice(0, mid);
-    const rightHalf = allBarangays.slice(mid);
     // Neutral, count-based section labels — no prescriptive clinical or
     // operational directives, which no approved protocol ever defined for
     // these groups. "No Assessment" (not "No Data"): case data may still
@@ -571,7 +595,7 @@ export default function GisMap() {
         ? [{ key: 'No Data', label: `No Assessment — ${groups['No Data'].length} barangay${groups['No Data'].length === 1 ? '' : 's'}`, color: '#94A3B8', items: groups['No Data'] }]
         : []),
     ].filter(s => s.items.length > 0);
-    return { groups, allBarangays, sections, leftHalf, rightHalf };
+    return { groups, allBarangays, sections };
   }, [data]);
 
   // Modal content data (extracted from IIFE for performance)
@@ -589,7 +613,6 @@ export default function GisMap() {
       : (monthlyByBarangay[monthlyKey] || monthlyByBarangay[selectedBarangayName] || []);
     const merged = { ...geoProps, ...b };
     const riskColor = RISK_COLORS[merged.risk_class] || '#64748B';
-    const totalOutcomeCases = outcomes.reduce((s, o) => s + (o.total || 0), 0);
     const onTreatmentCases = barangayDetail?.case_status_counts?.find(s => s.case_status === 'ON TREATMENT')?.total || 0;
     // Treatment Success Rate: the cohort-based figure fetched from
     // GET /api/tb/treatment-success-rate (see barangayTsr) — NOT computed
@@ -610,7 +633,7 @@ export default function GisMap() {
       ageGroups[d.age_group][d.sex] = (d.total || 0);
     });
     const demoChartData = Object.entries(ageGroups)
-      .sort((a, b) => a[0].localeCompare(b[0]))
+      .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
       .map(([age, counts]) => ({ name: age, Male: counts.Male, Female: counts.Female }));
     const outcomeChartData = outcomes
       .map(o => {
@@ -620,10 +643,12 @@ export default function GisMap() {
       })
       .filter(o => o.display && OUTCOME_COLORS[o.display])
       .map(o => ({
-        name: o.display.length > 16 ? o.display.slice(0, 14) + '...' : o.display,
+        name: o.display.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, letter => letter.toUpperCase()),
         value: o.value,
         color: OUTCOME_COLORS[o.display] || '#64748B',
-      }));
+      }))
+      .sort((a, b) => Number(b.value) - Number(a.value));
+    const totalOutcomeCases = outcomeChartData.reduce((sum, outcome) => sum + Number(outcome.value || 0), 0);
     // Real border-sharing neighbour names, carried on the GeoJSON feature.
     // Null (not []) when the backend had no adjacency map, so the UI can
     // hide the section instead of inventing a neighbour list.
@@ -875,6 +900,7 @@ export default function GisMap() {
   }, [data]);
 
   const toggleFullscreen = React.useCallback(() => {
+    setShowMapInterpretation(false);
     setIsFullscreen(prev => {
       const next = !prev;
       // Give the DOM time to resize, then tell Leaflet to recalculate
@@ -1091,16 +1117,34 @@ export default function GisMap() {
       >
         {/* Header Toolbar — hidden in fullscreen */}
         {!isFullscreen && (
-        <div className="gis-toolbar flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
-          {/* Left — Title */}
-          <div className="shrink-0">
-            <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>GIS Hotspot Mapping</h1>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Visualize TB cases across Pasig City and identify barangays with higher TB risk.</p>
+        <div className="gis-toolbar px-5 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
+          <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2">
+            <div>
+              <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>GIS Hotspot Mapping</h1>
+              <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Visualize TB cases across Pasig City and identify barangays with higher TB risk.</p>
+            </div>
+            {/* GIS Year selects the snapshot trained on that year's data.
+                Assessment year and prediction period are shown separately. */}
+            {(() => {
+              if (!filterYear) {
+                return data?.meta?.risk_assessment_period ? (
+                  <p className="text-[11px] text-[#64748B]" title="Showing the most recent risk assessment. Select a specific year to view its saved snapshot.">
+                    Data year {riskDataYear ?? '—'} · Assessment year {riskAssessmentYear ?? '—'} · Prediction period {riskAssessmentPeriod ?? '—'}
+                  </p>
+                ) : null;
+              }
+              if (data?.meta?.requested_year_has_snapshot === false) {
+                return <p className="text-[11px] font-semibold text-[#B45309]" title="An administrator can compute this from Settings > Backfill Historical Risk Snapshots.">No risk assessment for {filterYear} yet</p>;
+              }
+              return data?.meta?.risk_assessment_period ? (
+                <p className="text-[11px] text-[#64748B]">Data year {riskDataYear ?? '—'} · Assessment year {riskAssessmentYear ?? '—'} · Prediction period {riskAssessmentPeriod ?? '—'}</p>
+              ) : null;
+            })()}
           </div>
 
-          {/* Right — Filters + Actions */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <FilterSelect label="Barangay" value={filterBarangay} onChange={(v) => { setFilterBarangay(v); setSelectedBarangayName(null); }} selectStyle={{ maxWidth: 180 }}>
+          <div className="mt-3 overflow-x-auto pb-1" role="group" aria-label="Map filters and actions">
+            <div className="flex min-w-max items-center gap-2">
+            <FilterSelect label="Barangay" value={filterBarangay} onChange={(v) => { setFilterBarangay(v); setSelectedBarangayName(null); resetGisInsight(); }} selectStyle={{ maxWidth: 180 }}>
               <option value="">All</option>
               {barangayNames.map((b) => <option key={b} value={b}>{b}</option>)}
             </FilterSelect>
@@ -1110,65 +1154,15 @@ export default function GisMap() {
               {availableRiskLevels.map(level => <option key={level} value={level}>{level === 'No Data' ? 'No Assessment' : `${riskLabel(level)} Risk`}</option>)}
             </FilterSelect>
 
-            <FilterSelect label="Year" value={filterYear} onChange={(v) => { setFilterYear(v); setSelectedBarangayName(null); }}>
+            <FilterSelect label="Year" value={filterYear} onChange={(v) => { setFilterYear(v); setSelectedBarangayName(null); resetGisInsight(); }}>
               <option value="">All Years</option>
               {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
             </FilterSelect>
 
-            {/* GIS Year selects the snapshot trained on that year's data.
-                Assessment year and prediction period are shown separately. */}
-            {(() => {
-              if (!filterYear) {
-                return data?.meta?.risk_assessment_period ? (
-                  <span
-                    className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
-                    style={{ background: '#F8FAFC', color: '#64748B', border: '1px solid #E2E8F0' }}
-                    title="Showing the most recent risk assessment. Select a specific Year to see that year's own snapshot."
-                  >
-                    Data Year {riskDataYear ?? '—'} · Assessment Year {riskAssessmentYear ?? '—'} · Prediction Period {riskAssessmentPeriod ?? '—'}
-                  </span>
-                ) : null;
-              }
-              if (data?.meta?.requested_year_has_snapshot === false) {
-                return (
-                  <span
-                    className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
-                    style={{ background: '#FFFBEB', color: '#B45309', border: '1px solid #FDE68A' }}
-                    title="An administrator can compute this from Settings > Backfill Historical Risk Snapshots."
-                  >
-                    No risk snapshot for {filterYear} yet
-                  </span>
-                );
-              }
-              return data?.meta?.risk_assessment_period ? (
-                <span
-                  className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
-                  style={{ background: '#F8FAFC', color: '#64748B', border: '1px solid #E2E8F0' }}
-                >
-                  Data Year {riskDataYear ?? '—'} · Assessment Year {riskAssessmentYear} · Prediction Period {riskAssessmentPeriod ?? '—'}
-                </span>
-              ) : null;
-            })()}
-
-            {/* A snapshot built by the rule-based fallback is a weaker result
-                than a Random Forest one, so say so at map level rather than
-                only inside a barangay's detail panel. */}
-            {snapshotClassifier?.ruleBased > 0 && (
-              <span
-                className="text-[10px] font-semibold px-2 py-1.5 rounded-md shrink-0"
-                style={{ background: '#FFFBEB', color: '#B45309', border: '1px solid #FDE68A' }}
-                title="This saved assessment used incidence thresholds because no Random Forest result was available for these barangays. Check the pipeline run status and training row count before rerunning the assessment. Rule-based results have no model confidence score."
-              >
-                <i className="ri-error-warning-line mr-1" />
-                {snapshotClassifier.allRuleBased
-                  ? 'Rule-based fallback — not model-classified'
-                  : `${snapshotClassifier.ruleBased} of ${snapshotClassifier.total} rule-based`}
-              </span>
-            )}
-
+            <div className="ml-auto flex shrink-0 items-center gap-2 border-l border-[#E2E8F0] pl-3">
             {hasActiveFilters && (
               <button
-                onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); setFilterYear(''); setSelectedBarangayName(null); }}
+                onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); setFilterYear(''); setSelectedBarangayName(null); resetGisInsight(); }}
                 aria-label="Clear all filters"
                 className="text-xs font-medium px-3 py-2"
                 style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
@@ -1193,6 +1187,16 @@ export default function GisMap() {
             </button>
 
             <button
+              type="button"
+              onClick={() => setShowMapInterpretation((open) => !open)}
+              aria-expanded={showMapInterpretation}
+              aria-controls="gis-map-interpretation"
+              className="rounded border border-[#B8C9DB] bg-white px-3 py-2 text-xs font-semibold text-[#0F2D52] transition-colors hover:bg-[#F1F5F9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]"
+            >
+              Map interpretation
+            </button>
+
+            <button
               onClick={handleExportMap}
               aria-label="Export map as PDF"
               className="text-xs font-semibold px-3.5 py-2"
@@ -1214,7 +1218,18 @@ export default function GisMap() {
             >
               <i className={`${isFullscreen ? 'ri-fullscreen-exit-line' : 'ri-fullscreen-line'} text-sm`} />
             </button>
+            </div>
+            </div>
           </div>
+          {/* A rule-based fallback is less reliable than the model assessment. */}
+          {snapshotClassifier?.ruleBased > 0 && (
+            <p className="mt-2 text-[11px] font-medium text-[#B45309]" title="This saved assessment used incidence thresholds because no Random Forest result was available for these barangays. Rule-based results have no model confidence score.">
+              <i className="ri-error-warning-line mr-1" aria-hidden="true" />
+              {snapshotClassifier.allRuleBased
+                ? 'Risk levels use a rule-based fallback for this assessment.'
+                : `${snapshotClassifier.ruleBased} of ${snapshotClassifier.total} barangays use a rule-based risk fallback.`}
+            </p>
+          )}
         </div>
         )}
 
@@ -1270,6 +1285,33 @@ export default function GisMap() {
         >
         {/* Map */}
         <div ref={mapRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', background: '#0a1128' }} />
+
+        {showMapInterpretation && !isFullscreen && (
+          <div
+            id="gis-map-interpretation"
+            role="dialog"
+            aria-label="Map interpretation"
+            className="absolute inset-y-0 right-0 z-[1002] w-full max-w-[430px] overflow-y-auto border-l border-[#DCE4ED] bg-white shadow-[-8px_0_24px_rgba(15,45,82,0.15)]"
+          >
+            <div className="relative">
+              <div className="absolute right-3 top-2 z-10">
+                <ModalCloseButton ref={mapInsightCloseRef} onClick={() => setShowMapInterpretation(false)} label="Close map interpretation" light />
+              </div>
+              <AnalyticsInsightPanel
+                title="Map interpretation"
+                description={`Written findings for ${filterBarangay || 'all barangays'} · ${filterYear || 'all years'}.${filterRiskLevel ? ' The risk filter changes the map display only.' : ''}`}
+                titleId="map-interpretation-title"
+                data={gisInsightScope === `${filterBarangay}|${filterYear}` ? gisInsight : null}
+                loading={gisInsightLoading}
+                error={gisInsightError}
+                onRetry={handleGenerateGisInsight}
+                onGenerate={handleGenerateGisInsight}
+                embedded
+                sectionDisclosure
+              />
+            </div>
+          </div>
+        )}
 
         {/* ── Floating: Exit Fullscreen button (top-left, only in fullscreen) ── */}
         {isFullscreen && (
@@ -1409,7 +1451,7 @@ export default function GisMap() {
 
       {/* ── Risk Distribution ── */}
       {!isFullscreen && riskRankingData && (() => {
-        const { groups, allBarangays, sections, leftHalf, rightHalf } = riskRankingData;
+        const { groups, allBarangays, sections } = riskRankingData;
         const classifiedBarangays = allBarangays.length - (groups['No Data']?.length || 0);
         const totalBarangays = allBarangays.length;
         // Dynamic case-data year range (fetched from /api/tb/gis/years —
@@ -1423,37 +1465,27 @@ export default function GisMap() {
         // year shows the same-year incidence normally.
         const showConfidenceColumn = (data?.features || []).some(f =>
           f.properties?.model_type === 'random_forest' && f.properties.classification_confidence != null);
-        const rankCols = !filterYear
-          ? `32px 150px 118px ${showConfidenceColumn ? '132px ' : ''}70px`
-          : `32px 150px 104px ${showConfidenceColumn ? '112px ' : ''}96px 70px`;
+        const rankByName = new Map(allBarangays.map((barangay, index) => [barangay.name, index + 1]));
 
         return (
-          <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E8ECF1', boxShadow: '0 4px 24px rgba(15,45,82,0.06)' }}>
+          <div className="overflow-hidden rounded-lg border border-[#DCE4ED] bg-white">
             {/* Header */}
-            <div className="px-6 py-5" style={{ borderBottom: '1px solid #F1F5F9' }}>
-              <div className="flex items-start justify-between">
+            <div className="border-b border-[#0F2D52] bg-[#0F2D52] px-5 py-4 sm:px-6">
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: '#EF4444' }}>Priority Watchlist</p>
-                  <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>Risk-Classified Barangays</h3>
-                  <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
+                  <h3 className="text-lg font-semibold text-white">Barangay risk classifications</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-[#C9D9EA]">
                     {!filterYear
-                      ? `Grouped by latest Random Forest risk classification and ordered by total cases within each group — ${totalBarangays} Pasig City barangays`
-                      : `Grouped by Random Forest risk classification and ordered by ${filterYear} incidence within each group — ${totalBarangays} Pasig City barangays`}
+                      ? `Grouped by the latest saved risk assessment and ordered by total cases within each group — ${totalBarangays} Pasig City barangays`
+                      : `Grouped by saved risk assessment and ordered by ${filterYear} incidence within each group — ${totalBarangays} Pasig City barangays`}
                   </p>
                 </div>
-                <div className="text-right shrink-0">
-                  <span className="text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{classifiedBarangays}</span>
-                  <span className="text-sm font-semibold" style={{ color: '#94A3B8' }}>/{totalBarangays}</span>
-                  <p className="text-[10px] font-semibold uppercase tracking-wide mt-0.5" style={{ color: '#94A3B8' }}>of Pasig Barangays</p>
+                <div className="shrink-0 border-l-[3px] border-[#66C6D3] pl-3">
+                  <p className="text-base font-semibold leading-none tabular-nums text-white">
+                    {classifiedBarangays}<span className="font-normal text-[#AFC6DD]"> / {totalBarangays}</span>
+                  </p>
+                  <p className="mt-1 text-[11px] font-medium text-[#C9D9EA]">Barangays assessed</p>
                 </div>
-              </div>
-              <div className="flex items-center gap-4 mt-3">
-                {sections.map(s => (
-                  <div key={s.key} className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: s.color }} />
-                    <span className="text-[11px] font-semibold" style={{ color: '#64748B' }}>{s.label}</span>
-                  </div>
-                ))}
               </div>
               {/* All Years: risk class/confidence come from ONE snapshot while
                   case totals span all available years — state this plainly so
@@ -1461,154 +1493,67 @@ export default function GisMap() {
                   classification. Hidden entirely when no case years exist
                   (a fabricated year range would be worse than none). */}
               {!filterYear && data?.meta?.risk_assessment_period && caseYearRange && (
-                <p className="text-[9px] font-medium mt-2" style={{ color: '#94A3B8' }}>
+                <p className="mt-3 text-xs leading-relaxed text-[#C9D9EA]">
                   All Years combines available TB records from {caseYearRange}. Risk classification is based on the latest available risk assessment ({riskAssessmentYear}). Incidence per 100,000 is available only when a specific year is selected.
                 </p>
               )}
             </div>
 
-            {/* Table — 2-Column Layout */}
-            <div className="overflow-x-auto">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-                {/* Helper to render a column */}
-                {[leftHalf, rightHalf].map((halfItems, colIdx) => {
-                  let colRank = colIdx === 0 ? 0 : leftHalf.length;
-                  const halfSections = sections.map(sec => ({
-                    ...sec,
-                    items: sec.items.filter(item => halfItems.includes(item)),
-                  })).filter(sec => sec.items.length > 0);
-                  return (
-                    <div key={colIdx} style={{ borderRight: colIdx === 0 ? '1px solid #E8ECF1' : 'none' }}>
-                      {/* Column Header */}
-                      <div className="grid items-center px-4 py-2.5 text-[10px] font-bold uppercase tracking-wider" style={{ gridTemplateColumns: rankCols, background: '#0F2D52', color: '#ffffff', borderBottom: '1px solid #0F2D52' }}>
-                        <span>Rank</span>
-                        <span>Barangay</span>
-                        <span>{!filterYear ? `Latest Risk Assessment (${riskAssessmentYear ?? '—'})` : 'Risk Class'}</span>
-                        {showConfidenceColumn && <span className="text-right">{!filterYear ? 'Latest Classification Confidence' : 'Classification Confidence'}</span>}
-                        {filterYear && <span className="text-right">per 100k</span>}
-                        <span className="text-right">Actions</span>
-                      </div>
-                      {/* Grouped Rows */}
-                      {halfSections.map(sec => {
-                        const sectionStartRank = colRank;
-                        colRank += sec.items.length;
-                        return (
-                        <div key={sec.key}>
-                          <div className="px-4 py-2 flex items-center gap-2" style={{ background: `${sec.color}08`, borderBottom: '1px solid #F1F5F9' }}>
-                            <span className="w-2 h-2 rounded-full" style={{ background: sec.color }} />
-                            <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: sec.color }}>{sec.label}</span>
-                          </div>
-                          {sec.items.map((b, localIdx) => {
-                            const rank = sectionStartRank + localIdx + 1;
-                            const isHovered = hoveredBarangay === b.name;
-                            // Classification Confidence is RF's own
-                            // predict_proba for the predicted class — shown
-                            // ONLY when the classification actually came from
-                            // the trained model. Never fabricated for the
-                            // rule-based fallback (— means unavailable).
-                            const hasRfConfidence = b.model_type === 'random_forest' && b.classification_confidence != null;
-                            return (
-                              <div
-                                key={b.name}
-                                className="grid items-center px-4 py-3 transition"
-                                style={{
-                                  gridTemplateColumns: rankCols,
-                                  borderBottom: '1px solid #F1F5F9',
-                                  background: isHovered ? `${sec.color}10` : undefined,
-                                }}
-                                onMouseEnter={() => setHoveredBarangay(b.name)}
-                                onMouseLeave={() => setHoveredBarangay(null)}
-                              >
-                                <span className="text-sm font-bold" style={{ color: '#CBD5E1' }}>{String(rank).padStart(2, '0')}</span>
-                                <div className="flex items-center gap-2 min-w-0 pr-1">
-                                  <div className="w-1 h-7 rounded-full shrink-0" style={{ background: sec.color }} />
-                                  <div className="min-w-0">
-                                    <p className="text-[13px] font-bold truncate" style={{ color: '#0F2D52' }}>{b.name}</p>
-                                    <p className="text-[10px] truncate" style={{ color: '#94A3B8' }}>{formatNum(b.total_cases)} total cases</p>
-                                  </div>
-                                </div>
-                                <div className="flex items-center">
-                                  {/* "No Assessment" for the No Data group: case
-                                      data may exist — only the risk snapshot is
-                                      missing for the selected year. */}
-                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: `${sec.color}15`, color: sec.color, border: `1px solid ${sec.color}40` }}>{sec.key === 'No Data' ? 'No Assessment' : `${riskLabel(b.risk_class)} Risk`}</span>
-                                </div>
-                                {showConfidenceColumn && <div className="text-right" title={hasRfConfidence ? 'How strongly the Random Forest model supports the assigned risk classification. This is not the probability of developing TB.' : undefined}>
-                                  {hasRfConfidence ? (
-                                    <span className="text-[13px] font-extrabold" style={{ color: sec.color }}>{Math.round(b.classification_confidence * 100)}%</span>
-                                  ) : (
-                                    <span className="text-[13px] font-bold" style={{ color: '#CBD5E1' }}>—</span>
-                                  )}
-                                </div>}
-                                {filterYear && (
-                                  <div className="text-right">
-                                    <span className="text-[13px] font-bold" style={{ color: b.incidence_per_100k != null ? '#475569' : '#94A3B8' }}>{b.incidence_per_100k != null ? formatNum(b.incidence_per_100k) : 'N/A'}</span>
-                                    <p className="text-[9px] font-medium" style={{ color: '#94A3B8' }}>per 100k</p>
-                                  </div>
-                                )}
-                                <div className="flex items-center justify-end">
-                                  <button className="px-1.5 py-1 flex items-center justify-center" aria-label={`View details for ${b.name}`} style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onClick={() => { setSelectedBarangayName(b.name); }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}><i className="ri-eye-line text-xs" /></button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
-              </div>
+            <div className="space-y-5 px-5 py-5">
+              {sections.map((section) => (
+                <section key={section.key} aria-label={section.label}>
+                  <h4 className="mb-3 flex items-center gap-2 text-xs font-semibold text-[#0F2D52]">
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: section.color }} aria-hidden="true" />
+                    {section.label}
+                  </h4>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {section.items.map((barangay) => {
+                      const hasRfConfidence = barangay.model_type === 'random_forest' && barangay.classification_confidence != null;
+                      return (
+                        <button
+                          key={barangay.name}
+                          type="button"
+                          onClick={() => setSelectedBarangayName(barangay.name)}
+                          onMouseEnter={() => setHoveredBarangay(barangay.name)}
+                          onMouseLeave={() => setHoveredBarangay(null)}
+                          className="flex min-h-[96px] w-full flex-col justify-between rounded-md border border-[#DCE4ED] bg-white px-4 py-3 text-left transition-colors hover:border-[#8DA3BD] hover:bg-[#F8FAFC] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]"
+                          aria-label={`View details for ${barangay.name}, ${section.key === 'No Data' ? 'no assessment' : `${riskLabel(barangay.risk_class)} risk`}`}
+                        >
+                          <span className="flex w-full items-start gap-2">
+                            <span className="shrink-0 text-xs tabular-nums text-[#64748B]">{rankByName.get(barangay.name)}.</span>
+                            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-[#0F2D52]">{barangay.name}</span>
+                            <i className="ri-arrow-right-s-line shrink-0 text-base text-[#64748B]" aria-hidden="true" />
+                          </span>
+                          <span className="mt-3 flex w-full flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#64748B]">
+                            <span><strong className="font-semibold tabular-nums text-[#0F2D52]">{formatNum(barangay.total_cases)}</strong> cases</span>
+                            {filterYear ? (
+                              <span><strong className="font-semibold tabular-nums text-[#0F2D52]">{barangay.incidence_per_100k != null ? formatNum(barangay.incidence_per_100k) : 'N/A'}</strong> per 100,000</span>
+                            ) : showConfidenceColumn ? (
+                              <span title="Model support for this risk label; not the chance of developing TB."><strong className="font-semibold tabular-nums text-[#0F2D52]">{hasRfConfidence ? `${Math.round(barangay.classification_confidence * 100)}%` : 'N/A'}</strong> model confidence</span>
+                            ) : null}
+                            {filterYear && showConfidenceColumn && (
+                              <span title="Model support for this risk label; not the chance of developing TB."><strong className="font-semibold tabular-nums text-[#0F2D52]">{hasRfConfidence ? `${Math.round(barangay.classification_confidence * 100)}%` : 'N/A'}</strong> model confidence</span>
+                            )}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
             </div>
           </div>
         );
       })()}
 
-      {/* ── NLG GIS Insight Panel ── */}
-      {!isFullscreen && (
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-          <div className="lg:col-span-3 rounded-xl overflow-hidden" style={{ background: '#ffffff', border: '1px solid #E8ECF1', boxShadow: '0 4px 24px rgba(15,45,82,0.06)' }}>
-            <div className="px-6 py-5">
-              <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: '#2563EB' }}>Map Interpretation</p>
-              <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>About This Map</h3>
-              <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
-                The panel on the right generates a natural-language interpretation of the current risk distribution, hotspots, and case patterns shown on the map.
-              </p>
-              <div className="mt-4 grid grid-cols-3 gap-3">
-                {[
-                  { label: 'Focus', value: filterBarangay || 'All Barangays' },
-                  { label: 'Year Filter', value: filterYear || 'Latest' },
-                  { label: 'Risk Level Filter', value: filterRiskLevel || 'All' },
-                ].map((item) => (
-                  <div key={item.label} className="rounded-lg px-3 py-2" style={{ background: '#F8FAFC', border: '1px solid #E8ECF1' }}>
-                    <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>{item.label}</p>
-                    <p className="text-[13px] font-bold truncate" style={{ color: '#0F2D52' }}>{item.value}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-          <div className="lg:col-span-2">
-            <AiInsightPanel
-              type="gis"
-              data={gisInsight}
-              loading={gisInsightLoading}
-              error={gisInsightError}
-              onRetry={handleGenerateGisInsight}
-              onGenerate={handleGenerateGisInsight}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* ── Barangay Side Modal (Profile + Analytics tabs) ── */}
+      {/* ── Barangay profile drawer ── */}
       {selectedBarangayName && (
         <div className="fixed inset-0 z-[1200] flex justify-end bg-slate-950/20 backdrop-blur-sm">
           {/* Backdrop */}
           <div className="absolute inset-0" onClick={() => setSelectedBarangayName(null)} />
           {/* Panel */}
           <div
-            className="relative w-full max-w-lg h-full overflow-y-auto bg-white"
+            className="relative h-full w-full max-w-[960px] overflow-y-auto bg-white"
             role="dialog"
             aria-modal="true"
             aria-label={`${selectedBarangayName} barangay profile`}
@@ -1618,24 +1563,38 @@ export default function GisMap() {
             }}
           >
             {/* Header */}
-            <div className="sticky top-0 z-10" style={{ background: '#0F2D52' }}>
-              <div className="flex items-center justify-between px-6 py-4">
+            <div className="sticky top-0 z-10 bg-white shadow-[0_1px_0_#DCE4ED]">
+              <div className="flex items-center justify-between bg-[#0F2D52] px-6 py-4">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#93C5FD' }}>Barangay Profile</p>
                   <h2 className="text-base font-extrabold tracking-tight" style={{ color: '#ffffff' }}>{selectedBarangayName}</h2>
                 </div>
-                <button
-                  ref={closeButtonRef}
-                  onClick={() => setSelectedBarangayName(null)}
-                  aria-label="Close modal"
-                  className="inline-flex h-8 w-8 items-center justify-center shrink-0"
-                  style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, transition: 'background 0.15s' }}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}
-                >
-                  <i className="ri-close-line text-base" />
-                </button>
+                <ModalCloseButton ref={closeButtonRef} onClick={() => setSelectedBarangayName(null)} label="Close modal" light />
               </div>
+              {!barangayDetailLoading && modalData && (
+                <nav className="flex gap-5 overflow-x-auto border-b border-[#DCE4ED] px-6 text-xs font-medium text-[#475569]" aria-label="Barangay profile sections">
+                  {[
+                    { label: 'Overview', id: 'gis-profile-overview' },
+                    ...(modalData.merged.risk_class ? [{ label: 'Risk assessment', id: 'gis-profile-risk' }] : []),
+                    ...(modalData.trendChartData.length || modalData.demoChartData.length || modalData.outcomeChartData.length
+                      ? [{ label: 'Charts', id: 'gis-profile-charts' }] : []),
+                    { label: 'Other details', id: 'gis-profile-details' },
+                  ].map(({ label, id }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => {
+                        const section = document.getElementById(id);
+                        section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        section?.focus({ preventScroll: true });
+                      }}
+                      className="shrink-0 border-b-2 border-transparent py-3 transition-colors hover:border-[#0F2D52] hover:text-[#0F2D52] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#0F2D52]"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </nav>
+              )}
             </div>
 
             {/* Loading state */}
@@ -1689,50 +1648,63 @@ export default function GisMap() {
                 .filter(n => n && n !== selfName)
                 .map(n => ({ name: n, riskClass: riskByBarangay[n] || 'No Data' }));
 
+              const latestMonth = trendChartData.at(-1);
+              const previousMonth = trendChartData.at(-2);
+              const monthlyChange = latestMonth && previousMonth ? latestMonth.cases - previousMonth.cases : null;
+              const trendInterpretation = !latestMonth
+                ? null
+                : !previousMonth
+                  ? `${latestMonth.label} has ${formatNum(latestMonth.cases)} reported cases. Another month is needed to compare changes.`
+                  : monthlyChange === 0
+                    ? `${latestMonth.label} and ${previousMonth.label} each recorded ${formatNum(latestMonth.cases)} cases.`
+                    : `${latestMonth.label} recorded ${formatNum(latestMonth.cases)} cases, ${formatNum(Math.abs(monthlyChange))} ${monthlyChange > 0 ? 'more' : 'fewer'} than ${previousMonth.label} (${formatNum(previousMonth.cases)}).`;
+              const topAgeGroup = demoChartData.reduce((top, group) =>
+                !top || Number(group.Male || 0) + Number(group.Female || 0) > Number(top.Male || 0) + Number(top.Female || 0)
+                  ? group : top, null);
+              const topAgeCount = topAgeGroup ? Number(topAgeGroup.Male || 0) + Number(topAgeGroup.Female || 0) : 0;
+              const topOutcome = outcomeChartData[0];
+              const topOutcomePct = topOutcome && totalOutcomeCases > 0
+                ? ((Number(topOutcome.value) / totalOutcomeCases) * 100).toFixed(1)
+                : null;
+
               // ── Unified View ──
               return (
-                <div className="px-6 py-5 space-y-5">
+                <div className="space-y-7 px-5 py-5 sm:px-8 sm:py-7">
                   {/* Hero + Key Metrics */}
-                  <div>
-                    <div className="mb-3">
-                      <h3 className="text-lg font-extrabold" style={{ color: '#0F2D52' }}>{merged.name || selectedBarangayName}</h3>
-                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: `${riskColor}15`, color: riskColor }}>
-                          <span className="w-1.5 h-1.5 rounded-full" style={{ background: riskColor }} />
+                  <div id="gis-profile-overview" tabIndex={-1} className="scroll-mt-28 outline-none">
+                    <h3 className="mb-3 text-base font-semibold text-[#0F2D52]">At a glance</h3>
+                    <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+                        <span className="inline-flex items-center gap-2 font-semibold" style={{ color: riskColor }}>
+                          <span className="h-2 w-2 rounded-sm" style={{ background: riskColor }} aria-hidden="true" />
                           {riskChipText}
                         </span>
                         {confidencePct != null && (
                           <span
-                            className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold"
-                            style={{ background: '#EEF2FF', color: '#3730A3' }}
+                            className="text-[#475569]"
                             title="The Random Forest model's own confidence that the label it chose is correct. It is not a patient's probability of developing TB, and not a prediction that residents will catch TB."
                           >
-                            RF {confidencePct}%
+                            Model confidence {confidencePct}%
                           </span>
                         )}
                         {isRuleBased && (
                           <span
-                            className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold"
-                            style={{ background: '#FFFBEB', color: '#92400E' }}
+                            className="text-[#92400E]"
                             title="Produced by a rule-based fallback on incidence thresholds, not the trained Random Forest model — a confidence figure is not meaningful for a rule-based result."
                           >
                             Rule-based fallback
                           </span>
                         )}
-                      </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-3 mt-3">
-                      <div className="rounded-lg p-3" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }}>Total Cases ({filterYear || 'All Years'})</span>
-                        <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.total_cases)}</p>
+                    <div className="grid grid-cols-1 gap-x-8 gap-y-5 rounded-lg border border-[#DCE4ED] bg-[#F7FAFD] px-5 py-5 sm:grid-cols-2 lg:grid-cols-3">
+                      <div>
+                        <span className="text-xs text-[#64748B]">Total cases · {filterYear || 'All years'}</span>
+                        <p className="mt-1 text-xl font-semibold tabular-nums text-[#0F2D52]">{formatNum(merged.total_cases)}</p>
                       </div>
-                      <div className="rounded-lg p-3" style={{ background: '#F1F5F9', border: '1px solid #E2E8F0' }}>
-                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }}>On Treatment ({filterYear || 'All Years'})</span>
-                        <p className="text-xl font-extrabold mt-1" style={{ color: '#2563EB' }}>{onTreatmentCases}</p>
+                      <div>
+                        <span className="text-xs text-[#64748B]">On treatment · {filterYear || 'All years'}</span>
+                        <p className="mt-1 text-xl font-semibold tabular-nums text-[#0F2D52]">{onTreatmentCases}</p>
                       </div>
                       <div
-                        className="rounded-lg p-3"
-                        style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}
                         title={
                           'Cases ÷ Population × 100,000. ' +
                           "Cases diagnosed in the selected year divided by that year's population, per 100,000. " +
@@ -1740,49 +1712,38 @@ export default function GisMap() {
                           'the Why panel below — the two are measured differently and need not match.'
                         }
                       >
-                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }}>Incidence / 100k ({filterYear || 'All Years'})</span>
-                        <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{formatNum(merged.incidence_per_100k)}</p>
+                        <span className="text-xs text-[#64748B]">Incidence per 100,000 · {filterYear || 'All years'}</span>
+                        <p className="mt-1 text-xl font-semibold tabular-nums text-[#0F2D52]">{formatNum(merged.incidence_per_100k)}</p>
                       </div>
-                      <div className="rounded-lg p-3" style={{ background: successRate !== '—' && Number(successRate) >= 85 ? '#F1F8F1' : '#FDF8F0', border: `1px solid ${successRate !== '—' && Number(successRate) >= 85 ? '#D4EDDA' : '#F5E6CC'}` }}>
-                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }} title="Cohort-based: (Cured + Treatment Completed) among patients whose treatment started in the cohort year, over that year's total treatment cohort.">{barangayTsr?.cohortYear ? `Success Rate — ${barangayTsr.cohortYear} Cohort` : 'Success Rate'}</span>
-                        <p className="text-xl font-extrabold mt-1" style={{ color: successRate !== '—' && Number(successRate) >= 85 ? '#16A34A' : '#EA580C' }}>{successRate === '—' ? 'N/A' : `${successRate}%`}</p>
+                      <div>
+                        <span className="text-xs text-[#64748B]" title="Cohort-based: (Cured + Treatment Completed) among patients whose treatment started in the cohort year, over that year's total treatment cohort.">{barangayTsr?.cohortYear ? `Treatment success · ${barangayTsr.cohortYear} cohort` : 'Treatment success'}</span>
+                        <p className="mt-1 text-xl font-semibold tabular-nums text-[#0F2D52]">{successRate === '—' ? 'N/A' : `${successRate}%`}</p>
                       </div>
                       <div
-                        className="rounded-lg p-3"
-                        style={{ background: '#FDF2F2', border: '1px solid #F5D6D6' }}
                         title="Died ÷ evaluated terminal outcomes (Cured, Treatment Completed, Died, Treatment Failed, Lost to Follow-up) among this barangay's cases diagnosed in the selected period. Cases still on treatment are excluded because they have not reached an outcome."
                       >
-                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }}>Fatality Rate ({filterYear || 'All Years'})</span>
-                        <p className="text-xl font-extrabold mt-1" style={{ color: '#B91C1C' }}>{fatalityRate != null ? `${fatalityRate}%` : 'N/A'}</p>
+                        <span className="text-xs text-[#64748B]">Case fatality · {filterYear || 'All years'}</span>
+                        <p className="mt-1 text-xl font-semibold tabular-nums text-[#0F2D52]">{fatalityRate != null ? `${fatalityRate}%` : 'N/A'}</p>
                       </div>
                       <div
-                        className="rounded-lg p-3"
-                        style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}
                         title="The assessment year is the year of the stored RF snapshot. Its training data year is shown separately."
                       >
-                        <span className="text-[10px] font-bold uppercase leading-tight" style={{ color: '#64748B' }}>Assessment Year</span>
-                        <p className="text-xl font-extrabold mt-1" style={{ color: '#0F2D52' }}>{riskAssessmentYear ?? 'No Snapshot'}</p>
-                        {riskAssessmentPeriod && <p className="text-[10px] mt-1" style={{ color: '#64748B' }}>Data Year {riskDataYear} · Prediction Period {riskAssessmentPeriod}</p>}
+                        <span className="text-xs text-[#64748B]">Assessment year</span>
+                        <p className="mt-1 text-xl font-semibold tabular-nums text-[#0F2D52]">{riskAssessmentYear ?? 'No snapshot'}</p>
+                        {riskAssessmentPeriod && <p className="mt-1 text-xs text-[#64748B]">Data year {riskDataYear} · Prediction period {riskAssessmentPeriod}</p>}
                       </div>
-                       <div className="rounded-lg p-3 col-span-2" style={{ background: '#F0F5F4', border: '1px solid #D1D5DB' }}>
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <span className="text-[10px] font-bold uppercase" style={{ color: '#64748B' }}>Active Interventions</span>
-                            <p className="text-xl font-extrabold mt-1" style={{ color: '#0D9488' }}>{barangayInterventionCount}</p>
-                          </div>
-                          {barangayInterventionCount === 0 && (
-                            <button
-                              onClick={() => navigate(`/interventions?barangay=${encodeURIComponent(selectedBarangayName)}`)}
-                              className="text-[10px] font-semibold px-2.5 py-1 rounded-md transition-colors"
-                               style={{ background: '#E2E8F0', color: '#374151' }}
-                              onMouseEnter={e => { e.currentTarget.style.background = '#99F6E4'; }}
-                              onMouseLeave={e => { e.currentTarget.style.background = '#CCFBF1'; }}
-                            >
-                              <i className="ri-add-line mr-0.5" />Create
-                            </button>
-                          )}
-                        </div>
-                      </div>
+                    </div>
+                    <div className="mt-4 flex items-center justify-between gap-4 text-sm">
+                      <span className="text-[#475569]">Active interventions <strong className="ml-1 font-semibold tabular-nums text-[#0F2D52]">{barangayInterventionCount}</strong></span>
+                      {barangayInterventionCount === 0 && (
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/interventions?barangay=${encodeURIComponent(selectedBarangayName)}`)}
+                          className="font-semibold text-[#0F2D52] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]"
+                        >
+                          Create intervention <span aria-hidden="true">→</span>
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1791,28 +1752,31 @@ export default function GisMap() {
                       screen; every clause is dropped when its value is
                       absent, so the prose can never claim a number the page
                       does not actually have. */}
-                  <div className="rounded-lg p-4" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                    <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: '#64748B' }}>Barangay Summary</p>
-                    <p className="text-[12px] leading-relaxed" style={{ color: '#334155' }}>{barangaySummary}</p>
+                  <div className="rounded-lg border-l-[3px] border-[#0F2D52] bg-[#F7FAFD] px-4 py-3">
+                    <h3 className="mb-2 text-sm font-semibold text-[#0F2D52]">Summary</h3>
+                    <p className="text-sm leading-relaxed text-[#475569]">{barangaySummary}</p>
                   </div>
-
-                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
 
                   {/* Risk Classification — the RF classifier's own output and
                       inputs. This is the authoritative classification; the
                       legacy weighted index below is a separate, optional
                       analytical view, never the explanation for this. */}
                   {merged.risk_class && (
-                    <div>
+                    <div id="gis-profile-risk" tabIndex={-1} className="scroll-mt-28 border-t border-[#DCE4ED] pt-6 outline-none">
                       {/* All Years shows the NEWEST snapshot only — the
                           ({riskPeriodLabel}) suffix in the heading above says
                           which assessment year that is, so one year's RF
                           output is never read as an all-history
                           classification. */}
-                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
-                        {hasSnapshot ? `Why ${riskChipText}?` : 'Risk Assessment'}
-                        <span style={{ color: '#94A3B8', fontWeight: 600 }}> ({riskPeriodLabel})</span>
+                      <h4 className="mb-2 text-base font-semibold text-[#0F2D52]">
+                        Risk assessment
+                        <span className="ml-1 font-normal text-[#64748B]">({riskPeriodLabel})</span>
                       </h4>
+                      {hasSnapshot && merged.rf_features && (
+                        <p className="mb-3 text-xs leading-relaxed text-[#64748B]">
+                          These indicators were used together to classify this barangay as {riskChipText.toLowerCase()}. They show the context of the assessment, not separate causes.
+                        </p>
+                      )}
                       {/* Selected year has case data but no risk snapshot —
                           contextual note inside this section (the page-level
                           yellow banner already covers it globally). */}
@@ -1836,7 +1800,7 @@ export default function GisMap() {
                       )}
                       {merged.rf_features ? (
                         <>
-                          <div className="space-y-2">
+                          <div className="grid gap-x-8 gap-y-0 sm:grid-cols-2">
                             {RF_FEATURE_ORDER.filter(k => (
                               k === 'lag_1m'
                                 ? ['lag_1m', 'lag_2m', 'lag_3m'].some(lagKey => lagKey in merged.rf_features)
@@ -1853,36 +1817,20 @@ export default function GisMap() {
                                 featureBands
                               );
                               return (
-                                <div key={key}>
-                                  <div className="text-[11px] font-semibold" style={{ color: '#475569' }}>
+                                <div key={key} className="border-b border-[#E2E8F0] py-3">
+                                  <div className="text-xs font-medium text-[#475569]">
                                     {RF_FEATURE_LABELS[key] || key}
                                   </div>
-                                  <div className="text-[12px] font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>
+                                  <div className="mt-1 text-sm font-semibold text-[#0F2D52]">
                                     {value}
                                   </div>
-                                  <p className="text-[10px] mt-0.5 leading-relaxed" style={{ color: '#64748B' }}>
+                                  <p className="mt-1 text-xs leading-relaxed text-[#64748B]">
                                     {explanation}
                                   </p>
                                 </div>
                               );
                             })}
                           </div>
-                          <div className="mt-3 pt-3 space-y-1.5" style={{ borderTop: '1px solid #E2E8F0' }}>
-                            <div className="text-[11px]">
-                              <span className="font-semibold" style={{ color: '#475569' }}>Overall Classification: </span>
-                              <span className="font-extrabold" style={{ color: riskColor }}>{hasSnapshot ? riskChipText : 'No Assessment'}</span>
-                            </div>
-                            {confidencePct != null && (
-                              <div className="text-[11px]">
-                                <span className="font-semibold" style={{ color: '#475569' }}>Classification Confidence: </span>
-                                <span className="font-extrabold" style={{ color: '#0F2D52' }}>{confidencePct}%</span>
-                              </div>
-                            )}
-                          </div>
-                          <p className="text-[10px] mt-2 leading-relaxed" style={{ color: '#64748B' }}>
-                            TBInsight considered these indicators together when assigning the risk classification.
-                            No single indicator alone determines the result.
-                          </p>
                         </>
                       ) : (
                         <p className="text-[11px] leading-relaxed" style={{ color: '#94A3B8' }}>
@@ -1913,12 +1861,12 @@ export default function GisMap() {
                         style={{ color: '#94A3B8' }}
                       >
                         <i className={`ri-arrow-${showLegacyIndex ? 'down' : 'right'}-s-line`} />
-                        Analytical Risk Index (legacy, separate from RF classification)
+                        Legacy risk index
                       </button>
                       {showLegacyIndex && (
                         <div className="mt-3">
-                          <p className="text-[10px] mb-3 leading-relaxed" style={{ color: '#94A3B8' }}>
-                            A separate weighted formula kept for research/audit comparison. It does not determine the Risk Level above.
+                          <p className="mb-3 text-xs leading-relaxed text-[#64748B]">
+                            A separate research measure. It does not determine the risk classification above.
                           </p>
                           <div className="space-y-2.5">
                             {(() => {
@@ -1965,24 +1913,23 @@ export default function GisMap() {
                       claiming the model used something it never ran. */}
                   {hasSnapshot && neighbourRows.length > 0 && (
                     <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
-                        Neighboring Barangay Context
-                        <span style={{ color: '#94A3B8', fontWeight: 600 }}> ({riskPeriodLabel})</span>
+                      <h4 className="mb-3 text-sm font-semibold text-[#0F2D52]">
+                        Nearby barangays
+                        <span className="ml-1 font-normal text-[#64748B]">({riskPeriodLabel})</span>
                       </h4>
-                      <div className="space-y-1.5 mb-3">
+                      <div className="mb-3 grid gap-2 sm:grid-cols-2">
                         {neighbourRows.map(n => {
                           const color = RISK_COLORS[n.riskClass] || RISK_COLORS['No Data'];
                           const text = n.riskClass === 'No Data' ? 'No Assessment' : `${riskLabel(n.riskClass)} Risk`;
                           return (
                             <div
                               key={n.name}
-                              className="flex items-center justify-between gap-2 rounded-lg px-3 py-2"
-                              style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}
+                              className="flex items-center justify-between gap-2 border-b border-[#E2E8F0] py-2"
                             >
                               <span className="text-[12px] font-semibold" style={{ color: '#334155' }}>{n.name}</span>
                               <span
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap"
-                                style={{ background: `${color}15`, color, border: `1px solid ${color}40` }}
+                                className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium"
+                                style={{ color }}
                               >
                                 <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
                                 {text}
@@ -1999,139 +1946,123 @@ export default function GisMap() {
                     </div>
                   )}
 
-                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
-
+                  {(trendChartData.length > 0 || demoChartData.length > 0 || outcomeChartData.length > 0) && (
+                    <section id="gis-profile-charts" tabIndex={-1} className="scroll-mt-28 space-y-4 border-t border-[#DCE4ED] pt-6 outline-none" aria-label="Barangay charts">
+                      <div>
+                        <h3 className="text-base font-semibold text-[#0F2D52]">Cases and outcomes</h3>
+                        <p className="mt-1 text-xs text-[#64748B]">Figures for the selected barangay and available reporting period.</p>
+                      </div>
                   {/* Cases Over Time + Month-over-Month */}
                   {trendChartData.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Cases Over Time</h4>
-                      {(() => {
-                        const last = trendChartData[trendChartData.length - 1]?.cases || 0;
-                        const prev = trendChartData.length >= 2 ? (trendChartData[trendChartData.length - 2]?.cases || 0) : 0;
-                        const delta = prev > 0 ? (((last - prev) / prev) * 100).toFixed(1) : null;
-                        const isUp = last > prev;
-                        return delta !== null && prev > 0 ? (
-                          <div className="flex items-center gap-1.5 mb-3">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: isUp ? '#FEF2F2' : '#ECFDF5', color: isUp ? '#991B1B' : '#047857' }}>
-                              <i className={`ri-arrow-${isUp ? 'up' : 'down'}-line text-[10px]`} />
-                              {delta}%
-                            </span>
-                            <span className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>vs previous month</span>
-                          </div>
-                        ) : null;
-                      })()}
-                      <div style={{ height: 180 }}>
+                    <section className="rounded-lg border border-[#DCE4ED] bg-white p-4 sm:p-5" aria-label="Cases over time chart">
+                      <div className="mb-4">
+                        <h4 className="text-sm font-semibold text-[#0F2D52]">Cases over time</h4>
+                        <p className="mt-0.5 text-xs text-[#64748B]">Monthly reported cases · most recent 12 months with data</p>
+                      </div>
+                      <div style={{ height: 210 }}>
                         <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={trendChartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-                            <defs>
-                              <linearGradient id="gisAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="#3B82F6" stopOpacity={0.2} />
-                                <stop offset="100%" stopColor="#3B82F6" stopOpacity={0.02} />
-                              </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                            <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#94A3B8' }} />
-                            <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} allowDecimals={false} />
+                          <LineChart data={trendChartData} margin={{ top: 10, right: 12, left: -12, bottom: 0 }}>
+                            <CartesianGrid vertical={false} stroke="#E7EDF4" />
+                            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748B' }} tickLine={false} axisLine={false} minTickGap={14} />
+                            <YAxis tick={{ fontSize: 11, fill: '#64748B' }} tickLine={false} axisLine={false} allowDecimals={false} />
                             <Tooltip
-                              contentStyle={{ background: '#0F2D52', border: 'none', borderRadius: 8, color: '#fff', fontSize: 11 }}
-                              labelStyle={{ color: '#94A3B8', fontSize: 10 }}
-                              itemStyle={{ color: '#fff' }}
+                              contentStyle={{ background: '#ffffff', border: '1px solid #DCE4ED', borderRadius: 6, color: '#0F2D52', fontSize: 12 }}
+                              labelStyle={{ color: '#64748B' }}
+                              itemStyle={{ color: '#0F2D52' }}
                             />
-                            <Area type="monotone" dataKey="cases" stroke="#3B82F6" strokeWidth={2} fill="url(#gisAreaGrad)" name="Cases" />
-                          </AreaChart>
+                            <Line type="monotone" dataKey="cases" stroke="#0F2D52" strokeWidth={2.5} dot={{ r: 3, fill: '#ffffff', strokeWidth: 2 }} activeDot={{ r: 5 }} name="Reported cases" />
+                          </LineChart>
                         </ResponsiveContainer>
                       </div>
-                    </div>
+                      <p className="mt-4 border-t border-[#E2E8F0] pt-3 text-xs leading-relaxed text-[#475569]">
+                        <strong className="mr-1 font-semibold text-[#0F2D52]">Interpretation:</strong>{trendInterpretation}
+                      </p>
+                    </section>
                   )}
 
-                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
-
                   {/* Demographics Chart */}
+                  {(demoChartData.length > 0 || outcomeChartData.length > 0) && (
+                    <div className="grid gap-4 lg:grid-cols-2">
                   {demoChartData.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Demographics</h4>
-                      <div style={{ height: 200 }}>
+                    <section className="min-w-0 rounded-lg border border-[#DCE4ED] bg-white p-4 sm:p-5" aria-label="Cases by age and sex chart">
+                      <h4 className="text-sm font-semibold text-[#0F2D52]">Cases by age and sex</h4>
+                      <p className="mt-0.5 text-xs text-[#64748B]">Reported cases grouped by age and sex.</p>
+                      <div className="mt-4" style={{ height: Math.max(210, demoChartData.length * 36) }}>
                         <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={demoChartData} layout="vertical" margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                            <XAxis type="number" tick={{ fontSize: 9, fill: '#94A3B8' }} allowDecimals={false} />
-                            <YAxis type="category" dataKey="name" tick={{ fontSize: 9, fill: '#64748B' }} width={40} />
+                          <BarChart data={demoChartData} layout="vertical" margin={{ top: 0, right: 10, left: 0, bottom: 0 }} barGap={2}>
+                            <CartesianGrid horizontal={false} stroke="#E7EDF4" />
+                            <XAxis type="number" tick={{ fontSize: 10, fill: '#64748B' }} tickLine={false} axisLine={false} allowDecimals={false} />
+                            <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#475569' }} tickLine={false} axisLine={false} width={54} />
                             <Tooltip
-                              contentStyle={{ background: '#0F2D52', border: 'none', borderRadius: 8, color: '#fff', fontSize: 11 }}
-                              labelStyle={{ color: '#94A3B8', fontSize: 10 }}
+                              contentStyle={{ background: '#ffffff', border: '1px solid #DCE4ED', borderRadius: 6, color: '#0F2D52', fontSize: 12 }}
+                              labelStyle={{ color: '#64748B' }}
                             />
-                            <Bar dataKey="Male" fill="#3B82F6" radius={[0, 2, 2, 0]} barSize={10} />
-                             <Bar dataKey="Female" fill="#B48EAD" radius={[0, 2, 2, 0]} barSize={10} />
+                            <Bar dataKey="Male" fill="#0F2D52" radius={[0, 3, 3, 0]} barSize={9} />
+                            <Bar dataKey="Female" fill="#348A98" radius={[0, 3, 3, 0]} barSize={9} />
                           </BarChart>
                         </ResponsiveContainer>
                       </div>
-                      <div className="flex items-center gap-4 mt-2 justify-center">
+                      <div className="mt-3 flex items-center gap-4 text-xs text-[#64748B]">
                         <div className="flex items-center gap-1.5">
-                          <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#3B82F6' }} />
-                          <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>Male</span>
+                          <span className="h-2 w-2 rounded-sm bg-[#0F2D52]" />
+                          <span>Male</span>
                         </div>
                         <div className="flex items-center gap-1.5">
-                           <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#B48EAD' }} />
-                          <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>Female</span>
+                          <span className="h-2 w-2 rounded-sm bg-[#348A98]" />
+                          <span>Female</span>
                         </div>
                       </div>
-                    </div>
+                      <p className="mt-4 border-t border-[#E2E8F0] pt-3 text-xs leading-relaxed text-[#475569]">
+                        <strong className="mr-1 font-semibold text-[#0F2D52]">Interpretation:</strong>
+                        {topAgeCount > 0
+                          ? `The ${topAgeGroup.name} age group has the highest displayed count, with ${formatNum(topAgeCount)} cases across both sexes.`
+                          : 'No cases are recorded in the displayed age groups.'}
+                      </p>
+                    </section>
                   )}
 
-                  <div style={{ borderTop: '1px solid #E2E8F0' }} />
-
-                  {/* Outcomes Donut Chart */}
+                  {/* Outcomes comparison */}
                   {outcomeChartData.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Treatment Outcomes</h4>
-                      <div className="flex items-center gap-4">
-                        <div style={{ width: 140, height: 140 }}>
-                          <ResponsiveContainer width="100%" height="100%">
-                            <PieChart>
-                              <Pie
-                                data={outcomeChartData}
-                                cx="50%"
-                                cy="50%"
-                                innerRadius={35}
-                                outerRadius={60}
-                                dataKey="value"
-                                stroke="none"
-                              >
-                                {outcomeChartData.map((entry, i) => (
-                                  <Cell key={i} fill={entry.color} />
-                                ))}
-                              </Pie>
-                              <Tooltip
-                                contentStyle={{ background: '#0F2D52', border: 'none', borderRadius: 8, color: '#fff', fontSize: 11 }}
-                                formatter={(value, name) => [`${value} cases`, name]}
-                              />
-                            </PieChart>
-                          </ResponsiveContainer>
-                        </div>
-                        <div className="flex-1 space-y-1.5">
-                          {outcomeChartData.map((o) => {
-                            const pct = totalOutcomeCases > 0 ? ((o.value / totalOutcomeCases) * 100).toFixed(1) : 0;
-                            return (
-                              <div key={o.name} className="flex items-center gap-2">
-                                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: o.color }} />
-                                <span className="text-[10px] font-medium flex-1 truncate" style={{ color: '#475569' }}>{o.name}</span>
-                                <span className="text-[10px] font-bold" style={{ color: '#0F2D52' }}>{pct}%</span>
+                    <section className="min-w-0 rounded-lg border border-[#DCE4ED] bg-white p-4 sm:p-5" aria-label="Treatment outcomes chart">
+                      <h4 className="text-sm font-semibold text-[#0F2D52]">Treatment outcomes</h4>
+                      <p className="mt-0.5 text-xs text-[#64748B]">{formatNum(totalOutcomeCases)} recorded outcomes · sorted by count</p>
+                      <div className="mt-5 space-y-3.5" role="list" aria-label="Treatment outcome counts">
+                        {outcomeChartData.map((outcome) => {
+                          const pct = totalOutcomeCases > 0 ? Number(outcome.value) / totalOutcomeCases * 100 : 0;
+                          return (
+                            <div key={outcome.name} role="listitem">
+                              <div className="mb-1.5 flex items-baseline justify-between gap-3 text-xs">
+                                <span className="text-[#475569]">{outcome.name}</span>
+                                <span className="shrink-0 font-semibold tabular-nums text-[#0F2D52]">{formatNum(outcome.value)} <span className="font-normal text-[#64748B]">({pct.toFixed(1)}%)</span></span>
                               </div>
-                            );
-                          })}
-                        </div>
+                              <div className="h-2 overflow-hidden rounded-r-sm bg-[#E8EDF3]" aria-hidden="true">
+                                <div className="h-full rounded-r-sm" style={{ width: `${pct}%`, backgroundColor: outcome.color }} />
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
+                      <p className="mt-5 border-t border-[#E2E8F0] pt-3 text-xs leading-relaxed text-[#475569]">
+                        <strong className="mr-1 font-semibold text-[#0F2D52]">Interpretation:</strong>
+                        {topOutcomePct != null && Number(topOutcome.value) > 0
+                          ? `${topOutcome.name} has the highest displayed count: ${formatNum(topOutcome.value)} of ${formatNum(totalOutcomeCases)} recorded outcomes (${topOutcomePct}%).`
+                          : 'No outcome cases are recorded in this view.'}
+                      </p>
+                    </section>
+                  )}
                     </div>
+                  )}
+                    </section>
                   )}
 
                   <div style={{ borderTop: '1px solid #E2E8F0' }} />
 
                   {/* Barangay Profile (compact) */}
-                  <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>Barangay Profile</h4>
-                    <div className="space-y-2.5">
+                  <div id="gis-profile-details" tabIndex={-1} className="scroll-mt-28 outline-none">
+                    <h4 className="text-base font-semibold text-[#0F2D52]">Other details</h4>
+                    <p className="mt-1 text-xs text-[#64748B]">Population and available model outputs.</p>
+                    <div className="mt-2 grid gap-x-8 sm:grid-cols-2">
                       <DetailRow label="Population" value={formatNum(merged.population)} />
-                      <DetailRow label="Risk Score" value={formatNum(merged.risk_score)} />
                       <DetailRow label="Trend Direction" value={merged.trend_direction || '—'} />
                       {/* Null means ARIMA never ran for this period (historical
                           snapshots skip forecasting) — distinct from a real

@@ -109,6 +109,14 @@ describe('services/notifications', () => {
     assert.deepStrictEqual(rows.map(r => r.user_id), [10]); // de-duplicated, actor skipped
   });
 
+  it('can notify the actor about an operational outcome', async () => {
+    await notifications.notify([10, 10], {
+      type: 'import_completed', title: 'Import completed', actorId: 10, includeActor: true,
+    });
+    assert.deepStrictEqual(rows.map(r => r.user_id), [10]);
+    assert.strictEqual(rows[0].type, 'import_completed');
+  });
+
   it('falls back to admins when the barangay has no active staff', async () => {
     await notifications.notifyBarangay(99, { type: 'referral_received', title: 'Incoming referral', actorId: 1 });
     assert.deepStrictEqual(rows.map(r => r.user_id), [2]);

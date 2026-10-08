@@ -2,24 +2,32 @@ import API from '../api/axios';
 
 // Shared by the header bell (components/Layout.jsx) and pages/NotificationsPage.jsx.
 
-export const SEVERITY_COLOR = {
-  danger: '#DC2626',
-  warning: '#D97706',
-  success: '#059669',
-  info: '#2E6FAF',
+export const TYPE_LABEL = {
+  import_completed: 'Import',
+  import_failed: 'Import',
+  validation_issues: 'Validation',
+  validation_summary: 'Validation',
+  assignment_needed: 'Assignment',
+  case_assigned: 'Cases',
+  sync_completed: 'Sync',
+  sync_failed: 'Sync',
+  referral_received: 'Referral',
+  referral_accepted: 'Referral',
+  referral_rejected: 'Referral',
+  referral_cancelled: 'Referral',
+  account_updated: 'Account',
 };
 
-export const TYPE_ICON = {
-  referral_received: 'ri-inbox-archive-line',
-  referral_accepted: 'ri-checkbox-circle-line',
-  referral_rejected: 'ri-close-circle-line',
-  referral_cancelled: 'ri-arrow-go-back-line',
-  case_assigned: 'ri-map-pin-user-line',
-  validation_summary: 'ri-checkbox-multiple-line',
-  sync_completed: 'ri-upload-cloud-2-line',
-  sync_failed: 'ri-error-warning-line',
-  account_updated: 'ri-user-settings-line',
-};
+const notificationDateFormatter = new Intl.DateTimeFormat('en-PH', {
+  timeZone: 'Asia/Manila', month: 'short', day: 'numeric', year: 'numeric',
+  hour: 'numeric', minute: '2-digit', hour12: true,
+});
+
+export function formatNotificationDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : notificationDateFormatter.format(date);
+}
 
 export function timeAgo(value) {
   if (!value) return '';

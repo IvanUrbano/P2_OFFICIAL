@@ -9,17 +9,13 @@ const db = require('../db/pasigSchema');
 /**
  * Get source record ID based on source type
  * DSTB: uses validation_status as source ID (patient case identifier)
- * MN: uses itis_case_id as source ID
+ * MN: no stable source ID (the Case ID is handled by the identity rules)
  * @param {Object} record - Parsed record data
  * @param {string} sourceType - 'DSTB' or 'MN'
  * @returns {string|null} Stable source record ID
  */
 function getSourceRecordId(record, sourceType) {
   if (!record) return null;
-
-  if (sourceType === 'MN' && record.itis_case_id) {
-    return record.itis_case_id;
-  }
 
   // For DSTB, use a combination of key identifiers
   // This creates a stable key from patient data

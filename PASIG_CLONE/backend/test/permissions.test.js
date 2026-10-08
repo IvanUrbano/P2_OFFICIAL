@@ -42,7 +42,11 @@ describe('casePermissions', () => {
   });
 
   it('archived or merged records cannot be referred or archived again', () => {
-    assert.strictEqual(casePermissions(admin, null, { ...caseRosario, is_archived: true }).refer, false);
+    const archived = casePermissions(admin, null, { ...caseRosario, is_archived: true });
+    assert.strictEqual(archived.view, true);
+    assert.strictEqual(archived.edit, false);
+    assert.strictEqual(archived.refer, false);
+    assert.strictEqual(archived.archive, false);
     assert.strictEqual(casePermissions(admin, null, { ...caseRosario, merged_into_case_no: 'CS-1' }).archive, false);
   });
 

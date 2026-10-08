@@ -40,6 +40,7 @@ from models import (
     EvaluateRequest,
     EvaluateResponse,
     ArimaEvaluation,
+    ArimaBarangayEvaluation,
     ArimaStep,
     RfEvaluation,
     RfStep,
@@ -303,6 +304,17 @@ def evaluate_models(req: EvaluateRequest):
                 failed_barangays=failed_barangays,
                 baseline_mae=round(float(np.mean(all_base_mae)), 4) if all_base_mae else None,
                 baseline_mape=round(float(np.mean(all_base_mape)), 2) if all_base_mape else None,
+                per_barangay=[
+                    ArimaBarangayEvaluation(
+                        barangay_name=r["barangay_name"],
+                        mae=r["mae"],
+                        mape=r["mape"],
+                        n_steps=r["n_steps"],
+                        method_counts=r.get("method_counts") or {},
+                        steps=[ArimaStep(**s) for s in r["steps"]],
+                    )
+                    for r in arima_results
+                ],
             )
         else:
             arima_eval = ArimaEvaluation(failed_barangays=failed_barangays)

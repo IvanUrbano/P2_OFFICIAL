@@ -793,14 +793,14 @@ describe('Webhook Endpoint', () => {
     assert.equal(res.status, 200);
     assert.equal(res.body.success, true);
     assert.equal(res.body.importedCount, 1);
-    assert.equal(insertedRow[20], 'Non-Pasig Resident');
+    assert.equal(insertedRow[19], 'Non-Pasig Resident');
     // Never stamped with a Pasig barangay — barangay_id, barangay_name stay NULL
     assert.equal(insertedRow[1], null);
     assert.equal(insertedRow[7], null);
     // Residence is kept as the source wrote it, in its own free-text columns
-    // (index 35 is source_case_id — the Case ID users see)
-    assert.equal(insertedRow[36], 'Santa Cruz');
-    assert.equal(insertedRow[37], 'Manila');
+    // (index 34 is source_case_id — the Case ID users see)
+    assert.equal(insertedRow[35], 'Santa Cruz');
+    assert.equal(insertedRow[36], 'Manila');
   });
 
   it('rejects a confirmed Non-Pasig resident whose treatment facility is not Pasig', async () => {
@@ -908,14 +908,12 @@ describe('Webhook Endpoint', () => {
     assert.equal(res.body.errorCount, 1);
   });
 
-  it('maps ITIS Lite field for MN sheets', async () => {
-    let insertedItisId = null;
+  it('ignores the ITIS field of MN records: it is never stored', async () => {
+    let insertSql = '';
+    let insertParams = [];
     mockQueryFn = async (sql) => {
       if (sql.includes('SELECT id, name FROM barangays')) {
         return { rows: [{ name: 'caniogan' }] };
-      }
-      if (sql.includes('INSERT INTO webhook_logs')) {
-        return { rows: [] };
       }
       return { rows: [] };
     };
@@ -923,8 +921,9 @@ describe('Webhook Endpoint', () => {
     mockConnectFn = async () => ({
       query: async (sql, params) => {
         if (sql.includes('INSERT INTO tb_cases')) {
-          insertedItisId = params[18]; // itis_case_id is 19th param
-          return { rows: [{ id: 1, dstb_fingerprint: null, itis_case_id: insertedItisId, source_type: 'MN' }] };
+          insertSql = sql;
+          insertParams = params;
+          return { rows: [{ id: 1, dstb_fingerprint: null, source_type: 'MN' }] };
         }
         return { rows: [] };
       },
@@ -960,7 +959,8 @@ describe('Webhook Endpoint', () => {
 
     assert.equal(res.status, 200);
     assert.equal(res.body.importedCount, 1);
-    assert.equal(insertedItisId, 'ITIS-2025-001');
+    assert.ok(!insertSql.includes('itis_case_id'), 'no ITIS column is written');
+    assert.ok(!insertParams.includes('ITIS-2025-001'), 'the ITIS number is not stored');
   });
 
   it('parses various date formats in records', async () => {
@@ -1062,29 +1062,23 @@ describe('Webhook Endpoint', () => {
   });
 
   // ══════════════════════════════════════════════════════════════
-  //  Duplicate detection — MN itis_case_id / DSTB fingerprint
+  //  Duplicate detection — DSTB fingerprint
   //  (detection-only: never reject, never merge, never delete)
   // ══════════════════════════════════════════════════════════════
 
-  it('TEST A — MN same itis_case_id but clearly different record: both preserved, collision flagged, no silent rejection', async () => {
-    let mnFlagParams = null;
+  it('TEST A — MN records that share an ITIS number are NOT flagged: the ITIS number is ignored', async () => {
+    let collisionQueries = 0;
     mockQueryFn = async (sql) => {
       if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
       return { rows: [] };
     };
     mockConnectFn = async () => ({
-      query: async (sql, params) => {
+      query: async (sql) => {
         if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
         if (sql.includes('INSERT INTO tb_cases')) {
-          // A different patient whose itis_case_id happens to already exist
-          // on an earlier, unrelated record (the real condition found in
-          // live data — see migration 018's audit).
-          return { rows: [{ id: 9001, dstb_fingerprint: null, itis_case_id: 'ITIS-COLLIDE-1', source_type: 'MN' }] };
+          return { rows: [{ id: 9001, dstb_fingerprint: null, source_type: 'MN' }] };
         }
-        if (sql.includes('MN_ITIS_ID_COLLISION')) {
-          mnFlagParams = params;
-          return { rows: [{ id: 9001 }] };
-        }
+        if (sql.includes('MN_ITIS_ID_COLLISION')) collisionQueries++;
         return { rows: [] };
       },
       release: () => {},
@@ -1112,146 +1106,10 @@ describe('Webhook Endpoint', () => {
       .send(payload);
 
     assert.equal(res.status, 200);
-    assert.equal(res.body.importedCount, 1, 'the colliding record must be inserted, never rejected');
-    assert.equal(res.body.mnCollisionsFlagged, 1, 'the collision must be flagged for review');
-    assert.ok(mnFlagParams[0].includes('ITIS-COLLIDE-1'));
-  });
-
-  it('TEST B — same MN case resent in a different batch: batch-level idempotency does not apply, but no crash and no data loss', async () => {
-    // Batch idempotency (webhook_logs unique on batch_id) only prevents
-    // *reprocessing the same batch*. A different batch carrying the same
-    // MN case is a separate scenario, handled by record-level detection
-    // (TEST A/C), not by batch idempotency — this test documents that
-    // distinction by resending under a brand-new batch_id and confirming
-    // the record still lands (never silently dropped).
-    mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
-      if (sql.includes('FROM webhook_logs WHERE batch_id')) return { rows: [] }; // new batch, not seen before
-      return { rows: [] };
-    };
-    mockConnectFn = async () => ({
-      query: async (sql) => {
-        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
-        if (sql.includes('INSERT INTO tb_cases')) {
-          return { rows: [{ id: 9002, dstb_fingerprint: null, itis_case_id: 'ITIS-RESENT', source_type: 'MN' }] };
-        }
-        if (sql.includes('MN_ITIS_ID_COLLISION')) return { rows: [{ id: 9002 }] };
-        return { rows: [] };
-      },
-      release: () => {},
-    });
-
-    clearWebhookCache();
-    const webhook = require('../tbinsight/webhook');
-    const app = express();
-    app.use(express.json(RAW_BODY_CAPTURE));
-    app.use('/api/webhook', webhook);
-
-    const payload = buildPayload({
-      batch_id: '660e8400-e29b-41d4-a716-446655440099',
-      sheets: [{
-        sheet_name: 'MN', source_type: 'MN', record_count: 1,
-        records: [{
-          barangay_name: 'San Antonio', date_of_diagnosis: '2025-07-01',
-          sex: 'Female', age: 19, itis_case_id: 'ITIS-RESENT', source_type: 'MN',
-        }],
-      }],
-    });
-
-    const res = await request(app)
-      .post('/api/webhook/pasig-clone')
-      .set('X-Webhook-Signature', generateSignature(payload))
-      .send(payload);
-
-    assert.equal(res.status, 200);
-    assert.equal(res.body.importedCount, 1);
-    assert.equal(res.body.mnCollisionsFlagged, 1);
-  });
-
-  it('TEST B2 — same batch_id resent: batch-level idempotency handles it before any record-level processing', async () => {
-    mockClaimResult = { rows: [] };
-    mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
-      if (sql.includes('FROM webhook_logs WHERE batch_id')) return { rows: [{ id: 1, status: 'processed' }] };
-      return { rows: [] };
-    };
-
-    clearWebhookCache();
-    const webhook = require('../tbinsight/webhook');
-    const app = express();
-    app.use(express.json(RAW_BODY_CAPTURE));
-    app.use('/api/webhook', webhook);
-
-    const payload = buildPayload({
-      sheets: [{
-        sheet_name: 'MN', source_type: 'MN', record_count: 1,
-        records: [{
-          barangay_name: 'San Antonio', date_of_diagnosis: '2025-07-01',
-          sex: 'Female', age: 19, itis_case_id: 'ITIS-SAME-BATCH', source_type: 'MN',
-        }],
-      }],
-    });
-
-    const res = await request(app)
-      .post('/api/webhook/pasig-clone')
-      .set('X-Webhook-Signature', generateSignature(payload))
-      .send(payload);
-
-    assert.equal(res.status, 200);
-    assert.ok(res.body.message.includes('already processed'));
-  });
-
-  it('TEST C — same itis_case_id reappears with a changed outcome_status: still just flagged as possible_duplicate, never auto-confirmed', async () => {
-    let mnFlagSql = null;
-    mockQueryFn = async (sql) => {
-      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ name: 'san antonio' }] };
-      return { rows: [] };
-    };
-    mockConnectFn = async () => ({
-      query: async (sql) => {
-        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
-        if (sql.includes('INSERT INTO tb_cases')) {
-          return { rows: [{ id: 9003, dstb_fingerprint: null, itis_case_id: 'ITIS-OUTCOME-CHANGED', source_type: 'MN' }] };
-        }
-        if (sql.includes('MN_ITIS_ID_COLLISION')) {
-          mnFlagSql = sql;
-          return { rows: [{ id: 9003 }] };
-        }
-        return { rows: [] };
-      },
-      release: () => {},
-    });
-
-    clearWebhookCache();
-    const webhook = require('../tbinsight/webhook');
-    const app = express();
-    app.use(express.json(RAW_BODY_CAPTURE));
-    app.use('/api/webhook', webhook);
-
-    const payload = buildPayload({
-      sheets: [{
-        sheet_name: 'MN', source_type: 'MN', record_count: 1,
-        records: [{
-          barangay_name: 'San Antonio', date_of_diagnosis: '2025-07-01',
-          sex: 'Female', age: 19, itis_case_id: 'ITIS-OUTCOME-CHANGED',
-          outcome_status: 'CURED', source_type: 'MN',
-        }],
-      }],
-    });
-
-    const res = await request(app)
-      .post('/api/webhook/pasig-clone')
-      .set('X-Webhook-Signature', generateSignature(payload))
-      .send(payload);
-
-    assert.equal(res.status, 200);
-    assert.equal(res.body.importedCount, 1);
-    assert.equal(res.body.mnCollisionsFlagged, 1);
-    // The flagging query only ever sets 'possible_duplicate' — there is no
-    // code path that promotes a collision to a "confirmed" status based on
-    // outcome_status or any other field.
-    assert.ok(mnFlagSql.includes("'possible_duplicate'"));
-    assert.ok(!mnFlagSql.toLowerCase().includes('confirmed'));
+    assert.equal(res.body.importedCount, 1, 'the record is inserted, never rejected');
+    assert.equal(res.body.possibleDuplicatesFlagged, 0);
+    assert.equal(res.body.mnCollisionsFlagged, undefined, 'there is no MN/ITIS collision signal any more');
+    assert.equal(collisionQueries, 0, 'no ITIS collision query runs');
   });
 
   it('TEST D — DSTB fingerprint matches an earlier row: flagged as possible duplicate, record preserved', async () => {
@@ -1264,7 +1122,7 @@ describe('Webhook Endpoint', () => {
       query: async (sql, params) => {
         if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
         if (sql.includes('INSERT INTO tb_cases')) {
-          const fp = params[31]; // dstb_fingerprint follows outcome_reason
+          const fp = params[30]; // dstb_fingerprint follows outcome_reason
           return { rows: [{ id: 9004, dstb_fingerprint: fp, itis_case_id: null, source_type: 'DSTB' }] };
         }
         if (sql.includes('DSTB_FINGERPRINT_COLLISION')) {
@@ -1315,7 +1173,7 @@ describe('Webhook Endpoint', () => {
         if (sql.includes('INSERT INTO tb_cases')) {
           // Both records in this batch normalize to the same fingerprint —
           // simulate both landing as distinct rows sharing it.
-          const fp = params[31];
+          const fp = params[30];
           return {
             rows: [
               { id: 9005, dstb_fingerprint: fp, itis_case_id: null, source_type: 'DSTB' },
@@ -1504,5 +1362,263 @@ describe('Webhook Endpoint', () => {
     assert.equal(res.status, 400);
     assert.ok(claimLogUpdates.some(u => u.sql.includes("status = 'failed'")),
       'a rejected payload must not leave the batch blocked behind an in-progress claim');
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  //  Same-case outcome update — a later validated update to an
+  //  EXISTING Case ID (ON TREATMENT → CURED) must:
+  //    * match on the stable Case ID, not on the patient
+  //    * update that one row in place (no second row)
+  //    * preserve the previous values in case_history
+  //    * record what source and who produced the change
+  //  A new episode of the same patient is a different Case ID and
+  //  therefore a different case — that is what keeps case counts
+  //  honest: longitudinal updates never inflate them.
+  // ══════════════════════════════════════════════════════════════
+
+  const storedCaseRow = {
+    id: 77,
+    case_no: 'CS-2025-000042',
+    patient_no: 'PT-000009',
+    barangay_id: 11,
+    barangay_name: 'San Antonio',
+    residence_barangay_name: null,
+    residence_city: null,
+    location_classification: 'Pasig City',
+    outcome_status: 'ON TREATMENT',
+    source_outcome_status: 'ON TREATMENT',
+    date_of_outcome: null,
+    date_started_treatment: null,
+    treatment_facility: null,
+    source_case_id: 'ROS-D-2025-00042',
+  };
+
+  /**
+   * Transaction-client mock that records what the webhook asked the database to
+   * do, in order. `existing` is what the pre-update snapshot query finds.
+   */
+  function sameCaseHarness({ existing = [storedCaseRow], insertRows = null } = {}) {
+    const captured = { order: [], snapshots: [], caseInserts: [], historyInserts: [], missingFlags: [] };
+    mockQueryFn = async (sql) => {
+      if (sql.includes('SELECT id, name FROM barangays')) return { rows: [{ id: 11, name: 'San Antonio' }] };
+      return { rows: [] };
+    };
+    mockConnectFn = async () => ({
+      query: async (sql, params) => {
+        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [] };
+        if (sql.includes('FROM tb_cases') && sql.includes('case_no = ANY')) {
+          captured.order.push('snapshot');
+          captured.snapshots.push({ sql, params });
+          return { rows: existing.map(row => ({ ...row })) };
+        }
+        if (sql.includes('INSERT INTO tb_cases')) {
+          captured.order.push('upsert');
+          captured.caseInserts.push({ sql, params });
+          return { rows: insertRows || [
+            {
+              id: 77, case_no: 'CS-2025-000042', patient_no: 'PT-000009',
+              dstb_fingerprint: null, itis_case_id: null, source_type: 'DSTB',
+              inserted: false,
+            },
+          ] };
+        }
+        if (sql.includes('INSERT INTO case_history')) {
+          captured.order.push('history');
+          captured.historyInserts.push({ sql, params });
+          return { rows: [] };
+        }
+        if (sql.includes('MISSING_CASE_ID')) {
+          captured.order.push('flag-missing');
+          captured.missingFlags.push({ sql, params });
+          return { rows: [] };
+        }
+        return { rows: [] };
+      },
+      release: () => {},
+    });
+    return captured;
+  }
+
+  const curedPayload = (overrides = {}) => buildPayload({
+    batch_id: '770e8400-e29b-41d4-a716-446655440077',
+    actor: { username: 'ana.cruz', role: 'staff' },
+    sheets: [{
+      sheet_name: 'DSTB', source_type: 'DSTB', record_count: 1,
+      records: [{
+        barangay_name: 'San Antonio', date_of_diagnosis: '2025-02-06',
+        sex: 'Male', age: 31, source_type: 'DSTB',
+        case_no: 'CS-2025-000042', source_case_id: 'ROS-D-2025-00042',
+        outcome_status: 'CURED', date_of_outcome: '2025-06-10',
+      }],
+    }],
+    ...overrides,
+  });
+
+  it('TEST G — same Case ID re-sent as CURED: updates the existing row and preserves the previous outcome in case history', async () => {
+    const db = sameCaseHarness();
+    const payload = curedPayload();
+    const res = await request(webhookApp())
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 200);
+    // The whole point: an update, not another case.
+    assert.equal(res.body.updatedCount, 1, 'the existing case is updated');
+    assert.equal(res.body.importedCount, 0, 'no new case row is created');
+    assert.equal(res.body.historyEntries, 1, 'the previous values are preserved');
+
+    // Matched strictly by the stable Case ID, snapshot taken before the write.
+    assert.equal(db.snapshots.length, 1);
+    assert.deepStrictEqual(db.snapshots[0].params[0], ['CS-2025-000042']);
+    assert.ok(db.snapshots[0].sql.includes('outcome_status'), 'the snapshot reads the previous outcome');
+
+    // One upsert statement keyed on case_no — the duplicate-avoidance mechanism.
+    assert.equal(db.caseInserts.length, 1);
+    assert.ok(db.caseInserts[0].sql.includes('ON CONFLICT (case_no)'));
+    assert.ok(db.caseInserts[0].sql.includes('updated_at = NOW()'), 'the in-place update is timestamped');
+
+    // Snapshot before the upsert, history written after it, in the same transaction.
+    assert.deepStrictEqual(db.order.slice(0, 3), ['snapshot', 'upsert', 'history']);
+
+    const params = db.historyInserts[0].params;
+    assert.equal(params[0], 77, 'history is attached to the same case row');
+    assert.equal(params[1], 'CS-2025-000042');
+    assert.equal(params[4], 'status_changed');
+    assert.deepStrictEqual(JSON.parse(params[5]), {
+      outcome_status: { old: 'ON TREATMENT', new: 'CURED' },
+      source_outcome_status: { old: 'ON TREATMENT', new: 'CURED' },
+      date_of_outcome: { old: null, new: '2025-06-10' },
+    }, 'the previous outcome survives verbatim');
+    assert.equal(params[6], 'webhook', 'what produced the change');
+    assert.equal(params[8], 'ana.cruz', 'who produced the change');
+    assert.equal(params[3], '770e8400-e29b-41d4-a716-446655440077', 'which sync produced it');
+  });
+
+  it('TEST G2 — an unchanged resend updates the case but records no history', async () => {
+    const db = sameCaseHarness();
+    const payload = buildPayload({
+      batch_id: '770e8400-e29b-41d4-a716-446655440078',
+      sheets: [{
+        sheet_name: 'DSTB', source_type: 'DSTB', record_count: 1,
+        records: [{
+          barangay_name: 'San Antonio', date_of_diagnosis: '2025-02-06',
+          sex: 'Male', age: 31, source_type: 'DSTB',
+          case_no: 'CS-2025-000042', source_case_id: 'ROS-D-2025-00042',
+          outcome_status: 'ON TREATMENT',
+        }],
+      }],
+    });
+    const res = await request(webhookApp())
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.updatedCount, 1);
+    assert.equal(res.body.importedCount, 0);
+    assert.equal(res.body.historyEntries, 0, 'nothing changed, so nothing is written to history');
+    assert.equal(db.historyInserts.length, 0);
+  });
+
+  it('TEST G3 — records WHO via the optional actor, and NULL when the sender sends none', async () => {
+    const withActor = sameCaseHarness();
+    const actorPayload = curedPayload();
+    await request(webhookApp())
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(actorPayload))
+      .send(actorPayload);
+    assert.equal(withActor.historyInserts[0].params[8], 'ana.cruz');
+
+    const withoutActor = sameCaseHarness();
+    const anonymous = curedPayload();
+    delete anonymous.actor;
+    const res = await request(webhookApp())
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(anonymous))
+      .send(anonymous);
+
+    // Backward compatible: an older sender changes nothing except the actor label.
+    assert.equal(res.status, 200);
+    assert.equal(res.body.updatedCount, 1);
+    assert.equal(res.body.historyEntries, 1);
+    assert.equal(withoutActor.historyInserts[0].params[8], null);
+    assert.equal(withoutActor.historyInserts[0].params[6], 'webhook', 'the source is still recorded');
+  });
+
+  it('TEST G4 — a record with no Case ID cannot be matched on a resend: flagged for review, still never rejected', async () => {
+    const db = sameCaseHarness({
+      existing: [],
+      insertRows: [{
+        id: 555, case_no: null, patient_no: null,
+        dstb_fingerprint: null, itis_case_id: null, source_type: 'DSTB',
+        inserted: true,
+      }],
+    });
+    const payload = buildPayload({
+      batch_id: '770e8400-e29b-41d4-a716-446655440079',
+      sheets: [{
+        sheet_name: 'DSTB', source_type: 'DSTB', record_count: 1,
+        records: [{
+          barangay_name: 'San Antonio', date_of_diagnosis: '2025-02-06',
+          sex: 'Male', age: 31, source_type: 'DSTB',
+          outcome_status: 'CURED',
+        }],
+      }],
+    });
+    const res = await request(webhookApp())
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.importedCount, 1, 'still never rejected or merged');
+    assert.equal(db.snapshots.length, 0, 'nothing to match without a Case ID');
+    assert.equal(db.missingFlags.length, 1, 'but the row is marked for review');
+    assert.deepStrictEqual(db.missingFlags[0].params[0], [555]);
+    assert.ok(db.missingFlags[0].sql.includes("'MISSING_CASE_ID'"));
+    assert.equal(res.body.historyEntries, 0, 'an unmatched record has no Case ID to hang history on');
+  });
+
+  it('TEST G5 — patient identity is not case identity: a later episode under the same Patient # is a second case', async () => {
+    const db = sameCaseHarness({
+      existing: [],
+      insertRows: [
+        { id: 901, case_no: 'CS-2025-000100', patient_no: 'PT-000009', dstb_fingerprint: null, itis_case_id: null, source_type: 'DSTB', inserted: true },
+        { id: 902, case_no: 'CS-2026-000007', patient_no: 'PT-000009', dstb_fingerprint: null, itis_case_id: null, source_type: 'DSTB', inserted: true },
+      ],
+    });
+    const payload = buildPayload({
+      batch_id: '770e8400-e29b-41d4-a716-446655440080',
+      sheets: [{
+        sheet_name: 'DSTB', source_type: 'DSTB', record_count: 2,
+        records: [
+          {
+            barangay_name: 'San Antonio', date_of_diagnosis: '2025-02-06',
+            sex: 'Male', age: 31, source_type: 'DSTB',
+            case_no: 'CS-2025-000100', patient_no: 'PT-000009',
+            outcome_status: 'CURED',
+          },
+          {
+            // Same person, NEW episode → new Case ID → its own case.
+            barangay_name: 'San Antonio', date_of_diagnosis: '2026-01-15',
+            sex: 'Male', age: 32, source_type: 'DSTB',
+            case_no: 'CS-2026-000007', patient_no: 'PT-000009',
+            outcome_status: 'ON TREATMENT',
+          },
+        ],
+      }],
+    });
+    const res = await request(webhookApp())
+      .post('/api/webhook/pasig-clone')
+      .set('X-Webhook-Signature', generateSignature(payload))
+      .send(payload);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.importedCount, 2, 'two episodes = two cases');
+    assert.equal(res.body.updatedCount, 0, 'neither is an update of the other');
+    // Matching never even looks at patient_no — only at Case IDs.
+    assert.deepStrictEqual(db.snapshots[0].params[0], ['CS-2025-000100', 'CS-2026-000007']);
+    assert.ok(!db.snapshots[0].sql.includes('patient_no = '), 'never matched on the patient');
   });
 });

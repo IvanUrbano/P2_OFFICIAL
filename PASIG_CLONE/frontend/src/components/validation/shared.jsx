@@ -15,7 +15,7 @@ export const FIELD_LABELS = {
   date_started_treatment: 'Treatment started', date_of_outcome: 'Date of outcome', outcome_status: 'Outcome',
   barangay_name: 'Barangay', city: 'City', treatment_facility: 'Treatment facility',
   screening_facility: 'Screening facility', registration_group: 'Registration group',
-  bacteriological_status: 'Bacteriological status', anatomical_site: 'Anatomical site', itis_case_id: 'ITIS case no.',
+  bacteriological_status: 'Bacteriological status', anatomical_site: 'Anatomical site',
 };
 
 export function Notice({ notice, onClose }) {

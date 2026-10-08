@@ -157,6 +157,52 @@ describe('POST /api/auth/login', () => {
     assert.ok(!res.body.user.password_hash, 'password_hash must not be returned');
   });
 
+  it('does not show the reset notice after the user has changed their password', async () => {
+    mockQueryFn = async () => ({ rows: [{ ...STAFF_USER, password_changed_at: new Date().toISOString(), must_change_password: false }] });
+    const res = await request(buildApp()).post('/api/auth/login')
+      .send({ email: 'staff@test.com', password: 'Staffpass1' });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.passwordRecentlyChanged, false);
+    assert.strictEqual(res.body.mustChangePassword, false);
+  });
+
+  it('keeps the reset notice for an account still using a temporary password', async () => {
+    mockQueryFn = async () => ({ rows: [{ ...STAFF_USER, password_changed_at: new Date().toISOString(), must_change_password: true }] });
+    const res = await request(buildApp()).post('/api/auth/login')
+      .send({ email: 'staff@test.com', password: 'Staffpass1' });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.passwordRecentlyChanged, true);
+    assert.strictEqual(res.body.mustChangePassword, true);
+  });
+
+  it('stops the notice on the next login after a successful password change', async () => {
+    const user = { ...STAFF_USER, must_change_password: true, password_changed_at: new Date().toISOString() };
+    mockQueryFn = async (sql, params) => {
+      const query = String(sql);
+      if (query.includes('SELECT * FROM users')) return { rows: [user] };
+      if (query.startsWith('SELECT id, password_hash FROM users')) return { rows: [user] };
+      if (query.startsWith('UPDATE users SET password_hash = $1')) {
+        user.password_hash = params[0];
+        user.must_change_password = false;
+        user.password_changed_at = new Date().toISOString();
+      }
+      return { rows: [] };
+    };
+    const app = buildApp();
+    const first = await request(app).post('/api/auth/login')
+      .send({ email: 'staff@test.com', password: 'Staffpass1' });
+    assert.strictEqual(first.body.mustChangePassword, true);
+    const changed = await request(app).put('/api/auth/password')
+      .set('Authorization', `Bearer ${makeToken(STAFF_USER)}`)
+      .send({ currentPassword: 'Staffpass1', newPassword: 'Changedpass2' });
+    assert.strictEqual(changed.status, 200);
+    const next = await request(app).post('/api/auth/login')
+      .send({ email: 'staff@test.com', password: 'Changedpass2' });
+    assert.strictEqual(next.status, 200);
+    assert.strictEqual(next.body.mustChangePassword, false);
+    assert.strictEqual(next.body.passwordRecentlyChanged, false);
+  });
+
   it('refuses an account locked by an administrator, even with the right password', async () => {
     mockQueryFn = async () => ({ rows: [{ ...STAFF_USER, manually_locked: true }] });
     const res = await request(buildApp())
@@ -469,6 +515,25 @@ describe('GET /api/auth/profile', () => {
       .get('/api/auth/profile')
       .set('Authorization', `Bearer ${token}`);
     assert.strictEqual(res.status, 500);
+  });
+});
+
+describe('Profile photo', () => {
+  const photo = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0xff, 0xd9]).toString('base64')}`;
+
+  it('reads the photo stored by Pasig TB-IS, with no TBInsight photo write route', async () => {
+    mockQueryFn = async (sql) => {
+      if (String(sql).startsWith('SELECT profile_photo_data')) return { rows: [{ profile_photo_data: photo }] };
+      return { rows: [{ id: 1, username: 'staff1', role: 'staff' }] };
+    };
+    const app = buildApp();
+    const auth = `Bearer ${makeToken(STAFF_USER)}`;
+    const profile = await request(app).get('/api/auth/profile').set('Authorization', auth);
+    assert.strictEqual(profile.body.user.profile_photo_data, photo);
+    const upload = await request(app).put('/api/auth/profile/photo').set('Authorization', auth).send({ photo });
+    const removed = await request(app).delete('/api/auth/profile/photo').set('Authorization', auth);
+    assert.strictEqual(upload.status, 404);
+    assert.strictEqual(removed.status, 404);
   });
 });
 

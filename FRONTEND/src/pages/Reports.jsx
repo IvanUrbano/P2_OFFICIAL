@@ -6,6 +6,7 @@ import {
 } from '../utils/exportReports';
 import SkeletonBlock from '../../components/SkeletonBlock';
 import FilterSelect from '../components/FilterSelect';
+import ModalCloseButton from '../components/ModalCloseButton';
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
@@ -25,110 +26,241 @@ const REPORT_TYPES = [
 
 /* ─── Report Builder ─────────────────────────────────────────────────── */
 
+const fmtDate = value => value
+  ? new Date(value).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+  : null;
+const pct = value => (value != null ? `${value}%` : 'N/A');
+
+/**
+ * Turns the API payload into ONE ordered list of blocks. The on-screen preview, the PDF and the
+ * Excel workbook all read these same blocks, so they cannot disagree about what a report says.
+ * Block kinds: 'text' / 'list' (items), 'kv' (rows of [label, value]),
+ * 'table' (headers + rows; textColumns are left-aligned, the rest right-aligned).
+ */
 function buildReport(data, config) {
-  const { summary, outcomes, demographics, trend, barangayDistribution, recommendations, cases, caseProfile, forecast, riskSummary, facilityPerformance } = data;
+  const { summary = {}, outcomes, demographics, trend, barangayDistribution, riskSummary, recommendations,
+    cases, caseProfile, forecast, facilityPerformance, barangayProfile, outcomeReconciliation,
+    riskAssessmentPeriod, incidenceLabel } = data;
+  const meta = data.report || {};
   const { type, barangay, month, quarter, year } = config;
   const isCitywide = !barangay;
+  const scopeText = isCitywide ? 'across Pasig City' : `in Barangay ${barangay}`;
 
-  // Period-specific labels
-  let title, headerTitle, subtitle, footerPeriod;
+  let title, headerTitle, subtitle, footerPeriod, periodText;
   if (type === 'monthly') {
-    const monthName = monthLabel(month);
-    title = `Monthly TB Report \u2014 ${monthName} ${year}${barangay ? ' \u00B7 ' + barangay : ' \u00B7 City-wide'}`;
+    periodText = `${monthLabel(month)} ${year}`;
+    title = `Monthly TB Report — ${periodText}${barangay ? ' · ' + barangay : ' · City-wide'}`;
     headerTitle = 'TUBERCULOSIS MONTHLY REPORT';
-    subtitle = `${monthName} ${year}  \u00B7  ${isCitywide ? 'City-wide' : barangay}`;
-    footerPeriod = `Report Period: ${monthName} ${year}`;
+    subtitle = `${periodText}  ·  ${isCitywide ? 'City-wide' : barangay}`;
+    footerPeriod = `Report Period: ${periodText}`;
   } else if (type === 'quarterly') {
-    const qLabel = quarterLabel(quarter);
-    title = `Quarterly TB Report \u2014 ${qLabel} ${year}`;
+    periodText = `${quarterLabel(quarter)} ${year}`;
+    title = `Quarterly TB Report — ${periodText}`;
     headerTitle = 'TUBERCULOSIS QUARTERLY REPORT';
-    subtitle = `${qLabel} ${year}`;
-    footerPeriod = `Report Period: ${qLabel} ${year}`;
+    subtitle = periodText;
+    footerPeriod = `Report Period: ${periodText}`;
   } else if (type === 'annual') {
-    title = `Annual TB Report \u2014 ${year}`;
+    periodText = `Calendar Year ${year}`;
+    title = `Annual TB Report — ${year}`;
     headerTitle = 'TUBERCULOSIS ANNUAL REPORT';
-    subtitle = `Calendar Year ${year}`;
+    subtitle = periodText;
     footerPeriod = `Annual Report: ${year}`;
   } else {
-    title = `Barangay TB Report \u2014 ${barangay} \u00B7 ${year}`;
+    periodText = `Calendar Year ${year}`;
+    title = `Barangay TB Report — ${barangay} · ${year}`;
     headerTitle = 'BARANGAY TB DETAIL REPORT';
-    subtitle = `Barangay ${barangay}  \u00B7  ${year}`;
-    footerPeriod = `Barangay ${barangay} \u00B7 ${year}`;
+    subtitle = `Barangay ${barangay}  ·  ${year}`;
+    footerPeriod = `Barangay ${barangay} · ${year}`;
   }
+
+  const total = summary.totalCases ?? 0;
+  const blocks = [];
+
+  // Report details
+  const details = [
+    ['Report Period', periodText],
+    ['Coverage', isCitywide ? 'Pasig City (city-wide)' : `Barangay ${barangay}`],
+    ['Generated On', fmtDate(meta.generatedAt) || '—'],
+  ];
+  if (meta.lastSync) details.push(['Records Last Updated', fmtDate(meta.lastSync)]);
+  blocks.push({ id: 'details', title: 'Report Details', kind: 'kv', rows: details });
 
   // Executive summary
-  const executiveSummary = [];
-  if (type === 'monthly') {
-    const monthName = monthLabel(month);
-    executiveSummary.push(`${summary.totalCases} new TB cases were recorded in ${monthName} ${year}${isCitywide ? ' across Pasig City' : ' in ' + barangay}.`);
-  } else if (type === 'quarterly') {
-    executiveSummary.push(`${summary.totalCases} TB cases were recorded in the ${quarterLabel(quarter)} of ${year}.`);
-  } else if (type === 'annual') {
-    executiveSummary.push(`${summary.totalCases} TB cases were recorded in calendar year ${year}.`);
-  } else {
-    executiveSummary.push(`${summary.totalCases} TB cases were recorded in Barangay ${barangay} for ${year}.`);
-  }
+  const executive = [
+    `${total} TB case${total === 1 ? ' was' : 's were'} recorded in ${type === 'annual' || type === 'barangay' ? year : periodText} ${scopeText}.`,
+  ];
   if (summary.onTreatmentCases > 0) {
-    executiveSummary.push(`${summary.onTreatmentCases} cases are recorded as on treatment.`);
+    executive.push(`${summary.onTreatmentCases} case${summary.onTreatmentCases === 1 ? ' is' : 's are'} recorded as on treatment.`);
   }
   if (summary.successRate != null) {
-    executiveSummary.push(`Treatment success rate is ${summary.successRate}%, ${summary.successRate >= 85 ? 'above' : 'below'} the 85% target.`);
+    executive.push(`The treatment success rate is ${summary.successRate}% for the ${summary.cohortYear ?? 'previous-year'} treatment cohort, ${summary.successRate >= 85 ? 'at or above' : 'below'} the 85% target.`);
   }
-  if (summary.fatalityRate != null) {
-    executiveSummary.push(`Case fatality rate is ${summary.fatalityRate}%.`);
+  if (summary.fatalityRate != null) executive.push(`The case fatality rate is ${summary.fatalityRate}% among evaluated outcomes.`);
+  if (barangayProfile) {
+    executive.push(`${barangay} is classified ${barangayProfile.riskLevel} risk${barangayProfile.trendDirection ? ` with a ${String(barangayProfile.trendDirection).toLowerCase()} long-term trend` : ''} in the latest assessment.`);
+  } else if (riskSummary?.length) {
+    const high = riskSummary.filter(r => r.riskLevel === 'High' || r.riskLevel === 'Very High').length;
+    executive.push(`${high} of ${riskSummary.length} barangays with cases are classified High risk in the latest assessment.`);
   }
+  blocks.push({ id: 'executive', title: 'Executive Summary', kind: 'text', items: executive });
 
-  // Bacteriological status breakdown
-  const bactMap = {};
-  cases?.forEach(c => {
-    const s = c.bacteriological_status || 'Unknown';
-    bactMap[s] = (bactMap[s] || 0) + 1;
-  });
-  const bacteriologicalStatus = Object.entries(bactMap)
-    .map(([status, count]) => ({
-      status,
-      count,
-      percentage: cases?.length > 0 ? Number(((count / cases.length) * 100).toFixed(1)) : 0,
-    }))
-    .sort((a, b) => b.count - a.count);
+  // Summary figures
+  const kpiRows = [
+    ['Total Cases', total],
+    ['Diagnosed', summary.diagnosedCases ?? 0],
+    ['On Treatment', summary.onTreatmentCases ?? 0],
+    [`Treatment Success Rate${summary.cohortYear ? ` (${summary.cohortYear} cohort${summary.evaluatedCount ? `, ${summary.evaluatedCount} patients` : ''})` : ''}`, pct(summary.successRate)],
+    [`Case Fatality Rate${summary.fatalityEvaluated ? ` (${summary.fatalityDied ?? 0} of ${summary.fatalityEvaluated} evaluated)` : ''}`, pct(summary.fatalityRate)],
+  ];
+  if (barangayProfile) {
+    kpiRows.push(['Risk Classification', barangayProfile.riskLevel]);
+    if (barangayProfile.trendDirection) kpiRows.push(['Long-term Trend', barangayProfile.trendDirection]);
+    kpiRows.push(['Population', barangayProfile.population != null ? barangayProfile.population.toLocaleString() : 'N/A']);
+    kpiRows.push([barangayProfile.incidenceLabel || 'Incidence / 100k', barangayProfile.incidence != null ? barangayProfile.incidence : 'N/A']);
+  }
+  blocks.push({ id: 'summary', title: 'Summary', kind: 'kv', rows: kpiRows });
 
-  // Tables
-  const tables = [{
-    title: 'CASE STATUS BREAKDOWN',
-    headers: ['Status', 'Count'],
-    rows: [
-      ['DIAGNOSED', summary.diagnosedCases || 0],
-      ['ON TREATMENT', summary.onTreatmentCases || 0],
-    ],
-  }, {
-    title: 'TREATMENT OUTCOME BREAKDOWN',
+  blocks.push({
+    id: 'outcomes', title: 'Treatment Outcome Breakdown', kind: 'table',
     headers: ['Outcome', 'Count', 'Percentage'],
     rows: outcomes?.map(o => [o.outcome_status, o.count, `${o.percentage}%`]) || [],
-  }];
-
-  // Side by side
-  const sideBySide = [{
-    title: 'SEX DISTRIBUTION',
-    headers: ['Sex', 'Count', 'Percentage'],
+    emptyText: 'No treatment outcomes are recorded for this period.',
+  });
+  blocks.push({
+    id: 'sex', title: 'Sex Distribution', kind: 'table', headers: ['Sex', 'Count', 'Percentage'],
     rows: demographics?.sex?.map(s => [s.sex, s.count, `${s.percentage}%`]) || [],
-  }];
+  });
+  blocks.push({
+    id: 'age', title: 'Age Distribution', kind: 'table', headers: ['Age Group', 'Count', 'Percentage'],
+    rows: demographics?.ageGroups?.map(r => [r.age_group, r.count, `${r.percentage}%`]) || [],
+  });
 
-  return {
-    type, title, headerTitle, subtitle, footerPeriod,
-    executiveSummary, tables, sideBySide,
-    ageGroups: demographics?.ageGroups,
-    caseProfile, forecast, trend,
-    barangayDistribution: isCitywide ? barangayDistribution : null,
-    riskSummary: isCitywide ? riskSummary : null,
-    bacteriologicalStatus,
-    facilityPerformance: facilityPerformance || [],
-    recommendations, cases,
-  };
+  if (caseProfile) {
+    blocks.push({
+      id: 'profile', title: 'Case Profile', kind: 'kv',
+      rows: [
+        ['New Cases', caseProfile.newCases],
+        ['Relapse / Recapture', caseProfile.relapse],
+        ['Pulmonary', caseProfile.pulmonary],
+        ['Extra-pulmonary', caseProfile.extraPulmonary],
+      ],
+    });
+  }
+
+  // Bacteriological status, counted from the same case list the report is built on
+  const bactMap = {};
+  cases?.forEach(c => { const s = c.bacteriological_status || 'Unknown'; bactMap[s] = (bactMap[s] || 0) + 1; });
+  const bactRows = Object.entries(bactMap).sort((a, b) => b[1] - a[1])
+    .map(([status, count]) => [status, count, `${cases.length ? Number(((count / cases.length) * 100).toFixed(1)) : 0}%`]);
+  blocks.push({ id: 'bact', title: 'Bacteriological Status', kind: 'table', headers: ['Status', 'Count', 'Percentage'], rows: bactRows });
+
+  if (facilityPerformance?.length) {
+    blocks.push({
+      id: 'facility', title: 'Facility Performance', kind: 'table',
+      headers: ['Facility', 'Cases', 'Success Rate'],
+      rows: facilityPerformance.map(f => [f.facility, f.total_cases, f.evaluated > 0 ? `${((f.successful / f.evaluated) * 100).toFixed(1)}%` : 'N/A']),
+    });
+  }
+
+  if (forecast?.available) {
+    const fRows = [
+      ['Forecasted Cases', forecast.forecastedCases],
+      ['Forecast Period', forecast.period],
+      ['Forecast Scope', isCitywide ? `${forecast.barangays} barangays` : `Barangay ${barangay}`],
+    ];
+    if (forecast.methods?.length) {
+      fRows.push(['Method', forecast.methods.map(m => (m === 'arima' ? 'ARIMA' : String(m).replace(/_/g, ' '))).join(', ')]);
+    }
+    blocks.push({ id: 'forecast', title: 'Forecast', kind: 'kv', rows: fRows });
+  }
+
+  if (trend?.length) {
+    blocks.push({ id: 'trend', title: 'TB Case Trend', kind: 'table', headers: ['Month', 'Cases'], rows: trend.map(r => [r.label, r.cases]) });
+  }
+
+  if (isCitywide && barangayDistribution?.length) {
+    const riskBy = Object.fromEntries((riskSummary || []).map(r => [r.barangay, r]));
+    blocks.push({
+      id: 'barangays', title: 'TB Cases, Incidence and Risk by Barangay', kind: 'table',
+      headers: ['Barangay', 'Cases', 'Population', incidenceLabel || 'Incidence / 100k', 'Risk', 'Trend'],
+      rows: barangayDistribution.map(r => [
+        r.barangay, r.cases, r.population ? r.population.toLocaleString() : 'N/A',
+        r.incidence != null ? r.incidence : 'N/A', riskBy[r.barangay]?.riskLevel || 'No Data', riskBy[r.barangay]?.trendDirection || 'N/A',
+      ]),
+      textColumns: [0, 4, 5],
+    });
+  }
+
+  // Notes and definitions: what each figure is based on, and where the data is incomplete.
+  const notes = [];
+  if (summary.cohortYear) notes.push(`Treatment success rate uses the ${summary.cohortYear} treatment cohort (patients who started treatment the year before the report year); it is not computed from the cases listed above.`);
+  if (summary.fatalityEvaluated) notes.push('Case fatality rate is deaths divided by evaluated terminal outcomes (cured, completed, failed, lost to follow-up, died).');
+  if (outcomeReconciliation?.unapprovedTotal > 0) notes.push(`${outcomeReconciliation.unapprovedTotal} record(s) carry an outcome value outside the approved categories and are not shown in the outcome breakdown.`);
+  if (barangayDistribution?.length || barangayProfile) {
+    const annualised = !(type === 'annual' || type === 'barangay');
+    notes.push(`Incidence is cases per 100,000 ${year} population${annualised ? ', annualized from this period' : ''}.`);
+  }
+  if (riskAssessmentPeriod) notes.push(`Risk classification is the Random Forest model's latest assessment (${riskAssessmentPeriod}); the trend label is the long-term slope of monthly cases, not the latest few months.`);
+  if (forecast?.available && forecast.outsideReportPeriod) notes.push('The forecast is the next stored forecast month after this report period, not a forecast of the period itself.');
+  if (meta.latestCaseDate && meta.endDate && meta.latestCaseDate.slice(0, 7) < meta.endDate.slice(0, 7)) {
+    notes.push(`Records in this report run through ${fmtDate(meta.latestCaseDate)}; later months of the period have no data yet, so totals are partial.`);
+  }
+  if (notes.length) blocks.push({ id: 'notes', title: 'Notes and Definitions', kind: 'list', items: notes });
+
+  if (recommendations?.length) blocks.push({ id: 'recommendations', title: 'Recommendations', kind: 'list', items: recommendations });
+
+  return { type, title, headerTitle, subtitle, footerPeriod, blocks };
 }
 
 /* ─── Report Renderer ────────────────────────────────────────────────── */
 
-function ReportRenderer({ report, reportData }) {
+function ReportBlock({ block }) {
+  const { kind, headers, rows = [], items = [] } = block;
+  let body;
+  if (kind === 'text') {
+    body = <div className="space-y-1">{items.map((line, i) => <p key={i} className="text-xs" style={{ color: '#1E293B' }}>{line}</p>)}</div>;
+  } else if (kind === 'list') {
+    body = <ol className="text-xs pl-4 space-y-1" style={{ color: '#1E293B', listStyleType: 'decimal' }}>{items.map((line, i) => <li key={i}>{line}</li>)}</ol>;
+  } else if (rows.length === 0) {
+    body = <p className="text-xs italic" style={{ color: '#9CA3AF' }}>{block.emptyText || 'No data available for this period.'}</p>;
+  } else {
+    const textCols = block.textColumns || [0];
+    body = (
+      <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
+        {kind === 'table' && (
+          <thead>
+            <tr style={{ background: '#0F2D52' }}>
+              {headers.map((h, hi) => (
+                <th key={hi} className={`py-2 px-3 font-bold uppercase ${textCols.includes(hi) ? 'text-left' : 'text-right'}`} style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+        )}
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={ri} style={{ background: ri % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
+              {row.map((cell, ci) => (
+                <td key={ci} className="py-2 px-3" style={{
+                  color: ci === 0 ? '#1E293B' : '#374151', fontWeight: ci === 0 || kind === 'kv' ? 600 : 400,
+                  textAlign: kind === 'kv' ? (ci === 0 ? 'left' : 'right') : (textCols.includes(ci) ? 'left' : 'right'),
+                }}>{cell}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+  return (
+    <div style={{ breakInside: 'avoid' }}>
+      <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>{block.title}</p>
+      <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
+      {body}
+    </div>
+  );
+}
+
+function ReportRenderer({ report }) {
   if (!report) return null;
 
   return (
@@ -146,298 +278,7 @@ function ReportRenderer({ report, reportData }) {
       </div>
 
       <div className="px-10 py-6 space-y-6" style={{ fontSize: '11pt', lineHeight: 1.6 }}>
-
-        {/* Executive Summary */}
-        {report.executiveSummary?.length > 0 && (
-          <div>
-            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Executive Summary</p>
-            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-            <div className="space-y-1">
-              {report.executiveSummary.map((line, i) => (
-                <p key={i} className="text-xs" style={{ color: '#1E293B' }}>{line}</p>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Summary Stats - simple text row */}
-        {reportData?.summary && (
-          <div>
-            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Summary</p>
-            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-            <div className="flex flex-wrap gap-x-8 gap-y-1 text-xs" style={{ color: '#1E293B' }}>
-              <span><strong>Total Cases:</strong> {reportData.summary.totalCases ?? 0}</span>
-              <span><strong>Diagnosed:</strong> {reportData.summary.diagnosedCases ?? 0}</span>
-              <span><strong>On Treatment:</strong> {reportData.summary.onTreatmentCases ?? 0}</span>
-              <span><strong>Success Rate:</strong> {reportData.summary.successRate != null ? `${reportData.summary.successRate}%` : 'N/A'}</span>
-              <span><strong>Case Fatality Rate:</strong> {reportData.summary.fatalityRate != null ? `${reportData.summary.fatalityRate}%` : 'N/A'}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Tables */}
-        {report.tables?.map((table, ti) => (
-          <div key={ti}>
-            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>{table.title}</p>
-            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-            {table.rows.length > 0 ? (
-              <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
-                <thead>
-                  <tr style={{ background: '#0F2D52' }}>
-                    {table.headers.map((h, hi) => (
-                      <th key={hi} className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {table.rows.map((row, ri) => (
-                    <tr key={ri} style={{ background: ri % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
-                      {row.map((cell, ci) => (
-                        <td key={ci} className="py-2 px-3" style={{ color: ci === 0 ? '#1E293B' : '#374151', fontWeight: ci === 0 ? 600 : 400, textAlign: ci > 0 ? 'right' : 'left' }}>{cell}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <p className="text-xs italic" style={{ color: '#9CA3AF' }}>No data available for this period.</p>
-            )}
-          </div>
-        ))}
-
-        {/* Side by Side Sections */}
-        {report.sideBySide?.length > 0 && (
-          <div className="grid grid-cols-2 gap-8">
-            {report.sideBySide.map((section, si) => (
-              <div key={si}>
-                <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>{section.title}</p>
-                <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-                {section.rows.length > 0 ? (
-                  <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
-                    <thead>
-                      <tr style={{ background: '#0F2D52' }}>
-                        {section.headers.map((h, hi) => (
-                          <th key={hi} className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {section.rows.map((row, ri) => (
-                        <tr key={ri} style={{ background: ri % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
-                          {row.map((cell, ci) => (
-                            <td key={ci} className="py-2 px-3" style={{ color: ci === 0 ? '#1E293B' : '#374151', fontWeight: ci === 0 ? 600 : 400, textAlign: ci > 0 ? 'right' : 'left' }}>{cell}</td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : (
-                  <p className="text-xs italic" style={{ color: '#9CA3AF' }}>No data available.</p>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Age Distribution */}
-        {report.ageGroups?.length > 0 && (
-          <div>
-            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Age Distribution</p>
-            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
-              <thead>
-                <tr style={{ background: '#0F2D52' }}>
-                  <th className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Age Group</th>
-                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Count</th>
-                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Percentage</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.ageGroups.map((row, i) => (
-                  <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
-                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.age_group}</td>
-                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.count}</td>
-                    <td className="py-2 px-3 text-right" style={{ color: '#374151' }}>{row.percentage}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Case Profile */}
-        {report.caseProfile && (
-          <div className="grid grid-cols-2 gap-8">
-            <div>
-              <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Registration Group</p>
-              <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-              <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
-                <tbody>
-                  <tr style={{ background: '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
-                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>New Cases</td>
-                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.newCases}</td>
-                  </tr>
-                  <tr style={{ background: '#F8FAFC' }}>
-                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Relapse / Recapture</td>
-                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.relapse}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div>
-              <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Anatomical Site</p>
-              <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-              <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
-                <tbody>
-                  <tr style={{ background: '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
-                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Pulmonary</td>
-                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.pulmonary}</td>
-                  </tr>
-                  <tr style={{ background: '#F8FAFC' }}>
-                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>Extra-pulmonary</td>
-                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.caseProfile.extraPulmonary}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* Bacteriological Status */}
-        {report.bacteriologicalStatus?.length > 0 && (
-          <div>
-            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Bacteriological Status</p>
-            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
-              <thead>
-                <tr style={{ background: '#0F2D52' }}>
-                  <th className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Status</th>
-                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Count</th>
-                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Percentage</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.bacteriologicalStatus.map((row, i) => (
-                  <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
-                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.status}</td>
-                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.count}</td>
-                    <td className="py-2 px-3 text-right" style={{ color: '#374151' }}>{row.percentage}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Facility Performance */}
-        {report.facilityPerformance?.length > 0 && (
-          <div>
-            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Facility Performance</p>
-            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
-              <thead>
-                <tr style={{ background: '#0F2D52' }}>
-                  <th className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Facility</th>
-                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Cases</th>
-                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Success Rate</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.facilityPerformance.map((row, i) => {
-                  const rate = row.evaluated > 0 ? ((row.successful / row.evaluated) * 100).toFixed(1) : 'N/A';
-                  return (
-                    <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
-                      <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.facility}</td>
-                      <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.total_cases}</td>
-                      <td className="py-2 px-3 text-right" style={{ color: '#374151' }}>{rate}%</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Forecast */}
-        {report.forecast?.available && (
-          <div>
-            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Forecast</p>
-            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
-              <tbody>
-                <tr style={{ background: '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
-                  <td className="py-2 px-3" style={{ color: '#374151', fontWeight: 600 }}>Forecasted Cases</td>
-                  <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.forecastedCases}</td>
-                </tr>
-                <tr style={{ background: '#F8FAFC' }}>
-                  <td className="py-2 px-3" style={{ color: '#374151', fontWeight: 600 }}>Forecast Period</td>
-                  <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{report.forecast.period}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* TB Case Trend */}
-        {report.trend?.length > 0 && (
-          <div>
-            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>TB Case Trend</p>
-            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
-              <thead>
-                <tr style={{ background: '#0F2D52' }}>
-                  <th className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Month</th>
-                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Cases</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.trend.map((row, i) => (
-                  <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
-                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.label}</td>
-                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Barangay Distribution */}
-        {report.barangayDistribution?.length > 0 && (
-          <div>
-            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>TB Cases by Barangay</p>
-            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', border: '1px solid #D1D5DB' }}>
-              <thead>
-                <tr style={{ background: '#0F2D52' }}>
-                  <th className="py-2 px-3 text-left font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Barangay</th>
-                  <th className="py-2 px-3 text-right font-bold uppercase" style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>Cases</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.barangayDistribution.map((row, i) => (
-                  <tr key={i} style={{ background: i % 2 === 1 ? '#F8FAFC' : '#ffffff', borderBottom: '1px solid #E5E7EB' }}>
-                    <td className="py-2 px-3" style={{ color: '#1E293B', fontWeight: 600 }}>{row.barangay}</td>
-                    <td className="py-2 px-3 text-right font-bold" style={{ color: '#111827' }}>{row.cases}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Recommendations */}
-        {report.recommendations?.length > 0 && (
-          <div>
-            <p className="text-xs font-bold uppercase mb-1" style={{ color: '#0F2D52', letterSpacing: '0.05em' }}>Recommendations</p>
-            <div style={{ borderBottom: '1px solid #0F2D52', marginBottom: 6 }} />
-            <ol className="text-xs pl-4 space-y-1" style={{ color: '#1E293B', listStyleType: 'decimal' }}>
-              {report.recommendations.map((rec, i) => (
-                <li key={i}>{rec}</li>
-              ))}
-            </ol>
-          </div>
-        )}
+        {report.blocks.map(block => <ReportBlock key={block.id} block={block} />)}
 
         {/* Signature Block */}
         <div className="pt-6" style={{ borderTop: '1px solid #0F2D52' }}>
@@ -493,6 +334,7 @@ export default function Reports() {
   const [exportFormat, setExportFormat] = useState('pdf');
   const abortRef = useRef(null);
   const reportRef = useRef(null);
+  const deleteCancelRef = useRef(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -627,6 +469,7 @@ export default function Reports() {
 
   useEffect(() => {
     if (!deleteTarget) return;
+    deleteCancelRef.current?.focus();
     const onKey = (e) => { if (e.key === 'Escape') setDeleteTarget(null); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -837,52 +680,50 @@ export default function Reports() {
                 onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
 
-                Export
+                Download &amp; Print
               </button>
             </div>
           </div>
 
           {/* Rendered Report */}
-          <ReportRenderer report={report} reportData={reportData} />
+          <ReportRenderer report={report} />
         </div>
       )}
 
       {/* ─── Recent Reports ─── */}
-      <div className="rounded-xl overflow-hidden no-print" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-        <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: '1px solid #F1F5F9' }}>
-          <div className="flex items-center gap-3">
-            <h3 className="text-sm font-bold" style={{ color: '#1E293B' }}>Recent Reports</h3>
-          </div>
-          <span className="text-[11px] font-bold" style={{ color: '#94A3B8' }}>{recentReports.length} reports</span>
+      <div className="no-print overflow-hidden rounded-xl border border-[#E2E8F0] bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] px-5 py-4">
+          <h3 className="text-base font-semibold text-[#0F2D52]">Recent Reports</h3>
+          <span className="text-xs font-medium text-[#64748B]">{recentReports.length} report{recentReports.length === 1 ? '' : 's'}</span>
         </div>
-        <div className="pb-4">
+        <div>
           {recentReports.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-10 gap-2 px-5">
-              <i className="ri-file-list-3-line text-xl" style={{ color: '#CBD5E1' }} />
-              <p className="text-xs" style={{ color: '#94A3B8' }}>No reports generated yet.</p>
+            <div className="px-5 py-10 text-center">
+              <p className="text-sm font-medium text-[#475569]">No reports generated yet.</p>
+              <p className="mt-1 text-xs text-[#64748B]">Generated reports will appear here.</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[680px] text-sm">
                 <thead>
-                  <tr style={{ background: '#0F2D52' }}>
-                    {['Type', 'Period', 'Coverage', 'Generated', 'Actions'].map(h => (
-                      <th key={h} className="px-4 py-2 text-left text-[10px] font-bold uppercase tracking-widest" style={{ color: '#ffffff' }}>{h}</th>
+                  <tr className="bg-[#0F2D52]">
+                    {['Type', 'Period', 'Coverage', 'Generated', 'Action'].map(h => (
+                      <th key={h} scope="col" className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-widest text-white">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {recentReports.slice(0, showAllReports ? recentReports.length : 10).map((rpt) => (
-                    <tr key={rpt.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                      <td className="px-4 py-2 text-xs font-semibold" style={{ color: '#1E293B' }}>{rpt.type ? rpt.type.charAt(0).toUpperCase() + rpt.type.slice(1) : 'Report'}</td>
-                      <td className="px-4 py-2 text-xs font-medium" style={{ color: '#64748B' }}>{rpt.period || '\u2014'}</td>
-                      <td className="px-4 py-2 text-xs font-medium" style={{ color: '#64748B' }}>{rpt.coverage || '\u2014'}</td>
-                      <td className="px-4 py-2 text-xs font-medium" style={{ color: '#94A3B8' }}>
+                    <tr key={rpt.id} className="border-b border-[#E8EDF2] last:border-0 hover:bg-[#F8FAFC]">
+                      <td className="px-4 py-3 text-xs font-semibold text-[#0F2D52]">{rpt.type ? rpt.type.charAt(0).toUpperCase() + rpt.type.slice(1) : 'Report'}</td>
+                      <td className="px-4 py-3 text-xs text-[#475569]">{rpt.period || '\u2014'}</td>
+                      <td className="px-4 py-3 text-xs text-[#475569]">{rpt.coverage || '\u2014'}</td>
+                      <td className="px-4 py-3 text-xs tabular-nums text-[#64748B]">
                         {rpt.generatedAt ? new Date(rpt.generatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '\u2014'}
                       </td>
-                      <td className="px-4 py-2">
+                      <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
-                          <button aria-label="View report" onClick={() => {
+                          <button type="button" aria-label="View report" title="View report" onClick={() => {
                             const f = rpt.filters || {};
                             setReportType(f.reportType || rpt.type || 'monthly');
                             setFilterYear(f.year || String(new Date(rpt.generatedAt).getFullYear()));
@@ -891,17 +732,11 @@ export default function Reports() {
                             setFilterBarangay(f.barangay || '');
                             setRegenerateTrigger(n => n + 1);
                           }}
-                            className="inline-flex items-center justify-center h-7 w-7 text-sm"
-                            style={{ color: '#64748B', borderRadius: 4, transition: 'color 0.15s' }}
-                            onMouseEnter={e => { e.currentTarget.style.color = '#0F2D52'; }}
-                            onMouseLeave={e => { e.currentTarget.style.color = '#64748B'; }}>
+                            className="inline-flex h-7 w-7 items-center justify-center rounded text-sm text-[#64748B] transition-colors hover:bg-[#EAF0F6] hover:text-[#0F2D52] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]">
                             <i className="ri-eye-line" />
                           </button>
-                          <button aria-label="Delete report" onClick={() => setDeleteTarget(rpt)}
-                            className="inline-flex items-center justify-center h-7 w-7 text-sm"
-                            style={{ color: '#64748B', borderRadius: 4, transition: 'color 0.15s' }}
-                            onMouseEnter={e => { e.currentTarget.style.color = '#EF4444'; }}
-                            onMouseLeave={e => { e.currentTarget.style.color = '#64748B'; }}>
+                          <button type="button" aria-label="Delete report" title="Delete report" onClick={() => setDeleteTarget(rpt)}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded text-sm text-[#64748B] transition-colors hover:bg-[#FEF2F2] hover:text-[#B91C1C] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#B91C1C]">
                             <i className="ri-delete-bin-line" />
                           </button>
                         </div>
@@ -913,13 +748,11 @@ export default function Reports() {
             </div>
           )}
           {recentReports.length > 10 && (
-            <div className="flex justify-center pt-3 px-5">
-              <button onClick={() => setShowAllReports(!showAllReports)}
-                className="text-[11px] font-semibold px-3 py-1.5 rounded-lg"
-                style={{ color: '#0F2D52', background: '#F1F5F9', border: '1px solid #E2E8F0', transition: 'background 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#E2E8F0'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = '#F1F5F9'; }}>
-                {showAllReports ? 'Show Less' : `Show All (${recentReports.length})`}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#E8EDF2] px-4 py-3">
+              <span className="text-xs text-[#64748B]">Showing {showAllReports ? recentReports.length : 10} of {recentReports.length}</span>
+              <button type="button" onClick={() => setShowAllReports(!showAllReports)}
+                className="rounded border border-[#CBD5E1] px-3 py-1.5 text-xs font-semibold text-[#0F2D52] hover:bg-[#F1F5F9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]">
+                {showAllReports ? 'Show fewer' : 'Show all reports'}
               </button>
             </div>
           )}
@@ -928,32 +761,34 @@ export default function Reports() {
 
       {/* ─── Delete Confirmation Modal ─── */}
       {deleteTarget && (
-        <div className="fixed inset-0 z-[1200] flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Confirm delete">
-          <div className="absolute inset-0" style={{ background: 'rgba(15,45,82,0.2)' }} onClick={() => setDeleteTarget(null)} />
-          <div className="relative w-full max-w-sm mx-4 rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 20px 60px rgba(15,45,82,0.25)' }}>
-            <div className="px-6 py-5 text-center">
-              <div className="w-12 h-12 rounded-full mx-auto mb-4 flex items-center justify-center" style={{ background: '#FEF2F2' }}>
-                <i className="ri-error-warning-line text-xl" style={{ color: '#EF4444' }} />
-              </div>
-              <p className="text-sm font-bold" style={{ color: '#1E293B' }}>Delete Report?</p>
-              <p className="text-xs mt-1.5 max-w-xs mx-auto" style={{ color: '#64748B' }}>
-                This will permanently delete the {deleteTarget.type ? deleteTarget.type.charAt(0).toUpperCase() + deleteTarget.type.slice(1) : 'report'} report for {deleteTarget.period || 'this period'}. This action cannot be undone.
-              </p>
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center px-4" role="alertdialog" aria-modal="true" aria-labelledby="delete-report-title" aria-describedby="delete-report-description">
+          <div className="absolute inset-0 bg-[#0F2D52]/35" onClick={() => setDeleteTarget(null)} />
+          <div className="relative w-full max-w-[440px] overflow-hidden rounded-lg border border-[#DCE4ED] bg-white shadow-[0_20px_50px_rgba(15,45,82,0.2)]">
+            <div className="bg-[#0F2D52] px-6 py-4">
+              <h2 id="delete-report-title" className="text-base font-semibold text-white">Delete report</h2>
             </div>
-            <div className="flex" style={{ borderTop: '1px solid #F1F5F9' }}>
-              <button onClick={() => setDeleteTarget(null)}
-                className="flex-1 px-4 py-3 text-xs font-semibold"
-                style={{ color: '#374151', background: '#ffffff', borderRight: '1px solid #F1F5F9', transition: 'background 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#F8FAFC'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = '#ffffff'; }}>
+            <div id="delete-report-description" className="px-6 py-5">
+              <p className="text-sm leading-relaxed text-[#475569]">
+                Remove this saved report from Recent Reports?
+              </p>
+              <div className="mt-4 border-l-2 border-[#C5D3E2] pl-3">
+                <p className="text-sm font-semibold text-[#0F2D52]">
+                  {deleteTarget.type ? deleteTarget.type.charAt(0).toUpperCase() + deleteTarget.type.slice(1) : 'Report'} report
+                </p>
+                <p className="mt-0.5 text-xs text-[#64748B]">
+                  {deleteTarget.period || 'Period not specified'}{deleteTarget.coverage ? ` · ${deleteTarget.coverage}` : ''}
+                </p>
+              </div>
+              <p className="mt-4 text-xs text-[#64748B]">This action cannot be undone.</p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[#E2E8F0] px-6 py-4">
+              <button ref={deleteCancelRef} type="button" onClick={() => setDeleteTarget(null)}
+                className="rounded border border-[#CBD5E1] bg-white px-4 py-2 text-xs font-semibold text-[#334155] hover:bg-[#F8FAFC] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]">
                 Cancel
               </button>
-              <button onClick={handleDeleteReport}
-                className="flex-1 px-4 py-3 text-xs font-semibold"
-                style={{ color: '#ffffff', background: '#DC2626', transition: 'background 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#B91C1C'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = '#DC2626'; }}>
-                Delete
+              <button type="button" onClick={handleDeleteReport}
+                className="rounded bg-[#B91C1C] px-4 py-2 text-xs font-semibold text-white hover:bg-[#991B1B] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#B91C1C]">
+                Delete report
               </button>
             </div>
           </div>
@@ -962,29 +797,23 @@ export default function Reports() {
 
       {/* ─── Export Modal ─── */}
       {showExportModal && (
-        <div className="fixed inset-0 z-[1200] flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Export report">
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Download and print report">
           <div className="absolute inset-0" style={{ background: 'rgba(15,45,82,0.2)' }} onClick={() => { setShowExportModal(false); setExporting(''); }} />
           <div className="relative w-full max-w-md mx-4 rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 20px 60px rgba(15,45,82,0.25)' }}>
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: '1px solid #E2E8F0' }}>
               <div>
-                <p className="text-sm font-bold" style={{ color: '#0F2D52' }}>Export Reports</p>
-                <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Choose a format to download</p>
+                <p className="text-sm font-bold" style={{ color: '#0F2D52' }}>Download &amp; Print Report</p>
+                <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Choose a format to download or print</p>
               </div>
-              <button onClick={() => { setShowExportModal(false); setExporting(''); }}
-                className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                style={{ background: '#F3F4F6', color: '#64748B', transition: 'background 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
-                <i className="ri-close-line text-base" />
-              </button>
+              <ModalCloseButton onClick={() => { setShowExportModal(false); setExporting(''); }} />
             </div>
 
             {/* Body */}
             <div className="px-6 py-5 space-y-4">
               {/* Format Selection */}
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide mb-2" style={{ color: '#64748B' }}>Export Format</p>
+                <p className="text-[11px] font-semibold uppercase tracking-wide mb-2" style={{ color: '#64748B' }}>Format</p>
                 <div className="grid grid-cols-3 gap-2">
                   {[
                     { key: 'pdf', icon: 'ri-file-pdf-line', label: 'PDF', color: '#DC2626' },
@@ -1013,7 +842,7 @@ export default function Reports() {
                 <i className="ri-information-line text-sm mt-0.5 shrink-0" style={{ color: '#0284C7' }} />
                 <div>
                   <p className="text-[11px] font-semibold" style={{ color: '#0F2D52' }}>
-                    Ready to export as {exportFormat === 'pdf' ? 'PDF' : exportFormat === 'excel' ? 'Excel' : 'Print'} document
+                    {exportFormat === 'print' ? 'Ready to print' : `Ready to download as ${exportFormat === 'pdf' ? 'PDF' : 'Excel'}`}
                   </p>
                   <p className="text-[10px] mt-0.5" style={{ color: '#64748B' }}>
                     {report?.title || 'TB Report'} — {report?.subtitle || ''}
@@ -1035,7 +864,7 @@ export default function Reports() {
                 onClick={async () => {
                   const formatMap = {
                     pdf: { fn: () => exportPDF(report), label: 'PDF' },
-                    excel: { fn: () => exportExcel(reportData), label: 'Excel' },
+                    excel: { fn: () => exportExcel(report, reportData), label: 'Excel' },
                     print: { fn: () => printReport(), label: 'Print' },
                   };
                   const selected = formatMap[exportFormat];
@@ -1048,7 +877,7 @@ export default function Reports() {
                 style={{ background: '#0F2D52', color: '#ffffff', opacity: exporting ? 0.5 : 1, cursor: exporting ? 'not-allowed' : 'pointer', transition: 'background 0.15s' }}
                 onMouseEnter={e => { if (!exporting) e.currentTarget.style.background = '#174A7E'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}>
-                {exporting ? <><i className="ri-loader-4-line animate-spin" /> Exporting...</> : <>Download</>}
+                {exporting ? <><i className="ri-loader-4-line animate-spin" /> Working...</> : <>{exportFormat === 'print' ? 'Print' : 'Download'}</>}
               </button>
             </div>
           </div>

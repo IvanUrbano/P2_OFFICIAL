@@ -1,9 +1,5 @@
 /**
- * GET /records sorting — the list is server-paginated, so ordering is decided in SQL:
- *   - default            = newest first (v.id DESC), unchanged for existing callers
- *   - whitelisted keys   (sort=outcome&dir=asc) map to fixed columns, never user SQL
- *   - multi-column keys  (patient) apply the direction to every column
- *   - unknown key / dir / injection attempts fall back to the default order
+ * GET /records list views and sorting are server-side and use whitelisted SQL.
  * Run: node --test test/recordsSort.test.js
  */
 
@@ -18,7 +14,7 @@ function stub(modulePath, exportsValue) {
   require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: exportsValue };
 }
 
-const captured = { dataSql: null };
+const captured = { dataSql: null, restoreCalls: [] };
 
 stub('../config', { jwt: { secret: SECRET, expiresIn: '1h' }, webhook: {} });
 stub('../db/pasigSchema', {
@@ -31,9 +27,14 @@ stub('../db/pasigSchema', {
       }
       if (q.includes('COUNT(*)::int AS n')) return { rows: [{ n: 0 }] };
       if (q.includes('COUNT(*)::int AS total')) return { rows: [{ total: 0 }] };
+      if (q.includes('SELECT id, is_archived FROM validated_tb_cases')) return { rows: [{ id: 9, is_archived: true }] };
       throw new Error(`Unexpected pool query: ${q.slice(0, 120)}`);
     },
     connect: async () => ({ query: async () => ({ rows: [] }), release() {} }),
+  },
+  restoreRecord: async (id) => {
+    captured.restoreCalls.push(id);
+    return { rows: [{ id: Number(id), is_archived: false }] };
   },
   authPool: {
     query: async (sql) => {
@@ -57,17 +58,43 @@ before(async () => {
 after(() => server.close());
 
 const token = (role = 'admin', id = 1) => jwt.sign({ id, username: `${role}${id}`, role }, SECRET);
-async function fetchOrder(query = '') {
+async function fetchOrder(query = '', role = 'admin') {
   captured.dataSql = null;
-  const res = await fetch(`${base}/records${query}`, { headers: { authorization: `Bearer ${token()}` } });
+  const res = await fetch(`${base}/records${query}`, { headers: { authorization: 'Bearer ' + token(role) } });
   return { status: res.status, sql: captured.dataSql };
 }
 
-describe('GET /records sorting', () => {
+describe('GET /records list views and sorting', () => {
   it('defaults to newest first', async () => {
     const r = await fetchOrder();
     assert.strictEqual(r.status, 200);
     assert.ok(r.sql && r.sql.includes('ORDER BY v.id DESC LIMIT'), r.sql);
+  });
+
+  it('lists archived records separately from active records', async () => {
+    const active = await fetchOrder('?view=all');
+    assert.ok(active.sql.includes('v.is_archived = false'), active.sql);
+
+    const archived = await fetchOrder('?view=archived');
+    assert.strictEqual(archived.status, 200);
+    assert.ok(archived.sql.includes('AND v.is_archived = true'), archived.sql);
+    assert.ok(!archived.sql.includes('v.is_archived = false'), archived.sql);
+  });
+
+  it('allows only admins to restore an archived record', async () => {
+    const staffResponse = await fetch(`${base}/records/9/restore`, {
+      method: 'PATCH',
+      headers: { authorization: 'Bearer ' + token('staff') },
+    });
+    assert.strictEqual(staffResponse.status, 403);
+    assert.deepStrictEqual(captured.restoreCalls, []);
+
+    const adminResponse = await fetch(`${base}/records/9/restore`, {
+      method: 'PATCH',
+      headers: { authorization: 'Bearer ' + token('admin') },
+    });
+    assert.strictEqual(adminResponse.status, 200);
+    assert.deepStrictEqual(captured.restoreCalls, ['9']);
   });
 
   it('whitelisted keys map to their column with the requested direction', async () => {
@@ -90,7 +117,6 @@ describe('GET /records sorting', () => {
   it('multi-column keys apply the direction to every column', async () => {
     const r = await fetchOrder('?sort=patient&dir=desc');
     assert.strictEqual(r.status, 200);
-    // Names order only operational records; historical (de-identified) ones fall back to Patient #.
     assert.ok(r.sql.includes(`ORDER BY CASE WHEN v.identity_class = 'operational' THEN v.last_name END DESC, CASE WHEN v.identity_class = 'operational' THEN v.first_name END DESC, p.patient_no DESC LIMIT`), r.sql);
   });
 

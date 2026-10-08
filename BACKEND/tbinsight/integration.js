@@ -219,7 +219,7 @@ router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), a
          AND duplicate_of_case_id IN (
            SELECT id FROM tb_cases WHERE batch_id = $1 AND COALESCE(source_type, '') <> 'MANUAL'
          )
-       RETURNING source_type, dstb_fingerprint, itis_case_id`,
+       RETURNING source_type, dstb_fingerprint`,
       [batchId]
     );
 
@@ -234,8 +234,6 @@ router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), a
     const reflagged = await flagPossibleDuplicates(client, {
       dstbFingerprints: [...new Set(releasedRows
         .filter(r => r.source_type === 'DSTB' && r.dstb_fingerprint).map(r => r.dstb_fingerprint))],
-      mnItisCaseIds: [...new Set(releasedRows
-        .filter(r => r.source_type === 'MN' && r.itis_case_id).map(r => r.itis_case_id))],
     });
     const raw = await client.query('DELETE FROM tb_cases_raw WHERE batch_id = $1', [batchId]);
     const logs = await client.query(
@@ -276,7 +274,7 @@ router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), a
           recordsReceived: original.records_received ?? null,
           recordsImported: original.records_imported ?? null,
           deleted: { cases: cases.rowCount, rawRows: raw.rowCount, logs: logs.rowCount },
-          duplicateFlags: { released: releasedRows.length, reflagged: reflagged.dstb + reflagged.mn },
+          duplicateFlags: { released: releasedRows.length, reflagged: reflagged.dstb },
         }),
       ]
     );
@@ -293,7 +291,7 @@ router.delete('/batches/:batchId', authenticateToken, authorizeRoles('admin'), a
       success: true,
       batchId,
       deleted: { cases: cases.rowCount, rawRows: raw.rowCount, logs: logs.rowCount },
-      duplicateFlags: { released: releasedRows.length, reflagged: reflagged.dstb + reflagged.mn },
+      duplicateFlags: { released: releasedRows.length, reflagged: reflagged.dstb },
       aggregatesRebuilt: true,
       modelResultsCleared: {
         riskScores: clearedRisk.rowCount, forecasts: clearedForecasts.rowCount, alerts: clearedAlerts.rowCount,

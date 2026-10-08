@@ -36,7 +36,7 @@ beforeEach(() => {
   poolQueries = [];
   notified = [];
   poolResponder = async (sql) => (sql.includes('SELECT filename, uploaded_by')
-    ? { rows: [{ filename: 'cases.xlsx', uploaded_by: 1 }] }
+    ? { rows: [{ filename: 'cases.xlsx', uploaded_by: 5 }] }
     : { rows: [] });
 });
 
@@ -80,6 +80,8 @@ describe('startBackgroundSync', () => {
     release();
     await p;
     assert.strictEqual(notified[0].n.type, 'sync_completed');
+    assert.deepStrictEqual(notified[0].recipients, [5, user.id]);
+    assert.strictEqual(notified[0].n.includeActor, true);
   });
 
   it('records and notifies a sync that throws', async () => {

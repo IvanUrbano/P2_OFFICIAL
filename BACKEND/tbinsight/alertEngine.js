@@ -61,11 +61,11 @@ async function insertAlert(poolOrClient, { alertType, severity, message, recomme
 
   const result = await poolOrClient.query(
     `INSERT INTO alerts (type, title, alert_type, severity, message, recommendation,
-       barangay_name, period, source_module, status)
-     VALUES ('alert', $1, $2, $3, $4, $5, $6, $7, $8, 'unread')
+       barangay_name, period, source_module, status, metadata)
+     VALUES ('alert', $1, $2, $3, $4, $5, $6, $7, $8, 'unread', $9)
      RETURNING id`,
     [title || alertType, alertType, severity, message, recommendation || null,
-     barangayName || null, period, sourceModule]
+     barangayName || null, period, sourceModule, metadata ? JSON.stringify(metadata) : null]
   );
   return result.rows[0].id;
 }
@@ -132,6 +132,7 @@ async function evaluateHotspotAlerts(poolOrClient, period) {
     message: `${sorted.length} barangay${sorted.length > 1 ? 's' : ''} classified as high-risk TB hotspot${sorted.length > 1 ? 's' : ''}: ${topList}${suffix}.`,
     recommendation: `Increase surveillance and resource allocation in affected barangays. Review TB case management and contact tracing activities.`,
     barangayName: null,
+    metadata: { affected_barangays: sorted.map(row => row.barangay_name) },
     period,
     sourceModule: 'gis',
   });
@@ -189,6 +190,7 @@ async function evaluateCaseIncreaseAlerts(poolOrClient, period) {
     message: `${affected.length} barangay${affected.length > 1 ? 's' : ''} showed a ≥${THRESHOLDS.CASE_INCREASE_PERCENT}% increase in TB cases compared to the previous period: ${topList}${suffix}.`,
     recommendation: `Investigate the surge across affected barangays. Consider expanding case finding and contact tracing.`,
     barangayName: null,
+    metadata: { affected_barangays: affected.map(row => row.barangay_name) },
     period,
     sourceModule: 'analytics',
   });
@@ -230,6 +232,7 @@ async function evaluateForecastAlerts(poolOrClient, period) {
     message: `${sorted.length} barangay${sorted.length > 1 ? 's' : ''} projected to exceed the incidence threshold (${THRESHOLDS.FORECAST_INCIDENCE}/100k): ${topList}${suffix}.`,
     recommendation: `Prepare contingency resources for affected barangays. Review prevention and treatment capacity.`,
     barangayName: null,
+    metadata: { affected_barangays: sorted.map(row => row.barangay_name) },
     period,
     sourceModule: 'forecasting',
   });

@@ -20,6 +20,7 @@ const {
 } = require('./outcomeNormalization');
 const { computeCaseFatalityRate } = require('./caseFatalityRate');
 const { pasigResidentOnly, countedCases } = require('./locationScope');
+const { barangayCondition } = require('./barangayFilter');
 const { loadAdjacency } = require('./barangayAdjacency');
 const {
   getPopulation, getPopulationMap, calculateAnnualizedIncidence,
@@ -203,7 +204,7 @@ function staffCaseScope(user, paramIdx) {
  */
 router.get('/cases', async (req, res) => {
   try {
-    const allowedSortFields = ['id', 'barangay_name', 'age', 'date_of_diagnosis', 'screening_facility', 'source_type'];
+    const allowedSortFields = ['id', 'source_case_id', 'barangay_name', 'age', 'date_of_diagnosis', 'screening_facility', 'source_type'];
     const {
       page = 1,
       limit = 10,
@@ -239,7 +240,6 @@ router.get('/cases', async (req, res) => {
         `TRIM(c.barangay_name) ILIKE $${paramIdx}`,
         `TRIM(c.screening_facility) ILIKE $${paramIdx}`,
         `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
-        `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
         `c.case_no ILIKE $${paramIdx}`,
         `c.source_case_id ILIKE $${paramIdx}`,
         `TRIM(c.source_type) ILIKE $${paramIdx}`,
@@ -385,7 +385,6 @@ router.get('/cases', async (req, res) => {
         c.date_of_outcome,
         c.imported_at,
         c.validation_status,
-        c.itis_case_id,
         c.source_type,
         c.location_classification,
         c.residence_barangay_name,
@@ -424,7 +423,7 @@ router.get('/cases', async (req, res) => {
 /**
  * GET /api/tb/cases/analytics-dataset
  * Every case the user may see, with ONLY the fields Analytics and Forecasting compute
- * from — no identifiers (case_no, patient_no, itis_case_id, batch_id). Those pages
+ * from — no identifiers (case_no, patient_no, batch_id). Those pages
  * filter and chart client-side, so they need all rows; they used to fetch them via
  * /api/tb/cases?limit=<total>, which shipped all 25 columns (~7 MB at 8.5k cases).
  * Same access scope, outcome labels and order as /api/tb/cases.
@@ -507,7 +506,6 @@ router.get('/cases/export', async (req, res) => {
         `TRIM(c.barangay_name) ILIKE $${paramIdx}`,
         `TRIM(c.screening_facility) ILIKE $${paramIdx}`,
         `TRIM(c.treatment_facility) ILIKE $${paramIdx}`,
-        `TRIM(c.itis_case_id) ILIKE $${paramIdx}`,
         `c.case_no ILIKE $${paramIdx}`,
         `c.source_case_id ILIKE $${paramIdx}`,
         `TRIM(c.source_type) ILIKE $${paramIdx}`,
@@ -563,7 +561,7 @@ router.get('/cases/export', async (req, res) => {
     const result = await pool.query(
       `SELECT
         c.id,
-        c.itis_case_id,
+        c.source_case_id,
         c.barangay_name,
         c.age,
         c.sex,
@@ -594,13 +592,12 @@ router.get('/cases/export', async (req, res) => {
       params
     );
 
-    const headers = ['Case ID', 'ITIS Case ID', 'Barangay', 'Age', 'Sex', 'Diagnosis Date', 'Screening Date', 'Notification Date', 'Screening Facility', 'Treatment Facility', 'Source', 'Source of Patient', 'Anatomical Site', 'Registration Group', 'Bacteriologic Status', 'Treatment Start Date', 'Case Status', 'Treatment Outcome', 'Source Outcome Value', 'Outcome Date', 'Validation', 'Location', 'Residence Barangay', 'Residence City'];
+    const headers = ['Case ID', 'Barangay', 'Age', 'Sex', 'Diagnosis Date', 'Screening Date', 'Notification Date', 'Screening Facility', 'Treatment Facility', 'Source', 'Source of Patient', 'Anatomical Site', 'Registration Group', 'Bacteriologic Status', 'Treatment Start Date', 'Case Status', 'Treatment Outcome', 'Source Outcome Value', 'Outcome Date', 'Validation', 'Location', 'Residence Barangay', 'Residence City'];
     const csvRows = [headers.join(',')];
 
     for (const row of result.rows) {
       const values = [
-        row.id,
-        row.itis_case_id || '',
+        row.source_case_id || 'No Case ID',
         `"${(row.barangay_name || '').replace(/"/g, '""')}"`,
         row.age || '',
         row.sex || '',
@@ -633,6 +630,106 @@ router.get('/cases/export', async (req, res) => {
   } catch (err) {
     console.error('Cases export error:', err.message);
     res.status(500).json({ error: 'Server error exporting cases.' });
+  }
+});
+
+/**
+ * GET /api/tb/cases/:caseKey/history
+ * Case History for a single case: the append-only record of what changed on it
+ * and who changed it (written by tbinsight/caseHistory.js on every same-case
+ * outcome update).
+ *
+ * `caseKey` is the stable Case ID (tb_cases.case_no) — the same key the webhook
+ * matches a re-sent record on. A purely numeric key falls back to the internal
+ * id, so a row that was imported without a Case ID is still inspectable. It is
+ * NEVER matched by patient number: the same person can have a later, new
+ * episode, which is a different Case ID and therefore a different case with its
+ * own history. Longitudinal updates to one case never appear as a second case.
+ *
+ * A case outside a staff user's facility answers 404 rather than 403 on purpose:
+ * the frontend treats any 403 as a dead session and redirects to /login.
+ */
+router.get('/cases/:caseKey/history', async (req, res) => {
+  try {
+    const caseKey = String(req.params.caseKey || '').trim();
+    if (!caseKey) return res.status(404).json({ error: 'Case not found.' });
+
+    const numericId = /^\d+$/.test(caseKey) ? Number(caseKey) : null;
+    const params = [numericId == null ? caseKey : null, numericId];
+    const conditions = [
+      `(($1::text IS NOT NULL AND c.case_no = $1) OR ($2::bigint IS NOT NULL AND c.id = $2))`,
+    ];
+    let paramIdx = 3;
+
+    const scope = staffCaseScope(req.user, paramIdx);
+    if (scope) {
+      conditions.push(scope.sql);
+      params.push(...scope.params);
+      paramIdx += scope.params.length;
+    }
+
+    const caseResult = await pool.query(
+      `SELECT c.id, c.case_no, c.patient_no, c.source_case_id, c.batch_id,
+              c.imported_at, c.updated_at, c.case_status, c.treatment_outcome,
+              c.outcome_status, c.source_outcome_status
+         FROM tb_cases c
+        WHERE ${conditions.join(' AND ')}
+        LIMIT 1`,
+      params
+    );
+    const record = caseResult.rows[0];
+    if (!record) return res.status(404).json({ error: 'Case not found.' });
+
+    const historyResult = await pool.query(
+      `SELECT id, change_type, changed_fields, source, changed_by_user_id,
+              changed_by_label, changed_at, notes, batch_id
+         FROM case_history
+        WHERE ($1::text IS NOT NULL AND case_no = $1)
+           OR ($1::text IS NULL AND tb_case_id = $2::bigint)
+        ORDER BY changed_at DESC, id DESC
+        LIMIT 200`,
+      [record.case_no, record.id]
+    );
+
+    // Actor: the label the source system reported for a synced change, else the
+    // username of a TBInsight user (for a future manual/review edit).
+    const userIds = [...new Set(historyResult.rows.map(h => h.changed_by_user_id).filter(v => v != null))];
+    const actorNames = {};
+    if (userIds.length > 0) {
+      const users = await pool.query(
+        'SELECT id, username FROM users WHERE id = ANY($1::int[])',
+        [userIds]
+      );
+      for (const user of users.rows) actorNames[user.id] = user.username;
+    }
+
+    res.json({
+      case: {
+        id: record.id,
+        case_no: record.case_no,
+        source_case_id: record.source_case_id,
+        patient_no: record.patient_no,
+        case_status: record.case_status,
+        treatment_outcome: record.treatment_outcome,
+        outcome_status: record.treatment_outcome,
+        outcome_status_raw: record.source_outcome_status ?? record.outcome_status,
+        imported_at: record.imported_at,
+        updated_at: record.updated_at,
+      },
+      history: historyResult.rows.map(h => ({
+        id: Number(h.id),
+        change_type: h.change_type,
+        changed_fields: h.changed_fields,
+        source: h.source,
+        actor: h.changed_by_label || actorNames[h.changed_by_user_id] || null,
+        changed_at: h.changed_at,
+        batch_id: h.batch_id,
+        notes: h.notes,
+      })),
+    });
+  } catch (err) {
+    console.error('Case history error:', err.message);
+    res.status(500).json({ error: 'Server error fetching case history.' });
   }
 });
 
@@ -673,9 +770,10 @@ router.get('/dashboard/summary', async (req, res) => {
       params.push(Number(month));
       paramIdx++;
     }
-    if (barangay) {
-      conditions.push(`TRIM(barangay_name) = $${paramIdx}`);
-      params.push(barangay);
+    const brgy = barangayCondition('barangay_name', `$${paramIdx}`, barangay);
+    if (brgy) {
+      conditions.push(brgy.sql);
+      params.push(brgy.value);
       paramIdx++;
     }
     if (outcome) {
@@ -745,6 +843,9 @@ router.get('/dashboard/summary', async (req, res) => {
         SUM(CASE WHEN treatment_outcome = 'NOT EVALUATED' THEN 1 ELSE 0 END)::INTEGER as not_evaluated_count,
         SUM(CASE WHEN treatment_outcome = 'EXCLUDED' THEN 1 ELSE 0 END)::INTEGER as excluded_count,
         SUM(CASE WHEN case_status = 'DIAGNOSED' THEN 1 ELSE 0 END)::INTEGER as diagnosed_count,
+        -- diagnosed but still without a treatment start 30+ days later: records to follow up
+        COUNT(*) FILTER (WHERE case_status = 'DIAGNOSED'
+                           AND date_of_diagnosis < CURRENT_DATE - INTERVAL '30 days')::INTEGER as diagnosed_overdue_count,
         SUM(CASE WHEN treatment_outcome IN (${SUCCESS_OUTCOMES_SQL}) THEN 1 ELSE 0 END)::INTEGER as successful_count,
         COUNT(*) FILTER (WHERE treatment_outcome IN ('CURED','TREATMENT COMPLETED','TREATMENT FAILED','LOST TO FOLLOW-UP','DIED'))::INTEGER as total_outcomes,
         SUM(CASE WHEN date_of_diagnosis >= DATE_TRUNC('month', CURRENT_DATE) THEN 1 ELSE 0 END)::INTEGER as current_month_cases,
@@ -1864,8 +1965,9 @@ router.get('/alerts', async (req, res) => {
       params.push(severity);
     }
     if (barangay) {
-      conditions.push(`TRIM(barangay_name) = $${idx++}`);
-      params.push(barangay);
+      conditions.push(`(TRIM(barangay_name) = $${idx} OR COALESCE(metadata->'affected_barangays', '[]'::jsonb) ? $${idx})`);
+      params.push(barangay.trim());
+      idx++;
     }
     if (source) {
       conditions.push(`source_module = $${idx++}`);
@@ -2007,10 +2109,17 @@ router.put('/alerts/read-all', authenticateToken, async (req, res) => {
 router.get('/alerts/stale-check', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT MAX(created_at)::timestamptz AS last_alert_created FROM alerts WHERE type = 'alert'`
+      `SELECT MAX(created_at)::timestamptz AS last_alert_created,
+              EXISTS (
+                SELECT 1 FROM alerts
+                WHERE status != 'resolved'
+                  AND alert_type IN ('high_risk_hotspot', 'case_increase', 'forecast_exceeds_threshold')
+                  AND metadata->'affected_barangays' IS NULL
+              ) AS missing_coverage
+       FROM alerts WHERE type = 'alert'`
     );
     const lastCreated = result.rows[0]?.last_alert_created;
-    const isStale = !lastCreated || (Date.now() - new Date(lastCreated).getTime()) > 24 * 60 * 60 * 1000;
+    const isStale = result.rows[0]?.missing_coverage || !lastCreated || (Date.now() - new Date(lastCreated).getTime()) > 24 * 60 * 60 * 1000;
     res.json({ lastEvaluated: lastCreated, isStale });
   } catch (err) {
     console.error('Stale check error:', err.message);
@@ -2575,27 +2684,28 @@ router.get('/reports/summary', async (req, res) => {
       // Risk scores (latest period)
       pool.query(`
         SELECT DISTINCT ON (barangay_name)
-          barangay_name, risk_class, incidence_per_100k, risk_score, trend_direction
+          barangay_name, risk_class, incidence_per_100k, risk_score, trend_direction,
+          TO_CHAR(period, 'YYYY-MM') AS period_key
         FROM barangay_risk_scores
         ORDER BY barangay_name, period DESC
       `),
 
-      // Forecast (latest period that overlaps with report range)
+      // Forecast: the first stored forecast month on/after the report start, taken as ONE
+      // period for every barangay (so the total is a single month), and limited to the
+      // report's barangay when one is selected.
       pool.query(`
-        SELECT DISTINCT ON (barangay_name)
-          barangay_name, forecasted_count, period, confidence_lower, confidence_upper
+        SELECT barangay_name, forecasted_count, period, method
         FROM model_predictions
-        WHERE period >= $1
-        ORDER BY barangay_name, period ASC
-        LIMIT 30
-      `, [startDate]),
+        WHERE period = (SELECT MIN(period) FROM model_predictions WHERE period >= $1)
+          ${barangay ? 'AND TRIM(barangay_name) = $2' : ''}
+      `, barangay ? [startDate, barangay] : [startDate]),
 
       // Population for incidence calculation — year-specific
       getPopulationMap(yr),
 
       // All matching case records for the detailed table
       pool.query(`
-        SELECT c.id, c.date_of_diagnosis, c.barangay_name, c.sex, c.age,
+        SELECT c.id, c.source_case_id, c.case_no, c.date_of_diagnosis, c.barangay_name, c.sex, c.age,
           COALESCE(c.registration_group, 'Unknown') AS registration_group,
           COALESCE(c.anatomical_site, 'Unknown') AS anatomical_site,
           c.case_status,
@@ -2630,7 +2740,7 @@ router.get('/reports/summary', async (req, res) => {
 
     // TSR: single shared calculation (see treatmentSuccessRate.js) — do not
     // reimplement the cohort query here.
-    const { successRate, cohortTotal } = await computeTreatmentSuccessRate(pool, { year: yr, barangay });
+    const { successRate, cohortTotal, cohortYear } = await computeTreatmentSuccessRate(pool, { year: yr, barangay });
     // Same denominator successRate is computed from (the Y-1 treatment-start
     // cohort) — NOT summaryRow.evaluated_count, which counts a different,
     // diagnosis-period-based population. Reporting that count alongside this
@@ -2639,7 +2749,7 @@ router.get('/reports/summary', async (req, res) => {
 
     // CFR: single shared calculation (see caseFatalityRate.js) — do not
     // reimplement the evaluated-outcomes denominator here.
-    const { rate: fatalityRate, evaluated: fatalityEvaluated } = await computeCaseFatalityRate(pool, { year: yr, barangay });
+    const { rate: fatalityRate, evaluated: fatalityEvaluated, died: fatalityDied } = await computeCaseFatalityRate(pool, { year: yr, barangay });
 
     // Outcome breakdown: the shared fold into the 9 approved source-aligned
     // categories (see foldOutcomeCounts). This previously echoed the raw stored
@@ -2738,31 +2848,61 @@ router.get('/reports/summary', async (req, res) => {
       trendDirection: riskMap[r.barangay]?.trend_direction || 'N/A',
     }));
 
-    // Forecast
-    const totalForecasted = forecastRes.rows.reduce((s, r) => s + Math.round(Number(r.forecasted_count || 0)), 0);
+    // Forecast (single stored period; says so when it is not inside the report period)
+    const totalForecasted = forecastRes.rows.reduce((t, r) => t + Math.round(Number(r.forecasted_count || 0)), 0);
     const forecastPeriod = forecastRes.rows.length > 0 ? forecastRes.rows[0].period : null;
+    const forecastMethods = [...new Set(forecastRes.rows.map(r => r.method).filter(Boolean))];
     const forecast = {
       available: forecastRes.rows.length > 0,
       forecastedCases: totalForecasted,
       period: forecastPeriod ? new Date(forecastPeriod).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : null,
+      barangays: forecastRes.rows.length,
+      methods: forecastMethods,
+      outsideReportPeriod: forecastPeriod ? new Date(forecastPeriod) > new Date(`${endDate}T23:59:59`) : false,
     };
+
+    // The report's own barangay: classification, trend, population and incidence.
+    let barangayProfile = null;
+    if (barangay) {
+      const pop = popMap[barangay] || 0;
+      const rawInc = pop > 0 ? (totalCases * annualFactor / pop) * 100000 : null;
+      barangayProfile = {
+        barangay,
+        population: pop || null,
+        incidence: rawInc != null ? Number(rawInc.toFixed(1)) : null,
+        incidenceLabel,
+        riskLevel: riskMap[barangay]?.risk_class || 'No Data',
+        trendDirection: riskMap[barangay]?.trend_direction || null,
+      };
+    }
+    const riskAssessmentPeriod = riskRes.rows.map(r => r.period_key).filter(Boolean).sort().pop() || null;
 
     // Recommendations (rule-based)
     const recommendations = [];
     if (successRate !== null && successRate < 85) {
       recommendations.push('Treatment success rate is below the 85% target. Strengthen treatment adherence monitoring and patient follow-up.');
     }
-    const highRiskBarangays = riskRes.rows.filter(r => r.risk_class === 'High' || r.risk_class === 'Very High');
-    if (highRiskBarangays.length > 0) {
+    const highRiskBarangays = riskRes.rows.filter(r => (r.risk_class === 'High' || r.risk_class === 'Very High')
+      && (!barangay || r.barangay_name === barangay));
+    if (barangay) {
+      if (highRiskBarangays.length > 0) {
+        recommendations.push(`${barangay} is classified High Risk in the latest assessment. Prioritize case finding, contact tracing and treatment monitoring here.`);
+      }
+    } else if (highRiskBarangays.length > 0) {
       recommendations.push(`Prioritize monitoring and resource allocation in ${highRiskBarangays.length} high-risk barangay(s): ${highRiskBarangays.map(r => r.barangay_name).join(', ')}.`);
     }
     if (recommendations.length === 0) {
-      recommendations.push('No high-risk barangays were identified for the selected reporting period. Continue routine surveillance.');
+      recommendations.push(barangay
+        ? `${barangay} is not classified High Risk in the latest assessment. Continue routine surveillance.`
+        : 'No high-risk barangays were identified in the latest risk assessment. Continue routine surveillance.');
     }
 
     // Recent import (last sync)
     const syncRes = await pool.query(`SELECT MAX(imported_at) AS last_sync FROM tb_cases`);
     const lastSync = syncRes.rows[0]?.last_sync || null;
+    // Newest diagnosis date inside the report scope: tells the reader when the period is only partly covered.
+    const latestRes = await pool.query(`SELECT MAX(c.date_of_diagnosis)::TEXT AS latest FROM tb_cases c ${whereClause}`, params);
+    const latestCaseDate = latestRes.rows[0]?.latest || null;
 
     res.json({
       report: {
@@ -2771,8 +2911,11 @@ router.get('/reports/summary', async (req, res) => {
         coverage,
         generatedAt: new Date().toISOString(),
         lastSync,
+        startDate,
+        endDate,
+        latestCaseDate,
       },
-      summary: { totalCases, diagnosedCases, onTreatmentCases, successRate, evaluatedCount, fatalityRate, fatalityEvaluated },
+      summary: { totalCases, diagnosedCases, onTreatmentCases, successRate, evaluatedCount, cohortYear, fatalityRate, fatalityEvaluated, fatalityDied },
       outcomes,
       outcomeReconciliation,
       demographics: { sex, ageGroups },
@@ -2781,6 +2924,9 @@ router.get('/reports/summary', async (req, res) => {
       barangayDistribution,
       riskSummary,
       forecast,
+      barangayProfile,
+      riskAssessmentPeriod,
+      incidenceLabel,
       recommendations,
       cases: casesRes.rows,
       population: populationRes.rows,

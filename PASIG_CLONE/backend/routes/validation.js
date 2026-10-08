@@ -20,21 +20,41 @@ async function notifyValidated(batchId, results, user) {
       [batchId]
     )).rows[0];
     const issues = Number(results.invalid) || 0;
-    const parts = [
-      c.matches && `${c.matches} possible match${c.matches === 1 ? '' : 'es'}`,
-      c.assignment && `${c.assignment} need${c.assignment === 1 ? 's' : ''} assignment`,
-      issues && `${issues} data issue${issues === 1 ? '' : 's'}`,
-    ].filter(Boolean);
-    const tab = c.matches ? 'matches' : c.assignment ? 'assignment' : issues ? 'issues' : 'ready';
-    await notifications.notifyAdmins({
-      type: 'validation_summary', severity: parts.length ? 'warning' : 'success', actorId: user.id,
-      title: parts.length ? `${file}: records need review` : `${file} validated`,
-      message: parts.length
-        ? `Validated by ${user.username}: ${results.valid} valid. ${parts.join(', ')}.`
-        : `Validated by ${user.username}: all ${results.valid} records are ready to sync.`,
-      link: `/validation?batchId=${batchId}${tab === 'ready' ? '' : `&tab=${tab}`}`,
-      entityType: 'import_batch', entityId: batchId,
-    });
+    const assignment = Number(c.assignment) || 0;
+    const matches = Number(c.matches) || 0;
+    let adminIds = [];
+    try { adminIds = await notifications.admins(); }
+    catch (err) { console.error('[notifications] admin lookup failed:', err.message); }
+    const reviewers = [user.id, ...adminIds];
+    const base = { actorId: user.id, includeActor: true, entityType: 'import_batch', entityId: batchId };
+    if (issues > 0) {
+      await notifications.notify(reviewers, {
+        ...base, type: 'validation_issues', severity: 'warning',
+        title: `${file}: ${issues} validation issue${issues === 1 ? '' : 's'}`,
+        message: 'Review and resolve the data issues before syncing.',
+        link: `/validation?batchId=${batchId}&tab=issues`,
+      });
+    }
+    if (assignment > 0) {
+      await notifications.notify(adminIds, {
+        ...base, type: 'assignment_needed', severity: 'warning',
+        title: `${file}: ${assignment} case${assignment === 1 ? '' : 's'} need assignment`,
+        message: 'Assign the missing location or facility information.',
+        link: `/validation?batchId=${batchId}&tab=assignment`,
+      });
+    }
+    if (matches > 0 || (!issues && !assignment)) {
+      await notifications.notify(reviewers, {
+        ...base, type: 'validation_summary', severity: matches ? 'warning' : 'success',
+        title: matches
+          ? `${file}: ${matches} possible match${matches === 1 ? '' : 'es'} need review`
+          : `${file} validated`,
+        message: matches
+          ? 'Review possible patient matches before syncing.'
+          : `All ${results.valid} records are ready to sync.`,
+        link: `/validation?batchId=${batchId}${matches ? '&tab=matches' : ''}`,
+      });
+    }
 
     const perBarangay = (await db.pool.query(
       `SELECT v.barangay_id, COUNT(*)::int AS n FROM validated_tb_cases v
@@ -69,8 +89,8 @@ router.post('/validate/:batchId', authenticate, authorizeRoles('admin', 'staff')
       return res.status(403).json({ error: 'Only the uploader or an administrator can validate this batch.' });
     }
 
-    // Run validation
-    const results = await validateBatch(batchId);
+    // Run validation (the acting user decides any auto-merge on a Case ID match)
+    const results = await validateBatch(batchId, req.user);
 
     // Update batch with validation tracking
     await db.pool.query(

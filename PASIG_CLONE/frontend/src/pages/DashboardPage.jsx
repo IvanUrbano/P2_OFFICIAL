@@ -1,23 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
-import { useTheme } from '../theme';
 import SkeletonBlock from '../components/SkeletonBlock';
 import { timeAgo } from '../utils/notifications';
-import { caseIdOf } from '../utils/caseId';
-
-const cardStyle = (t) => ({
-  background: t.cardSolid,
-  border: `1px solid ${t.border}`,
-  borderRadius: '12px',
-  boxShadow: '0 4px 16px rgba(15,23,42,0.04)',
-});
+import { caseIdLabel } from '../utils/caseId';
 
 const detailCard = {
   background: '#ffffff',
   border: '1px solid #E2E8F0',
-  borderRadius: '12px',
-  boxShadow: '0 4px 16px rgba(15,23,42,0.04)',
+  borderRadius: '10px',
+  boxShadow: '0 2px 8px rgba(15,23,42,0.04)',
 };
 
 // Muted palette for the detail section — deep, low-brightness text colors only.
@@ -27,30 +19,36 @@ const C = {
   amber: '#B45309',
   blue: '#1E40AF',
   navy: '#0F2D52',
-  brand: '#0F2D52', // navy brand bar across the top of detail cards
+  brand: '#0F2D52',
   text: '#334155',
   sub: '#64748B',
   faint: '#94A3B8',
   line: '#F1F5F9',
-  border: '#E2E8F0',
 };
 
-/* Full-width card header bar — edge-to-edge on top of the card: white, bold,
-   uppercase, letter-spaced label; optional secondary tag right-aligned in
-   muted light-gray (e.g. BRGY: ROSARIO). Replaces inset h2 + separator lines. */
+/* Shared dark-blue header for dashboard detail cards. */
 function CardHeader({ title, tag }) {
   return (
-    <div className="shrink-0 flex items-center justify-between gap-3 px-5 sm:px-6 py-2.5" style={{ background: C.brand }}>
-      <h2 className="text-[11px] font-bold uppercase tracking-wider" style={{ color: '#ffffff' }}>{title}</h2>
+    <div className="shrink-0 flex items-center justify-between gap-3 px-5 py-3" style={{ background: C.brand }}>
+      <h2 className="text-[13px] font-semibold" style={{ color: '#ffffff' }}>{title}</h2>
       {tag && (
-        <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider" style={{ color: C.faint }}>{tag}</span>
+        <span className="max-w-[55%] truncate text-right text-[11px] font-medium" style={{ color: '#CBD5E1' }} title={tag}>{tag}</span>
       )}
     </div>
   );
 }
 
+function CardFooter({ label, onClick }) {
+  return (
+    <div className="mt-auto border-t border-[#E2E8F0] px-5 py-3">
+      <button type="button" onClick={onClick} className="text-[12px] font-semibold text-[#0F2D52] hover:underline focus-visible:underline">
+        {label} <span aria-hidden="true">→</span>
+      </button>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
-  const { t } = useTheme();
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [stats, setStats] = useState(null);
@@ -92,8 +90,8 @@ export default function DashboardPage() {
     : user?.barangay?.name ? `Barangay ${user.barangay.name}` : 'No barangay assigned';
 
   const refTag = isAdmin
-    ? 'CITY-WIDE'
-    : user?.barangay?.name ? `BRGY: ${user.barangay.name}` : 'NO BRGY';
+    ? 'City-wide'
+    : user?.barangay?.name ? `Brgy. ${user.barangay.name}` : 'No barangay';
   const refHelper = isAdmin
     ? 'Showing all pending referrals city-wide.'
     : user?.barangay?.name
@@ -130,31 +128,31 @@ export default function DashboardPage() {
   };
 
   const importBadge = (b) => (b.sync_status === 'synced'
-    ? { text: 'SYNCED', color: C.green }
+    ? { text: 'Synced', color: C.green }
     : b.status === 'validated'
-      ? { text: 'VALIDATED', color: C.green }
+      ? { text: 'Validated', color: C.green }
       : b.status === 'uploaded'
-        ? { text: 'PENDING REVIEW', color: C.amber }
-        : { text: (b.status || '—').toUpperCase(), color: C.faint });
+        ? { text: 'Pending review', color: C.amber }
+        : { text: b.status || 'Unknown', color: C.sub });
 
   // Strictly the three validation items (batch-level alerts intentionally omitted).
   const actionRows = [
     ...(isAdmin && pa.needsAssignment > 0 ? [{
-      label: 'Needs assignment', n: pa.needsAssignment, icon: 'ri-error-warning-line',
+      label: 'Needs assignment', detail: 'Records waiting for a barangay or facility', n: pa.needsAssignment,
       color: C.red, tab: 'assignment',
     }] : []),
     ...(pa.dataIssues > 0 ? [{
-      label: 'Data issues', n: pa.dataIssues, icon: 'ri-alert-line',
+      label: 'Data issues', detail: 'Records that need correction', n: pa.dataIssues,
       color: C.amber, tab: 'issues',
     }] : []),
     ...(pa.possibleMatches > 0 ? [{
-      label: 'Possible matches', n: pa.possibleMatches, icon: 'ri-information-line',
+      label: 'Possible matches', detail: 'Potential duplicate records to review', n: pa.possibleMatches,
       color: C.blue, tab: 'matches',
     }] : []),
     // Not part of Needs Review: one mapping per facility name covers all its records.
     ...(isAdmin && pa.facilityNamesToMap > 0 ? [{
       label: `Facility names to map (${(pa.facilityRecordsToMap || 0).toLocaleString()} records)`,
-      n: pa.facilityNamesToMap, icon: 'ri-hospital-line', color: C.faint, tab: 'assignment',
+      detail: 'Facility names need mapping', n: pa.facilityNamesToMap, color: C.sub, tab: 'assignment',
     }] : []),
   ];
 
@@ -255,103 +253,96 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ─── Detail section: 2×2 card block + status card of the same length ─── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
+      {/* Operational details */}
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-6 lg:items-stretch">
         {/* Pending Actions */}
-        <div style={detailCard} className="flex flex-col overflow-hidden">
+        <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-2">
           <CardHeader title="Pending Actions" />
-          <div className="p-5 sm:p-6 flex flex-col flex-1">
+          <div className="flex-1 px-5 py-3">
             {actionRows.length === 0 ? (
-              <p className="text-xs text-center py-8 flex-1" style={{ color: C.green }}>✓ No issues require attention.</p>
+              <p className="py-5 text-[13px]" style={{ color: C.green }}>Nothing needs review right now.</p>
             ) : (
-              <div className="flex-1">
+              <div>
                 {actionRows.map((row) => (
                   <button
+                    type="button"
                     key={row.tab}
                     onClick={() => navigate(`/validation?tab=${row.tab}`)}
-                    className="w-full flex items-center justify-between gap-2 py-3.5 text-left cursor-pointer border-b"
-                    style={{ borderColor: C.line }}
+                    className="flex w-full items-center justify-between gap-3 border-b border-[#E8EDF2] py-3.5 text-left last:border-b-0 hover:bg-[#F8FAFC] focus-visible:bg-[#F8FAFC] focus-visible:outline-none"
                   >
-                    <span className="flex items-center gap-2 text-[13px]" style={{ color: C.text }}>
-                      <i className={row.icon} style={{ color: row.color }} />
-                      {row.label}
+                    <span className="min-w-0">
+                      <span className="block text-[13px] font-semibold" style={{ color: C.navy }}>{row.label}</span>
+                      <span className="mt-0.5 block text-[11px] leading-4" style={{ color: C.sub }}>{row.detail}</span>
                     </span>
-                    <span className="text-[17px] font-extrabold tabular-nums" style={{ color: row.color }}>{row.n.toLocaleString()}</span>
+                    <span className="flex shrink-0 items-center gap-1 text-[17px] font-semibold tabular-nums" style={{ color: row.color }}>
+                      {row.n.toLocaleString()} <i className="ri-arrow-right-s-line text-sm text-[#94A3B8]" aria-hidden="true" />
+                    </span>
                   </button>
                 ))}
-                <p className="text-[11px] mt-3" style={{ color: C.faint }}>Each row opens the corresponding Validation tab.</p>
               </div>
             )}
-            <div className="mt-auto pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
-              <button onClick={() => navigate('/validation')} className="text-[12px] font-semibold cursor-pointer" style={{ color: C.green }}>View validation &rarr;</button>
-            </div>
           </div>
-        </div>
+          <CardFooter label="View validation" onClick={() => navigate('/validation')} />
+        </section>
 
         {/* Recent Imports */}
-        <div style={detailCard} className="flex flex-col overflow-hidden">
+        <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-2">
           <CardHeader title="Recent Imports" />
-          <div className="p-5 sm:p-6 flex flex-col flex-1">
+          <div className="flex-1 px-5 py-3">
             {recentImports.length === 0 ? (
-              <p className="text-xs text-center py-8 flex-1" style={{ color: C.faint }}>No imports available.</p>
+              <p className="py-5 text-[13px]" style={{ color: C.sub }}>No imports yet.</p>
             ) : (
-              <div className="flex-1">
+              <div>
                 {recentImports.slice(0, 3).map((batch, i) => {
                   const badge = importBadge(batch);
                   return (
-                    <div key={batch.id} className={`py-3.5 ${i > 0 ? 'border-t' : ''}`} style={{ borderColor: C.line }}>
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-[14px] font-bold truncate" style={{ color: C.navy }}>{batch.filename}</p>
-                        <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider" style={{ color: badge.color }}>{badge.text}</span>
+                    <div key={batch.id} className={`py-3.5 ${i > 0 ? 'border-t border-[#E8EDF2]' : ''}`}>
+                      <div className="flex min-w-0 items-start justify-between gap-3">
+                        <p className="min-w-0 truncate text-[13px] font-semibold" style={{ color: C.navy }} title={batch.filename}>{batch.filename || 'Unnamed import'}</p>
+                        <span className="shrink-0 text-[11px] font-semibold" style={{ color: badge.color }}>{badge.text}</span>
                       </div>
                       <p className="text-[11px] mt-1" style={{ color: C.sub }}>{(batch.total_rows || 0).toLocaleString()} records{batch.username ? ` · ${batch.username}` : ''}</p>
-                      <p className="text-[11px] mt-0.5" style={{ color: C.faint }}>{fmtDateTime(batch.created_at)}</p>
+                      <p className="mt-0.5 text-[11px]" style={{ color: C.faint }}>{fmtDateTime(batch.created_at)}</p>
                     </div>
                   );
                 })}
               </div>
             )}
-            <div className="mt-auto pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
-              <button onClick={() => navigate('/import?tab=history')} className="text-[12px] font-semibold cursor-pointer" style={{ color: C.green }}>View all imports &rarr;</button>
-            </div>
           </div>
-        </div>
+          <CardFooter label="View all imports" onClick={() => navigate('/import?tab=history')} />
+        </section>
 
-        {/* Recent Activity — spans both rows, same length as the 2×2 block */}
-        <div style={detailCard} className="flex flex-col overflow-hidden lg:row-span-2 max-lg:order-last">
-          <CardHeader title="Recent Activity" />
-          <div className="p-5 sm:p-6 flex flex-col flex-1">
+        {/* Recent Activity */}
+        <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-2">
+          <CardHeader title="Recent Activity" tag={activity.length > 5 ? 'Latest 5' : null} />
+          <div className="flex-1 px-5 py-3">
             {activity.length === 0 ? (
-              <p className="text-xs text-center py-8 flex-1" style={{ color: C.faint }}>No recent activity.</p>
+              <p className="py-5 text-[13px]" style={{ color: C.sub }}>No recent activity.</p>
             ) : (
-              <div className="flex-1">
-                {activity.map((ev) => (
-                  <div key={ev.id} className="py-3">
-                    <div className="flex items-start gap-2.5">
-                      <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5" style={{ background: C.sub }} />
-                      <p className="text-[13px] leading-snug" style={{ color: C.text }}>{ev.text}</p>
-                    </div>
-                    <p className="text-[11px] mt-1 pl-4" style={{ color: C.faint }}>{timeAgoFull(ev.createdAt)}</p>
+              <div>
+                {activity.slice(0, 5).map((ev, i) => (
+                  <div key={ev.id} className={`py-3 ${i > 0 ? 'border-t border-[#E8EDF2]' : ''}`}>
+                    <p className="text-[13px] leading-snug" style={{ color: C.text }}>{ev.text}</p>
+                    <p className="mt-1 text-[11px]" style={{ color: C.faint }}>{timeAgoFull(ev.createdAt)}</p>
                   </div>
                 ))}
               </div>
             )}
-            {isAdmin && (
-              <div className="mt-auto pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
-                <button onClick={() => navigate('/audit-logs')} className="text-[12px] font-semibold cursor-pointer" style={{ color: C.green }}>View Audit Logs &rarr;</button>
-              </div>
-            )}
           </div>
-        </div>
+          {isAdmin && <CardFooter label="View audit logs" onClick={() => navigate('/audit-logs')} />}
+        </section>
 
         {/* Incoming Referrals */}
-        <div style={detailCard} className="flex flex-col overflow-hidden">
+        <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-3">
           <CardHeader title="Incoming Referrals" tag={refTag} />
-          <div className="p-5 sm:p-6 flex flex-col flex-1">
+          <div className="flex-1 px-5 py-3">
             {referrals.length === 0 ? (
-              <p className="text-xs text-center py-8 flex-1" style={{ color: C.green }}>✓ No pending referrals.</p>
+              <div className="py-5">
+                <p className="text-[13px] font-medium" style={{ color: C.green }}>No referrals waiting for review.</p>
+                <p className="mt-1 text-[11px]" style={{ color: C.sub }}>{refHelper}</p>
+              </div>
             ) : (
-              <div className="flex-1">
+              <div>
                 {referrals.map((r, i) => (
                   <button
                     key={r.id}
@@ -364,7 +355,7 @@ export default function DashboardPage() {
                         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: C.amber }} />
                         <span className="text-[14px] font-bold truncate" style={{ color: C.navy }}>{r.from_barangay || '—'} &rarr; {r.to_barangay || '—'}</span>
                       </div>
-                      <p className="text-[12px] mt-1 pl-3" style={{ color: C.sub }}>{caseIdOf(r) || `#${r.validated_case_id}`}</p>
+                      <p className="text-[12px] mt-1 pl-3" style={{ color: C.sub }}>{caseIdLabel(r)}</p>
                       <p className="text-[11px] mt-0.5 pl-3" style={{ color: C.faint }}>Pending · {timeAgo(r.created_at || r.initiated_at)}</p>
                     </div>
                     <span className="shrink-0 text-[12px] font-semibold" style={{ color: C.green }}>Review &rarr;</span>
@@ -373,46 +364,39 @@ export default function DashboardPage() {
                 <p className="text-[11px] mt-3" style={{ color: C.faint }}>{refHelper}</p>
               </div>
             )}
-            <div className="mt-auto pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
-              <button onClick={() => navigate('/records?view=referrals')} className="text-[12px] font-semibold cursor-pointer" style={{ color: C.green }}>View all referrals &rarr;</button>
-            </div>
           </div>
-        </div>
+          <CardFooter label="View all referrals" onClick={() => navigate('/records?view=referrals')} />
+        </section>
 
         {/* Latest TBInsight Sync */}
-        <div style={detailCard} className="flex flex-col overflow-hidden">
+        <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-3">
           <CardHeader title="Latest TBInsight Sync" />
-          <div className="p-5 sm:p-6 flex flex-col flex-1">
+          <div className="flex-1 px-5 py-4">
             {latestSync ? (
               latestSync.status === 'sent' ? (
-                <div className="flex-1 py-4 space-y-2">
+                <div>
                   <div className="flex items-center gap-2">
                     <i className="ri-checkbox-circle-line" style={{ color: C.green }} />
-                    <span className="text-[14px] font-bold" style={{ color: C.green }}>Successful</span>
+                    <span className="text-[13px] font-semibold" style={{ color: C.green }}>Successful</span>
                   </div>
-                  <p className="text-[12px]" style={{ color: C.faint }}>{fmtSyncTime(latestSync.sent_at)}</p>
-                  <p className="text-[15px] font-extrabold" style={{ color: C.navy }}>
-                    {(latestSync.records_synced || 0).toLocaleString()} records synchronized
+                  <p className="mt-2 text-[15px] font-semibold" style={{ color: C.navy }}>
+                    {(latestSync.records_synced || 0).toLocaleString()} records sent to TBInsight
                   </p>
+                  <p className="mt-1 text-[11px]" style={{ color: C.sub }}>{fmtSyncTime(latestSync.sent_at)}</p>
                 </div>
               ) : (
-                <div className="flex-1 py-4 space-y-2">
-                  <p className="text-[12px]" style={{ color: C.faint }}>{fmtSyncTime(latestSync.sent_at)}</p>
-                  <p className="text-[14px] font-bold" style={{ color: C.red }}>⚠ Sync Failed</p>
-                  <p className="text-[12px]" style={{ color: C.sub }}>Some eligible records could not be synchronized.</p>
-                  <button onClick={() => navigate('/sync-history')} className="text-[12px] font-semibold cursor-pointer" style={{ color: C.green }}>View Details &rarr;</button>
+                <div>
+                  <p className="text-[13px] font-semibold" style={{ color: C.red }}>Sync failed</p>
+                  <p className="mt-2 text-[12px]" style={{ color: C.sub }}>Some eligible records could not be sent to TBInsight.</p>
+                  <p className="mt-1 text-[11px]" style={{ color: C.sub }}>{fmtSyncTime(latestSync.sent_at)}</p>
                 </div>
               )
             ) : (
-              <p className="text-xs text-center py-8 flex-1" style={{ color: C.faint }}>No synchronizations yet</p>
-            )}
-            {(!latestSync || latestSync.status === 'sent') && (
-              <div className="mt-auto pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
-                <button onClick={() => navigate('/sync-history')} className="text-[12px] font-semibold cursor-pointer" style={{ color: C.green }}>View sync history &rarr;</button>
-              </div>
+              <p className="py-3 text-[13px]" style={{ color: C.sub }}>No synchronizations yet.</p>
             )}
           </div>
-        </div>
+          <CardFooter label="View sync history" onClick={() => navigate('/sync-history')} />
+        </section>
       </div>
     </div>
   );

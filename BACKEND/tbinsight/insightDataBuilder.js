@@ -774,10 +774,15 @@ async function buildGisMetrics(pool, filters = {}) {
   const incidenceAvailable =
     Boolean(latestPeriod) && withIncidence > 0 && periodYearHasPopulation;
 
-  // --- Top hotspots (by risk score) ---
-  const byRisk = [...scored].sort(
-    (a, b) => (b.risk_score || 0) - (a.risk_score || 0)
-  );
+  // --- Top hotspots ---
+  // Ranked like the GIS page: by the selected year's incidence, ties broken by
+  // that year's cases. The legacy weighted risk_score is not used to rank.
+  const byRisk = [...scored].sort((a, b) => {
+    const ai = a.incidence_per_100k ?? -1;
+    const bi = b.incidence_per_100k ?? -1;
+    if (bi !== ai) return bi - ai;
+    return (b.year_cases || 0) - (a.year_cases || 0);
+  });
   const topHotspots = byRisk.slice(0, 5).map((r) => ({
     name: r.name,
     risk_score: r.risk_score,
@@ -785,7 +790,24 @@ async function buildGisMetrics(pool, filters = {}) {
     incidence_per_100k: r.incidence_per_100k, // raw — may be null
     trend_direction: r.trend_direction || 'Stable',
     total_cases: r.total_cases,
+    year_cases: r.year_cases,
   }));
+
+  // Part-year note: months of the case year that have data (e.g. Jan–Sep 2026).
+  let latestCaseMonth = null;
+  if (caseYear != null) {
+    try {
+      const lm = await pool.query(
+        `SELECT MAX(date_of_diagnosis) AS d FROM tb_cases
+         WHERE EXTRACT(YEAR FROM date_of_diagnosis) = $1 AND ${pasigResidentOnly()}`,
+        [caseYear]
+      );
+      const d = lm.rows[0]?.d;
+      if (d) latestCaseMonth = new Date(d).getMonth() + 1;
+    } catch {
+      latestCaseMonth = null;
+    }
+  }
 
   // --- Case concentration (top 5 barangays by raw case count) ---
   const totalCases = rows.reduce((s, r) => s + (r.total_cases || 0), 0);
@@ -793,6 +815,7 @@ async function buildGisMetrics(pool, filters = {}) {
   const top5Cases = byCases.slice(0, 5);
   const top5CaseCount = top5Cases.reduce((s, r) => s + (r.total_cases || 0), 0);
   const concentration = {
+    scope: selectedYear ? 'year' : 'all',
     totalCases,
     top5CaseSharePct:
       totalCases > 0
@@ -884,6 +907,7 @@ async function buildGisMetrics(pool, filters = {}) {
       periodYear,
       dataYear: snapshotDataYear,
       caseYear,
+      latestCaseMonth: latestCaseMonth && latestCaseMonth < 12 ? latestCaseMonth : null,
     },
     incidence: {
       available: incidenceAvailable,

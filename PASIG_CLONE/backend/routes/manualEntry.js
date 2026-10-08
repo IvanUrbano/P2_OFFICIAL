@@ -7,6 +7,7 @@ const { cleanRecord, isPasigBarangay } = require('../services/dataCleaner');
 const { logAuditEvent } = require('../utils/auditLogger');
 const { startBackgroundSync, SYNC_STARTED } = require('../services/backgroundSync');
 const { resolveMatch, createPatient, nextCaseNo, RESOLUTIONS } = require('../services/matchResolution');
+const { normalizeCaseId } = require('../services/caseIds');
 const { resolveUserScope } = require('../policies/caseAccessPolicy');
 const { ACTIONS, can, assertCaseAction } = require('../policies/permissions');
 
@@ -30,6 +31,9 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
     // Normalize first (names, dates, sex, city, barangay canonicalization, outcome).
     // Age is always calculated from date of birth + date of diagnosis, never typed.
     const { record: cleaned, notes } = cleanRecord({ ...b, age: null });
+    // The Case ID is typed by the user (from DSTB/MN) — never generated. It identifies the
+    // TB case/episode, not the person: a returning patient gets a new Case ID per episode.
+    cleaned.source_case_id = normalizeCaseId(b.source_case_id);
 
     // Manual entry is Pasig-only — the barangay must exist regardless of city
     const bgy = String(cleaned.barangay_name || '').trim();
@@ -60,7 +64,27 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
       return res.status(400).json({ errors: allErrors, warnings: [...notes, ...validation.warnings] });
     }
 
-    // Possible returning patient: same Last + First name + date of birth as an existing case.
+    // The Case ID already exists: this episode is already recorded. Do not create it again —
+    // point to the existing case (edit it there). No "new episode" / "different person" choice.
+    const existing = cleaned.source_case_id ? (await db.pool.query(
+      `SELECT case_no, source_case_id, date_of_diagnosis FROM validated_tb_cases
+       WHERE upper(source_case_id) = upper($1) AND is_archived = false AND merged_into_case_no IS NULL
+       LIMIT 1`,
+      [cleaned.source_case_id]
+    )).rows[0] : null;
+    if (existing) {
+      return res.status(409).json({
+        code: 'DUPLICATE_CASE_ID',
+        error: `Case ID ${existing.source_case_id} is already recorded. Find it in TB Records and edit it there instead of adding it again.`,
+        existingCase: {
+          case_id: existing.source_case_id,
+          date_of_diagnosis: existing.date_of_diagnosis ? ymd(existing.date_of_diagnosis) : null,
+        },
+      });
+    }
+
+    // Possible returning patient: same Last + First name + date of birth as an existing case
+    // that carries a DIFFERENT Case ID (this entry is then a new episode of that patient).
     const candidate = (await db.pool.query(
       `SELECT v.*, p.patient_no FROM validated_tb_cases v
        LEFT JOIN patients p ON p.id = v.patient_id
@@ -71,6 +95,12 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
     )).rows[0] || null;
 
     const resolution = candidate ? b.match_resolution : null;
+    // A different Case ID means a different episode, so "same case" is only possible when the
+    // existing case has no Case ID yet (older record) that this entry can fill in.
+    const sameCaseAllowed = Boolean(candidate && !candidate.source_case_id);
+    if (candidate && resolution === 'same_case' && !sameCaseAllowed) {
+      return res.status(400).json({ errors: [`The existing case already has Case ID ${candidate.source_case_id}; ${cleaned.source_case_id} is a different episode. Choose "New episode" or "Different person".`] });
+    }
     // "Same case" updates the existing case — refuse up front if it is view-only for (or not
     // assigned to) this user, instead of only hiding the option in the UI.
     const scopeForMatch = candidate ? await resolveUserScope(req.user) : null;
@@ -89,15 +119,16 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
       const visible = can(req.user, await resolveUserScope(req.user), ACTIONS.CASE_VIEW, candidate)
         && require('../services/pinService').isUnlocked(req)
         && require('../services/pinService').namesAllowed(candidate);
-      const sameDx = String(candidate.date_of_diagnosis ? ymd(candidate.date_of_diagnosis) : '') === cleaned.date_of_diagnosis;
       return res.status(409).json({
         possibleMatch: {
-          case_no: candidate.case_no,
-          case_id: candidate.source_case_id || candidate.case_no,
+          case_id: candidate.source_case_id || null,
+          has_case_id: Boolean(candidate.source_case_id),
+          new_case_id: cleaned.source_case_id,
           date_of_diagnosis: candidate.date_of_diagnosis ? ymd(candidate.date_of_diagnosis) : null,
-          suggestion: sameDx ? 'same_case' : 'new_episode',
-          // "Same case" would update the existing case — offered only if it is editable here.
-          canUpdateExisting: can(req.user, scopeForMatch, ACTIONS.CASE_EDIT, candidate),
+          suggestion: 'new_episode',
+          // "Same case" would update the existing case — offered only if it is editable here
+          // and has no Case ID of its own yet.
+          canUpdateExisting: sameCaseAllowed && can(req.user, scopeForMatch, ACTIONS.CASE_EDIT, candidate),
           ...(visible ? {
             name: [candidate.last_name, candidate.first_name, candidate.middle_name].filter(Boolean).join(', '),
             barangay_name: candidate.barangay_name,
@@ -140,13 +171,13 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
           batch_id, source_type, barangay_name, date_of_diagnosis, date_of_notification,
           age, sex, city, screening_facility, treatment_facility, source_of_patient,
           anatomical_site, registration_group, bacteriological_status, date_started_treatment,
-          outcome_status, date_of_outcome, date_of_screening, validation_status, itis_case_id,
+          outcome_status, date_of_outcome, date_of_screening, validation_status,
           is_valid, validation_errors, validation_warnings, record_status,
           entered_by_user_id, entered_by_facility_id, current_responsible_facility_id,
           last_name, first_name, middle_name, suffix, date_of_birth,
-          patient_id, case_no, match_status, match_candidate_case_no
-        ) VALUES ($1,'MANUAL',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-                  true,$20,$21,'new',$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
+          patient_id, case_no, match_status, match_candidate_case_no, source_case_id
+        ) VALUES ($1,'MANUAL',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+                  true,$19,$20,'new',$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
         RETURNING *`,
         [
           batchId,
@@ -167,7 +198,6 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
           cleaned.date_of_outcome || null,
           cleaned.date_of_screening || null,
           cleaned.validation_status || 'Validated',
-          cleaned.itis_case_id || null,
           JSON.stringify([...notes, ...validation.warnings]),
           JSON.stringify([]),
           req.user.id,
@@ -179,6 +209,7 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
           newIdentity ? newIdentity.caseNo : null,
           candidate ? 'pending' : 'none',
           candidate ? candidate.case_no : null,
+          cleaned.source_case_id,
         ]
       );
       recordId = recRes.rows[0].id;
@@ -226,8 +257,8 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
     const sync = SYNC_STARTED;
 
     const what = identity.resolution === 'same_case'
-      ? `Existing case ${identity.caseNo} updated`
-      : `TB record created (Case ID ${identity.caseNo})`;
+      ? `Existing case ${cleaned.source_case_id} updated`
+      : `TB record created (Case ID ${cleaned.source_case_id})`;
     res.status(201).json({
       message: `${what}.`,
       batch_id: batchId,
@@ -238,6 +269,9 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
     });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
+    if (error.code === '23505' && /source_case_id/i.test(`${error.constraint || ''} ${error.detail || ''}`)) {
+      return res.status(409).json({ code: 'DUPLICATE_CASE_ID', error: 'That Case ID was just recorded by someone else. Find it in TB Records instead of adding it again.' });
+    }
     console.error('Manual entry error:', error);
     res.status(500).json({ error: 'Failed to create TB record.' });
   }

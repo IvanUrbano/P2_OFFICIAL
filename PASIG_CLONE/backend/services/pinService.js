@@ -120,8 +120,8 @@ function maskIdentity(row) {
 }
 
 // ---------- Patient-name privacy (migration 015: identity_class) ----------
-// historical  — names/DOB stay stored but are NEVER returned: the API sends nulls plus
-//               identity_deidentified: true and the UI shows "De-identified".
+// historical  — names/DOB stay stored and are returned only while the user has unlocked
+//               the Records PIN; otherwise the API de-identifies them.
 // operational — created after approval (PATIENT_NAMES_ENABLED=true when its batch was
 //               created). Names are returned only while the approval flag is on AND the
 //               user has unlocked the Records PIN; otherwise masked to initials.
@@ -150,8 +150,10 @@ function deidentify(row) {
 function protectIdentity(req, row) {
   if (!row) return row;
   let out;
-  if (!namesAllowed(row)) out = deidentify(row);
-  else if (!isUnlocked(req)) out = maskIdentity(row);
+  const unlocked = isUnlocked(req);
+  const historicalAndUnlocked = row.identity_class === 'historical' && unlocked;
+  if (!namesAllowed(row) && !historicalAndUnlocked) out = deidentify(row);
+  else if (!unlocked) out = maskIdentity(row);
   else out = { ...row };
   if (row.candidate) out.candidate = protectIdentity(req, row.candidate);
   return out;

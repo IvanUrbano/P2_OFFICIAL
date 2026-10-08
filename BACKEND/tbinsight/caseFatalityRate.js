@@ -22,13 +22,14 @@
  */
 
 const { EVALUATED_TERMINAL_OUTCOMES } = require('./outcomeNormalization');
+const { barangayList } = require('./barangayFilter');
 
 /**
  * @param {object} pool - pg Pool (or a mock exposing the same `query` shape)
  * @param {object} [opts]
  * @param {number|string} [opts.year] - Filter by EXTRACT(YEAR FROM date_of_diagnosis).
  * @param {number|string} [opts.month] - Filter by EXTRACT(MONTH FROM date_of_diagnosis).
- * @param {string} [opts.barangay] - Optional barangay_name filter.
+ * @param {string|string[]} [opts.barangay] - Optional barangay_name filter (one name or a list).
  * @param {string} [opts.sex] - Optional sex filter.
  * @param {string} [opts.ageGroup] - Optional age group filter.
  * @param {string} [opts.facility] - Optional treatment_facility filter.
@@ -62,7 +63,9 @@ async function computeCaseFatalityRate(pool, { year, month, barangay, sex, ageGr
 
   if (year) add((ph) => `EXTRACT(YEAR FROM date_of_diagnosis) = ${ph}`, Number(year));
   if (month) add((ph) => `EXTRACT(MONTH FROM date_of_diagnosis) = ${ph}`, Number(month));
-  if (barangay) add((ph) => `TRIM(barangay_name) = ${ph}`, barangay);
+  const brgys = barangayList(barangay);
+  if (brgys.length === 1) add((ph) => `TRIM(barangay_name) = ${ph}`, brgys[0]);
+  else if (brgys.length > 1) add((ph) => `TRIM(barangay_name) = ANY(${ph}::text[])`, brgys);
   if (sex) add((ph) => `TRIM(sex) ILIKE ${ph}`, sex);
   if (ageGroup) {
     const ag = ageGroup;
