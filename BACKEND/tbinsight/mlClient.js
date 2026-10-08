@@ -66,19 +66,42 @@ async function mlPost(path, body) {
   }
 }
 
-/**
- * Health check — verify ML service is reachable
- * @returns {boolean} true if healthy
- */
-async function healthCheck() {
+// Pause before retrying a failed health check.
+const ML_HEALTH_RETRY_DELAY_MS = Number(process.env.ML_HEALTH_RETRY_DELAY_MS ?? 2_000);
+
+/** One health request: null when healthy, otherwise why it failed. */
+async function _healthAttempt() {
   try {
     const res = await fetch(`${ML_BASE}/api/ml/health`, { signal: AbortSignal.timeout(ML_HEALTH_TIMEOUT_MS) });
-    if (!res.ok) return false;
-    const data = await res.json();
-    return data.status === 'ok';
-  } catch {
-    return false;
+    if (!res.ok) return `HTTP ${res.status}`;
+    const data = await res.json().catch(() => null);
+    return data?.status === 'ok' ? null : `unexpected response ${JSON.stringify(data)}`;
+  } catch (err) {
+    if (err.name === 'TimeoutError') return `timed out after ${ML_HEALTH_TIMEOUT_MS}ms`;
+    return err.cause?.code || err.message;
   }
+}
+
+/**
+ * Health check — verify ML service is reachable
+ *
+ * Retried after a short pause: the first request after a new Lambda deploy
+ * (or a long idle) can run past the timeout while the service loads, and a
+ * single miss would send the whole pipeline to the rule-based fallback.
+ * Each failure is logged with its reason, since the result is only a boolean.
+ *
+ * @param {object} [options]
+ * @param {number} [options.retries=1] - Extra attempts after the first failure
+ * @returns {boolean} true if healthy
+ */
+async function healthCheck({ retries = 1 } = {}) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const reason = await _healthAttempt();
+    if (reason === null) return true;
+    console.warn(`ML service health check failed (attempt ${attempt + 1}/${retries + 1}, ${ML_BASE}): ${reason}`);
+    if (attempt < retries) await new Promise(resolve => setTimeout(resolve, ML_HEALTH_RETRY_DELAY_MS));
+  }
+  return false;
 }
 
 /**
