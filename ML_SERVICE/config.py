@@ -16,7 +16,7 @@ if not ML_API_KEY:
 
 # ==================== MODEL CONFIG ====================
 
-MODEL_VERSION = "arima-v1.2-rf-v1.2"  # v1.2: city-first seasonal ARIMA, 12 RF features (all-history), shallow RF
+MODEL_VERSION = "arima-v1.2-rf-v1.3"  # rf v1.3: 17 features, band filling, depth 5
 
 # Worker processes for per-barangay ARIMA fits (1 = serial). Defaults to up to 4 cores.
 ML_N_JOBS = int(os.environ.get("ML_N_JOBS", "0")) or min(4, os.cpu_count() or 1)
@@ -73,11 +73,24 @@ ARIMA_EVAL_RESELECT_MONTHS = 12
 # 0.475 -> 0.561, above the "rank the last 12 months" rule (59.7%, 0.543); Low and
 # High confused in 6.4% of cases. A perfect model knowing each barangay's true rate
 # would score about 64% on these labels.
-RF_MAX_DEPTH = 3
+#
+# Retuned on 2022-2026 data (real 2025 + simulated years) with five more features
+# (lag_12m, incidence_6m, volatility, yoy_change, high_share_12m) and band filling
+# (RF_FILL_BANDS): grid over depth 3/5/unbounded x leaf 10/20 x max_features sqrt/0.5,
+# chosen on Oct 2024-Jul 2025 and checked on unseen Aug 2025-Jun 2026: accuracy
+# 56.4% -> 62.7%, quadratic kappa 0.480 -> 0.663, Low/High never confused 92.1% -> 96.1%.
+RF_MAX_DEPTH = 5
 RF_N_ESTIMATORS = 500
 RF_RANDOM_STATE = 42
 RF_MIN_SAMPLES_SPLIT = 4
 RF_MIN_SAMPLES_LEAF = 10
+RF_MAX_FEATURES = 0.5         # share of features tried at each split
+
+# Each month's labels have fixed band sizes (bottom third Low, top 40% High), so instead
+# of taking each barangay's most likely class on its own, the barangays are ranked by
+# their expected band (P(Medium) + 2 x P(High)) and the bands filled in that order, the
+# same way the labels are made. Used when a whole month (>= 3 barangays) is classified.
+RF_FILL_BANDS = True
 
 # Smaller, shallower forest for short histories (fewer than RF_LARGE_SAMPLE rows,
 # e.g. one year x 30 barangays): deep trees would just memorize the noise.

@@ -49,7 +49,7 @@ const DEFAULT_THRESHOLDS = {
 
 // Single source of truth for the combined model version string persisted
 // alongside every forecast/risk row this run produces.
-const MODEL_VERSION = 'arima-v1.2-rf-v1.2';
+const MODEL_VERSION = 'arima-v1.2-rf-v1.3';
 
 // Mirrors ML_SERVICE/config.py's ARIMA_MIN_HISTORY_NONSEASONAL. Below this
 // many monthly observations, no forecast method (ARIMA or fallback) has
@@ -496,6 +496,7 @@ async function runPipeline({
     const rfMaxLen = Math.max(0, ...allLens);
     const rfWindow = _featureWindow(rfMaxLen);
     const rfNeighborRisks = _neighborRisksAt(seriesByBarangay, popMapByYear, rfMaxLen - 1, adjacency);
+    const rfHighHistory = _highRiskHistory(seriesByBarangay, popMapByYear);
     const predictRows = addCrossSectionFeatures(barangays.map(b =>
       buildFeatureRow({
         name: b.name,
@@ -504,6 +505,7 @@ async function runPipeline({
         popMapByYear,
         window: rfWindow,
         neighborRisks: rfNeighborRisks,
+        highHistory: rfHighHistory,
       })
     ));
 
@@ -1241,7 +1243,7 @@ function _neighborRisksAt(seriesByBarangay, popMapByYear, monthIndex, adjacency 
  * @param {Object} p.neighborRisks - lag-1 normalized neighbor risks ({name: 0..1})
  * @returns {{barangay_name: string, features: Object}}
  */
-function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neighborRisks }) {
+function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neighborRisks, highHistory = null }) {
   const months = seriesByBarangay[name] || [];
   const windowCounts = months.slice(Math.max(0, t - window), t).map(w => w.case_count);
   const meanCount = windowCounts.length > 0
@@ -1268,6 +1270,22 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
   const history = months.slice(0, t).map(w => w.case_count);
   const historyMean = history.length > 0 ? history.reduce((a, b) => a + b, 0) / history.length : 0;
 
+  // Monthly incidence of earlier months, for the features below (all strictly before t).
+  const incAt = k => (k >= 0 && k < t ? _computeIncidence(months[k].case_count, pop) : null);
+  const meanInc = (from, to) => {
+    const vals = [];
+    for (let k = Math.max(0, from); k < to; k++) vals.push(incAt(k));
+    return vals.length && vals.every(v => v != null) ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+  const last12 = [];
+  for (let k = Math.max(0, t - 12); k < t; k++) last12.push(incAt(k));
+  const mean12 = meanInc(t - 12, t);
+  // Share of the last 12 months the barangay spent in the High band (see _highRiskHistory):
+  // a barangay's band is persistent, so how often it has been High is a strong signal.
+  const highFlags = highHistory?.[name];
+  const highWindow = [];
+  if (highFlags) for (let k = Math.max(3, t - 12); k < t; k++) highWindow.push(highFlags[k]);
+
   return {
     barangay_name: name,
     features: {
@@ -1280,8 +1298,46 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
       lag_3m: _computeIncidence(count(3), pop),
       neighbor_risk: neighborRisks[name] || 0,
       history_incidence: history.length > 0 ? _computeIncidence(historyMean, pop) : null,
+      // Added after walk-forward tuning (Oct 2024-Jul 2025) and confirmed on unseen months
+      // (Aug 2025-Jun 2026): with band filling (rf_classifier) accuracy 56% -> 63%.
+      lag_12m: t >= 12 ? incAt(t - 12) : meanInc(0, t),           // same month last year
+      incidence_6m: meanInc(t - 6, t),
+      volatility: last12.length && last12.every(v => v != null)
+        ? Math.sqrt(last12.reduce((s, v) => s + (v - mean12) ** 2, 0) / last12.length) : null,
+      yoy_change: t >= 13 && mean12 != null && meanInc(t - 24, t - 12) != null
+        ? mean12 - meanInc(t - 24, t - 12) : 0,
+      high_share_12m: highWindow.length ? highWindow.reduce((a, b) => a + b, 0) / highWindow.length : 0.5,
     },
   };
+}
+
+/**
+ * For every month index k >= 3: was each barangay in the High band (top 40%, the label
+ * rule) when ranked by its mean incidence over months k-3..k-1? Computed once per run
+ * and read by buildFeatureRow's high_share_12m. Uses only months before k.
+ * @returns {Object} { name: number[] } 1 = High at k, 0 = not (or unknown)
+ */
+function _highRiskHistory(seriesByBarangay, popMapByYear) {
+  const names = Object.keys(seriesByBarangay);
+  const len = Math.max(0, ...names.map(n => seriesByBarangay[n].length));
+  const out = Object.fromEntries(names.map(n => [n, new Array(len).fill(0)]));
+  for (let k = 3; k < len; k++) {
+    const known = [];
+    for (const name of names) {
+      const months = seriesByBarangay[name];
+      if (months.length < k) continue;
+      const year = Number(months[k - 1].month.slice(0, 4));
+      const inc = _computeIncidence((months[k - 3].case_count + months[k - 2].case_count + months[k - 1].case_count) / 3,
+        _popForFeature(popMapByYear, name, year));
+      if (inc != null) known.push([name, inc]);
+    }
+    known.sort((a, b) => a[1] - b[1]);
+    known.forEach(([name], i) => {
+      const q = known.length > 1 ? i / (known.length - 1) : 0.5;
+      out[name][k] = q >= MED_PERCENTILE ? 1 : 0;
+    });
+  }
+  return out;
 }
 
 /**
@@ -1348,6 +1404,7 @@ function buildTrainingRows(seriesByBarangay, popMapByYear, adjacency = null) {
   if (maxLen <= window) return [];
 
   const trainRows = [];
+  const highHistory = _highRiskHistory(seriesByBarangay, popMapByYear);
   for (let i = window; i < maxLen; i++) {
     // neighbor_risk cross-section at the month BEFORE the target (lag-1)
     const neighborRisks = _neighborRisksAt(seriesByBarangay, popMapByYear, i - 1, adjacency);
@@ -1357,7 +1414,7 @@ function buildTrainingRows(seriesByBarangay, popMapByYear, adjacency = null) {
     for (const name of names) {
       if (seriesByBarangay[name].length <= i) continue;
       featureRows.set(name, buildFeatureRow({
-        name, t: i, seriesByBarangay, popMapByYear, window, neighborRisks,
+        name, t: i, seriesByBarangay, popMapByYear, window, neighborRisks, highHistory,
       }));
     }
     addCrossSectionFeatures([...featureRows.values()]);
@@ -1652,6 +1709,7 @@ module.exports = {
   _buildTrainingRows,
   _featureWindow,
   _neighborRisksAt,
+  _highRiskHistory,
   _popFor,
   _popForFeature,
   _uniformPopMapByYear,

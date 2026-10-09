@@ -19,7 +19,7 @@ require.cache[dbPath] = {
 
 const {
   buildDenseSeries, buildTrainingRows, buildFeatureRow, addCrossSectionFeatures, dropUnfinishedMonth,
-  _featureWindow, _neighborRisksAt,
+  _featureWindow, _neighborRisksAt, _highRiskHistory,
   _uniformPopMapByYear, _popFor, _popForFeature, _resolveClassification, _ruleBasedClassify,
   _mergeClassifications,
   runHistoricalSnapshots,
@@ -248,8 +248,10 @@ describe('feature parity & leakage (train vs predict)', () => {
     for (const [n, s] of Object.entries(seriesByBarangay)) truncated[n] = s.slice(0, T);
     const window = _featureWindow(T);
     const neighborRisks = _neighborRisksAt(truncated, popMap, T - 1);
+    // Built from the truncated series, as runPipeline does: only months before T.
+    const highHistory = _highRiskHistory(truncated, popMap);
     const predictRows = addCrossSectionFeatures(Object.keys(truncated).map(name => buildFeatureRow({
-      name, t: T, seriesByBarangay: truncated, popMapByYear: popMap, window, neighborRisks,
+      name, t: T, seriesByBarangay: truncated, popMapByYear: popMap, window, neighborRisks, highHistory,
     })));
     const predictRow = predictRows.find(r => r.barangay_name === 'A');
 
@@ -500,9 +502,9 @@ describe('neighbor_risk with real (bordering) neighbours', () => {
     assert.ok(rows.length > 0);
     for (const r of rows) {
       assert.deepStrictEqual(Object.keys(r.features).sort(), [
-        'history_incidence', 'history_rank',
-        'incidence_3m', 'incidence_rank', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk', 'prev_category',
-        'recent_trend', 'rolling_12m_incidence', 'seasonality_flag',
+        'high_share_12m', 'history_incidence', 'history_rank',
+        'incidence_3m', 'incidence_6m', 'incidence_rank', 'lag_12m', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk',
+        'prev_category', 'recent_trend', 'rolling_12m_incidence', 'seasonality_flag', 'volatility', 'yoy_change',
       ]);
     }
   });

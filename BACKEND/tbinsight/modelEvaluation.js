@@ -6,7 +6,7 @@ const { pasigResidentOnly } = require('./locationScope');
 const { forecastErrorFloor, riskBandCeiling, lowHighConfusion } = require('./achievable');
 
 const MIN_TRAIN_MONTHS = 24;
-const MODEL_VERSION = 'arima-v1.2-rf-v1.2';
+const MODEL_VERSION = 'arima-v1.2-rf-v1.3';
 
 let evaluationStatus = {
   running: false,

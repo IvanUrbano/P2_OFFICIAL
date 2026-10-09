@@ -4,10 +4,12 @@ TBInsight ML Service — Random Forest Classifier
 Predicts Low/Medium/High risk classes from historical/current case-data
 features only. Independent of ARIMA: no feature here is derived from a
 forecast, so RF classification does not require ARIMA to run or succeed.
-Uses 12 features: 12- and 3-month incidence, trend, seasonality, three monthly
-lags (as incidence), the incidence of the barangays that share a border
-(neighbor_risk), two ranks against the other barangays that month, and the
-incidence over all earlier months with its rank.
+Uses 17 features: 12-, 6- and 3-month incidence, trend, seasonality, monthly lags
+(1-3 months and the same month last year, as incidence), volatility, year-over-year
+change, the incidence of the barangays that share a border (neighbor_risk), ranks
+against the other barangays that month, the incidence over all earlier months with
+its rank, and how often the barangay was in the High band over the last 12 months.
+A whole month is banded by ranking its expected band (fill_bands), like the labels.
 
 Design spec:
   - Labels derived from incidence tertiles, auto-calibrated per run from the
@@ -44,11 +46,13 @@ from config import (
     RF_MIN_SAMPLES_SPLIT,
     RF_MIN_SAMPLES_LEAF,
     RF_LABEL_HORIZON_MONTHS,
+    RF_MAX_FEATURES,
+    RF_FILL_BANDS,
 )
 
 logger = logging.getLogger(__name__)
 
-# Fixed feature order (12 features). historical_bias (past ARIMA error) was removed:
+# Fixed feature order (17 features). historical_bias (past ARIMA error) was removed:
 # it measured the forecaster rather than TB risk, contributed nothing in
 # walk-forward evaluation, and tied the classifier to ARIMA output.
 # Training and prediction rows MUST supply this exact key set, in any order
@@ -73,6 +77,11 @@ FEATURES = [
     "prev_category",          # band of the last 3 months (0 Low, 1 Medium, 2 High)
     "history_incidence",      # annualized incidence over ALL months before the target
     "history_rank",           # rank of history_incidence that month, 0..1
+    "lag_12m",                # incidence of the same month last year
+    "incidence_6m",           # annualized incidence of the last 6 months
+    "volatility",             # spread of monthly incidence over the last 12 months
+    "yoy_change",             # last 12 months' incidence minus the 12 before
+    "high_share_12m",         # share of the last 12 months spent in the High band
 ]
 
 _BANDS = ["Low", "Medium", "High"]
@@ -121,6 +130,19 @@ def classify_incidence_tertile(
         return "High"
     else:
         return "Medium"
+
+
+def fill_bands(proba, classes) -> list[str]:
+    """
+    Bands for one month's barangays from their class probabilities: rank by expected band
+    (P(Medium) + 2 x P(High)) and cut at the label percentiles, so the month gets the same
+    band sizes as its labels (see derive_labels) instead of each barangay's argmax.
+    """
+    cls = list(classes)
+    score = sum(proba[:, cls.index(c)] * i for i, c in enumerate(_BANDS) if c in cls)
+    order = np.argsort(np.argsort(score, kind="stable"), kind="stable")
+    n = len(score)
+    return [band_for_rank(r / (n - 1) if n > 1 else 0.0) for r in order]
 
 
 def _vec(features: dict) -> list[float]:
@@ -198,6 +220,7 @@ def _make_rf(n_samples: int) -> RandomForestClassifier:
     return RandomForestClassifier(
         n_estimators=RF_N_ESTIMATORS if large else RF_SMALL_N_ESTIMATORS,
         max_depth=RF_MAX_DEPTH if large else RF_SMALL_MAX_DEPTH,
+        max_features=RF_MAX_FEATURES,
         min_samples_split=RF_MIN_SAMPLES_SPLIT,
         min_samples_leaf=RF_MIN_SAMPLES_LEAF if large else RF_SMALL_MIN_SAMPLES_LEAF,
         random_state=RF_RANDOM_STATE,
@@ -238,8 +261,9 @@ def train_and_predict(
 
     # Predict
     X_predict = [_vec(r["features"]) for r in predict_rows]
-    classes = clf.predict(X_predict)
     probas = clf.predict_proba(X_predict)
+    classes = (fill_bands(probas, clf.classes_) if RF_FILL_BANDS and len(X_predict) >= 3
+               else clf.predict(X_predict))
     label_order = list(clf.classes_)
 
     out = []
@@ -426,7 +450,8 @@ def walk_forward_rf(
         # Train and predict
         clf = _make_rf(len(X_train))
         clf.fit(X_train, y_train)
-        y_test_pred = clf.predict(X_test)
+        y_test_pred = (fill_bands(clf.predict_proba(X_test), clf.classes_) if RF_FILL_BANDS and len(X_test) >= 3
+                       else clf.predict(X_test))
 
         # Reference classifier on the same month: the simple rule, labelling
         # the barangays by their last-12-month incidence with the same
