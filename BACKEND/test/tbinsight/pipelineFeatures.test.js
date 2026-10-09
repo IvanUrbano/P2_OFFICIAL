@@ -500,10 +500,22 @@ describe('neighbor_risk with real (bordering) neighbours', () => {
     assert.ok(rows.length > 0);
     for (const r of rows) {
       assert.deepStrictEqual(Object.keys(r.features).sort(), [
+        'history_incidence', 'history_rank',
         'incidence_3m', 'incidence_rank', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk', 'prev_category',
         'recent_trend', 'rolling_12m_incidence', 'seasonality_flag',
       ]);
     }
+  });
+
+  it('history_incidence averages every month before the target, and history_rank orders it', () => {
+    const series = { A: mk('A', [6, 6, 6, 6, 0, 0, 0, 0]), B: mk('B', [0, 0, 0, 0, 3, 3, 3, 3]) };
+    const rows = buildTrainingRows(series, popMapByYear, null);
+    const last = name => rows.filter(r => r.barangay_name === name).at(-1);
+    const a = last('A'), b = last('B');
+    // Same months and population; before the last target A has 24 cases, B fewer.
+    assert.ok(a.features.history_incidence > b.features.history_incidence);
+    assert.strictEqual(a.features.history_rank, 1);
+    assert.strictEqual(b.features.history_rank, 0);
   });
 });
 

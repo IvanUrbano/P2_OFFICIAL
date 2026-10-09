@@ -17,6 +17,7 @@
  *   model_metadata                          - history of model/pipeline runs and evaluation results
  *   barangays, barangays_geom               - the 30 barangays + GIS shapes (cases and the map depend on these)
  *   health_facilities, barangay_population  - reference data
+ *   facility_aliases, user_pins             - Pasig Clone facility spellings and users' Records PINs
  *   spatial_ref_sys and other PostGIS tables
  */
 const fs = require('fs');
@@ -29,6 +30,9 @@ const KEEP = new Set([
   'audit_logs', 'login_attempts', 'model_metadata',
   // map and reference data
   'barangays', 'barangays_geom', 'health_facilities', 'barangay_population',
+  // Pasig Clone: facility spellings used to match imports (only re-seeded on restart)
+  // and each user's Records PIN (a credential, not case data)
+  'facility_aliases', 'user_pins',
   // PostGIS system tables
   'spatial_ref_sys', 'geometry_columns', 'geography_columns', 'raster_columns', 'raster_overviews',
   'topology', 'layer',

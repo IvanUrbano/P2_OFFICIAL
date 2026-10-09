@@ -229,4 +229,21 @@ describe('generateAlerts', () => {
     const danger = alerts.find(a => a.severity === 'danger');
     assert.ok(danger, 'Should still generate danger alert on first run');
   });
+
+  it('lists High barangays by incidence, highest first, and never prints N/A', () => {
+    const alerts = generateAlerts({
+      forecasts: [],
+      classifications: [
+        { barangay_name: 'Alpha', risk_class: 'High', incidence_per_100k: 300 },
+        { barangay_name: 'Beta', risk_class: 'High', incidence_per_100k: 900 },
+        { barangay_name: 'Gamma', risk_class: 'High' },
+      ],
+      barangayList: [{ name: 'Alpha' }, { name: 'Beta' }, { name: 'Gamma' }],
+      prevRiskClasses: {},
+      period: '2026-01-01',
+    });
+    const danger = alerts.find(a => a.severity === 'danger');
+    assert.match(danger.message, /Beta \(900\.0\/100k\); Alpha \(300\.0\/100k\); Gamma\./);
+    assert.doesNotMatch(danger.message, /N\/A/);
+  });
 });

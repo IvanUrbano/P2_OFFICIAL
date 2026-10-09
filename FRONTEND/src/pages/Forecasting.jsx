@@ -172,6 +172,51 @@ function formatEvaluationMonth(value) {
   return new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 }
 
+const pct = (value, digits = 0) => `${(Number(value) * 100).toFixed(digits)}%`;
+
+/**
+ * The forecast error read against the best possible: how many cases fall in one
+ * barangay-month is partly chance, so even a perfect forecast misses by some amount
+ * (metrics.arima.achievable_mae, computed by the evaluation). Overall figures only.
+ */
+function AchievableNote({ view, metrics }) {
+  const floor = Number(metrics?.arima?.achievable_mae);
+  if (view.scope !== 'overall' || view.narrowed || !(floor > 0) || !(view.mae > 0)) return null;
+  const share = Math.min(1, floor / Number(view.mae));
+  return (
+    <div className="mt-3 rounded px-3 py-2.5" style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+      <p className="text-[11px] font-bold" style={{ color: '#166534' }}>Compared with the best possible</p>
+      <div className="mt-1 grid grid-cols-2 gap-3">
+        <EvalMetric label="Best possible average error" value={`${floor.toFixed(1)} cases`} />
+        <EvalMetric label="Accuracy reached" value={`${pct(share)} of best possible`} />
+      </div>
+      <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#475569' }}>
+        A barangay reports only a few cases a month, and how many fall in a given month is partly chance. Even a forecast that knew each barangay's true rate and the city's seasonal pattern would be off by about {floor.toFixed(1)} cases a month on these months.
+      </p>
+    </div>
+  );
+}
+
+/** The Random Forest's own evaluation (all barangays, all tested months). */
+function RiskClassificationEvaluation({ rf }) {
+  if (!rf || rf.accuracy == null) return null;
+  const highRecall = rf.recall?.High;
+  return (
+    <div className="mt-3 rounded px-3 py-2.5" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+      <p className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>Risk levels (Random Forest)</p>
+      <div className="mt-1 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <EvalMetric label="Correct risk level" value={rf.ceiling_accuracy != null ? `${pct(rf.accuracy)} (best possible ${pct(rf.ceiling_accuracy)})` : pct(rf.accuracy)} />
+        <EvalMetric label="Never mixes up Low and High" value={rf.low_high_confusion != null ? pct(1 - rf.low_high_confusion, 1) : '—'} />
+        <EvalMetric label="High-risk barangays caught" value={highRecall != null ? pct(highRecall) : '—'} />
+        <EvalMetric label="Simple ranking rule" value={rf.baseline_accuracy != null ? pct(rf.baseline_accuracy) : '—'} />
+      </div>
+      <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>
+        Each month the model placed every barangay in Low, Medium or High risk for the next 3 months, using only data from before that month; the result was then checked against the cases reported. Barangays close to a band boundary can land on either side by chance, so even a perfect model would get about {rf.ceiling_accuracy != null ? pct(rf.ceiling_accuracy) : 'two-thirds'} right. "Simple ranking rule" ranks barangays by their last 12 months. Covers all barangays over {rf.n_steps} tested months.
+      </p>
+    </div>
+  );
+}
+
 /**
  * Model evaluation: hidden until "View Model Evaluation" is pressed. It only READS the saved evaluation
  * (GET /api/tb/evaluation/latest) — viewing never reruns ARIMA, the Random Forest or the evaluation.
@@ -269,6 +314,8 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
                     </div>
                   )}
                   <p className="mt-3 text-[11px] leading-relaxed text-[#475569]">These values show how far earlier predictions were from reported cases. Cases missed is the total difference as a share of all reported cases. "vs. 12-month average" compares the error with simply predicting each barangay's average of the past 12 months: above 0% means the model did better than that.</p>
+                  <AchievableNote view={view} metrics={record?.metrics} />
+                  <RiskClassificationEvaluation rf={record?.metrics?.rf} />
 
                   <h3 className="text-[11px] font-bold mt-4" style={{ color: '#0F2D52' }}>Past predictions compared with reported cases — {view.rowsLabel}</h3>
                   {view.rows.length > 0 ? (

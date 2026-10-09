@@ -4,9 +4,10 @@ TBInsight ML Service — Random Forest Classifier
 Predicts Low/Medium/High risk classes from historical/current case-data
 features only. Independent of ARIMA: no feature here is derived from a
 forecast, so RF classification does not require ARIMA to run or succeed.
-Uses 10 features: 12- and 3-month incidence, trend, seasonality, three monthly
+Uses 12 features: 12- and 3-month incidence, trend, seasonality, three monthly
 lags (as incidence), the incidence of the barangays that share a border
-(neighbor_risk), and two ranks against the other barangays that month.
+(neighbor_risk), two ranks against the other barangays that month, and the
+incidence over all earlier months with its rank.
 
 Design spec:
   - Labels derived from incidence tertiles, auto-calibrated per run from the
@@ -38,14 +39,16 @@ from config import (
     RF_N_ESTIMATORS,
     RF_SMALL_MAX_DEPTH,
     RF_SMALL_N_ESTIMATORS,
+    RF_SMALL_MIN_SAMPLES_LEAF,
     RF_RANDOM_STATE,
     RF_MIN_SAMPLES_SPLIT,
     RF_MIN_SAMPLES_LEAF,
+    RF_LABEL_HORIZON_MONTHS,
 )
 
 logger = logging.getLogger(__name__)
 
-# Fixed feature order (10 features). historical_bias (past ARIMA error) was removed:
+# Fixed feature order (12 features). historical_bias (past ARIMA error) was removed:
 # it measured the forecaster rather than TB risk, contributed nothing in
 # walk-forward evaluation, and tied the classifier to ARIMA output.
 # Training and prediction rows MUST supply this exact key set, in any order
@@ -68,6 +71,8 @@ FEATURES = [
     "neighbor_risk",  # mean incidence of the barangays sharing a border, month t-1
     "incidence_rank",         # rank of rolling_12m_incidence that month, 0..1
     "prev_category",          # band of the last 3 months (0 Low, 1 Medium, 2 High)
+    "history_incidence",      # annualized incidence over ALL months before the target
+    "history_rank",           # rank of history_incidence that month, 0..1
 ]
 
 _BANDS = ["Low", "Medium", "High"]
@@ -119,8 +124,8 @@ def classify_incidence_tertile(
 
 
 def _vec(features: dict) -> list[float]:
-    """Convert feature dict to ordered vector."""
-    return [float(features.get(f, 0)) for f in FEATURES]
+    """Convert feature dict to ordered vector (a missing or null value counts as 0)."""
+    return [float(features.get(f) or 0) for f in FEATURES]
 
 
 def band_for_rank(q: float) -> str:
@@ -194,7 +199,7 @@ def _make_rf(n_samples: int) -> RandomForestClassifier:
         n_estimators=RF_N_ESTIMATORS if large else RF_SMALL_N_ESTIMATORS,
         max_depth=RF_MAX_DEPTH if large else RF_SMALL_MAX_DEPTH,
         min_samples_split=RF_MIN_SAMPLES_SPLIT,
-        min_samples_leaf=RF_MIN_SAMPLES_LEAF,
+        min_samples_leaf=RF_MIN_SAMPLES_LEAF if large else RF_SMALL_MIN_SAMPLES_LEAF,
         random_state=RF_RANDOM_STATE,
         class_weight="balanced",
     )
@@ -288,12 +293,21 @@ def classify_risk_simple(
     return results
 
 
+def _month_index(month) -> Optional[int]:
+    """'YYYY-MM-..' -> months since year 0, or None when the row carries no month."""
+    if not month:
+        return None
+    year, mon = str(month)[:7].split("-")
+    return int(year) * 12 + int(mon) - 1
+
+
 def walk_forward_rf(
     train_rows: list[dict],
     min_train: int = 24,
     low_max: float = 150.0,
     med_max: float = 350.0,
     n_barangays: Optional[int] = None,
+    label_horizon: int = RF_LABEL_HORIZON_MONTHS,
 ) -> dict:
     """
     Walk-forward evaluation for RF classification (Option C: group by month).
@@ -309,6 +323,9 @@ def walk_forward_rf(
         low_max: Low/Medium threshold for label derivation
         med_max: Medium/High threshold for label derivation
         n_barangays: Number of barangays (if known). Auto-detected from barangay_name if not provided.
+        label_horizon: Months each label averages, starting at its own month. A training
+                       row is used only if its label window ends before the test month;
+                       otherwise its label already contains the answer being tested.
 
     Returns:
         {
@@ -384,6 +401,15 @@ def walk_forward_rf(
 
         train_data = train_rows[:test_start]
         test_data = train_rows[test_start:test_end]
+
+        # A row's label averages its month and the label_horizon - 1 after it, so the
+        # last rows before the test month have labels built from the test month itself.
+        test_idx = _month_index(test_data[0].get("month"))
+        if test_idx is not None and label_horizon > 1:
+            train_data = [
+                r for r in train_data
+                if (_month_index(r.get("month")) or 0) <= test_idx - label_horizon
+            ]
 
         # Build training set
         X_train = [_vec(r["features"]) for r in train_data]

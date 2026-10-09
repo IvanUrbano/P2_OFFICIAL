@@ -247,10 +247,11 @@ function generateAlerts({ forecasts, classifications, barangayList, prevRiskClas
     });
   }
 
-  // Group high-risk alerts into a single summary
+  // Group high-risk alerts into a single summary, highest incidence first
   if (highRisk.length > 0) {
+    highRisk.sort((a, b) => (b.incidence ?? -1) - (a.incidence ?? -1));
     const topList = highRisk.slice(0, 5).map(h =>
-      `${h.name} (${h.incidence?.toFixed(1) || 'N/A'}/100k)`
+      h.incidence != null ? `${h.name} (${h.incidence.toFixed(1)}/100k)` : h.name
     ).join('; ');
     const suffix = highRisk.length > 5 ? ` and ${highRisk.length - 5} more` : '';
     alerts.push({
@@ -258,7 +259,7 @@ function generateAlerts({ forecasts, classifications, barangayList, prevRiskClas
       period,
       alert_type: 'high_risk_escalation',
       severity: 'danger',
-      message: `${highRisk.length} barangay${highRisk.length > 1 ? 's' : ''} forecasted to remain in High risk band: ${topList}${suffix}.`,
+      message: `${highRisk.length} barangay${highRisk.length > 1 ? 's' : ''} classified High risk for ${period}: ${topList}${suffix}.`,
       recommendation: `Immediate intervention recommended. Deploy additional DOTS workers, increase case finding frequency, and ensure drug supply adequacy.`,
     });
   }

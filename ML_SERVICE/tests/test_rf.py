@@ -17,8 +17,8 @@ from rf_classifier import (
 )
 
 
-def test_features_are_the_fixed_ten():
-    """FEATURES: the original 7 (historical_bias removed) plus incidence_3m and the two ranks."""
+def test_features_are_the_fixed_twelve():
+    """FEATURES: the original 7 (historical_bias removed), incidence_3m, the two ranks, and the all-history pair."""
     assert FEATURES == [
         "rolling_12m_incidence",
         "incidence_3m",
@@ -30,6 +30,8 @@ def test_features_are_the_fixed_ten():
         "neighbor_risk",
         "incidence_rank",
         "prev_category",
+        "history_incidence",
+        "history_rank",
     ]
 
 
@@ -196,6 +198,26 @@ def test_walk_forward_rf_enough_data():
     assert 0 <= result["accuracy"] <= 1
     assert result["f1_macro"] is not None
     assert len(result["steps"]) > 0
+
+
+def test_walk_forward_rf_keeps_labels_that_reach_the_test_month_out_of_training():
+    """A label averages 3 months, so rows of the 2 months before the test month are held out."""
+    n_b, n_months = 6, 12
+    train_rows = []
+    for m in range(n_months):
+        for b in range(n_b):
+            base = 50 + b * 40 + m
+            train_rows.append({
+                "barangay_name": f"B{b}",
+                "month": f"2024-{m + 1:02d}-01",
+                "features": {"rolling_12m_incidence": base, "lag_1m": base},
+                "incidence": base,
+            })
+    min_train = 8 * n_b
+    leaky = walk_forward_rf(train_rows, min_train=min_train, n_barangays=n_b, label_horizon=1)
+    honest = walk_forward_rf(train_rows, min_train=min_train, n_barangays=n_b, label_horizon=3)
+    assert leaky["steps"][0]["train_size"] == min_train
+    assert honest["steps"][0]["train_size"] == min_train - 2 * n_b
 
 
 if __name__ == "__main__":

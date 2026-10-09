@@ -28,6 +28,15 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 
+// Pure logic only: stub the DB module so loading pipeline.js does not connect.
+const dbPath = require.resolve('../../db');
+require.cache[dbPath] = {
+  id: dbPath,
+  filename: dbPath,
+  loaded: true,
+  exports: { query: async () => ({ rows: [] }), connect: async () => ({}) },
+};
+
 const {
   DEFAULT_THRESHOLDS,
   _resolveThresholds,

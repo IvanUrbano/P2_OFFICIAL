@@ -1,0 +1,5 @@
+# Run state and outputs: rebuilt by running the scripts (see README.md)
+registry.json
+caseid_counters.json
+*.xlsx
+__pycache__/

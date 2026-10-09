@@ -400,7 +400,12 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [], actor = null } 
 
         // 4xx errors — don't retry (permanent failure)
         if (response.status >= 400 && response.status < 500) {
-          const errorMsg = `Webhook failed with status ${response.status}: ${responseBody}`;
+          // A 401 is TBInsight rejecting the signature: the two services hold different
+          // WEBHOOK_SECRET values. Say so, since retrying cannot fix it.
+          const hint = response.status === 401
+            ? ' WEBHOOK_SECRET differs between Pasig Clone and TBInsight; set the same value on both and sync again.'
+            : '';
+          const errorMsg = `Webhook failed with status ${response.status}: ${responseBody}${hint}`;
           
           await client.query('BEGIN');
           await client.query(
@@ -425,7 +430,9 @@ async function sendWebhook(batchId, userId, { extraCaseNos = [], actor = null } 
           return {
             success: false,
             status: response.status,
-            message: 'Webhook failed: Please check your configuration',
+            message: response.status === 401
+              ? 'TBInsight rejected the sync signature: WEBHOOK_SECRET is not the same on Pasig Clone and TBInsight.'
+              : `Webhook failed: TBInsight answered ${response.status}. Please check your configuration.`,
             recordsSent,
             recordsAccepted: 0,
           };

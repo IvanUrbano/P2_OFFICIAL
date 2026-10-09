@@ -49,7 +49,7 @@ const DEFAULT_THRESHOLDS = {
 
 // Single source of truth for the combined model version string persisted
 // alongside every forecast/risk row this run produces.
-const MODEL_VERSION = 'arima-v1.1-rf-v1.1';
+const MODEL_VERSION = 'arima-v1.2-rf-v1.2';
 
 // Mirrors ML_SERVICE/config.py's ARIMA_MIN_HISTORY_NONSEASONAL. Below this
 // many monthly observations, no forecast method (ARIMA or fallback) has
@@ -167,6 +167,11 @@ async function runPipeline({
 } = {}) {
   const forecastHorizon = Math.max(Number(requestedHorizon) || 1, MIN_STORED_HORIZON);
   const client = await pool.connect();
+  // Released before the long ML calls; the finally below covers early returns and errors.
+  let clientReleased = false;
+  const releaseClient = () => {
+    if (!clientReleased) { clientReleased = true; client.release(); }
+  };
   const results = {
     status: 'started',
     period: null,
@@ -253,7 +258,7 @@ async function runPipeline({
     }
 
     // Release client before long-running ML calls to free pool connections
-    client.release();
+    releaseClient();
 
     // Determine forecast period (next month from latest)
     const { calendar, seriesByBarangay } = buildDenseSeries(monthlyRows, barangays.map(b => b.name));
@@ -636,9 +641,12 @@ async function runPipeline({
         // first run — no previous data
       }
 
+      // The classifier returns classes only; the incidence shown in the alert text
+      // comes from this run's risk scores.
+      const incidenceByName = Object.fromEntries(riskScores.map(r => [r.barangay_name, r.incidence_per_100k]));
       alerts = generateAlerts({
         forecasts: forecastResults,
-        classifications: classifyResults,
+        classifications: classifyResults.map(c => ({ ...c, incidence_per_100k: incidenceByName[c.barangay_name] ?? null })),
         barangayList: barangays.map(b => ({ name: b.name })),
         prevRiskClasses,
         period: results.period,
@@ -774,6 +782,8 @@ async function runPipeline({
     results.errors.push(err.message);
     console.error('❌ Pipeline failed:', err.message);
     throw err;
+  } finally {
+    releaseClient();
   }
 }
 
@@ -1252,6 +1262,11 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
   // Lags are incidence, not raw counts: the label is incidence, and 5 cases
   // in a barangay of 1,000 is not the same risk as 5 cases in one of 50,000.
   const recent3 = (count(1) + count(2) + count(3)) / 3;
+  // Every month before t. A barangay's rate barely changes from year to year while a
+  // month holds a handful of cases, so the longest average is the steadiest estimate
+  // of its risk — ranking barangays by it scored above every shorter window.
+  const history = months.slice(0, t).map(w => w.case_count);
+  const historyMean = history.length > 0 ? history.reduce((a, b) => a + b, 0) / history.length : 0;
 
   return {
     barangay_name: name,
@@ -1264,6 +1279,7 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
       lag_2m: _computeIncidence(count(2), pop),
       lag_3m: _computeIncidence(count(3), pop),
       neighbor_risk: neighborRisks[name] || 0,
+      history_incidence: history.length > 0 ? _computeIncidence(historyMean, pop) : null,
     },
   };
 }
@@ -1293,8 +1309,10 @@ function addCrossSectionFeatures(rows) {
   };
   const rank12 = positions('rolling_12m_incidence');
   const rank3 = positions('incidence_3m');
+  const rankAll = positions('history_incidence');
   for (const r of rows) {
     r.features.incidence_rank = rank12.has(r) ? rank12.get(r) : 0.5;
+    r.features.history_rank = rankAll.has(r) ? rankAll.get(r) : 0.5;
     const q = rank3.has(r) ? rank3.get(r) : 0.5;
     r.features.prev_category = q < LOW_PERCENTILE ? 0 : q >= MED_PERCENTILE ? 2 : 1;
   }
@@ -1543,17 +1561,21 @@ async function runPipelineTracked(options = {}, trigger = 'manual') {
     _runState.lastRunStatus = results.status;
     _runState.lastRiskScoresCount = results.riskScoresCount;
     _runState.lastAlertsCount = results.alertsCount;
+    // 'no_data' and 'stale' runs stored nothing, so there is no new forecast to announce.
+    const stored = ['completed', 'degraded'].includes(results.status);
 
-    try {
-      await createNotification(pool, {
-        title: 'Forecast Generated',
-        message: `A new forecast has been generated for ${results.period || 'latest period'}.`,
-        sourceModule: 'forecasting',
-        relatedEntityType: 'pipeline',
-        metadata: { period: results.period, trigger },
-      });
-    } catch (notifErr) {
-      console.error('Pipeline notification error:', notifErr.message);
+    if (stored) {
+      try {
+        await createNotification(pool, {
+          title: 'Forecast Generated',
+          message: `A new forecast has been generated for ${results.period || 'latest period'}.`,
+          sourceModule: 'forecasting',
+          relatedEntityType: 'pipeline',
+          metadata: { period: results.period, trigger },
+        });
+      } catch (notifErr) {
+        console.error('Pipeline notification error:', notifErr.message);
+      }
     }
 
     try {
@@ -1562,7 +1584,7 @@ async function runPipelineTracked(options = {}, trigger = 'manual') {
       console.error('Post-pipeline alert evaluation error:', alertErr.message);
     }
 
-    if (!options.historyCutoffMonth && ['completed', 'degraded'].includes(results.status)) {
+    if (!options.historyCutoffMonth && stored) {
       const { runModelEvaluation } = require('./modelEvaluation');
       runModelEvaluation().catch(evaluationErr => {
         console.error('Automatic model evaluation failed:', evaluationErr.message);
@@ -1621,6 +1643,7 @@ module.exports = {
   DEFAULT_THRESHOLDS,
   MODEL_VERSION,
   MIN_STORED_HORIZON,
+  LABEL_HORIZON_MONTHS,
   buildDenseSeries,
   dropUnfinishedMonth,
   buildTrainingRows,

@@ -240,6 +240,28 @@ const initDb = async () => {
       console.error('❌ 2026 population projection migration failed (continuing with remaining migrations):', pop2026Err.message);
     }
 
+    // 2022 barangay population from the eFOI city total (never overwrites an entered figure)
+    try {
+      const pop2022MigPath = path.join(__dirname, 'db', 'migrations', '034_population_2022.sql');
+      if (fs.existsSync(pop2022MigPath)) {
+        await execSql(fs.readFileSync(pop2022MigPath, 'utf8'));
+        console.log('✅ 2022 population migration completed successfully.');
+      }
+    } catch (pop2022Err) {
+      console.error('❌ 2022 population migration failed (continuing with remaining migrations):', pop2022Err.message);
+    }
+
+    // 2023 barangay population aligned to the official eFOI city total (back-cast rows only)
+    try {
+      const pop2023MigPath = path.join(__dirname, 'db', 'migrations', '035_population_2023_efoi.sql');
+      if (fs.existsSync(pop2023MigPath)) {
+        await execSql(fs.readFileSync(pop2023MigPath, 'utf8'));
+        console.log('✅ 2023 population migration completed successfully.');
+      }
+    } catch (pop2023Err) {
+      console.error('❌ 2023 population migration failed (continuing with remaining migrations):', pop2023Err.message);
+    }
+
     // Barangay-based staff (users.barangay_id), expanded health_facilities, case tracking
     // fields + case/review history tables. Additive only.
     try {

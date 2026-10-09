@@ -1,0 +1,573 @@
+{
+ "SAN ANTONIO HEALTH CENTER - IDOTS": {
+  "id": 65,
+  "code": "SAN",
+  "name": "San Antonio HC"
+ },
+ "BAMBANG HEALTH CENTER - IDOTS": {
+  "id": 42,
+  "code": "BAM",
+  "name": "Bambang HC"
+ },
+ "BUTING HEALTH CENTER - IDOTS": {
+  "id": 43,
+  "code": "BUT",
+  "name": "Buting HC"
+ },
+ "DE LA PAZ HEALTH CENTER - IDOTS": {
+  "id": 45,
+  "code": "DLP",
+  "name": "Dela Paz HC"
+ },
+ "KALAWAAN HEALTH CENTER - IDOTS": {
+  "id": 46,
+  "code": "KAL",
+  "name": "Kalawaan HC"
+ },
+ "KABAYANAN HEALTH CENTER - IDOTS": null,
+ "MANGGAHAN HEALTH CENTER - IDOTS": {
+  "id": 51,
+  "code": "MAN",
+  "name": "Manggahan HC"
+ },
+ "MAYBUNGA HEALTH CENTER - IDOTS": {
+  "id": 475,
+  "code": "MAY",
+  "name": "Maybunga Health Center"
+ },
+ "ORANBO HEALTH CENTER - IDOTS": {
+  "id": 56,
+  "code": "ORA",
+  "name": "Oranbo HC"
+ },
+ "PALATIW HEALTH CENTER - IDOTS": {
+  "id": 57,
+  "code": "PAL",
+  "name": "Palatiw HC"
+ },
+ "KAPASIGAN HEALTH CENTER - IDOTS": {
+  "id": 48,
+  "code": "KPS",
+  "name": "Kapasigan HC"
+ },
+ "SUMILANG SUPER HEALTH CENTER - IDOTS": {
+  "id": 491,
+  "code": "SUMSH",
+  "name": "Sumilang Super Health Center"
+ },
+ "PINAGBUHATAN HEALTH CENTER - IDOTS": {
+  "id": 58,
+  "code": "PIN",
+  "name": "Pinagbuhatan HC"
+ },
+ "PINEDA HEALTH CENTER - IDOTS": {
+  "id": 62,
+  "code": "PND",
+  "name": "Pineda HC"
+ },
+ "ROSARIO HEALTH CENTER - IDOTS": {
+  "id": 63,
+  "code": "ROS",
+  "name": "Rosario HC"
+ },
+ "SAGAD HEALTH CENTER - IDOTS": {
+  "id": 64,
+  "code": "SAG",
+  "name": "Sagad HC"
+ },
+ "SAN MIGUEL HEALTH CENTER - IDOTS": {
+  "id": 68,
+  "code": "SMI",
+  "name": "San Miguel HC"
+ },
+ "SANTOLAN HEALTH CENTER - IDOTS": {
+  "id": 74,
+  "code": "SNT",
+  "name": "Santolan HC"
+ },
+ "SANTA LUCIA HEALTH CENTER - IDOTS": {
+  "id": 71,
+  "code": "SLU",
+  "name": "Santa Lucia HC"
+ },
+ "SANTO TOMAS HEALTH CENTER - IDOTS": {
+  "id": 73,
+  "code": "STO",
+  "name": "Santo Tomas HC"
+ },
+ "SUMILANG HEALTH CENTER - IDOTS": {
+  "id": 76,
+  "code": "SUM",
+  "name": "Sumilang HC"
+ },
+ "UGONG HEALTH CENTER-PASIG - IDOTS": {
+  "id": 77,
+  "code": "UGO",
+  "name": "Ugong HC"
+ },
+ "CANIOGAN HEALTH CENTER - IDOTS": {
+  "id": 44,
+  "code": "CAN",
+  "name": "Caniogan HC"
+ },
+ "BAGONG ILOG HEALTH CENTER - IDOTS": {
+  "id": 40,
+  "code": "BIL",
+  "name": "Bagong Ilog HC"
+ },
+ "DOÑA BETANG HEALTH CENTER - IDOTS": {
+  "id": 75,
+  "code": "DBE",
+  "name": "Dona Betang HC"
+ },
+ "MALINAO HEALTH CENTER - IDOTS": {
+  "id": 50,
+  "code": "MAL",
+  "name": "Malinao HC"
+ },
+ "KAPITOLYO HEALTH CENTER - IDOTS": {
+  "id": 49,
+  "code": "KAP",
+  "name": "Kapitolyo HC"
+ },
+ "SAN JOSE HEALTH CENTER - IDOTS": {
+  "id": 67,
+  "code": "SJO",
+  "name": "San Jose HC"
+ },
+ "KARANGALAN HEALTH CENTER - IDOTS": {
+  "id": 53,
+  "code": "KAR",
+  "name": "Karangalan HC"
+ },
+ "BAGONG KATIPUNAN HEALTH CENTER - IDOTS": {
+  "id": 79,
+  "code": "BKA",
+  "name": "Bagong Katipunan HC"
+ },
+ "NAPICO HEALTH CENTER - IDOTS": {
+  "id": 52,
+  "code": "NAP",
+  "name": "Napico HC"
+ },
+ "PINAGBUHATAN PUERICULTURE CENTER - IDOTS": {
+  "id": 59,
+  "code": "PINPC",
+  "name": "Pinagbuhatan Puericulture Center"
+ },
+ "SANTA CRUZ HEALTH CENTER - IDOTS": {
+  "id": 70,
+  "code": "SCR",
+  "name": "Santa Cruz HC"
+ },
+ "MAYBUNGA FLOODWAY HEALTH CENTER - IDOTS": {
+  "id": 55,
+  "code": "MBFW",
+  "name": "Maybunga Floodway"
+ },
+ "ISMAR HEALTH CENTER - IDOTS": {
+  "id": 47,
+  "code": "ISM",
+  "name": "Ismar HC"
+ },
+ "STA. LUCIA MINI FLOODWAY HEALTH CENTER - IDOTS": {
+  "id": 482,
+  "code": "SLUFW",
+  "name": "Santa Lucia Mini Floodway Health Center"
+ },
+ "NAGPAYONG HEALTH CENTER - IDOTS": {
+  "id": 61,
+  "code": "NAG",
+  "name": "Nagpayong HC"
+ },
+ "E. SANTOS HEALTH CENTER - IDOTS": {
+  "id": 60,
+  "code": "ESA",
+  "name": "E. Santos"
+ },
+ "PASIG CITY JAIL - IDOTS": {
+  "id": 472,
+  "code": "PCJ",
+  "name": "Pasig City Jail"
+ },
+ "SAN NICOLAS HEALTH CENTER - IDOTS": {
+  "id": 69,
+  "code": "SNI",
+  "name": "San Nicolas HC"
+ },
+ "PASIG CITY GENERAL HOSPITAL - IDOTS": {
+  "id": 485,
+  "code": "PCGH",
+  "name": "Pasig City General Hospital"
+ },
+ "RIZAL MEDICAL CENTER - IDOTS": {
+  "id": 480,
+  "code": "RMC",
+  "name": "Rizal Medical Center"
+ },
+ "BAGONG ILOG PUERICULTURE CENTER - IDOTS": {
+  "id": 41,
+  "code": "BILPC",
+  "name": "Bagong Ilog PC"
+ },
+ "PASIG CITY CHILDREN HOSPITAL HOPE - IDOTS": {
+  "id": 498,
+  "code": "PCCH",
+  "name": "Pasig City Children Hospital Hope"
+ },
+ "THE MEDICAL CITY-PASIG - IDOTS": {
+  "id": 470,
+  "code": "TMCP",
+  "name": "The Medical City-Pasig"
+ },
+ "SAN JOAQUIN HEALTH CENTER - IDOTS": {
+  "id": 66,
+  "code": "SJQ",
+  "name": "San Joaquin HC"
+ },
+ "ST. CAMILLUS MEDICAL CENTER - IDOTS": {
+  "id": 487,
+  "code": "SCMC",
+  "name": "St. Camillus Medical Center"
+ },
+ "PAYATAS A HEALTH CENTER - IDOTS": null,
+ "SANTOLAN HEALTH CENTER - PMDT STC": null,
+ "STA. ROSA DE LIMA MEDICAL CLINIC AND PHARMACY INC. - MTBN": {
+  "id": 508,
+  "code": "SRDL",
+  "name": "Santa Rosa De Lima Medical Clinic And Pharmacy Inc."
+ },
+ "STO. ROSARIO POLYCLINIC - MTBN": {
+  "id": 494,
+  "code": "SRP",
+  "name": "Santo Rosario Polyclinic"
+ },
+ "RJR DEL ROSARIO MEDICAL CLINIC CO. - MTBN": {
+  "id": 481,
+  "code": "RJR",
+  "name": "RJR Del Rosario Medical Clinic Co."
+ },
+ "JRVEAJEDOR MEDICAL CLINIC - MTBN": {
+  "id": 486,
+  "code": "JRV",
+  "name": "Jrveajedor Medical Clinic"
+ },
+ "SALVE REGINA GENERAL HOSPITAL INC. - MTBN": {
+  "id": 483,
+  "code": "SRGH",
+  "name": "Salve Regina General Hospital Inc."
+ },
+ "FRANCISCO MEDICAL CLINIC - MTBN": {
+  "id": 492,
+  "code": "FRAN",
+  "name": "Francisco Medical Clinic"
+ },
+ "LUSTRE MEDICAL AND DIAGNOSTIC CLINIC - MTBN": {
+  "id": 471,
+  "code": "LUS",
+  "name": "Lustre Medical And Diagnostic Clinic"
+ },
+ "A. BAUTISTA MEDICAL CLINIC - MTBN": {
+  "id": 493,
+  "code": "BAUT",
+  "name": "A. Bautista Medical Clinic"
+ },
+ "LU QUEZON MEDICAL CLINIC - MTBN": {
+  "id": 474,
+  "code": "LUQ",
+  "name": "Lu Quezon Medical Clinic"
+ },
+ "LIFES HOPE MEDICAL CLINIC - MTBN": {
+  "id": 505,
+  "code": "LHOPE",
+  "name": "Lifes Hope Medical Clinic"
+ },
+ "L. O. CEZAR POLYCLINIC - MTBN": {
+  "id": 509,
+  "code": "CEZAR",
+  "name": "L. O. Cezar Polyclinic"
+ },
+ "TRICITY MEDICAL CENTER - MTBN": {
+  "id": 473,
+  "code": "TRI",
+  "name": "Tricity Medical Center"
+ },
+ "IBAYO HEALTH CENTER - IDOTS": null,
+ "NAPINDAN HEALTH CENTER - IDOTS": null,
+ "MISSION HOSPITAL - MTBN": {
+  "id": 490,
+  "code": "MISH",
+  "name": "Mission Hospital"
+ },
+ "ARDI HEALTH SERVICES INC.-MALINAO-PASIG - MTBN": {
+  "id": 476,
+  "code": "ARDIM",
+  "name": "ARDI Health Services Inc.-Malinao-Pasig"
+ },
+ "ARDI HEALTH SERVICES INC.-MERCEDES-PASIG - MTBN": {
+  "id": 489,
+  "code": "ARDIR",
+  "name": "ARDI Health Services Inc.-Mercedes-Pasig"
+ },
+ "PURISIMA PASIG CLINIC-PASIG - MTBN": {
+  "id": 488,
+  "code": "PURI",
+  "name": "Purisima Pasig Clinic-Pasig"
+ },
+ "S. A. ALVAREZ MEDICAL CLINIC-PASIG - MTBN": {
+  "id": 478,
+  "code": "ALV",
+  "name": "S. A. Alvarez Medical Clinic-Pasig"
+ },
+ "RIGOR MEDICAL CLINIC-PASIG - MTBN": {
+  "id": 502,
+  "code": "RIGOR",
+  "name": "Rigor Medical Clinic-Pasig"
+ },
+ "MARIKINA DOCTORS HOSPITAL AND MEDICAL CENTER - MTBN": {
+  "id": 497,
+  "code": "MDH",
+  "name": "Marikina Doctors Hospital And Medical Center"
+ },
+ "ST. CAMILLUS MEDICAL CENTER - MTBN": {
+  "id": 487,
+  "code": "SCMC",
+  "name": "St. Camillus Medical Center"
+ },
+ "PINAGKAISAHAN HEALTH CENTER - IDOTS": null,
+ "THE MEDICAL CITY-PASIG - MTBN": {
+  "id": 470,
+  "code": "TMCP",
+  "name": "The Medical City-Pasig"
+ },
+ "CAINTA RURAL HEALTH UNIT II (GRUAR) - IDOTS": null,
+ "SABLAYAN RURAL HEALTH UNIT ANNEX - IDOTS": null,
+ "BACLARAN HEALTH CENTER - IDOTS": null,
+ "ANTIPOLO CITY HEALTH I - IDOTS": null,
+ "MOONWALK HEALTH CENTER - IDOTS": null,
+ "TUMAUINI RURAL HEALTH UNIT - IDOTS": null,
+ "ANTIPOLO CITY HEALTH II - IDOTS": null,
+ "PEMBO HEALTH CENTER - IDOTS": null,
+ "CAINTA RURAL HEALTH UNIT I - IDOTS": null,
+ "LOVEYOURSELF CLINIC - DOTS": null,
+ "ANTIPOLO CITY HEALTH IV - IDOTS": null,
+ "FORT BONIFACIO HEALTH CENTER - IDOTS": null,
+ "CARMONA CITY HEALTH OFFICE - IDOTS": null,
+ "SANGANDAAN HEALTH CENTER - IDOTS": null,
+ "MASIKAP HEALTH CENTER - IDOTS": null,
+ "USUSAN HEALTH CENTER - IDOTS": null,
+ "CONCEPCION DOS HEALTH CENTER - IDOTS": null,
+ "EAST REMBO HEALTH CENTER - IDOTS": null,
+ "CENTRAL SIGNAL HEALTH CENTER - IDOTS": null,
+ "CAINTA RURAL HEALTH UNIT IV (KARANGALAN) - IDOTS": null,
+ "BARAS RURAL HEALTH UNIT - IDOTS": null,
+ "NUMANCIA RURAL HEALTH UNIT - IDOTS": null,
+ "VILLAMOR HEALTH CENTER - IDOTS": null,
+ "SHAMMAH DIAGNOSTICS LABORATORY - MTBN": {
+  "id": 504,
+  "code": "SHAM",
+  "name": "Shammah Diagnostics Laboratory"
+ },
+ "RODRIGUEZ RURAL HEALTH UNIT I - IDOTS": null,
+ "ACCUDETEK HEALTH DIAGNOSTICS - MTBN": {
+  "id": 495,
+  "code": "ACCU",
+  "name": "Accudetek Health Diagnostics"
+ },
+ "COUNTRYSIDE MEDICAL CLINIC-PASIG - MTBN": {
+  "id": 513,
+  "code": "CTRY",
+  "name": "Countryside Medical Clinic-Pasig"
+ },
+ "BASILICA DE PIAT MEDICAL CLINIC - MTBN": {
+  "id": 522,
+  "code": "PIAT",
+  "name": "Basilica De Piat Medical Clinic"
+ },
+ "HOLYLIFE HOSPITAL - MTBN": {
+  "id": 479,
+  "code": "HOLY",
+  "name": "Holylife Hospital"
+ },
+ "DR. GINA FAUSTINO CLINIC - MTBN": {
+  "id": 526,
+  "code": "FAUS",
+  "name": "Dr. Gina Faustino Clinic"
+ },
+ "THE CLINIC BY MBCI - MTBN": {
+  "id": 507,
+  "code": "MBCI",
+  "name": "The Clinic By MBCI"
+ },
+ "HEALTHLOCK MEDICAL DENTAL DIAGNOSTIC SERVICES - MTBN": {
+  "id": 499,
+  "code": "HLOCK",
+  "name": "Healthlock Medical Dental Diagnostic Services"
+ },
+ "VENTURA`S MEDICAL CLINIC - MTBN": {
+  "id": 512,
+  "code": "VENT",
+  "name": "Ventura's Medical Clinic"
+ },
+ "FAIRCARE X-RAY AND CLINIC LABORATORY - MTBN": {
+  "id": 484,
+  "code": "FAIR",
+  "name": "Faircare X-Ray And Clinic Laboratory"
+ },
+ "HEALTH CONNECTION MEDICAL CLINIC - MTBN": {
+  "id": 501,
+  "code": "HCON",
+  "name": "Health Connection Medical Clinic"
+ },
+ "ALFONSO SPECIALIST HOSPITAL - MTBN": {
+  "id": 477,
+  "code": "ALF",
+  "name": "Alfonso Specialist Hospital"
+ },
+ "THE MEDICAL CITY CLINIC- ESTANCIA MALL - MTBN": {
+  "id": 506,
+  "code": "TMCEM",
+  "name": "The Medical City Clinic- Estancia Mall"
+ },
+ "THE MEDICAL CITY CLINIC-SM ORTIGAS EAST - MTBN": {
+  "id": 496,
+  "code": "TMCSM",
+  "name": "The Medical City Clinic-Sm Ortigas East"
+ },
+ "WAWA HEALTH CENTER - IDOTS": null,
+ "NEW WORLD DIAGNOSTICS INC.-PASIG CITY - MTBN": {
+  "id": 523,
+  "code": "NWD",
+  "name": "New World Diagnostics Inc.-Pasig City"
+ },
+ "FLORESMED MEDICAL CARE CLINIC - MTBN": {
+  "id": 530,
+  "code": "FLOR",
+  "name": "Floresmed Medical Care Clinic"
+ },
+ "MERCIHUB MULTISPECIALTY AND DIAGNOSTICS - MTBN": {
+  "id": 500,
+  "code": "MERCI",
+  "name": "Mercihub Multispecialty And Diagnostics"
+ },
+ "VLF MEDICAL CLINIC - MTBN": {
+  "id": 516,
+  "code": "VLF",
+  "name": "VLF Medical Clinic"
+ },
+ "PARKWOOD DENTAL AND PEDRIATIC CLINIC - MTBN": {
+  "id": 514,
+  "code": "PARK",
+  "name": "Parkwood Dental And Pedriatic Clinic"
+ },
+ "ST. HANNAH MEDICAL CENTER - MTBN": {
+  "id": 503,
+  "code": "HANNA",
+  "name": "St. Hannah Medical Center"
+ },
+ "UYUGAN RURAL HEALTH UNIT - IDOTS": null,
+ "KAWIT RURAL HEALTH UNIT I - IDOTS": null,
+ "STA. MAGDALENA RURAL HEALTH UNIT - IDOTS": null,
+ "PALTOC HEALTH CENTER - IDOTS": null,
+ "ALICIA RURAL HEALTH UNIT - IDOTS": null,
+ "COMMONWEALTH HEALTH CENTER - IDOTS": null,
+ "CLINICA ANTIPOLO HOSPITAL AND WELLNESS CENTER - DOTS": null,
+ "PINAGSAMA HEALTH CENTER - IDOTS": null,
+ "WESTERN BICUTAN HEALTH CENTER - IDOTS": null,
+ "TAGUIG-PATEROS DISTRICT HOSPITAL - DOTS": null,
+ "SAN ROQUE HEALTH CENTER - IDOTS": null,
+ "MA. CLARA HEALTH CENTER - IDOTS": null,
+ "TLCC MEDICAL SERVICES - MTBN": {
+  "id": 529,
+  "code": "TLCC",
+  "name": "TLCC Medical Services"
+ },
+ "SAN ANTONIO ABAD HEALTH CARE - MTBN": {
+  "id": 518,
+  "code": "SAABD",
+  "name": "San Antonio Abad Health Care"
+ },
+ "ST. JOHN MEDICAL CLINIC - MTBN": {
+  "id": 528,
+  "code": "SJMC",
+  "name": "St. John Medical Clinic"
+ },
+ "SOCORRO HEALTH CENTER - IDOTS": null,
+ "PILILLA RURAL HEALTH UNIT - IDOTS": null,
+ "CEMBO HEALTH CENTER - IDOTS": null,
+ "DON BOSCO HEALTH CENTER - IDOTS": null,
+ "CITY OF GENERAL TRIAS TB DOTS CENTER-MANGGAHAN - IDOTS": null,
+ "TAYTAY RURAL HEALTH UNIT I - IDOTS": null,
+ "NANGKA HEALTH CENTER - IDOTS": null,
+ "CALARIAN RURAL HEALTH UNIT - IDOTS": null,
+ "TAYTAY RURAL HEALTH UNIT IV - IDOTS": null,
+ "CAINTA RURAL HEALTH UNIT III (ST. FRANCIS) - IDOTS": null,
+ "KALUMPANG HEALTH CENTER - IDOTS": null,
+ "MATAG-OB RURAL HEALTH UNIT - IDOTS": null,
+ "THE MEDICAL CITY CLINIC-AYALA FELIZ - MTBN": {
+  "id": 517,
+  "code": "TMCAF",
+  "name": "The Medical City Clinic-Ayala Feliz"
+ },
+ "ST. CHRISTIANA HOSPITAL INC. - MTBN": {
+  "id": 524,
+  "code": "CHRIS",
+  "name": "St. Christiana Hospital Inc."
+ },
+ "CORAZON E. CASTILLO CONDE M.D. MEDICAL CLINIC - MTBN": {
+  "id": 519,
+  "code": "CONDE",
+  "name": "Corazon E. Castillo Conde M.D. Medical Clinic"
+ },
+ "LDC DIAGNOSTICS-PASIG - MTBN": {
+  "id": 521,
+  "code": "LDC",
+  "name": "LDC Diagnostics-Pasig"
+ },
+ "MED HELP CLINIC & DIAGNOSTICS - MTBN": {
+  "id": 520,
+  "code": "MEDH",
+  "name": "Med Help Clinic & Diagnostics"
+ },
+ "SAN JOSE DEL MONTE CITY HEALTH CENTER I - IDOTS": null,
+ "MALAMIG HEALTH CENTER - IDOTS": null,
+ "BURDEOS RURAL HEALTH UNIT - IDOTS": null,
+ "MALOLOS RURAL HEALTH UNIT II - IDOTS": null,
+ "LUNG CENTER OF THE PHILIPPINES - IDOTS": null,
+ "LUCENA CITY RURAL HEALTH UNIT I - IDOTS": null,
+ "BATASAN HILLS SUPER HEALTH CENTER - IDOTS": null,
+ "SAN MATEO RURAL HEALTH UNIT I - IDOTS": null,
+ "GUINOBATAN MUNICIPAL HEALTH OFFICE PPMD UNIT-IDOTS": null,
+ "STO. NIÑO HEALTH CENTER - IDOTS": null,
+ "CALAMBA CITY HEALTH I - IDOTS": null,
+ "TAYTAY RURAL HEALTH UNIT II-A - IDOTS": null,
+ "TINAMBACAN MAIN HEALTH CENTER - IDOTS": null,
+ "PROJECT 4 HEALTH CENTER - IDOTS": null,
+ "STA. MARIA HEALTH CENTER - IDOTS": null,
+ "BARANGKA IBABA/ITAAS HEALTH CENTER - IDOTS": null,
+ "F.B. ANCHETA CHILDREN`S MEDICAL & DIAGNOSTIC CLINIC - MTBN": {
+  "id": 525,
+  "code": "ANCH",
+  "name": "F.B. Ancheta Children's Medical & Diagnostic Clinic"
+ },
+ "VISTA CARE MEDICAL CLINIC AND DIAGNOSTIC CENTER - MTBN": {
+  "id": 515,
+  "code": "VISTA",
+  "name": "Vista Care Medical Clinic And Diagnostic Center"
+ },
+ "ST. NICOLAS MEDICAL AND PEDIATRIC CLINIC - MTBN": {
+  "id": 527,
+  "code": "SNMP",
+  "name": "St. Nicolas Medical And Pediatric Clinic"
+ },
+ "MT. HERMONT MEDICAL CLINIC - MTBN": {
+  "id": 511,
+  "code": "HERM",
+  "name": "Mt. Hermont Medical Clinic"
+ },
+ "ALVEZ-CUNANAN FAMILY CARE CLINIC - MTBN": {
+  "id": 510,
+  "code": "ALVEZ",
+  "name": "Alvez-Cunanan Family Care Clinic"
+ }
+}

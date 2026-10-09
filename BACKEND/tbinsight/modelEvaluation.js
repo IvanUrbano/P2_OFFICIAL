@@ -3,9 +3,10 @@ const { evaluate, thresholds: callThresholds } = require('./mlClient');
 const { getPopulationMap } = require('./populationService');
 const { monthKey } = require('./scoring');
 const { pasigResidentOnly } = require('./locationScope');
+const { forecastErrorFloor, riskBandCeiling, lowHighConfusion } = require('./achievable');
 
 const MIN_TRAIN_MONTHS = 24;
-const MODEL_VERSION = 'arima-v1.1-rf-v1.1';
+const MODEL_VERSION = 'arima-v1.2-rf-v1.2';
 
 let evaluationStatus = {
   running: false,
@@ -19,7 +20,7 @@ let queuedEvaluation = false;
 let queuedMinTrain = MIN_TRAIN_MONTHS;
 
 async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
-  const { _buildTrainingRows, buildDenseSeries, dropUnfinishedMonth } = require('./pipeline');
+  const { _buildTrainingRows, buildDenseSeries, dropUnfinishedMonth, LABEL_HORIZON_MONTHS } = require('./pipeline');
   const monthlyResult = await pool.query(
     `SELECT barangay_name, DATE_TRUNC('month', date_of_diagnosis)::date AS month,
             COUNT(*)::integer AS case_count
@@ -121,8 +122,19 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
   if ((result.arima?.mae != null || result.arima?.mape != null) && evaluatedMonths.length === 0) {
     throw new Error('Evaluation returned error metrics without dated comparison periods.');
   }
+  // What a perfect model would score on the same months (see achievable.js): the
+  // evaluation is read against this, not against 100%. The RF was tested on the last
+  // n_steps label months.
+  const rfSteps = result.rf?.n_steps || 0;
+  const labelMonths = [...new Set(trainRows.map(row => row.month))].sort();
+  const achievableMae = forecastErrorFloor(perBarangay, seriesByBarangay);
+  const rfCeiling = rfSteps > 0
+    ? riskBandCeiling(seriesByBarangay, popMapByYear, labelMonths.slice(-rfSteps), LABEL_HORIZON_MONTHS)
+    : null;
+
   const savedMetrics = {
     arima: {
+      achievable_mae: achievableMae,
       mae: result.arima?.mae ?? null,
       mape: result.arima?.mape ?? null,
       n_steps: result.arima?.n_steps ?? 0,
@@ -153,6 +165,9 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
       persistence_accuracy: result.rf?.persistence_accuracy ?? null,
       persistence_kappa: result.rf?.persistence_kappa ?? null,
       n_steps: result.rf?.n_steps ?? 0,
+      confusion_matrix: result.rf?.confusion_matrix || null,
+      ceiling_accuracy: rfCeiling,
+      low_high_confusion: lowHighConfusion(result.rf?.confusion_matrix),
     },
   };
 

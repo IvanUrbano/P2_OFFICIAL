@@ -16,7 +16,7 @@ if not ML_API_KEY:
 
 # ==================== MODEL CONFIG ====================
 
-MODEL_VERSION = "arima-v1.1-rf-v1.1"  # v1.1: city-combined ARIMA, 10 RF features, 33/60 bands
+MODEL_VERSION = "arima-v1.2-rf-v1.2"  # v1.2: city-first seasonal ARIMA, 12 RF features (all-history), shallow RF
 
 # Worker processes for per-barangay ARIMA fits (1 = serial). Defaults to up to 4 cores.
 ML_N_JOBS = int(os.environ.get("ML_N_JOBS", "0")) or min(4, os.cpu_count() or 1)
@@ -42,6 +42,14 @@ ARIMA_LOG_TRANSFORM = os.environ.get("ARIMA_LOG_TRANSFORM", "0") == "1"
 # ARIMA_SHARE_WINDOW months. The city total is far smoother than any barangay.
 ARIMA_COMBINE_CITY = os.environ.get("ARIMA_COMBINE_CITY", "1") == "1"
 ARIMA_SHARE_WINDOW = 12
+# Weight of the city-first forecast in that average (1 = city-first only). Each
+# barangay's rate is nearly constant and its monthly counts are close to pure
+# counting noise, so its own ARIMA mostly fits noise; the city total carries the
+# one real pattern, the annual season. Walk-forward on 2023-2025 (months 19-36),
+# skill against the 12-month average: own ARIMA averaged with city +1%, city-first
+# with a forced seasonal fit +6% at weight 0.5 and +9% at weight 1. At weight 1 the
+# per-barangay fits are skipped (they are only run if the city fit fails).
+ARIMA_CITY_WEIGHT = float(os.environ.get("ARIMA_CITY_WEIGHT", "1.0"))
 
 # Evaluation also scores the forecast as a 3-month TOTAL (the pipeline stores 3
 # months ahead). Single barangay-months are mostly chance; over 3 months much of
@@ -57,22 +65,34 @@ ARIMA_EVAL_TOTAL_MONTHS = 3
 ARIMA_EVAL_RESELECT_MONTHS = 12
 
 # Random Forest settings (tuned for ~700+ monthly snapshot training samples).
-# Chosen by walk-forward grid search over depth, tree count and split/leaf minima
-# against the balanced relative-tertile labels (see rf_classifier.derive_labels):
-# 55.3% accuracy on a three-way split whose majority-class baseline is 33.3%.
-# Unbounded depth with small leaves beat the previous shallower, more constrained
-# forest — once the labels were balanced, the earlier settings were underfitting.
-RF_MAX_DEPTH = None
+# Chosen by walk-forward search (labels kept out of training once they reach the
+# test month) over depth 3/4/6/unbounded x leaf 5/10/20, two seeds each, with the
+# all-history features. The labels are mostly counting noise around rates that barely
+# change, so deep trees learn the noise: shallow trees with large leaves scored best.
+# 2023-2025 data, 11 test months: accuracy 56.4% -> 59.1%, quadratic kappa
+# 0.475 -> 0.561, above the "rank the last 12 months" rule (59.7%, 0.543); Low and
+# High confused in 6.4% of cases. A perfect model knowing each barangay's true rate
+# would score about 64% on these labels.
+RF_MAX_DEPTH = 3
 RF_N_ESTIMATORS = 500
 RF_RANDOM_STATE = 42
 RF_MIN_SAMPLES_SPLIT = 4
-RF_MIN_SAMPLES_LEAF = 2
+RF_MIN_SAMPLES_LEAF = 10
 
 # Smaller, shallower forest for short histories (fewer than RF_LARGE_SAMPLE rows,
 # e.g. one year x 30 barangays): deep trees would just memorize the noise.
 RF_LARGE_SAMPLE = 400
 RF_SMALL_MAX_DEPTH = 4
 RF_SMALL_N_ESTIMATORS = 200
+# Leaves of RF_MIN_SAMPLES_LEAF would leave a short history too few splits to learn
+# from (15 rows could not split at all). 5 scored best of 2/3/5 in walk-forward, whose
+# early test months train on fewer than RF_LARGE_SAMPLE rows.
+RF_SMALL_MIN_SAMPLES_LEAF = 5
+
+# Months averaged into one RF label: the target month and the ones after it. Must
+# match LABEL_HORIZON_MONTHS in BACKEND/tbinsight/pipeline.js. Walk-forward
+# evaluation uses it to keep labels that reach into the test month out of training.
+RF_LABEL_HORIZON_MONTHS = 3
 
 # Below this many training rows the RF is not trained; the classifier applies the
 # incidence thresholds directly (the RF labels ARE those thresholds, so an RF fit on

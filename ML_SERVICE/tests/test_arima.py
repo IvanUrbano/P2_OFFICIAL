@@ -226,7 +226,7 @@ def test_walk_forward_searches_orders_only_when_needed(monkeypatch):
         def predict(self, n_periods, return_conf_int, alpha):
             return np.full(n_periods, 5.0), np.full((n_periods, 2), [4.0, 6.0])
 
-    def fake_fit_model(values, template=None):
+    def fake_fit_model(values, template=None, force_seasonal=False):
         calls.append((len(values), "search" if template is None else "refit"))
         if template is None and len(values) == 20:
             raise ValueError("search failed")  # e.g. pmdarima's seasonal test on a short series
@@ -245,3 +245,35 @@ def test_walk_forward_searches_orders_only_when_needed(monkeypatch):
     assert searches == [20, 21, 24, 30, 42]
     assert sum(1 for _, kind in calls if kind == "refit") == 26
     assert result["method_counts"] == {"arima": 29, af.FALLBACK_METHOD: 1}
+
+
+def test_city_first_forecast_splits_one_seasonal_city_forecast_by_share():
+    """Barangay forecasts are shares of one city forecast, so they add up to it."""
+    import arima_forecast as af
+
+    rng = np.random.default_rng(1)
+    months = pd.date_range("2023-01-01", periods=36, freq="MS").strftime("%Y-%m-%d")
+    season = 1 + 0.2 * np.sin(np.arange(36) * 2 * np.pi / 12)
+    data = [
+        {"barangay_name": name, "month": m, "case_count": int(c)}
+        for name, rate in [("Big", 40), ("Mid", 15), ("Small", 4)]
+        for m, c in zip(months, rng.poisson(rate * season))
+    ]
+    out = af.forecast_all(data, forecast_horizon=3)
+    city, _ = af.city_forecast(
+        {n: np.array([r["case_count"] for r in data if r["barangay_name"] == n], float) for n in ["Big", "Mid", "Small"]}, 3
+    )
+    assert {r["method"] for r in out} == {"arima"}
+    total = sum(r["predictions"][0]["yhat"] for r in out)
+    assert abs(total - sum(float(v[0][0]) for v in city.values())) < 1e-6
+    big = next(r for r in out if r["barangay_name"] == "Big")["predictions"][0]
+    assert big["yhat_lower"] <= big["yhat"] <= big["yhat_upper"]
+
+
+def test_share_interval_includes_counting_noise():
+    """With a certain city total, a barangay's count still varies by chance (variance = mean)."""
+    from arima_forecast import share_interval
+
+    mean, lower, upper = share_interval([100.0], [100.0], [100.0], 0.25)
+    assert mean[0] == 25.0
+    assert abs((upper[0] - mean[0]) - 1.96 * 5.0) < 1e-9  # sd = sqrt(25)

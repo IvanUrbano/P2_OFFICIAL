@@ -17,8 +17,7 @@ Frontend directory layout is **non-standard**: shared components live in `FRONTE
 | `npm run lint` | FRONTEND | ESLint (frontend only) |
 | `npm run build` | FRONTEND | Vite build → `FRONTEND/dist/` |
 
-Backend has 80\+ tests (run \
-ode --test BACKEND/test/\*.test.js BACKEND/test/tbinsight/\*.test.js\). CI (`/.github/workflows/ci.yml`) only runs `npm run build` on the frontend — no backend checks or lint.
+Backend has 700+ tests (run `node --test BACKEND/test/*.test.js BACKEND/test/tbinsight/*.test.js`); Pasig Clone has its own (`cd PASIG_CLONE/backend && node --test test/*.test.js`). Tests stub `BACKEND/db.js` via `require.cache` — never let a test load the real one: it connects to the configured database and runs the startup migrations. CI (`/.github/workflows/ci.yml`) only runs `npm run build` on the frontend — no backend checks or lint.
 
 ## Database Setup
 
@@ -30,7 +29,7 @@ ode --test BACKEND/test/\*.test.js BACKEND/test/tbinsight/\*.test.js\). CI (`/.g
 
 ## Environment
 
-- Backend: **`BACKEND/.env.example` is missing** — create `BACKEND/.env` manually with `DB_USER`, `DB_HOST`, `DB_NAME`, `DB_PASSWORD`, `DB_PORT`. In production, `DATABASE_URL` takes precedence over discrete vars.
+- Backend: copy `BACKEND/.env.example` to `BACKEND/.env` (or set discrete `DB_USER`, `DB_HOST`, `DB_NAME`, `DB_PASSWORD`, `DB_PORT`). In production, `DATABASE_URL` takes precedence over discrete vars.
 - Frontend: `VITE_API_URL` defaults to `http://localhost:5000`. Set via `FRONTEND/.env` (local) or Vercel env vars (production). `FRONTEND/.env.production.example` shows the Render URL format.
 - Login rate-limit: 5 attempts / 15 min window (config via `LOGIN_LIMIT_WINDOW_MINS`, `LOGIN_LIMIT_MAX`).
 
@@ -44,7 +43,7 @@ ode --test BACKEND/test/\*.test.js BACKEND/test/tbinsight/\*.test.js\). CI (`/.g
 
 ## CORS
 
-Allows `localhost:5173`, `localhost:5174`, `localhost:3000`, and any Vercel preview matching `^https://p2-official[a-z0-9-]*\.vercel\.app$`. `FRONTEND_URL` env var also allowed.
+Allows `localhost:5173`, `localhost:5174`, `localhost:5001`, `localhost:5050`, `localhost:3000`, and any Vercel preview matching `^https://p2-official[a-z0-9-]*\.vercel\.app$`. `FRONTEND_URL` env var also allowed.
 
 ## Deployment
 
@@ -54,7 +53,7 @@ Allows `localhost:5173`, `localhost:5174`, `localhost:3000`, and any Vercel prev
 
 ## Key Quirks
 
-- `BACKEND/.env.example` is **missing** from the repo — README references it but it doesn't exist. Create one if needed.
+- `WEBHOOK_SECRET` must be identical on TBInsight and Pasig Clone (locally in both `.env` files; on Render set by hand on `p2-official` and `pasig-clone-backend`). A mismatch makes every sync fail with `401 Invalid signature`.
 - `init.sql` runs automatically on every backend startup.
 - ESLint covers frontend only. Backend has no lint or typecheck config.
 - No TypeScript anywhere — all `.js`/`.jsx`.
@@ -154,13 +153,14 @@ BACKEND/
 - **Date column**: `date_of_diagnosis` is the ARIMA time key
 - **Incidence formula**: (cases ÷ population) × 100,000
 - **Risk bands**: one rule everywhere — barangays ranked by incidence, bottom third (33.3rd percentile) Low, top 40% (60th percentile) High: 30 barangays → 10 / 8 / 12. Constants `LOW_PERCENTILE` / `MED_PERCENTILE` in `ML_SERVICE/thresholds.py` and `BACKEND/tbinsight/scoring.js` (must match); used by the thresholds, the RF labels (`rf_classifier.band_for_rank`) and `prev_category`. Relative, not absolute WHO thresholds
-- **RF features (10)**: rolling_12m_incidence, incidence_3m, recent_trend, seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk, incidence_rank, prev_category. Lags are incidence per 100k, not raw counts. incidence_rank (0-1) and prev_category (0/1/2, the band of the last 3 months under the same rule) are ranks against the other barangays that month, added by `addCrossSectionFeatures` to training AND prediction rows (historical_bias removed: it measured ARIMA error, not TB risk)
+- **RF features (12)**: rolling_12m_incidence, incidence_3m, recent_trend, seasonality_flag, lag_1m, lag_2m, lag_3m, neighbor_risk, incidence_rank, prev_category, history_incidence, history_rank. Lags are incidence per 100k, not raw counts. incidence_rank (0-1) and prev_category (0/1/2, the band of the last 3 months under the same rule) are ranks against the other barangays that month, added by `addCrossSectionFeatures` to training AND prediction rows (historical_bias removed: it measured ARIMA error, not TB risk). history_incidence / history_rank cover ALL months before the target: barangay rates barely change year to year and monthly counts are mostly counting noise, so the longest average is the steadiest risk signal. Forest is shallow (depth 3, leaf 10; small histories leaf 5) — deep trees fit the label noise
+- **Data reality (2023-2025)**: per-barangay monthly counts are ~Poisson noise around a near-constant rate (variance/mean ≈ 1.05, year-to-year correlation 0.998); the only systematic pattern is the city-wide Jul-Sep peak. Scores have a ceiling well below 100% — `tbinsight/achievable.js` computes it and the evaluation stores it (`arima.achievable_mae`, `rf.ceiling_accuracy`, ~64% for the 3-month band labels)
 - **RF labels**: barangays ranked within each month (the risk-band rule above) on the average incidence of the target month and the 2 after it (`LABEL_HORIZON_MONTHS = 3`; training rows carry `month` through the ML API)
 - **Neighbor risk**: average incidence (month t-1) of the barangays sharing a border — PostGIS `ST_DWithin` 50 m on `barangays_geom` (`tbinsight/barangayAdjacency.js`), normalized to 0-1
 - **Forecast horizon**: every pipeline run stores at least 3 months so the 1- and 3-month views both have data
-- **Forecast method**: each barangay's own ARIMA averaged with a city-first forecast (ARIMA on the city total × the barangay's share of the last 12 months) — `ARIMA_COMBINE_CITY`. A log(1 + cases) transform exists behind `ARIMA_LOG_TRANSFORM` but is OFF: it made walk-forward error worse on this data
+- **Forecast method**: city-first — seasonal ARIMA on the city total (forced seasonal AR, no seasonal differencing, from 24 months) × each barangay's share of the last 12 months (`ARIMA_COMBINE_CITY`, `ARIMA_CITY_WEIGHT` = 1). Per-barangay ARIMA is only fitted if the city fit fails or the weight is lowered; it fitted noise (skill +1% vs +8% city-first). Barangay intervals add counting noise (variance = mean) to the share of the city interval (`share_interval`). A log(1 + cases) transform exists behind `ARIMA_LOG_TRANSFORM` but is OFF: it made walk-forward error worse on this data
 - **Unfinished month**: the live pipeline and the evaluation drop the current calendar month (Philippine time) via `dropUnfinishedMonth` — a partial month reads as a drop
-- **Evaluation**: `/evaluate` reports a reference next to each model. ARIMA: MAE, RMSE, WAPE and skill (1 − MAE ÷ 12-month-average MAE; > 0 beats it); MAPE is still returned but not shown. The same figures are also reported for 3-month totals (`*_3m`, `ARIMA_EVAL_TOTAL_MONTHS`), scored from the same fits. Walk-forward runs the auto_arima order search once per series, then refits those orders each month, searching again every 12 steps (`ARIMA_EVAL_RESELECT_MONTHS`), at 24 months (seasonal models become possible) and after a failed fit — needed because Lambda fits one at a time (`ML_N_JOBS=1`) and a search every month overran the backend's 5-minute limit
+- **Evaluation**: `/evaluate` reports a reference next to each model. ARIMA: MAE, RMSE, WAPE and skill (1 − MAE ÷ 12-month-average MAE; > 0 beats it); MAPE is still returned but not shown. The same figures are also reported for 3-month totals (`*_3m`, `ARIMA_EVAL_TOTAL_MONTHS`), scored from the same fits. Walk-forward runs the auto_arima order search once per series, then refits those orders each month, searching again every 12 steps (`ARIMA_EVAL_RESELECT_MONTHS`), at 24 months (seasonal models become possible) and after a failed fit — needed because Lambda fits one at a time (`ML_N_JOBS=1`) and a search every month overran the backend's 5-minute limit. RF walk-forward leaves out training rows whose 3-month label reaches into the test month (`label_horizon`). The Forecasting page shows each model against its best achievable score (`achievable.js`)
 - **Actual-vs-predicted chart**: `GET /api/tb/forecast/backtest` serves the latest saved evaluation's per-barangay steps (real model predictions); empty until one exists. It no longer shows "same month last year" RF: accuracy, macro-F1, quadratic-weighted kappa, against ranked 12-month incidence and against last-3-months band carried forward
 - **Risk classification (authoritative)**: Random Forest's own predicted class, persisted with model_type/model_version/classification_confidence in `barangay_risk_scores` — this is what GIS displays
 - **Legacy weighted risk_score**: 45% incidence + 25% trend + 20% neighbor risk + 10% forecast error — a separate analytical index only, does NOT determine risk_class or GIS color

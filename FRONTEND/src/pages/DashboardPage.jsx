@@ -490,8 +490,8 @@ export default function DashboardPage() {
     setLoading(false);
   }, [settle, loadScoped]);
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadAll();
     handleGenerateDashboardInsight();
   }, [loadAll, handleGenerateDashboardInsight]);

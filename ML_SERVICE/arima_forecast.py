@@ -22,6 +22,7 @@ from joblib import Parallel, delayed
 from pmdarima import ARIMA, auto_arima
 
 from config import (
+    ARIMA_CITY_WEIGHT,
     ARIMA_COMBINE_CITY,
     ARIMA_EVAL_RESELECT_MONTHS,
     ARIMA_EVAL_TOTAL_MONTHS,
@@ -122,13 +123,31 @@ def _exponential_smoothing_forecast(series: pd.Series, forecast_horizon: int = 1
         return _seasonal_naive_forecast(series, forecast_horizon)
 
 
-def _fit_arima(values):
+def _fit_arima(values, force_seasonal: bool = False):
     """
     Fit auto_arima. Seasonal only when there are two full annual cycles;
     otherwise a small non-seasonal model (orders capped to avoid overfitting
     short series).
+
+    force_seasonal (the city total): the search starts from a seasonal AR term
+    with no seasonal differencing. Left to itself, auto_arima's seasonal-
+    differencing test fails on 24-35 months and the fit errors out or drops the
+    season, though the city's July-September peak repeats every year.
     """
     values = np.asarray(values, dtype=float)
+    if len(values) >= ARIMA_MIN_HISTORY and force_seasonal:
+        return auto_arima(
+            values,
+            seasonal=True,
+            m=ARIMA_SEASONAL_PERIOD,
+            D=0,
+            start_P=1,
+            stepwise=True,
+            suppress_warnings=True,
+            error_action="ignore",
+            max_order=6,
+            trace=False,
+        )
     if len(values) >= ARIMA_MIN_HISTORY:
         return auto_arima(
             values,
@@ -153,7 +172,7 @@ def _fit_arima(values):
     )
 
 
-def _fit_model(values, template=None):
+def _fit_model(values, template=None, force_seasonal: bool = False):
     """
     Fit on the modelling scale (log(1 + cases) with ARIMA_LOG_TRANSFORM).
     Without `template` this runs the auto_arima order search; with one, it
@@ -163,7 +182,7 @@ def _fit_model(values, template=None):
     if ARIMA_LOG_TRANSFORM:
         values = np.log1p(values)
     if template is None:
-        return _fit_arima(values)
+        return _fit_arima(values, force_seasonal)
     return ARIMA(
         order=template.order,
         seasonal_order=template.seasonal_order,
@@ -190,9 +209,9 @@ def _predict_model(model, horizon: int):
     return np.expm1(mu + sigma ** 2 / 2), np.expm1(ci[:, 0]), np.expm1(ci[:, 1])
 
 
-def _fit_predict(values, horizon: int):
+def _fit_predict(values, horizon: int, force_seasonal: bool = False):
     """Fit ARIMA (full order search) and forecast `horizon` months: (mean, lower, upper)."""
-    return _predict_model(_fit_model(values), horizon)
+    return _predict_model(_fit_model(values, force_seasonal=force_seasonal), horizon)
 
 
 def city_shares(counts_by_name: dict, end: int) -> dict:
@@ -202,15 +221,34 @@ def city_shares(counts_by_name: dict, end: int) -> dict:
     return {name: (v / total if total > 0 else 1 / len(window)) for name, v in window.items()}
 
 
-def city_forecast(counts_by_name: dict, horizon: int) -> dict:
+def share_interval(mean, lower, upper, share: float):
     """
-    City-first forecast: ARIMA on the city-wide monthly total, split across
-    barangays by their recent share of cases. Returns {name: (mean, lower, upper)}.
+    One barangay's 95% interval from the city interval and its share.
+
+    The barangay's count varies for two reasons: the city total is uncertain
+    (the city interval, scaled by the share) and, given the total, which
+    barangay a case falls in is chance (counting noise, variance = the mean).
+    Scaling the city interval alone would leave out the second, which is the
+    larger one for a barangay of a few cases a month.
+    """
+    mean, lower, upper = (np.asarray(v, dtype=float) for v in (mean, lower, upper))
+    city_sd = np.maximum(upper - lower, 0) / (2 * 1.96)
+    b_mean = np.maximum(mean * share, 0)
+    sd = np.sqrt((city_sd * share) ** 2 + b_mean)
+    return b_mean, np.maximum(b_mean - 1.96 * sd, 0), b_mean + 1.96 * sd
+
+
+def city_forecast(counts_by_name: dict, horizon: int) -> tuple[dict, str]:
+    """
+    City-first forecast: seasonal ARIMA on the city-wide monthly total, split
+    across barangays by their recent share of cases.
+    Returns ({name: (mean, lower, upper)}, method).
     """
     city = np.sum([np.asarray(c, dtype=float) for c in counts_by_name.values()], axis=0)
-    mean, lower, upper = _fit_predict(city, horizon)
+    mean, lower, upper = _fit_predict(city, horizon, force_seasonal=True)
     shares = city_shares(counts_by_name, len(city))
-    return {name: (mean * sh, lower * sh, upper * sh) for name, sh in shares.items()}
+    method = "arima" if len(city) >= ARIMA_MIN_HISTORY else "arima_nonseasonal"
+    return {name: share_interval(mean, lower, upper, sh) for name, sh in shares.items()}, method
 
 
 def _fallback_forecast(series: pd.Series, forecast_horizon: int = 1) -> dict:
@@ -376,16 +414,23 @@ def forecast_all(
     wide = wide.reindex(pd.date_range(wide.index[0], wide.index[-1], freq="MS"), fill_value=0)
     wide = _trim_leading_months(wide)
 
-    jobs = [(name, wide[name].astype(float), forecast_horizon) for name in wide.columns]
-    results = parallel_map(forecast_barangay, jobs)
-
-    if ARIMA_COMBINE_CITY and len(wide) >= ARIMA_MIN_HISTORY_NONSEASONAL:
+    city, city_method = None, None
+    if _use_city_first(wide.sum(axis=1)):
         try:
-            city = city_forecast({n: wide[n].values for n in wide.columns}, forecast_horizon)
+            city, city_method = city_forecast({n: wide[n].values for n in wide.columns}, forecast_horizon)
+        except Exception as e:
+            logger.warning(f"City-first forecast failed, using per-barangay forecasts: {e}")
+
+    if city is not None and ARIMA_CITY_WEIGHT >= 1:
+        # City-first only: each barangay's own ARIMA would get weight 0, so it is not fitted.
+        results = [_city_only_result(name, wide.index[-1], city[name], city_method, forecast_horizon)
+                   for name in wide.columns]
+    else:
+        jobs = [(name, wide[name].astype(float), forecast_horizon) for name in wide.columns]
+        results = parallel_map(forecast_barangay, jobs)
+        if city is not None:
             for name, result in zip(wide.columns, results):
                 _combine_with_city(result, city[name])
-        except Exception as e:
-            logger.warning(f"City-first forecast failed, keeping per-barangay forecasts: {e}")
     for barangay_name, result in zip(wide.columns, results):
         n_preds = len(result["predictions"])
         logger.info(
@@ -396,15 +441,39 @@ def forecast_all(
     return results
 
 
-def _combine_with_city(result: dict, city: tuple) -> None:
-    """Average a barangay's own forecast with its city-first share, in place."""
+def _use_city_first(city: pd.Series) -> bool:
+    """City-first applies when the city total itself passes the ARIMA checks (length, sparsity)."""
+    return ARIMA_COMBINE_CITY and not _needs_fallback(city)
+
+
+def _city_only_result(name: str, last_month, city: tuple, method: str, horizon: int) -> dict:
+    """forecast_barangay's result shape, built from the barangay's city-first share."""
     mean, lower, upper = city
+    start = pd.Timestamp(last_month).to_period("M").to_timestamp()
+    predictions = [{
+        "month": (start + pd.DateOffset(months=i + 1)).strftime("%Y-%m-%d"),
+        "yhat": float(mean[i]),
+        "yhat_lower": float(lower[i]),
+        "yhat_upper": float(upper[i]),
+    } for i in range(horizon)]
+    return {
+        "barangay_name": name,
+        "period": (start + pd.DateOffset(months=horizon)).strftime("%Y-%m-%d"),
+        "predictions": predictions,
+        "method": method,
+    }
+
+
+def _combine_with_city(result: dict, city: tuple) -> None:
+    """Weight a barangay's own forecast with its city-first share (ARIMA_CITY_WEIGHT), in place."""
+    mean, lower, upper = city
+    w = ARIMA_CITY_WEIGHT
     for i, p in enumerate(result["predictions"]):
         if p["yhat"] is None or i >= len(mean):
             continue
-        p["yhat"] = max(0.0, (p["yhat"] + float(mean[i])) / 2)
-        p["yhat_lower"] = max(0.0, (p["yhat_lower"] + float(lower[i])) / 2)
-        p["yhat_upper"] = (p["yhat_upper"] + float(upper[i])) / 2
+        p["yhat"] = max(0.0, (1 - w) * p["yhat"] + w * float(mean[i]))
+        p["yhat_lower"] = max(0.0, (1 - w) * p["yhat_lower"] + w * float(lower[i]))
+        p["yhat_upper"] = (1 - w) * p["yhat_upper"] + w * float(upper[i])
 
 
 def compute_trend(series: pd.Series, window: int = 12) -> float:
@@ -492,10 +561,11 @@ class _WalkForwardFitter:
     so each forecast still only uses months before the one it predicts.
     """
 
-    def __init__(self):
+    def __init__(self, force_seasonal: bool = False):
         self.template = None
         self.seasonal = None
         self.age = 0
+        self.force_seasonal = force_seasonal
 
     def forecast(self, train, horizon: int = ARIMA_EVAL_TOTAL_MONTHS) -> tuple[list[float], str]:
         """
@@ -516,7 +586,7 @@ class _WalkForwardFitter:
                 except Exception:
                     self.template = None
             if model is None:
-                model = _fit_model(train)
+                model = _fit_model(train, force_seasonal=self.force_seasonal)
                 self.template, self.seasonal, self.age = model, seasonal, 0
             self.age += 1
             return [max(0.0, float(v)) for v in _predict_model(model, horizon)[0]], "arima"
@@ -549,6 +619,7 @@ def walk_forward_arima(
     seasonal_m: int = 12,
     city_preds: Optional[list[float]] = None,
     shares: Optional[list[float]] = None,
+    city_methods: Optional[list[str]] = None,
 ) -> dict:
     """
     Walk-forward evaluation for ARIMA forecasting.
@@ -562,8 +633,9 @@ def walk_forward_arima(
         seasonal_m: Seasonal period (12 for monthly)
         city_preds / shares: per step, the city-first forecasts for the next
             ARIMA_EVAL_TOTAL_MONTHS months and this barangay's share of them (see
-            walk_forward_all). When given, each prediction is the average of the
-            barangay's own ARIMA and its city share, as forecast_all produces.
+            walk_forward_all). When given, each prediction weights the barangay's
+            own ARIMA and its city share by ARIMA_CITY_WEIGHT, as forecast_all
+            does; at weight 1 the own ARIMA is not fitted (city_methods tag the steps).
 
     Each step also scores the next ARIMA_EVAL_TOTAL_MONTHS months as one total
     (actual_3m / predicted_3m / baseline_3m) when those months exist; the
@@ -611,10 +683,15 @@ def walk_forward_arima(
         train = counts[:i]
         actual = float(counts[i])
 
-        ahead, method = fitter.forecast(train)
-        if city_preds is not None:
-            k = i - min_train
-            ahead = [max(0.0, (p + c * shares[k]) / 2) for p, c in zip(ahead, city_preds[k])]
+        k = i - min_train
+        if city_preds is not None and ARIMA_CITY_WEIGHT >= 1:
+            ahead = [max(0.0, c * shares[k]) for c in city_preds[k]]
+            method = city_methods[k] if city_methods else "arima"
+        else:
+            ahead, method = fitter.forecast(train)
+            if city_preds is not None:
+                w = ARIMA_CITY_WEIGHT
+                ahead = [max(0.0, (1 - w) * p + w * c * shares[k]) for p, c in zip(ahead, city_preds[k])]
         predicted = ahead[0]
 
         error = abs(actual - predicted)
@@ -692,6 +769,7 @@ def _walk_forward_arima_job(
     min_train: int,
     city_preds: Optional[list[float]] = None,
     shares: Optional[list[float]] = None,
+    city_methods: Optional[list[str]] = None,
 ) -> dict:
     """
     Wraps walk_forward_arima for use with parallel_map — same unmodified
@@ -709,7 +787,8 @@ def _walk_forward_arima_job(
     be lost too.
     """
     try:
-        result = walk_forward_arima(counts, min_train=min_train, city_preds=city_preds, shares=shares)
+        result = walk_forward_arima(counts, min_train=min_train, city_preds=city_preds,
+                                    shares=shares, city_methods=city_methods)
         result["barangay_name"] = barangay_name
         result["error"] = None
         return result
@@ -740,13 +819,19 @@ def walk_forward_all(counts_by_name: dict, min_train: int) -> dict:
     """
     names = list(counts_by_name)
     n = len(counts_by_name[names[0]]) if names else 0
-    city_preds, shares = None, {}
-    if ARIMA_COMBINE_CITY and n > min_train:
-        city = np.sum([np.asarray(counts_by_name[b], dtype=float) for b in names], axis=0)
-        city_fitter = _WalkForwardFitter()
-        city_preds = [city_fitter.forecast(city[:i])[0] for i in range(min_train, n)]
+    city_preds, city_methods, shares = None, None, {}
+    city = np.sum([np.asarray(counts_by_name[b], dtype=float) for b in names], axis=0) if names else np.array([])
+    if n > min_train and _use_city_first(pd.Series(city)):
+        city_fitter = _WalkForwardFitter(force_seasonal=True)
+        city_steps = [city_fitter.forecast(city[:i]) for i in range(min_train, n)]
+        city_preds = [preds for preds, _ in city_steps]
+        # Tagged like forecast_all: a seasonal fit needs ARIMA_MIN_HISTORY months.
+        city_methods = [
+            m if m != "arima" or i >= ARIMA_MIN_HISTORY else "arima_nonseasonal"
+            for (_, m), i in zip(city_steps, range(min_train, n))
+        ]
         share_by_step = [city_shares(counts_by_name, i) for i in range(min_train, n)]
         shares = {b: [s[b] for s in share_by_step] for b in names}
 
-    jobs = [(b, list(counts_by_name[b]), min_train, city_preds, shares.get(b)) for b in names]
+    jobs = [(b, list(counts_by_name[b]), min_train, city_preds, shares.get(b), city_methods) for b in names]
     return dict(zip(names, parallel_map(_walk_forward_arima_job, jobs)))
