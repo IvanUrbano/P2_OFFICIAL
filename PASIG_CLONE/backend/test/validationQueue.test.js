@@ -5,7 +5,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
-const { categorizeMatch, issueType, issueField, suggestFacility, NEEDS_LOCATION, READY } = require('../services/validationQueue');
+const { categorizeMatch, issueType, issueField, protectedIdentityChanges, suggestFacility, NEEDS_LOCATION, READY } = require('../services/validationQueue');
 
 const existing = {
   case_no: 'CS-2025-000010', date_of_diagnosis: '2025-03-04', outcome_status: 'ON TREATMENT',
@@ -104,5 +104,29 @@ describe('queue predicates', () => {
   });
   it('ready excludes pending matches and both assignment kinds', () => {
     assert.ok(READY.includes("match_status <> 'pending'") && READY.includes('NOT'));
+  });
+});
+
+describe('protectedIdentityChanges (historical data issues)', () => {
+  const record = { last_name: 'Reyes', first_name: 'Ana', date_of_birth: '2029-01-07', middle_name: null };
+
+  it('refuses changing a stored date of birth while the Records PIN is locked', () => {
+    const r = protectedIdentityChanges(record, { date_of_birth: '1982-03-04' });
+    assert.deepStrictEqual(r.locked, ['date_of_birth']);
+  });
+
+  it('allows correcting a stored date of birth once the Records PIN is unlocked', () => {
+    const r = protectedIdentityChanges(record, { date_of_birth: '1982-03-04' }, { dobEditable: true });
+    assert.deepStrictEqual(r, { locked: [], keep: [] });
+  });
+
+  it('never allows changing a stored name, PIN or not', () => {
+    const r = protectedIdentityChanges(record, { last_name: 'Cruz', date_of_birth: '1982-03-04' }, { dobEditable: true });
+    assert.deepStrictEqual(r.locked, ['last_name']);
+  });
+
+  it('a blank name may be filled in; an unchanged stored value is simply kept', () => {
+    const r = protectedIdentityChanges(record, { middle_name: 'Santos', first_name: 'Ana' });
+    assert.deepStrictEqual(r, { locked: [], keep: ['first_name'] });
   });
 });

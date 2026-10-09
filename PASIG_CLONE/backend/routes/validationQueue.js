@@ -36,7 +36,7 @@ const {
 } = require('../policies/permissions');
 const {
   LIVE, NEEDS_LOCATION, NEEDS_FACILITY, MATCH_PENDING, READY, SENDS_TO_TBINSIGHT,
-  categorizeMatch, issueType, issueField, suggestFacility, ymd, normFacility,
+  categorizeMatch, issueType, issueField, protectedIdentityChanges, suggestFacility, ymd, normFacility,
 } = require('../services/validationQueue');
 const { cleanRecord, PASIG_BARANGAYS } = require('../services/dataCleaner');
 const { validateRecord, getValidBarangays, INSERT_COLUMNS, rowValues, identityRuleFor, currentIssueErrors } = require('../services/validator');
@@ -801,18 +801,20 @@ router.put('/issues/:id', authenticate, authorizeRoles('admin', 'staff'), async 
     if (error) return res.status(error[0]).json({ error: error[1] });
 
     const changes = req.body?.changes || {};
-    // Historical rows: stored names/DOB are de-identified and never modified. A blank
-    // required value may still be filled in.
+    // Historical rows: stored names are de-identified and never modified; a blank required
+    // value may still be filled in. The date of birth is the exception once the user has
+    // unlocked the Records PIN (the same unlock that shows it): a mistyped one — e.g. after
+    // the date of diagnosis — would otherwise leave the row impossible to fix.
     if (!pinService.namesAllowed(issue)) {
-      const locked = NAME_FIELDS.filter(f => Object.prototype.hasOwnProperty.call(changes, f)
-        && issue.record?.[f] !== null && issue.record?.[f] !== undefined && String(issue.record[f]).trim() !== ''
-        && String(changes[f] ?? '') !== String(issue.record[f]));
+      const { locked, keep } = protectedIdentityChanges(issue.record, changes, { dobEditable: pinService.isUnlocked(req) });
       if (locked.length) {
-        return res.status(403).json({ error: 'This is a de-identified historical record — its stored patient name and date of birth cannot be changed.' });
+        return res.status(403).json({
+          error: locked.every(f => f === 'date_of_birth')
+            ? 'Unlock your Records PIN to correct the date of birth.'
+            : 'This is a de-identified historical record — its stored patient name cannot be changed.',
+        });
       }
-      for (const f of NAME_FIELDS) {
-        if (Object.prototype.hasOwnProperty.call(changes, f) && issue.record?.[f] != null && String(issue.record[f]).trim() !== '') delete changes[f];
-      }
+      for (const f of keep) delete changes[f];
     }
     const merged = { ...issue.record };
     const editable = req.user.role === 'admin'

@@ -24,6 +24,17 @@ const DATE_FIELDS = new Set(['date_of_birth', 'date_of_diagnosis', 'date_started
 const NAME_FIELDS = new Set(['last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth']);
 const toInput = (field, v) => (v == null ? '' : DATE_FIELDS.has(field) ? String(v).slice(0, 10) : String(v));
 
+/** Completed years from date of birth to date of diagnosis (both YYYY-MM-DD), as the server computes it. */
+function ageAtDiagnosis(dob, dx) {
+  const p = (s) => /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+  const b = p(dob);
+  const d = p(dx);
+  if (!b || !d) return null;
+  let age = +d[1] - +b[1];
+  if (+d[2] < +b[2] || (+d[2] === +b[2] && +d[3] < +b[3])) age -= 1;
+  return age < 0 ? null : age;
+}
+
 /**
  * Data Issues — rows that failed validation (missing required values, invalid dates,
  * invalid values, incomplete data). Correct them here — once clean they become normal
@@ -218,17 +229,22 @@ export default function IssuesTab({ batch, refreshKey, onChanged }) {
             <fieldset key={s.title}>
               <legend className="text-[10px] font-bold uppercase tracking-wide mb-2" style={{ color: '#64748B' }}>{s.title}</legend>
               <div className="grid grid-cols-2 gap-3">
-                {s.fields.filter(f => !(fixing.issue.record?.identity_deidentified && NAME_FIELDS.has(f))).map(f => {
+                {/* De-identified names stay out of the form; the date of birth stays in it (locked
+                    until the Records PIN is unlocked) so a wrong one can be found and corrected. */}
+                {s.fields.filter(f => !(fixing.issue.record?.identity_deidentified && NAME_FIELDS.has(f) && f !== 'date_of_birth')).map(f => {
                   const flagged = fixing.errorFields.includes(f);
                   const deid = deidentifiedField(fixing.issue, f);
                   const hidden = (masked || fixing.issue.record?.identity_deidentified) && NAME_FIELDS.has(f);
+                  // Age follows the date of birth: with one entered, the server uses the age on
+                  // the date of diagnosis, so the form shows that and does not take a typed age.
+                  const ageFromDob = f === 'age' ? ageAtDiagnosis(fixing.values.date_of_birth, fixing.values.date_of_diagnosis) : null;
                   // The row's location decides which barangay owns it — an assignment
                   // decision the server also refuses for staff (admin only).
                   const locationLocked = s.title === 'Location' && !data.isAdmin;
                   return (
                     <label key={f} className={`block ${['last_name', 'first_name', 'treatment_facility', 'screening_facility'].includes(f) ? 'col-span-2 sm:col-span-1' : ''}`}>
                       <span className="block text-[11px] font-semibold mb-1" style={{ color: flagged ? '#B91C1C' : '#475569' }}>
-                        {FIELD_LABELS[f]}{flagged && ' — needs fixing'}
+                        {FIELD_LABELS[f]}{ageFromDob !== null && ' (from date of birth)'}{flagged && ageFromDob === null && ' — needs fixing'}
                       </span>
                       {f === 'sex' ? (
                         <select value={fixing.values[f]} onChange={e => setValue(f, e.target.value)} disabled={locationLocked} className="w-full px-3 py-2 text-xs rounded-lg outline-none disabled:opacity-60"
@@ -237,11 +253,12 @@ export default function IssuesTab({ batch, refreshKey, onChanged }) {
                         </select>
                       ) : (
                         <input
-                          type={DATE_FIELDS.has(f) ? 'date' : f === 'age' ? 'number' : 'text'}
-                          value={fixing.values[f]}
-                          placeholder={deid ? 'De-identified' : hidden ? 'Hidden — leave empty to keep' : ''}
+                          type={DATE_FIELDS.has(f) && !(deid && f === 'date_of_birth') ? 'date' : f === 'age' ? 'number' : 'text'}
+                          value={ageFromDob !== null ? String(ageFromDob) : fixing.values[f]}
+                          placeholder={deid && f === 'date_of_birth' ? 'Unlock your Records PIN to view or correct'
+                            : deid ? 'De-identified' : hidden ? 'Hidden — leave empty to keep' : ''}
                           onChange={e => setValue(f, e.target.value)}
-                          disabled={locationLocked || deid}
+                          disabled={locationLocked || deid || ageFromDob !== null}
                           className="w-full px-3 py-2 text-xs rounded-lg outline-none disabled:opacity-60"
                           style={{ background: flagged ? '#FFFBFB' : '#ffffff', border: `1px solid ${flagged ? '#FCA5A5' : '#E2E8F0'}`, color: '#0F2D52' }}
                         />

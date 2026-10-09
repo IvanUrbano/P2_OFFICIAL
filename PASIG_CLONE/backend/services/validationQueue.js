@@ -112,6 +112,25 @@ function issueType(message) {
 }
 
 /** Which record field an error message is about (to highlight it in the fix form). */
+const IDENTITY_FIELDS = ['last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth'];
+
+/**
+ * A fix to a historical (de-identified) data issue may fill in a blank name or date of
+ * birth, but not change a stored one — except the date of birth once the user has unlocked
+ * the Records PIN, so a mistyped one (e.g. after the date of diagnosis) can be corrected.
+ * @returns {{ locked: string[], keep: string[] }} locked: changes to refuse;
+ *   keep: fields whose submitted value is ignored (the stored value stays)
+ */
+function protectedIdentityChanges(record, changes, { dobEditable = false } = {}) {
+  const stored = f => record?.[f] !== null && record?.[f] !== undefined && String(record[f]).trim() !== '';
+  const fixed = IDENTITY_FIELDS.filter(f => !(f === 'date_of_birth' && dobEditable));
+  const given = f => Object.prototype.hasOwnProperty.call(changes || {}, f);
+  return {
+    locked: fixed.filter(f => given(f) && stored(f) && String(changes[f] ?? '') !== String(record[f])),
+    keep: fixed.filter(f => given(f) && stored(f)),
+  };
+}
+
 function issueField(message) {
   const m = String(message).toLowerCase();
   if (m.includes('case id')) return 'source_case_id';
@@ -153,5 +172,5 @@ function suggestFacility(text, facilities) {
 
 module.exports = {
   LIVE, NEEDS_LOCATION, NEEDS_FACILITY, MATCH_PENDING, READY, SENDS_TO_TBINSIGHT, PASIG_CITY,
-  categorizeMatch, issueType, issueField, suggestFacility, ymd, normFacility,
+  categorizeMatch, issueType, issueField, protectedIdentityChanges, suggestFacility, ymd, normFacility,
 };
