@@ -43,16 +43,26 @@ YEARS = {
                typos=[("DSTB", "SANTOLAN DAMAYAN"), ("DSTB", "MAYBUNGA EXT."), ("MN", "PINAGBUH.")],
                sex_missing=[("DSTB", "F"), ("MN", "M")], age_missing=("MN", "DSTB"),
                dx_missing=("MN",), dob_after=("DSTB",), short_id=("DSTB", "MN")),
+    # The current year: no official figure exists yet. Built forward from the real 2025 registry
+    # (January-August: September is still being entered on as_of, and a half-entered month would
+    # read to the models as a real drop), at the 2025 volume (growth 1.00 - an
+    # assumption, change it when an official figure is published), as a registry exported on
+    # `as_of` would look: records entered later are absent, later outcomes still ON TREATMENT.
+    2026: dict(forward=True, as_of=dt.date(2026, 10, 9), through_month=8, growth=1.00,
+               typos=[("DSTB", "SANTOLAN DAMAYAN EXT"), ("MN", "UGONG NORTE PH")],
+               sex_missing=[("DSTB", "M"), ("MN", "F")], age_missing=("DSTB",),
+               dx_missing=("MN",), dob_after=("DSTB",), short_id=("MN",)),
 }
 CFG = YEARS[YEAR]
 SHIFT = 2025 - YEAR
 SEED = YEAR
 rng = random.Random(SEED)
-TOTAL, MALE, FEMALE = CFG["total"], CFG["male"], CFG["female"]
-TARGET_TSR = CFG["tsr"]
+FORWARD = CFG.get("forward", False)
+TOTAL, MALE, FEMALE = CFG.get("total"), CFG.get("male"), CFG.get("female")
+TARGET_TSR = CFG.get("tsr")
 BARANGAY_SPREAD = 0.15        # how far 2022 barangay shares sit from 2025 (lognormal sigma)
 YEAR_NOISE = 0.04             # extra year-specific wobble for 2023 and 2024
-VALIDATED_SHARE = CFG["validated"]  # older records are almost all validated
+VALIDATED_SHARE = CFG.get("validated")  # older records are almost all validated
 
 FINAL = ["TREATMENT COMPLETED", "CURED", "LOST TO FF-UP", "DIED", "TREATMENT FAILED", "NOT EVALUATED", "EXCLUDED"]
 SUCCESS = {"TREATMENT COMPLETED", "CURED"}
@@ -83,16 +93,24 @@ for kind, h in HEADER_ROW.items():
         rows.append(rec)
     templates[kind] = rows
 
+if FORWARD:  # the same calendar months of the real 2025 registry
+    templates = {k: [r for r in v if (d := parse_date(r["Date of Diagnosis"])).year == 2025
+                     and d.month <= CFG["through_month"]] for k, v in templates.items()}
+
 # ---------- sizes: eFOI totals split by the real sheet and sex mix ----------
 counts = {k: len(v) for k, v in templates.items()}
 male_share = {k: sum(str(r["Sex"]).upper().startswith("M") for r in v) / len(v) for k, v in templates.items()}
-n = {"DSTB": round(TOTAL * counts["DSTB"] / sum(counts.values()))}
-n["MN"] = TOTAL - n["DSTB"]
-expected_m = sum(n[k] * male_share[k] for k in n)
-males = {"DSTB": round(n["DSTB"] * male_share["DSTB"] * MALE / expected_m)}
-males["MN"] = MALE - males["DSTB"]
-plan = {k: {"M": males[k], "F": n[k] - males[k]} for k in n}
-assert sum(v["M"] for v in plan.values()) == MALE and sum(v["F"] for v in plan.values()) == FEMALE
+if FORWARD:  # no official total: the real 2025 counts per sheet and sex, times the growth
+    plan = {k: {sex: round(CFG["growth"] * sum(str(r["Sex"]).upper().startswith(sex) for r in v)) for sex in ("M", "F")}
+            for k, v in templates.items()}
+else:
+    n = {"DSTB": round(TOTAL * counts["DSTB"] / sum(counts.values()))}
+    n["MN"] = TOTAL - n["DSTB"]
+    expected_m = sum(n[k] * male_share[k] for k in n)
+    males = {"DSTB": round(n["DSTB"] * male_share["DSTB"] * MALE / expected_m)}
+    males["MN"] = MALE - males["DSTB"]
+    plan = {k: {"M": males[k], "F": n[k] - males[k]} for k in n}
+    assert sum(v["M"] for v in plan.values()) == MALE and sum(v["F"] for v in plan.values()) == FEMALE
 
 # ---------- barangay variation: each barangay's share moves a little from 2025 ----------
 # Each barangay drifts steadily from its 2022 share to its real 2025 share: 2022 sits a random
@@ -168,6 +186,9 @@ for kind in ("DSTB", "MN"):
             age = valid_age(rec["Age"])
             if age >= 5:
                 rec["Age"] = float(max(5, min(100, int(age) + rng.randint(-1, 1))))
+            if FORWARD:  # recent records: validation status and outcomes as the real registry has them
+                out.append(rec)
+                continue
             if kind == "DSTB":
                 rec["Validation Status"] = "Validated" if rng.random() < VALIDATED_SHARE else "Not validated"
             o = str(rec["Outcome/Status"]).strip().upper()
@@ -179,11 +200,41 @@ for kind in ("DSTB", "MN"):
             out.append(rec)
     generated[kind] = out
 
+# ---------- the current year as exported on as_of ----------
+as_of_report = {}
+if FORWARD:
+    AS_OF = CFG["as_of"]
+    OTHER_DATES = ["Date of Screening", "Date of Notification", "RDT Release Date", "Microscopy Release Date"]
+    for kind, rows in generated.items():
+        kept, dropped, on_tx, not_started = [], 0, 0, 0
+        for r in rows:
+            created = parse_date(r["Date/Time Record was Created"])
+            if created and created > AS_OF:      # entered in the registry after the export
+                dropped += 1
+                continue
+            start, outcome = parse_date(r["Date Started Tx"]), parse_date(r["Date of Outcome/Status"])
+            status = str(r["Outcome/Status"]).strip().upper()
+            if start and start > AS_OF:          # diagnosed, treatment not started yet
+                r["Date Started Tx"] = "No Data"
+                r["Outcome/Status"] = "DIAGNOSED"
+                r["Date of Outcome/Status"] = r["Date of Diagnosis"]
+                not_started += 1
+            elif status in FINAL and outcome and outcome > AS_OF:  # outcome not reached yet
+                r["Outcome/Status"] = "ON TREATMENT"
+                r["Date of Outcome/Status"] = r["Date Started Tx"]  # the registry's own convention
+                on_tx += 1
+            for f in OTHER_DATES:
+                if f in r and (d := parse_date(r[f])) and d > AS_OF:
+                    r[f] = "No Data"
+            kept.append(r)
+        generated[kind] = kept
+        as_of_report[kind] = {"not_yet_entered": dropped, "now_on_treatment": on_tx, "treatment_not_started": not_started}
+
 # ---------- treatment success rate -> the eFOI figure for the year ----------
 everyone = [r for rows in generated.values() for r in rows]
 evaluated = [r for r in everyone if str(r["Outcome/Status"]).upper() in SUCCESS | set(UNSUCCESSFUL)]
 successes = [r for r in evaluated if str(r["Outcome/Status"]).upper() in SUCCESS]
-excess = len(successes) - round(TARGET_TSR * len(evaluated))
+excess = len(successes) - round(TARGET_TSR * len(evaluated)) if TARGET_TSR is not None else 0
 unsucc_mix = {}
 for rows in templates.values():
     for r in rows:
@@ -290,17 +341,31 @@ for q in range(4):
 if "README" in wb.sheetnames:  # the template's own notes describe the real 2025 file
     del wb["README"]
 notes = wb.create_sheet("README")
+if FORWARD:
+    basis = [
+        f"No official {YEAR} figure exists yet. Volume: the real 2025 registry's January-{dt.date(2000, CFG['through_month'], 1):%B}",
+        f"  counts per sheet and sex, times {CFG['growth']:.2f} (an assumption; replace with the official figure when published).",
+        "Method: each record copies one real 2025 Pasig registry record of the same sheet (DSTB/MN) and sex —",
+        "  facility, barangay, age (±1 year from age 5), site, registration group, test results, validation status, outcome —",
+        f"  with every date moved forward {-SHIFT} year. Barangay shares continue the 2022-2025 trend one more year.",
+        f"As exported on {CFG['as_of']:%B %d, %Y}: records entered after that date are absent; an outcome not reached by then",
+        "  stays ON TREATMENT (outcome date = treatment start, the registry's convention); treatment not started yet: DIAGNOSED.",
+    ]
+else:
+    basis = [
+        f"Calibrated to official figures: DOH Metro Manila CHD eFOI response on tuberculosis ({CFG['table']}; source LGU CHO/FHSIS report), Pasig City {YEAR}:",
+        f"  notified TB cases {TOTAL:,} (male {MALE:,}, female {FEMALE:,}); treatment success rate {TARGET_TSR:.2%}.",
+        "Method: each record copies one real 2025 Pasig registry record of the same sheet (DSTB/MN) and sex —",
+        "  facility, barangay, age (±1 year from age 5), site, registration group, test results — with every date moved back",
+        f"  {SHIFT} year(s). Barangay shares drift steadily between a 2022 level (random lognormal step, sigma {BARANGAY_SPREAD}) and the real 2025 shares.",
+        "  Patients still ON TREATMENT in the template are given a final outcome from the real outcome mix, dated with real",
+        f"  treatment durations; outcomes are then adjusted to the official {YEAR} treatment success rate.",
+    ]
 for line in [
     f"{YEAR} PASIG TB REGISTRY — SIMULATED DATA",
     "",
     "Not real patient records. Built for system testing and demonstration.",
-    f"Calibrated to official figures: DOH Metro Manila CHD eFOI response on tuberculosis ({CFG['table']}; source LGU CHO/FHSIS report), Pasig City {YEAR}:",
-    f"  notified TB cases {TOTAL:,} (male {MALE:,}, female {FEMALE:,}); treatment success rate {TARGET_TSR:.2%}.",
-    "Method: each record copies one real 2025 Pasig registry record of the same sheet (DSTB/MN) and sex —",
-    "  facility, barangay, age (±1 year from age 5), site, registration group, test results — with every date moved back",
-    f"  {SHIFT} year(s). Barangay shares drift steadily between a 2022 level (random lognormal step, sigma {BARANGAY_SPREAD}) and the real 2025 shares.",
-    "  Patients still ON TREATMENT in the template are given a final outcome from the real outcome mix, dated with real",
-    f"  treatment durations; outcomes are then adjusted to the official {YEAR} treatment success rate.",
+    *basis,
     "Names, dates of birth, Case IDs and ITIS Lite numbers are fictional. Dates of birth match the recorded age.",
     f"{len(issues)} rows deliberately carry data issues to correct on the Validation page:",
     *[f"  {k} {cid}: {what}" for k, cid, what in issues],
@@ -322,4 +387,5 @@ print(json.dumps({
     "treatment_success_rate": round(tsr, 4),
     "on_treatment_left": sum(str(r["Outcome/Status"]).upper() == "ON TREATMENT" for r in everyone),
     "issues": len(issues),
+    **({"as_of": as_of_report} if FORWARD else {}),
 }))

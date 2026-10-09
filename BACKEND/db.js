@@ -262,6 +262,17 @@ const initDb = async () => {
       console.error('❌ 2023 population migration failed (continuing with remaining migrations):', pop2023Err.message);
     }
 
+    // 2026 Bagong Katipunan projection re-based on the official 2025 figure
+    try {
+      const popBkMigPath = path.join(__dirname, 'db', 'migrations', '036_population_2026_bagong_katipunan.sql');
+      if (fs.existsSync(popBkMigPath)) {
+        await execSql(fs.readFileSync(popBkMigPath, 'utf8'));
+        console.log('✅ 2026 Bagong Katipunan population migration completed successfully.');
+      }
+    } catch (popBkErr) {
+      console.error('❌ 2026 Bagong Katipunan population migration failed (continuing with remaining migrations):', popBkErr.message);
+    }
+
     // Barangay-based staff (users.barangay_id), expanded health_facilities, case tracking
     // fields + case/review history tables. Additive only.
     try {

@@ -13,6 +13,8 @@ const TYPE = {
 };
 
 const SECTIONS = [
+  // The Case ID comes from the file and identifies the case; a mistyped one is fixed here.
+  { title: 'Case', fields: ['source_case_id'] },
   { title: 'Patient', fields: ['last_name', 'first_name', 'middle_name', 'suffix', 'date_of_birth', 'sex', 'age'] },
   { title: 'Location', fields: ['barangay_name', 'city'] },
   { title: 'TB case', fields: ['date_of_diagnosis', 'date_started_treatment', 'outcome_status', 'date_of_outcome', 'registration_group', 'bacteriological_status', 'anatomical_site'] },
@@ -61,7 +63,9 @@ export default function IssuesTab({ batch, refreshKey, onChanged }) {
     const values = {};
     SECTIONS.forEach(s => s.fields.forEach(f => {
       // Hidden names are not pre-filled: leaving them empty keeps the stored value.
-      values[f] = (masked || issue.record?.identity_deidentified) && NAME_FIELDS.has(f) ? '' : toInput(f, issue.record?.[f]);
+      // A row that never became a case still holds the file's Case ID as file_case_id.
+      const stored = f === 'source_case_id' ? issue.record?.source_case_id ?? issue.record?.file_case_id : issue.record?.[f];
+      values[f] = (masked || issue.record?.identity_deidentified) && NAME_FIELDS.has(f) ? '' : toInput(f, stored);
     }));
     setFixing({ issue, values, touched: {}, errors: issue.errors || [], errorFields: issue.error_fields || [] });
   };

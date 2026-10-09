@@ -114,6 +114,7 @@ function issueType(message) {
 /** Which record field an error message is about (to highlight it in the fix form). */
 function issueField(message) {
   const m = String(message).toLowerCase();
+  if (m.includes('case id')) return 'source_case_id';
   if (m.includes('last name')) return 'last_name';
   if (m.includes('first name')) return 'first_name';
   if (m.includes('date of birth')) return 'date_of_birth';

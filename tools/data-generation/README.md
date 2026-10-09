@@ -8,6 +8,7 @@ registry (DSTB and MN sheets), plus Case ID, name and date-of-birth columns.
 |---|---|
 | 2025 | **Real** Pasig City Health Department registry. Every original value unchanged; Case ID, names and date of birth added (fictional). |
 | 2022–2024 | **Simulated.** Calibrated to the official DOH Metro Manila CHD eFOI figures (source: LGU CHO/FHSIS report): notified cases by sex and treatment success rate. Every other detail is copied from real 2025 records. |
+| 2026 | **Simulated, current year.** No official figure yet: January–August at the real 2025 volume (growth 1.00, an assumption in `genyear.py`), as a registry exported on 9 October 2026 would look. |
 
 Official targets used (Pasig City rows of the eFOI tables):
 
@@ -36,6 +37,18 @@ The matching barangay populations are in `BACKEND/db/migrations/034_population_2
   misspelled barangays, missing sex, missing age and birth date, missing diagnosis date, birth
   date after diagnosis, and short Case IDs. Each file's README sheet lists them. Blank barangays
   (Needs Assignment) occur at the real rate.
+
+## 2026 (the current year)
+
+- **Volume:** the real 2025 registry's January–August counts per sheet and sex, times `growth`
+  (1.00). Change it in `YEARS[2026]` when an official figure is published.
+- **Period:** January–August. September is still being entered on the export date, and a
+  half-entered month would read to the models as a real drop in cases.
+- **As exported on `as_of` (9 October 2026):** records entered after that date are absent;
+  an outcome not reached by then stays ON TREATMENT (outcome date = treatment start, the
+  registry's own convention); treatment not started yet is DIAGNOSED. Validation status and
+  outcomes otherwise come from the real records.
+- **Barangays:** the 2022–2025 trend continues one more year.
 
 ## Identifiers (all years)
 
@@ -67,7 +80,7 @@ node $G/prepare_lookups.js "$REAL"
 #    years, so always rebuild every file together.
 rm -f $G/registry.json $G/caseid_counters.json
 python $G/enrich2025.py "$REAL" "$OUT/2025_Pasig_TB_Records.xlsx" $G/lookups/fac_resolved.json $G/registry.json
-for y in 2022 2023 2024; do
+for y in 2022 2023 2024 2026; do
   python $G/genyear.py "$OUT/2025_Pasig_TB_Records.xlsx" "$OUT/${y}_Pasig_TB_Records.xlsx" \
     $G/lookups/fac_resolved.json $G/registry.json $G/lookups/bgymap.json $y
 done
@@ -76,4 +89,4 @@ done
 `registry.json` and `caseid_counters.json` are working files (the names and Case ID numbers
 already used); they are not committed.
 
-Import order in Pasig Clone: 2022, 2023, 2024, 2025, syncing each one.
+Import order in Pasig Clone: 2022, 2023, 2024, 2025, 2026, syncing each one.

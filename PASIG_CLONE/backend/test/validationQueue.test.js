@@ -70,6 +70,9 @@ describe('issue classification', () => {
     assert.strictEqual(issueField('Date of Diagnosis is required'), 'date_of_diagnosis');
     assert.strictEqual(issueField('Invalid sex: "M/F"'), 'sex');
     assert.strictEqual(issueField('Date of birth cannot be after the date of diagnosis'), 'date_of_birth');
+    // Case ID errors point at the fix form's Case ID field ("look like" must not read as "age")
+    assert.strictEqual(issueField('Case ID must look like ROS-D-2025-00042 (got "NAP-D-2022-0232")'), 'source_case_id');
+    assert.strictEqual(issueField('Case ID is required — it comes from the file\'s "Case ID" column'), 'source_case_id');
   });
 });
 

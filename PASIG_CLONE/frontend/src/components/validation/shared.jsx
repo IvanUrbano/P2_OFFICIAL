@@ -10,6 +10,7 @@ export const fmtDate = (v) => {
 export const fullName = (r) => patientName(r);
 
 export const FIELD_LABELS = {
+  source_case_id: 'Case ID',
   last_name: 'Last name', first_name: 'First name', middle_name: 'Middle name', suffix: 'Suffix',
   date_of_birth: 'Date of birth', sex: 'Sex', age: 'Age', date_of_diagnosis: 'Date of diagnosis',
   date_started_treatment: 'Treatment started', date_of_outcome: 'Date of outcome', outcome_status: 'Outcome',
