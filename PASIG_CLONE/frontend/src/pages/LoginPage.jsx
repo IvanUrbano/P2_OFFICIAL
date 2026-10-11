@@ -77,9 +77,16 @@ export default function LoginPage() {
 
       <div className="relative z-10 w-full flex items-center justify-center px-4">
         <div className="w-full max-w-[400px] p-8" style={{ background: '#ffffff', borderRadius: '5px', boxShadow: '0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08)' }}>
-          <div className="mb-4">
-            <h1 className="text-[15px] font-extrabold leading-tight" style={{ color: '#0F2D52' }}>PASIG TB-IS</h1>
-            <p className="text-[11px]" style={{ color: '#94A3B8' }}>Tuberculosis Information System</p>
+          <div className="mb-5 flex flex-col items-center text-center">
+            <img
+              src="/images/pasig-tb-is-logo.png"
+              alt="Pasig City Tuberculosis Control Program logo"
+              className="h-24 w-24 shrink-0 object-contain"
+            />
+            <div className="mt-2">
+              <h1 className="text-[15px] font-extrabold leading-tight" style={{ color: '#0F2D52' }}>PASIG TB-IS</h1>
+              <p className="mt-0.5 text-[11px]" style={{ color: '#94A3B8' }}>Tuberculosis Information System</p>
+            </div>
           </div>
 
           <div className="mb-4">
