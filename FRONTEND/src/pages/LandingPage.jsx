@@ -1,4 +1,7 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import PrivacyNotice from '../components/PrivacyNotice';
+import { privacyNoticeAccepted } from '../utils/privacyNotice';
 import { PASIG_CLONE_URL } from '../config/externalSystems';
 import Logo from '../../components/Logo';
 
@@ -12,6 +15,8 @@ const FEATURES = [
 
 export default function LandingPage() {
   const navigate = useNavigate();
+  // 'required' until accepted in this browser (shown before the page); 'review' when reopened.
+  const [notice, setNotice] = useState(() => (privacyNoticeAccepted() ? null : 'required'));
 
   const handleSelect = (system) => {
     if (system === 'tbinsight') {
@@ -22,7 +27,10 @@ export default function LandingPage() {
   };
 
   return (
+    <>
+    {notice && <PrivacyNotice onAccept={() => setNotice(null)} onClose={notice === 'review' ? () => setNotice(null) : undefined} />}
     <div
+      aria-hidden={notice === 'required' || undefined}
       className="h-screen w-full flex flex-col overflow-hidden relative"
       style={{
         backgroundImage: "url('/images/LANDING_BG.png')",
@@ -130,9 +138,12 @@ export default function LandingPage() {
 
           <p className="text-center text-[9.5px] mt-3" style={{ color: '#CBD5E1' }}>
             &copy; 2026 TBInsight &mdash; Pasig City Tuberculosis Surveillance System
+            {' · '}
+            <button type="button" onClick={() => setNotice('review')} className="underline hover:text-[#64748B]">Privacy Notice</button>
           </p>
         </footer>
       </div>
     </div>
+    </>
   );
 }
