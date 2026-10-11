@@ -1,0 +1,206 @@
+{
+ "Bagong Ilog": [
+  "Caniogan",
+  "Kapasigan",
+  "Kapitolyo",
+  "Oranbo",
+  "Pineda",
+  "San Jose",
+  "Santa Rosa",
+  "Ugong"
+ ],
+ "Bagong Katipunan": [
+  "Bambang",
+  "Malinao",
+  "San Jose",
+  "Santa Rosa",
+  "Sumilang"
+ ],
+ "Bambang": [
+  "Bagong Katipunan",
+  "Kalawaan",
+  "Malinao",
+  "Pinagbuhatan",
+  "San Joaquin",
+  "San Nicolas",
+  "Sumilang"
+ ],
+ "Buting": [
+  "San Joaquin",
+  "Santa Rosa",
+  "Sumilang"
+ ],
+ "Caniogan": [
+  "Bagong Ilog",
+  "Kapasigan",
+  "Maybunga",
+  "Sagad",
+  "San Miguel",
+  "Ugong"
+ ],
+ "Dela Paz": [
+  "Manggahan",
+  "Santolan"
+ ],
+ "Kalawaan": [
+  "Bambang",
+  "Pinagbuhatan",
+  "San Joaquin"
+ ],
+ "Kapasigan": [
+  "Bagong Ilog",
+  "Caniogan",
+  "Malinao",
+  "Sagad",
+  "San Jose",
+  "San Nicolas"
+ ],
+ "Kapitolyo": [
+  "Bagong Ilog",
+  "Oranbo",
+  "Pineda",
+  "San Antonio"
+ ],
+ "Malinao": [
+  "Bagong Katipunan",
+  "Bambang",
+  "Kapasigan",
+  "Pinagbuhatan",
+  "San Jose",
+  "San Nicolas",
+  "Sumilang"
+ ],
+ "Manggahan": [
+  "Dela Paz",
+  "Rosario",
+  "Santolan"
+ ],
+ "Maybunga": [
+  "Caniogan",
+  "Rosario",
+  "San Miguel",
+  "Santa Lucia",
+  "Ugong"
+ ],
+ "Oranbo": [
+  "Bagong Ilog",
+  "Kapitolyo",
+  "San Antonio",
+  "Ugong"
+ ],
+ "Palatiw": [
+  "Pinagbuhatan",
+  "San Miguel",
+  "San Nicolas",
+  "Santo Tomas"
+ ],
+ "Pinagbuhatan": [
+  "Bambang",
+  "Kalawaan",
+  "Malinao",
+  "Palatiw",
+  "San Miguel",
+  "San Nicolas"
+ ],
+ "Pineda": [
+  "Bagong Ilog",
+  "Kapitolyo"
+ ],
+ "Rosario": [
+  "Manggahan",
+  "Maybunga",
+  "Santa Lucia",
+  "Ugong"
+ ],
+ "Sagad": [
+  "Caniogan",
+  "Kapasigan",
+  "San Miguel",
+  "San Nicolas",
+  "Santa Cruz",
+  "Santo Tomas"
+ ],
+ "San Antonio": [
+  "Kapitolyo",
+  "Oranbo",
+  "Ugong"
+ ],
+ "San Joaquin": [
+  "Bambang",
+  "Buting",
+  "Kalawaan",
+  "Sumilang"
+ ],
+ "San Jose": [
+  "Bagong Ilog",
+  "Bagong Katipunan",
+  "Kapasigan",
+  "Malinao",
+  "San Nicolas",
+  "Santa Rosa",
+  "Sumilang"
+ ],
+ "San Miguel": [
+  "Caniogan",
+  "Maybunga",
+  "Palatiw",
+  "Pinagbuhatan",
+  "Sagad",
+  "Santo Tomas"
+ ],
+ "San Nicolas": [
+  "Bambang",
+  "Kapasigan",
+  "Malinao",
+  "Palatiw",
+  "Pinagbuhatan",
+  "Sagad",
+  "San Jose",
+  "Santa Cruz",
+  "Santo Tomas"
+ ],
+ "Santa Cruz": [
+  "Sagad",
+  "San Nicolas",
+  "Santo Tomas"
+ ],
+ "Santa Lucia": [
+  "Maybunga",
+  "Rosario"
+ ],
+ "Santa Rosa": [
+  "Bagong Ilog",
+  "Bagong Katipunan",
+  "Buting",
+  "San Jose",
+  "Sumilang"
+ ],
+ "Santo Tomas": [
+  "Palatiw",
+  "Sagad",
+  "San Miguel",
+  "San Nicolas",
+  "Santa Cruz"
+ ],
+ "Santolan": [
+  "Dela Paz",
+  "Manggahan"
+ ],
+ "Sumilang": [
+  "Bagong Katipunan",
+  "Bambang",
+  "Buting",
+  "Malinao",
+  "San Joaquin",
+  "San Jose",
+  "Santa Rosa"
+ ],
+ "Ugong": [
+  "Bagong Ilog",
+  "Caniogan",
+  "Maybunga",
+  "Oranbo",
+  "Rosario",
+  "San Antonio"
+ ]
+}

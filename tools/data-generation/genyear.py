@@ -1,11 +1,19 @@
 """
-Generate a simulated Pasig TB registry year (2022-2024) in the exact format of the real 2025 file.
+Generate a simulated Pasig TB registry year (2022-2024, 2026) in the exact format of the real 2025 file.
 
 Calibrated to the official DOH-NCR eFOI figures for Pasig City (YEARS below): notified cases by
-sex and the treatment success rate. Everything else is resampled from the REAL 2025 registry
-(same sheet and sex): each record copies one real record's facility, barangay, age, site,
-registration group and test results, with all its dates moved back to the target year (the gaps
-between them unchanged).
+sex and the treatment success rate.
+
+WHEN cases happen comes from a stated model, not from the 2025 calendar: each barangay-month
+gets an expected share = the barangay's real 2025 share x its multi-year drift x the planted
+patterns (patterns.py: a city-wide Jul-Sep seasonal peak, rising and falling barangays, two
+outbreaks spreading to neighbours), and the year's records are drawn across barangay-months in
+proportion. So no barangay repeats 2025 month by month (which let a "same month last year"
+feature read the answer), and the planted patterns can be scored against the answer sheet.
+
+WHAT a case looks like is resampled from the REAL 2025 registry: each record copies one real
+record of the same sheet, sex and barangay (facility, age +-1, site, registration group, test
+results), with all its dates moved to the drawn diagnosis day (the gaps between them unchanged).
 
 Usage: python genyear.py <enriched_2025.xlsx> <out.xlsx> <fac_resolved.json> <registry.json> <bgymap.json> <year>
 """
@@ -20,8 +28,9 @@ import sys
 import openpyxl
 
 sys.path.insert(0, __import__("os").path.dirname(__file__))
-from tbgen import (IdentityRegistry, MONTHS, _minus_years, assign_case_ids, facility_code, load_counters, save_counters,
+from tbgen import (IdentityRegistry, MONTHS, assign_case_ids, facility_code, load_counters, save_counters,
                    fmt_date, parse_date, valid_age)
+import patterns
 
 SRC, OUT, FAC, REG, BGY = sys.argv[1:6]
 YEAR = int(sys.argv[6])
@@ -43,12 +52,11 @@ YEARS = {
                typos=[("DSTB", "SANTOLAN DAMAYAN"), ("DSTB", "MAYBUNGA EXT."), ("MN", "PINAGBUH.")],
                sex_missing=[("DSTB", "F"), ("MN", "M")], age_missing=("MN", "DSTB"),
                dx_missing=("MN",), dob_after=("DSTB",), short_id=("DSTB", "MN")),
-    # The current year: no official figure exists yet. Built forward from the real 2025 registry
-    # (January-August: September is still being entered on as_of, and a half-entered month would
-    # read to the models as a real drop), at the 2025 volume (growth 1.00 - an
-    # assumption, change it when an official figure is published), as a registry exported on
-    # `as_of` would look: records entered later are absent, later outcomes still ON TREATMENT.
-    2026: dict(forward=True, as_of=dt.date(2026, 10, 9), through_month=8, growth=1.00,
+    # The current year: no official figure exists yet. January-September at the real 2025
+    # volume for those months (growth 1.00 - an assumption, change it when an official figure is
+    # published), as a registry exported on `as_of` would look: records entered later are
+    # absent, later outcomes still ON TREATMENT.
+    2026: dict(forward=True, as_of=dt.date(2026, 10, 11), through_month=9, growth=1.00,
                typos=[("DSTB", "SANTOLAN DAMAYAN EXT"), ("MN", "UGONG NORTE PH")],
                sex_missing=[("DSTB", "M"), ("MN", "F")], age_missing=("DSTB",),
                dx_missing=("MN",), dob_after=("DSTB",), short_id=("MN",)),
@@ -93,15 +101,16 @@ for kind, h in HEADER_ROW.items():
         rows.append(rec)
     templates[kind] = rows
 
-if FORWARD:  # the same calendar months of the real 2025 registry
-    templates = {k: [r for r in v if (d := parse_date(r["Date of Diagnosis"])).year == 2025
-                     and d.month <= CFG["through_month"]] for k, v in templates.items()}
+MONTHS_IN_YEAR = CFG["through_month"] if FORWARD else 12
 
 # ---------- sizes: eFOI totals split by the real sheet and sex mix ----------
 counts = {k: len(v) for k, v in templates.items()}
 male_share = {k: sum(str(r["Sex"]).upper().startswith("M") for r in v) / len(v) for k, v in templates.items()}
-if FORWARD:  # no official total: the real 2025 counts per sheet and sex, times the growth
-    plan = {k: {sex: round(CFG["growth"] * sum(str(r["Sex"]).upper().startswith(sex) for r in v)) for sex in ("M", "F")}
+if FORWARD:  # no official total: the real 2025 counts per sheet and sex for the same months, times the growth
+    plan = {k: {sex: round(CFG["growth"] * sum(str(r["Sex"]).upper().startswith(sex)
+                                               and (d := parse_date(r["Date of Diagnosis"])).year == 2025
+                                               and d.month <= MONTHS_IN_YEAR for r in v))
+                for sex in ("M", "F")}
             for k, v in templates.items()}
 else:
     n = {"DSTB": round(TOTAL * counts["DSTB"] / sum(counts.values()))}
@@ -112,10 +121,11 @@ else:
     plan = {k: {"M": males[k], "F": n[k] - males[k]} for k in n}
     assert sum(v["M"] for v in plan.values()) == MALE and sum(v["F"] for v in plan.values()) == FEMALE
 
-# ---------- barangay variation: each barangay's share moves a little from 2025 ----------
+# ---------- barangay drift: each barangay's share moves a little from 2025 ----------
 # Each barangay drifts steadily from its 2022 share to its real 2025 share: 2022 sits a random
 # lognormal step away, and 2023/2024 lie on the way (2/3 and 1/3 of the step) plus a small
-# wobble, so the years form a trend rather than unrelated draws.
+# wobble, so the years form a trend rather than unrelated draws. (Separate from the planted
+# patterns in patterns.py, which are what the models are scored on.)
 barangays = sorted({b for b in bgymap.values() if b})
 if YEAR == 2022:
     mult = {b: math.exp(rng.gauss(0, BARANGAY_SPREAD)) for b in barangays}
@@ -123,25 +133,32 @@ else:
     first = random.Random(2022)
     step = {b: first.gauss(0, BARANGAY_SPREAD) for b in barangays}  # the 2022 draws, reproduced
     mult = {b: math.exp(step[b] * SHIFT / 3 + rng.gauss(0, YEAR_NOISE)) for b in barangays}
+# Barangays carrying a planted pattern follow it alone: a random drift could cancel a planted trend.
+mult = {b: (1.0 if patterns.planted(b) else v) for b, v in mult.items()}
+
+OTHER = None  # records with no Pasig barangay (blank, misspelled beyond matching, non-Pasig) keep their real share
 
 
-def weight(rec):
-    b = bgymap.get("" if rec.get("Brgy") is None else str(rec["Brgy"]))
-    return mult.get(b, 1.0)
+def barangay_of(rec):
+    return bgymap.get("" if rec.get("Brgy") is None else str(rec["Brgy"]))
 
 
 # ---------- dates ----------
 DATE_RE = re.compile(r"([A-Za-z]+) (\d{1,2}), (\d{4})")
 
 
-def shift_text(v):
-    """Move every 'Month DD, YYYY' in a cell back SHIFT years, keeping the rest (e.g. a time)."""
+def shift_cell(v, days):
+    """Move every 'Month DD, YYYY' in a cell by `days`, keeping the rest (e.g. a time)."""
+    if isinstance(v, dt.datetime):
+        return v + dt.timedelta(days=days)
+    if isinstance(v, dt.date):
+        return v + dt.timedelta(days=days)
     if not isinstance(v, str):
         return v
 
     def sub(m):
         d = parse_date(m.group(0))
-        return fmt_date(_minus_years(d, SHIFT)) if d else m.group(0)
+        return fmt_date(d + dt.timedelta(days=days)) if d else m.group(0)
     return DATE_RE.sub(sub, v)
 
 
@@ -175,24 +192,61 @@ for kind, rows in templates.items():
             c[o] = c.get(o, 0) + 1
     final_mix[kind] = c
 
+# ---------- when the cases happen: the planted patterns (patterns.py) ----------
+# City-wide seasonal amplitude fitted to the real 2025 registry: the Jul-Sep share above the
+# monthly average, divided by the mean of the cosine over those months (cos 30 deg, 1, cos 30 deg).
+real_month = [0] * 12
+for rows in templates.values():
+    for r in rows:
+        d = parse_date(r["Date of Diagnosis"])
+        if d.year == 2025:
+            real_month[d.month - 1] += 1
+peak = sum(real_month[6:9]) / 3 / (sum(real_month) / 12)
+AMPLITUDE = max(0.0, min(0.3, (peak - 1) / ((2 * math.cos(math.pi / 6) + 1) / 3)))
+
+# Each (barangay, month) cell's expected share of a sheet + sex: the barangay's real 2025
+# share x drift x trend x season x outbreak. Cells are filled by drawing the year's records
+# in proportion, which gives natural month-to-month randomness around the plan.
+by_cell_pool = {}
+for kind, rows in templates.items():
+    for r in rows:
+        sex = "M" if str(r["Sex"]).upper().startswith("M") else "F"
+        by_cell_pool.setdefault((kind, sex, barangay_of(r)), []).append(r)
+
+
+def cell_weight(b, month):
+    if b is OTHER:
+        return patterns.season(month, AMPLITUDE)
+    return (mult.get(b, 1.0) * patterns.trend(b, YEAR) * patterns.season(month, AMPLITUDE)
+            * patterns.outbreak(b, YEAR, month))
+
+
 # ---------- build the records ----------
 generated = {}
 for kind in ("DSTB", "MN"):
     out = []
     for sex, k in plan[kind].items():
-        pool = [r for r in templates[kind] if str(r["Sex"]).upper().startswith(sex)]
-        for t in rng.choices(pool, weights=[weight(r) for r in pool], k=k):
-            rec = {h: shift_text(v) for h, v in t.items()}
+        groups = {b: pool for (kd, sx, b), pool in by_cell_pool.items() if kd == kind and sx == sex}
+        base = {b: len(pool) for b, pool in groups.items()}  # real 2025 share of this sheet + sex
+        cells = [(b, m) for b in groups for m in range(1, MONTHS_IN_YEAR + 1)]
+        weights = [base[b] * cell_weight(b, m) for b, m in cells]
+        for b, month in rng.choices(cells, weights=weights, k=k):
+            t = rng.choice(groups[b])
+            last = (dt.date(YEAR, 12, 31) if month == 12 else dt.date(YEAR, month + 1, 1) - dt.timedelta(days=1)).day
+            dx = dt.date(YEAR, month, rng.randint(1, last))
+            delta = (dx - parse_date(t["Date of Diagnosis"])).days
+            rec = {h: shift_cell(v, delta) for h, v in t.items()}
             age = valid_age(rec["Age"])
             if age >= 5:
                 rec["Age"] = float(max(5, min(100, int(age) + rng.randint(-1, 1))))
-            if FORWARD:  # recent records: validation status and outcomes as the real registry has them
-                out.append(rec)
-                continue
-            if kind == "DSTB":
+            if kind == "DSTB" and not FORWARD:
                 rec["Validation Status"] = "Validated" if rng.random() < VALIDATED_SHARE else "Not validated"
             o = str(rec["Outcome/Status"]).strip().upper()
-            if o == "ON TREATMENT":  # every patient of a past year has finished treatment by now
+            if o == "ON TREATMENT":
+                # Give the patient a final outcome from the real mix, dated with a real duration;
+                # in the current year the as_of step below turns outcomes not reached yet back into
+                # ON TREATMENT, so a record moved to an early month does not stay on treatment for
+                # a year.
                 mix = final_mix[kind]
                 o = rng.choices(list(mix), weights=list(mix.values()))[0]
                 rec["Outcome/Status"] = o
@@ -209,9 +263,12 @@ if FORWARD:
         kept, dropped, on_tx, not_started = [], 0, 0, 0
         for r in rows:
             created = parse_date(r["Date/Time Record was Created"])
-            if created and created > AS_OF:      # entered in the registry after the export
+            if created and created > AS_OF:
+                # Diagnosed in January-September: treated as entered by the export (the months
+                # kept are complete), so the record is created on a day before AS_OF instead.
+                when = AS_OF - dt.timedelta(days=rng.randint(1, 10))
+                r["Date/Time Record was Created"] = DATE_RE.sub(fmt_date(when), str(r["Date/Time Record was Created"]), count=1)
                 dropped += 1
-                continue
             start, outcome = parse_date(r["Date Started Tx"]), parse_date(r["Date of Outcome/Status"])
             status = str(r["Outcome/Status"]).strip().upper()
             if start and start > AS_OF:          # diagnosed, treatment not started yet
@@ -228,7 +285,7 @@ if FORWARD:
                     r[f] = "No Data"
             kept.append(r)
         generated[kind] = kept
-        as_of_report[kind] = {"not_yet_entered": dropped, "now_on_treatment": on_tx, "treatment_not_started": not_started}
+        as_of_report[kind] = {"entry_date_moved_before_export": dropped, "now_on_treatment": on_tx, "treatment_not_started": not_started}
 
 # ---------- treatment success rate -> the eFOI figure for the year ----------
 everyone = [r for rows in generated.values() for r in rows]
@@ -341,25 +398,29 @@ for q in range(4):
 if "README" in wb.sheetnames:  # the template's own notes describe the real 2025 file
     del wb["README"]
 notes = wb.create_sheet("README")
+METHOD = [
+    "Method: diagnosis dates follow a stated model, not the 2025 calendar. Each barangay-month's expected share is the",
+    "  barangay's real 2025 share x a multi-year drift x the planted patterns (patterns.py: city-wide Jul-Sep seasonal peak,",
+    "  rising and falling barangays, two outbreaks spreading to neighbours); the year's records are drawn in proportion.",
+    "  Each record copies one real 2025 Pasig registry record of the same sheet (DSTB/MN), sex and barangay - facility,",
+    "  age (+-1 year from age 5), site, registration group, test results - with all its dates moved to the drawn",
+    "  diagnosis day (gaps between them unchanged). Patients still ON TREATMENT in the template get a final outcome",
+    "  from the real outcome mix, dated with real treatment durations.",
+]
 if FORWARD:
     basis = [
         f"No official {YEAR} figure exists yet. Volume: the real 2025 registry's January-{dt.date(2000, CFG['through_month'], 1):%B}",
         f"  counts per sheet and sex, times {CFG['growth']:.2f} (an assumption; replace with the official figure when published).",
-        "Method: each record copies one real 2025 Pasig registry record of the same sheet (DSTB/MN) and sex —",
-        "  facility, barangay, age (±1 year from age 5), site, registration group, test results, validation status, outcome —",
-        f"  with every date moved forward {-SHIFT} year. Barangay shares continue the 2022-2025 trend one more year.",
-        f"As exported on {CFG['as_of']:%B %d, %Y}: records entered after that date are absent; an outcome not reached by then",
+        *METHOD,
+        f"As exported on {CFG['as_of']:%B %d, %Y}, with January-{dt.date(2000, CFG['through_month'], 1):%B} complete; an outcome not reached by then",
         "  stays ON TREATMENT (outcome date = treatment start, the registry's convention); treatment not started yet: DIAGNOSED.",
     ]
 else:
     basis = [
         f"Calibrated to official figures: DOH Metro Manila CHD eFOI response on tuberculosis ({CFG['table']}; source LGU CHO/FHSIS report), Pasig City {YEAR}:",
         f"  notified TB cases {TOTAL:,} (male {MALE:,}, female {FEMALE:,}); treatment success rate {TARGET_TSR:.2%}.",
-        "Method: each record copies one real 2025 Pasig registry record of the same sheet (DSTB/MN) and sex —",
-        "  facility, barangay, age (±1 year from age 5), site, registration group, test results — with every date moved back",
-        f"  {SHIFT} year(s). Barangay shares drift steadily between a 2022 level (random lognormal step, sigma {BARANGAY_SPREAD}) and the real 2025 shares.",
-        "  Patients still ON TREATMENT in the template are given a final outcome from the real outcome mix, dated with real",
-        f"  treatment durations; outcomes are then adjusted to the official {YEAR} treatment success rate.",
+        *METHOD,
+        f"  Outcomes are then adjusted to the official {YEAR} treatment success rate.",
     ]
 for line in [
     f"{YEAR} PASIG TB REGISTRY — SIMULATED DATA",
@@ -374,6 +435,7 @@ for line in [
 notes.column_dimensions["A"].width = 120
 
 wb.save(OUT)
+json.dump(patterns.answer_sheet(AMPLITUDE), open(__import__('os').path.join(__import__('os').path.dirname(OUT) or '.', 'answer_sheet.json'), 'w', encoding='utf-8'), indent=1)
 reg.save()
 save_counters(COUNTERS, counters)
 
