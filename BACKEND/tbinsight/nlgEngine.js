@@ -509,7 +509,7 @@ function buildGisTopHotspots(m) {
   if (spots.length === 0) {
     return {
       id: 'topHotspots',
-      title: 'Top Hotspots',
+      title: 'Top Priority Barangays',
       text: 'No barangays currently have risk scores for this period.',
     };
   }
@@ -528,7 +528,7 @@ function buildGisTopHotspots(m) {
     const names = spots.map((s) => `**${s.name}** (${s.risk_class})`).join(', ');
     text = `The barangays classified at the highest risk are ${names}.`;
   }
-  return { id: 'topHotspots', title: 'Top Hotspots', text };
+  return { id: 'topHotspots', title: 'Top Priority Barangays', text };
 }
 
 function buildGisCaseConcentration(m) {

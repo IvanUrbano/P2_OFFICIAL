@@ -378,7 +378,7 @@ export function SystemInfoPanel({ sys, sysError }) {
         )}
       </Card>
 
-      <Card title="Application" subtitle="TBInsight — GIS-based TB hotspot and resource-prioritization system." badge={<ReadOnlyBadge />}>
+      <Card title="Application" subtitle="TBInsight — GIS-based TB priority mapping and resource-prioritization system." badge={<ReadOnlyBadge />}>
         <Row label="Application version">{sys?.version || '—'}</Row>
         <Row label="Model version">{run?.model_version || '—'}</Row>
         <Row label="Data source">{fresh.data?.dataSource || 'PASIG TB-IS'}</Row>

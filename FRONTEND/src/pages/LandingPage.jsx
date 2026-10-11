@@ -77,7 +77,7 @@ export default function LandingPage() {
             style={{ color: '#64748B', letterSpacing: '0.01em' }}
           >
             TBInsight transforms tuberculosis data into clear, actionable insights.
-            Combining advanced analytics, predictive forecasting, GIS hotspot detection,
+            Combining advanced analytics, predictive forecasting, GIS priority mapping,
             risk classification, and automated reporting — it empowers health professionals
             to anticipate risks and take timely, evidence-based action.
           </p>

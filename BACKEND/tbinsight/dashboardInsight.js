@@ -464,7 +464,7 @@ function buildRiskSituation(m) {
     const names = (m.highRiskBarangays || []).slice(0, 4).join(', ');
     const others = r.high - 4;
     text = `The Random Forest risk classification places **${r.high}** of **${r.assessed}** assessed barangays in the **High Risk** band${yearNote}`;
-    text += others > 0 ? `, including ${names}, and ${others} others.` : `: ${names || 'see GIS Hotspots'}.`;
+    text += others > 0 ? `, including ${names}, and ${others} others.` : `: ${names || 'see GIS Mapping'}.`;
   }
   if (r.noData > 0) {
     text += ` **${r.noData}** barangay(s) have no classification in this snapshot and are reported as No Assessment rather than Low Risk.`;

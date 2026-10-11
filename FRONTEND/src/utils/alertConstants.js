@@ -1,5 +1,5 @@
 export const MODULE_LABELS = {
-  gis: 'GIS Hotspots',
+  gis: 'GIS Mapping',
   analytics: 'Analytics',
   forecasting: 'Forecasting',
   reports: 'Reports',

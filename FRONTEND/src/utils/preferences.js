@@ -8,7 +8,7 @@ const EVENT = 'tbinsight:prefs';
 
 export const LANDING_PAGES = [
   { path: '/dashboard', label: 'Dashboard' },
-  { path: '/gis-map', label: 'GIS Hotspot Map' },
+  { path: '/gis-map', label: 'GIS Mapping' },
   { path: '/forecasting', label: 'Forecasting' },
   { path: '/alert', label: 'Alerts & Notifications' },
   { path: '/records', label: 'TB Records' },

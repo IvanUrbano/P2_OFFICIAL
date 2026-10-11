@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
+﻿import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -361,6 +361,12 @@ export default function GisMap() {
   const [refreshing, setRefreshing] = useState(false);
   const [filterYear, setFilterYear] = useState('');
   const [availableYears, setAvailableYears] = useState([]);
+  // The page opens on the latest year with data (incidence needs a single year's
+  // population, so "All Years" has none); once the user picks a year it is left alone.
+  const yearChosen = useRef(false);
+  useEffect(() => {
+    if (!yearChosen.current && !filterYear && availableYears.length) setFilterYear(String(availableYears[0]));
+  }, [availableYears, filterYear]);
   const [gisInsight, setGisInsight] = useState(null);
   const [gisInsightLoading, setGisInsightLoading] = useState(false);
   const [gisInsightError, setGisInsightError] = useState(null);
@@ -655,6 +661,17 @@ export default function GisMap() {
     const neighbours = Array.isArray(geoProps.neighbours) ? geoProps.neighbours : null;
     return { merged, riskColor, totalOutcomeCases, onTreatmentCases, successRate, fatalityRate, trendChartData, demoChartData, outcomeChartData, neighbours };
   }, [selectedBarangayName, barangayDetail, barangayDetailLoading, monthlyByBarangay, data, barangayTsr, barangayCfr]);
+
+  // "2026 (Jan–Sep)" for a year whose data does not cover all 12 months yet, so a part-year's
+  // cases and incidence are not read as a full year's.
+  const yearLabel = useMemo(() => {
+    if (!filterYear) return 'All Years';
+    const months = [...new Set(Object.values(monthlyByBarangay).flat()
+      .map(m => String(m.month).slice(0, 7)).filter(m => m.startsWith(String(filterYear))))].sort();
+    if (months.length === 0 || months.length >= 12) return String(filterYear);
+    const name = (ym) => new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1, 1).toLocaleDateString('en-US', { month: 'short' });
+    return `${filterYear} (${name(months[0])}–${name(months[months.length - 1])})`;
+  }, [filterYear, monthlyByBarangay]);
 
   const hasActiveFilters = filterBarangay || filterRiskLevel || filterYear;
 
@@ -1103,7 +1120,7 @@ export default function GisMap() {
 
       {/* Print-only title */}
       <div className="gis-print-title hidden">
-        <h1>GIS Hotspot Mapping — TB Surveillance</h1>
+        <h1>GIS Mapping — TB Priority Levels</h1>
         <p>Pasig City Health Department | Generated {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
       </div>
 
@@ -1120,7 +1137,7 @@ export default function GisMap() {
         <div className="gis-toolbar px-5 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2">
             <div>
-              <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>GIS Hotspot Mapping</h1>
+              <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>GIS Mapping</h1>
               <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Visualize TB cases across Pasig City and identify barangays with higher TB risk.</p>
             </div>
             {/* GIS Year selects the snapshot trained on that year's data.
@@ -1154,7 +1171,7 @@ export default function GisMap() {
               {availableRiskLevels.map(level => <option key={level} value={level}>{level === 'No Data' ? 'No Assessment' : `${riskLabel(level)} Risk`}</option>)}
             </FilterSelect>
 
-            <FilterSelect label="Year" value={filterYear} onChange={(v) => { setFilterYear(v); setSelectedBarangayName(null); resetGisInsight(); }}>
+            <FilterSelect label="Year" value={filterYear} onChange={(v) => { yearChosen.current = true; setFilterYear(v); setSelectedBarangayName(null); resetGisInsight(); }}>
               <option value="">All Years</option>
               {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
             </FilterSelect>
@@ -1162,7 +1179,7 @@ export default function GisMap() {
             <div className="ml-auto flex shrink-0 items-center gap-2 border-l border-[#E2E8F0] pl-3">
             {hasActiveFilters && (
               <button
-                onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); setFilterYear(''); setSelectedBarangayName(null); resetGisInsight(); }}
+                onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); yearChosen.current = false; setFilterYear(availableYears.length ? String(availableYears[0]) : ''); setSelectedBarangayName(null); resetGisInsight(); }}
                 aria-label="Clear all filters"
                 className="text-xs font-medium px-3 py-2"
                 style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
@@ -1416,7 +1433,7 @@ export default function GisMap() {
             <div className="flex flex-col px-5 py-5 relative">
               <div className="flex items-start gap-2">
                 <i className="ri-stethoscope-line text-sm" style={{ color: '#B8956A' }} />
-                <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>TB Cases ({filterYear || 'All Years'})</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>TB Cases ({yearLabel})</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
               <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{stats.totalCases.toLocaleString()}</p>
@@ -1440,7 +1457,7 @@ export default function GisMap() {
             <div className="flex flex-col px-5 py-5">
               <div className="flex items-start gap-2">
                 <i className="ri-node-tree text-sm" style={{ color: '#6B9E9E' }} />
-                <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Case Density ({filterYear || 'All Years'})</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider leading-tight" style={{ color: '#64748B' }}>Case Density ({yearLabel})</span>
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
               <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{(stats.totalCases / PASIG_AREA_KM2).toFixed(1)}</p>
@@ -1697,11 +1714,11 @@ export default function GisMap() {
                     </div>
                     <div className="grid grid-cols-1 gap-x-8 gap-y-5 rounded-lg border border-[#DCE4ED] bg-[#F7FAFD] px-5 py-5 sm:grid-cols-2 lg:grid-cols-3">
                       <div>
-                        <span className="text-xs text-[#64748B]">Total cases · {filterYear || 'All years'}</span>
+                        <span className="text-xs text-[#64748B]">Total cases · {yearLabel}</span>
                         <p className="mt-1 text-xl font-semibold tabular-nums text-[#0F2D52]">{formatNum(merged.total_cases)}</p>
                       </div>
                       <div>
-                        <span className="text-xs text-[#64748B]">On treatment · {filterYear || 'All years'}</span>
+                        <span className="text-xs text-[#64748B]">On treatment · {yearLabel}</span>
                         <p className="mt-1 text-xl font-semibold tabular-nums text-[#0F2D52]">{onTreatmentCases}</p>
                       </div>
                       <div
@@ -1712,7 +1729,7 @@ export default function GisMap() {
                           'the Why panel below — the two are measured differently and need not match.'
                         }
                       >
-                        <span className="text-xs text-[#64748B]">Incidence per 100,000 · {filterYear || 'All years'}</span>
+                        <span className="text-xs text-[#64748B]">Incidence per 100,000 · {yearLabel}</span>
                         <p className="mt-1 text-xl font-semibold tabular-nums text-[#0F2D52]">{formatNum(merged.incidence_per_100k)}</p>
                       </div>
                       <div>
@@ -1722,7 +1739,7 @@ export default function GisMap() {
                       <div
                         title="Died ÷ evaluated terminal outcomes (Cured, Treatment Completed, Died, Treatment Failed, Lost to Follow-up) among this barangay's cases diagnosed in the selected period. Cases still on treatment are excluded because they have not reached an outcome."
                       >
-                        <span className="text-xs text-[#64748B]">Case fatality · {filterYear || 'All years'}</span>
+                        <span className="text-xs text-[#64748B]">Case fatality · {yearLabel}</span>
                         <p className="mt-1 text-xl font-semibold tabular-nums text-[#0F2D52]">{fatalityRate != null ? `${fatalityRate}%` : 'N/A'}</p>
                       </div>
                       <div

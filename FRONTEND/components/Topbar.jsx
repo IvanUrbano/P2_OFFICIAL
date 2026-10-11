@@ -10,7 +10,7 @@ const NAV_ITEMS = [
   { icon: 'ri-stethoscope-line', label: 'TB Records', path: '/records' },
   { icon: 'ri-line-chart-line', label: 'Analytics', path: '/analytics' },
   { icon: 'ri-line-chart-line', label: 'Forecasting', path: '/forecasting' },
-  { icon: 'ri-compass-3-line', label: 'GIS Hotspots', path: '/gis-map' },
+  { icon: 'ri-compass-3-line', label: 'GIS Mapping', path: '/gis-map' },
   { icon: 'ri-file-text-line', label: 'Reports', path: '/reports' },
   { icon: 'ri-notification-3-line', label: 'Alerts & Notifications', path: '/alert' },
   { icon: 'ri-server-line', label: 'Data Integration', path: '/data-integration' },

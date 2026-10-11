@@ -1,5 +1,5 @@
 /* Shared compact filter dropdown — label pill + native select, used by the
- * inline horizontal filter bars (Analytics, Forecasting, GIS Hotspots,
+ * inline horizontal filter bars (Analytics, Forecasting, GIS Mapping,
  * Intervention Planning). Left padding on the <select> itself carries into
  * the native dropdown list's option indentation in Chromium, so keep pl-2
  * rather than removing it. */

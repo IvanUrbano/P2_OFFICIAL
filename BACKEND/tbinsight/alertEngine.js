@@ -99,7 +99,7 @@ async function getUnreadCount(poolOrClient) {
 // ── Alert Evaluations ───────────────────────────────────────────────────────
 
 /**
- * High-Risk Hotspot Detected
+ * High-Priority Barangays Detected (alert type high_risk_hotspot, kept for stored alerts)
  * Checks barangay_risk_scores for barangays classified as High.
  * Creates a single summary alert listing all high-risk barangays.
  */
@@ -128,8 +128,8 @@ async function evaluateHotspotAlerts(poolOrClient, period) {
   const id = await insertAlert(poolOrClient, {
     alertType: 'high_risk_hotspot',
     severity,
-    title: sorted.length === 1 ? 'High-Risk Hotspot Detected' : `${sorted.length} High-Risk Hotspots Detected`,
-    message: `${sorted.length} barangay${sorted.length > 1 ? 's' : ''} classified as high-risk TB hotspot${sorted.length > 1 ? 's' : ''}: ${topList}${suffix}.`,
+    title: sorted.length === 1 ? 'High-Priority Barangay Detected' : `${sorted.length} High-Priority Barangays Detected`,
+    message: `${sorted.length} barangay${sorted.length > 1 ? 's' : ''} classified as High priority for TB: ${topList}${suffix}.`,
     recommendation: `Increase surveillance and resource allocation in affected barangays. Review TB case management and contact tracing activities.`,
     barangayName: null,
     metadata: { affected_barangays: sorted.map(row => row.barangay_name) },
