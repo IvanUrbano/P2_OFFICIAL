@@ -174,29 +174,6 @@ function formatEvaluationMonth(value) {
 
 const pct = (value, digits = 0) => `${(Number(value) * 100).toFixed(digits)}%`;
 
-/**
- * The forecast error read against the best possible: how many cases fall in one
- * barangay-month is partly chance, so even a perfect forecast misses by some amount
- * (metrics.arima.achievable_mae, computed by the evaluation). Overall figures only.
- */
-function AchievableNote({ view, metrics }) {
-  const floor = Number(metrics?.arima?.achievable_mae);
-  if (view.scope !== 'overall' || view.narrowed || !(floor > 0) || !(view.mae > 0)) return null;
-  const share = Math.min(1, floor / Number(view.mae));
-  return (
-    <div className="mt-3 rounded px-3 py-2.5" style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
-      <p className="text-[11px] font-bold" style={{ color: '#166534' }}>Compared with the best possible</p>
-      <div className="mt-1 grid grid-cols-2 gap-3">
-        <EvalMetric label="Best possible average error" value={`${floor.toFixed(1)} cases`} />
-        <EvalMetric label="Accuracy reached" value={`${pct(share)} of best possible`} />
-      </div>
-      <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#475569' }}>
-        A barangay reports only a few cases a month, and how many fall in a given month is partly chance. Even a forecast that knew each barangay's true rate and the city's seasonal pattern would be off by about {floor.toFixed(1)} cases a month on these months.
-      </p>
-    </div>
-  );
-}
-
 /** The Random Forest's own evaluation (all barangays, all tested months). */
 function RiskClassificationEvaluation({ rf }) {
   if (!rf || rf.accuracy == null) return null;
@@ -206,12 +183,12 @@ function RiskClassificationEvaluation({ rf }) {
       <p className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>Risk levels (Random Forest)</p>
       <div className="mt-1 grid grid-cols-2 gap-3 md:grid-cols-4">
         <EvalMetric label="Correct risk level" value={rf.ceiling_accuracy != null ? `${pct(rf.accuracy)} (best possible ${pct(rf.ceiling_accuracy)})` : pct(rf.accuracy)} />
-        <EvalMetric label="Never mixes up Low and High" value={rf.low_high_confusion != null ? pct(1 - rf.low_high_confusion, 1) : '—'} />
+        <EvalMetric label="Right or one level off" value={rf.low_high_confusion != null ? pct(1 - rf.low_high_confusion, 1) : '—'} />
         <EvalMetric label="High-risk barangays caught" value={highRecall != null ? pct(highRecall) : '—'} />
         <EvalMetric label="Simple ranking rule" value={rf.baseline_accuracy != null ? pct(rf.baseline_accuracy) : '—'} />
       </div>
       <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>
-        Each month the model placed every barangay in Low, Medium or High risk for the next 3 months, using only data from before that month; the result was then checked against the cases reported. Barangays close to a band boundary can land on either side by chance, so even a perfect model would get about {rf.ceiling_accuracy != null ? pct(rf.ceiling_accuracy) : 'two-thirds'} right. "Simple ranking rule" ranks barangays by their last 12 months. Covers all barangays over {rf.n_steps} tested months.
+        Risk level for the next 3 months, checked against the cases later reported ({rf.n_steps} months tested). "Simple ranking rule" ranks barangays by their last 12 months.
       </p>
     </div>
   );
@@ -295,11 +272,10 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
 
               {view.state === 'ready' && (
                 <>
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-5 md:gap-0">
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-0">
                     <EvalMetric label="Average error" value={view.mae == null ? '—' : `${Number(view.mae).toFixed(1)} cases`} />
                     <EvalMetric label="Cases missed (WAPE)" value={view.wape == null ? '—' : `${Number(view.wape).toFixed(1)}%`} />
                     <EvalMetric label="vs. 12-month average" value={view.skill == null ? '—' : `${view.skill >= 0 ? '+' : ''}${(Number(view.skill) * 100).toFixed(1)}%`} />
-                    <EvalMetric label="Method" value={view.method} />
                     <EvalMetric label="Months tested" value={evaluationPeriod} />
                   </div>
                   {view.total3m?.wape != null && (
@@ -310,16 +286,29 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
                         <EvalMetric label="Cases missed (WAPE)" value={`${Number(view.total3m.wape).toFixed(1)}%`} />
                         <EvalMetric label="vs. 12-month average" value={view.total3m.skill == null ? '—' : `${view.total3m.skill >= 0 ? '+' : ''}${(Number(view.total3m.skill) * 100).toFixed(1)}%`} />
                       </div>
-                      <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>The same forecasts scored as a total over the next 3 months. Single months jump up and down by chance; over 3 months much of that evens out, so this is the better guide for planning supplies and staff.</p>
+                      <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>Chance ups and downs even out over 3 months: the better guide for planning supplies and staff.</p>
                     </div>
                   )}
-                  <p className="mt-3 text-[11px] leading-relaxed text-[#475569]">These values show how far earlier predictions were from reported cases. Cases missed is the total difference as a share of all reported cases. "vs. 12-month average" compares the error with simply predicting each barangay's average of the past 12 months: above 0% means the model did better than that.</p>
-                  <AchievableNote view={view} metrics={record?.metrics} />
+                  {view.city?.wape != null && (
+                    <div className="mt-3 rounded px-3 py-2.5" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                      <p className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>City-wide total</p>
+                      <div className="mt-1 grid grid-cols-3 gap-3">
+                        <EvalMetric label="Average error" value={`${Number(view.city.mae).toFixed(1)} cases`} />
+                        <EvalMetric label="Cases missed (WAPE)" value={`${Number(view.city.wape).toFixed(1)}%`} />
+                        <EvalMetric label="vs. 12-month average" value={view.city.skill == null ? '—' : `${view.city.skill >= 0 ? '+' : ''}${(Number(view.city.skill) * 100).toFixed(1)}%`} />
+                      </div>
+                      <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>All barangays added up each month; small misses cancel out. The figure for city-wide planning.</p>
+                    </div>
+                  )}
+                  <p className="mt-3 text-[11px] leading-relaxed text-[#475569]">"vs. 12-month average": above 0% means the forecast beat simply using each barangay's average of the past 12 months.</p>
                   <RiskClassificationEvaluation rf={record?.metrics?.rf} />
 
-                  <h3 className="text-[11px] font-bold mt-4" style={{ color: '#0F2D52' }}>Past predictions compared with reported cases — {view.rowsLabel}</h3>
                   {view.rows.length > 0 ? (
-                    <>
+                    <details className="group mt-4">
+                      <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] font-bold [&::-webkit-details-marker]:hidden" style={{ color: '#0F2D52' }}>
+                        <i className="ri-arrow-right-s-line text-sm transition-transform group-open:rotate-90" aria-hidden="true" />
+                        Show months: predicted vs reported — {view.rowsLabel}
+                      </summary>
                       <div className="overflow-x-auto mt-3">
                         <table className="w-full text-[11px] text-left">
                           <thead style={{ color: '#64748B', background: '#F8FAFC' }}>
@@ -341,12 +330,7 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
                           </tbody>
                         </table>
                       </div>
-                      <p className="text-[10px] mt-1.5" style={{ color: '#94A3B8' }}>
-                        {view.scope === 'overall'
-                          ? `Each row adds up the actual and predicted cases of the ${view.barangaysEvaluated} barangays tested that month. Average error above is the average of each barangay's own error; cases missed is pooled over all of them.`
-                          : 'Each row is a month the model predicted from the records before it, then compared with the cases actually recorded.'}
-                      </p>
-                    </>
+                    </details>
                   ) : (
                     <p className="text-[10px] mt-2 leading-relaxed" style={{ color: '#64748B' }}>
                       A month-by-month comparison for all barangays was not saved with this evaluation. It will be saved the next time the evaluation runs, which happens automatically after each analysis pipeline run.
@@ -368,10 +352,7 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
                   The latest evaluation failed on {failedAt}. These are previous saved results from {savedAt}.
                 </p>
               )}
-              <p className="text-[10px] mt-3 leading-relaxed" style={{ color: '#64748B' }}>
-                Results are based on the historical data available at the time of the evaluation and may change as more validated monthly data become available.
-              </p>
-              <p className="text-[10px] mt-1" style={{ color: '#94A3B8' }}>Last evaluated: {savedAt}</p>
+              <p className="text-[10px] mt-3" style={{ color: '#94A3B8' }}>Last evaluated: {savedAt}</p>
             </>
           )}
         </div>

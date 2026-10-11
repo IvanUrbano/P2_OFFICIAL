@@ -15,7 +15,8 @@
 // Rules:
 //   - "All barangays" is the OVERALL evaluation — never one barangay standing in for the city. Its monthly
 //     comparison is the city-wide total (actual and predicted summed over the barangays) for each month.
-//   - Overall MAE / MAPE keep the saved definition: the average of the barangays' own figures.
+//   - Overall MAE / MAPE keep the saved definition: the average of the barangays' own figures. `city`
+//     scores that city-wide total itself.
 //   - With no narrowing the SAVED figures are shown as they are; with a year range or a barangay they are
 //     recomputed from the saved months, the same way.
 //   - An older record that kept only one barangay's months cannot answer a barangay or year filter it has no
@@ -174,12 +175,14 @@ export function buildEvaluationView(record, filters = {}) {
     const pooled = errorStats(allSteps);
 
     // City-wide monthly totals: actual and predicted summed over the barangays tested that month.
+    // The baseline is summed too, so the city total gets its own skill (null if any month lacks one).
     const byMonth = new Map();
     allSteps.forEach((s) => {
       const k = monthKey(s.month);
-      const cur = byMonth.get(k) || { month: k, actual: 0, predicted: 0 };
+      const cur = byMonth.get(k) || { month: k, actual: 0, predicted: 0, baseline: 0 };
       cur.actual += Number(s.actual);
       cur.predicted += Number(s.predicted);
+      cur.baseline = cur.baseline != null && finite(s.baseline) ? cur.baseline + Number(s.baseline) : null;
       byMonth.set(k, cur);
     });
     const w = firstLast(allSteps);
@@ -197,6 +200,8 @@ export function buildEvaluationView(record, filters = {}) {
       method: !narrowed && config.method ? config.method : methodLabel(countMethods(allSteps)),
       periodStart: w.start,
       periodEnd: w.end,
+      // The city-wide monthly total scored as one forecast: barangay errors partly cancel out.
+      city: errorStats([...byMonth.values()]),
       rows: toRows([...byMonth.values()]),
       rowsLabel: 'City-wide total (all barangays)',
       barangaysEvaluated: scoped.length,

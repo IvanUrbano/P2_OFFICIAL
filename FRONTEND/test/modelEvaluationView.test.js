@@ -47,6 +47,19 @@ test('the overall comparison is the city-wide total per month, not one barangay\
   ]);
 });
 
+test('the city-wide total is scored as one forecast, with skill only when every month has a baseline', () => {
+  const v = buildEvaluationView(saved, {});
+  assert.equal(v.city.mae, 8);
+  assert.equal(v.city.wape, (16 / 120) * 100);
+  assert.equal(v.city.skill, null);                            // these steps carry no baseline
+
+  const withBase = (b, base) => ({ ...b, steps: b.steps.map((s, i) => ({ ...s, baseline: base[i] })) });
+  const based = { ...saved, metrics: { arima: { ...saved.metrics.arima,
+    per_barangay: [withBase(uguong, [12, 12]), withBase(rosario, [40, 40])] } } };
+  // City baseline 52 both months: off by 8 each, the same as the model -> skill 0
+  assert.equal(buildEvaluationView(based, {}).city.skill, 0);
+});
+
 // ---------- Year / Period filter ----------
 test('a year range narrows the overall evaluation and recomputes MAE/MAPE from the saved months', () => {
   const v = buildEvaluationView(saved, { startYear: '2026', endYear: '2026', barangay: '' });
