@@ -122,6 +122,10 @@ async function start() {
     await recoverSyncs(0);
     setInterval(() => recoverSyncs(), 5 * 60 * 1000).unref();
 
+    // Weekly reminder to record the outcome of patients on treatment past a standard
+    // treatment (services/outcomeDue.js).
+    require('./services/outcomeDue').startOutcomeDueReminders();
+
     app.listen(config.port, () => {
       console.log(`🚀 Pasig Clone backend running on port ${config.port}`);
       console.log(`📦 File upload limits:`);

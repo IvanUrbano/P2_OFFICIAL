@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useId } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import API from '../api/axios';
 import { patientName } from '../utils/patientName';
 import { caseIdLabel } from '../utils/caseId';
@@ -21,6 +22,7 @@ const TABS = [
   { key: 'warning', title: 'Yellow', desc: '1 or 2 missed pickups', countKey: 'warning', dot: '#F59E0B', tone: '#92400E', toneBg: 'rgba(245,158,11,0.16)' },
   { key: 'due', title: 'Due now', desc: 'Expected at the center today', countKey: 'due', icon: 'ri-calendar-event-line', tone: '#1D4ED8', toneBg: 'rgba(59,130,246,0.12)' },
   { key: 'ok', title: 'On track', desc: 'No missed pickups', countKey: 'ok', dot: '#10B981', tone: '#047857', toneBg: 'rgba(16,185,129,0.12)' },
+  { key: 'outcome', title: 'Outcome due', desc: 'On treatment over 6 months', countKey: 'outcome', icon: 'ri-file-warning-line', tone: '#9A3412', toneBg: 'rgba(234,88,12,0.12)' },
   { key: 'none', title: 'No schedule', desc: 'Needs a schedule assigned', countKey: 'none', dot: '#94A3B8' },
 ];
 
@@ -575,6 +577,17 @@ function PatientPanel({ patientId, onClose, onChanged }) {
         </p>
       )}
 
+      {data?.outcome_due && (
+        <div className="rounded px-3 py-2.5 text-xs" style={{ background: '#FFF7ED', border: '1px solid #FDBA74', color: '#9A3412' }}>
+          <p className="font-bold"><i className="ri-file-warning-line mr-1" />Outcome due</p>
+          <p className="mt-0.5 leading-relaxed">
+            On treatment since {fmtDate(patient.date_started_treatment || patient.date_of_diagnosis)}, over {data.outcome_due_months} months.
+            Record the outcome (cured, treatment completed, …) when treatment has ended.
+          </p>
+          <Link to={`/records?record=${patient.id}`} className="mt-1.5 inline-block font-semibold underline">Open in TB Records</Link>
+        </div>
+      )}
+
       {data && !schedule && (editable
         ? <ScheduleForm patientId={patientId} today={data.today} onSaved={changed} />
         : <EmptyState icon="ri-calendar-line" title="No schedule yet" description="The barangay handling this patient has not assigned a pickup schedule." />)}
@@ -688,7 +701,8 @@ function BulkAssignPanel({ count, target, today, onClose, onDone }) {
 /* ─── Page ─── */
 
 export default function MedicationSchedulePage() {
-  const [level, setLevel] = useState('');
+  const [searchParams] = useSearchParams();
+  const [level, setLevel] = useState(() => (TABS.some(t => t.key === searchParams.get('tab')) ? searchParams.get('tab') : ''));
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);

@@ -16,6 +16,7 @@ export const TYPE_LABEL = {
   referral_rejected: 'Referral',
   referral_cancelled: 'Referral',
   account_updated: 'Account',
+  outcome_due: 'Treatment',
 };
 
 const notificationDateFormatter = new Intl.DateTimeFormat('en-PH', {

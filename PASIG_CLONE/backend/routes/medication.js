@@ -17,6 +17,7 @@ const pinService = require('../services/pinService');
 const { withUserNames } = require('../services/userNames');
 const { logAuditEvent } = require('../utils/auditLogger');
 const med = require('../services/medicationSchedule');
+const { OUTCOME_DUE_MONTHS, outcomeDueSql } = require('../services/outcomeDue');
 
 const TODAY = `(NOW() AT TIME ZONE 'Asia/Manila')::date`;
 const MISSED = med.missedSql('s', TODAY);
@@ -30,7 +31,8 @@ const ON_TREATMENT = `v.is_archived = false AND v.case_status = 'ON TREATMENT'
 const CASE_COLUMNS = `v.id, v.source_case_id, v.case_no, v.last_name, v.first_name, v.middle_name, v.suffix,
   v.identity_class, v.barangay_name, v.barangay_id, v.responsible_barangay, v.responsible_barangay_id,
   v.location_resolution, v.city, v.is_archived, v.merged_into_case_no, v.match_status, v.case_status,
-  v.treatment_facility, v.date_started_treatment::text AS date_started_treatment`;
+  v.treatment_facility, v.date_started_treatment::text AS date_started_treatment,
+  v.date_of_diagnosis::text AS date_of_diagnosis, ${outcomeDueSql('v', TODAY)} AS outcome_due`;
 const SCHEDULE_COLUMNS = `s.id, s.validated_case_id, s.medicines, s.interval_days, s.start_date::text AS start_date,
   s.end_date::text AS end_date, s.notes, s.status, s.created_by, s.created_at, s.updated_by, s.updated_at,
   s.stopped_by, s.stopped_at`;
@@ -104,7 +106,7 @@ function listFilters(req, params, query = req.query) {
 /**
  * GET / — patients on treatment with their schedule's warning level.
  * Query: level = none | ok | warning | critical (warning = 1st or 2nd) | due (expected at the
- * center now), barangay (id or name), search (Case ID, barangay; names once unlocked), page, limit.
+ * center now) | outcome (on treatment past OUTCOME_DUE_MONTHS), barangay (id or name), search (Case ID, barangay; names once unlocked), page, limit.
  * Sorted: most missed first, then patients without a schedule, then those on track.
  */
 router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
@@ -127,6 +129,7 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
     const level = req.query.level;
     const levelWhere = level === 'none' ? 'r.schedule_id IS NULL'
       : level === 'due' ? 'r.due_now'
+      : level === 'outcome' ? 'r.outcome_due'
       : med.levelSql(level, 'r.missed') ? `r.schedule_id IS NOT NULL AND ${med.levelSql(level, 'r.missed')}` : 'TRUE';
 
     const [countsRes, dataRes] = await Promise.all([
@@ -136,7 +139,8 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
           COUNT(*) FILTER (WHERE r.missed = 0)::int AS "ok",
           COUNT(*) FILTER (WHERE r.missed BETWEEN 1 AND 2)::int AS "warning",
           COUNT(*) FILTER (WHERE r.missed >= 3)::int AS "critical",
-          COUNT(*) FILTER (WHERE r.due_now)::int AS "due"
+          COUNT(*) FILTER (WHERE r.due_now)::int AS "due",
+          COUNT(*) FILTER (WHERE r.outcome_due)::int AS "outcome"
         FROM (${rowsSql}) r`, params),
       db.pool.query(`SELECT r.* FROM (${rowsSql}) r WHERE ${levelWhere}
         ORDER BY CASE WHEN r.missed > 0 THEN 0 WHEN r.schedule_id IS NULL THEN 1 ELSE 2 END,
@@ -164,7 +168,7 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
     });
 
     const total = level === 'none' ? countsRes.rows[0].none
-      : ['ok', 'warning', 'critical', 'due'].includes(level) ? countsRes.rows[0][level]
+      : ['ok', 'warning', 'critical', 'due', 'outcome'].includes(level) ? countsRes.rows[0][level]
         : countsRes.rows[0].all;
     res.json({
       patients: pinService.maskUnlessUnlocked(req, patients),
@@ -207,6 +211,9 @@ router.get('/:caseId', authenticate, authorizeRoles('admin', 'staff'), async (re
       history,
       grace_days: med.PICKUP_GRACE_DAYS,
       today: med.manilaToday(),
+      // Still ON TREATMENT past a standard treatment: the panel asks for the outcome (services/outcomeDue.js).
+      outcome_due: Boolean(record.outcome_due),
+      outcome_due_months: OUTCOME_DUE_MONTHS,
     });
   } catch (err) {
     fail(res, err, 'Failed to load the medication schedule');

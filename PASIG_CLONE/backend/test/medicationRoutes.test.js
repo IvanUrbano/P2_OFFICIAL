@@ -154,6 +154,15 @@ describe('viewing', () => {
     assert.strictEqual(data.params[1], '%ROS%');
   });
 
+  it('lists patients whose outcome is due (on treatment past 6 months)', async () => {
+    await call('GET', '/?level=outcome');
+    const data = listed.find(l => l.q.startsWith('SELECT r.* FROM'));
+    assert.match(data.q, /WHERE r\.outcome_due/);
+    assert.match(data.q, /COALESCE\(v\.date_started_treatment, v\.date_of_diagnosis\) <= .* INTERVAL '6 months'/);
+    const counts = listed.find(l => l.q.includes('AS "outcome"'));
+    assert.ok(counts, 'counts include the Outcome due tab');
+  });
+
   it('filters by barangay and Due now, and searches names only once the PIN is unlocked', async () => {
     await call('GET', '/?level=due&barangay=17&search=Cruz');
     const data = listed.find(l => l.q.startsWith('SELECT r.* FROM'));
@@ -172,6 +181,8 @@ describe('viewing', () => {
     assert.strictEqual(r.body.patient.permissions.edit, false);
     assert.strictEqual(r.body.schedule.id, 11);
     assert.strictEqual(r.body.patient.last_name, null); // names follow the Records PIN rules
+    assert.strictEqual(r.body.outcome_due, false);
+    assert.strictEqual(r.body.outcome_due_months, 6);
   });
 
   it('another barangay\'s patient is not shown', async () => {
