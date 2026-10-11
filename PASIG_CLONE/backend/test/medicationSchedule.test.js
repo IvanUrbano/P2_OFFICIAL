@@ -71,6 +71,16 @@ describe('missed pickups and warnings', () => {
     assert.strictEqual(s.missed, 0);
   });
 
+  it('a patient is due now on the pickup day and while a pickup is late, until it is recorded', () => {
+    const dueOn = (today, pickups = []) => med.summarize(weekly, pickups, today).due_now;
+    assert.strictEqual(dueOn('2026-09-30'), false);   // before the first pickup
+    assert.strictEqual(dueOn('2026-10-01'), true);    // pickup day
+    assert.strictEqual(dueOn('2026-10-03'), true);    // late, still in the grace period
+    assert.strictEqual(dueOn('2026-10-04'), false);   // grace over: now a missed pickup
+    assert.strictEqual(dueOn('2026-10-02', [{ due_date: '2026-10-01', status: 'collected' }]), false);
+    assert.ok(med.dueNowSql('s', 'T').includes(`generate_series(0, ${med.PICKUP_GRACE_DAYS})`));
+  });
+
   it('is finished once the last pickup has passed', () => {
     const all = med.pickupDates(weekly).map(d => ({ due_date: d, status: 'collected' }));
     assert.strictEqual(med.summarize(weekly, all, '2026-11-01').finished, true);
@@ -83,6 +93,32 @@ describe('missed pickups and warnings', () => {
     assert.strictEqual(med.levelSql('warning', 'm'), 'm BETWEEN 1 AND 2');
     assert.strictEqual(med.levelSql('critical', 'm'), 'm >= 3');
     assert.strictEqual(med.levelSql('bogus', 'm'), null);
+  });
+});
+
+describe('bulk assignment dates', () => {
+  const value = { start_date: '2026-10-13', end_date: '2027-04-12', interval_days: 7, duration_value: 6, duration_unit: 'months' };
+
+  it("'same' gives everyone the form's dates", () => {
+    assert.deepStrictEqual(med.planForCase(value, 'same', { date_started_treatment: '2026-09-01' }, '2026-10-11'),
+      { start_date: '2026-10-13', end_date: '2027-04-12' });
+  });
+
+  it("'treatment_start' keeps the patient's pickup day and counts the duration from the treatment start", () => {
+    // Started Tue Sep 1: weekly pickups Sep 1, 8, ... -> next one from Oct 11 is Oct 13
+    assert.deepStrictEqual(med.planForCase(value, 'treatment_start', { date_started_treatment: '2026-09-01' }, '2026-10-11'),
+      { start_date: '2026-10-13', end_date: '2027-02-28' });
+    // A pickup day that is today stays today
+    assert.strictEqual(med.planForCase(value, 'treatment_start', { date_started_treatment: '2026-09-27' }, '2026-10-11').start_date, '2026-10-11');
+    // Starting in the future: the first pickup is the start itself
+    assert.strictEqual(med.planForCase(value, 'treatment_start', { date_started_treatment: '2026-10-20' }, '2026-10-11').start_date, '2026-10-20');
+  });
+
+  it('skips a patient whose treatment period is already over, and falls back without a start date', () => {
+    assert.deepStrictEqual(med.planForCase(value, 'treatment_start', { date_started_treatment: '2025-01-01' }, '2026-10-11'),
+      { skip: 'treatment period already over' });
+    assert.deepStrictEqual(med.planForCase(value, 'treatment_start', { date_started_treatment: null }, '2026-10-11'),
+      { start_date: '2026-10-13', end_date: '2027-04-12' });
   });
 });
 

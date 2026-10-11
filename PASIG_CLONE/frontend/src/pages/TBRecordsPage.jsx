@@ -210,7 +210,7 @@ export default function TBRecordsPage() {
     setPinBusy(true);
     setPinMsg('');
     try {
-      const res = await API.post('/api/auth/pin/verify', { pin: pinInput });
+      const res = await API.post('/api/auth/pin/verify', { pin: pinInput }, { skipAuthRedirect: true });
       setPinStatus(s => ({ ...s, unlocked: true, unlockedUntil: res.data.unlockedUntil }));
       setPinInput('');
       fetchRecords();

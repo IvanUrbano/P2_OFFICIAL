@@ -2,12 +2,13 @@
 // (backend/services/medicationSchedule.js); endDateFor / pickupCount here only preview
 // the form before it is saved, using the same date rules.
 
+// bg / color: the badge; dot: the level color (row stripe, missed dots); rowBg: row tint.
 export const LEVEL_STYLE = {
-  ok: { label: 'On track', bg: 'rgba(16,185,129,0.1)', color: '#047857', dot: '#10B981' },
-  warning1: { label: '1st warning', bg: 'rgba(245,158,11,0.14)', color: '#92400E', dot: '#F59E0B' },
-  warning2: { label: '2nd warning', bg: 'rgba(245,158,11,0.14)', color: '#92400E', dot: '#F59E0B' },
-  critical: { label: '3rd warning', bg: 'rgba(239,68,68,0.12)', color: '#991B1B', dot: '#EF4444' },
-  none: { label: 'No schedule', bg: '#F1F5F9', color: '#64748B', dot: '#CBD5E1' },
+  ok: { label: 'On track', bg: '#DCFCE7', color: '#166534', dot: '#16A34A', icon: 'ri-checkbox-circle-fill', rowBg: null },
+  warning1: { label: '1st warning', bg: '#FBBF24', color: '#422006', dot: '#F59E0B', icon: 'ri-error-warning-fill', rowBg: '#FFFBEB' },
+  warning2: { label: '2nd warning', bg: '#FBBF24', color: '#422006', dot: '#F59E0B', icon: 'ri-error-warning-fill', rowBg: '#FFFBEB' },
+  critical: { label: '3rd warning', bg: '#DC2626', color: '#ffffff', dot: '#DC2626', icon: 'ri-alarm-warning-fill', rowBg: '#FEF2F2' },
+  none: { label: 'No schedule', bg: '#F1F5F9', color: '#475569', dot: '#CBD5E1', icon: 'ri-calendar-line', rowBg: null },
 };
 
 export const PICKUP_STATE = {
@@ -41,6 +42,8 @@ export const MEDICINE_UNITS = ['tablets', 'capsules', 'sachets', 'vials', 'bottl
 const DAY_MS = 86400000;
 const dayNumber = (iso) => Math.round(Date.parse(`${iso}T00:00:00Z`) / DAY_MS);
 const isoOf = (day) => new Date(day * DAY_MS).toISOString().slice(0, 10);
+
+export const addDaysIso = (iso, n) => isoOf(dayNumber(iso) + n);
 
 export function endDateFor(start, value, unit) {
   const n = Number(value);

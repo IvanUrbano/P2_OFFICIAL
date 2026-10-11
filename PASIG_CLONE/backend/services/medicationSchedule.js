@@ -110,8 +110,18 @@ function summarize(schedule, pickups = [], today = manilaToday()) {
     level: levelFor(missed),
     next_pickup: next ? next.date : null,
     next_state: next ? next.state : null,
+    // Expected at the center now: a pickup due today, or a late one still in its grace period.
+    due_now: list.some((p) => p.state === 'due' || p.state === 'late'),
     finished: dayNumber(schedule.end_date) < t && !next,
   };
+}
+
+/** SQL condition for summarize().due_now: an unrecorded pickup dated today - grace .. today. */
+function dueNowSql(s = 's', today = 'CURRENT_DATE') {
+  return `EXISTS (SELECT 1 FROM generate_series(0, ${PICKUP_GRACE_DAYS}) g
+    WHERE ${today} - g BETWEEN ${s}.start_date AND ${s}.end_date
+      AND (${today} - g - ${s}.start_date) % ${s}.interval_days = 0
+      AND NOT EXISTS (SELECT 1 FROM medication_pickups mp WHERE mp.schedule_id = ${s}.id AND mp.due_date = ${today} - g))`;
 }
 
 /**
@@ -194,6 +204,8 @@ function validateScheduleInput(body = {}, today = manilaToday()) {
     value: {
       start_date: body.start_date,
       end_date: end,
+      duration_value: value,
+      duration_unit: unit,
       interval_days: interval,
       medicines: meds.medicines,
       notes: clean(body.notes, 500) || null,
@@ -201,8 +213,31 @@ function validateScheduleInput(body = {}, today = manilaToday()) {
   };
 }
 
+const START_MODES = ['same', 'treatment_start'];
+
+/**
+ * One patient's dates in a bulk assignment.
+ *   'same'            every patient gets the form's first pickup and end date.
+ *   'treatment_start' pickups keep the rhythm of the patient's own treatment start: the first
+ *                     one is the next pickup date on or after today, and the treatment runs
+ *                     the form's duration from the treatment start. A patient without a
+ *                     treatment start date falls back to 'same'.
+ * Returns { start_date, end_date } or { skip } with the reason.
+ */
+function planForCase(value, mode, record, today = manilaToday()) {
+  const ts = record?.date_started_treatment ? String(record.date_started_treatment).slice(0, 10) : null;
+  if (mode !== 'treatment_start' || !isIsoDate(ts)) return { start_date: value.start_date, end_date: value.end_date };
+  const end = endDateFor(ts, value.duration_value, value.duration_unit);
+  const step = value.interval_days;
+  const behind = dayNumber(today) - dayNumber(ts);
+  const first = behind <= 0 ? ts : addDays(ts, Math.ceil(behind / step) * step);
+  if (first > end) return { skip: 'treatment period already over' };
+  return { start_date: first, end_date: end };
+}
+
 module.exports = {
+  START_MODES, planForCase,
   PICKUP_GRACE_DAYS, MAX_BACKDATE_DAYS, LEVELS, DURATION_UNITS,
   manilaToday, isIsoDate, addDays, endDateFor, pickupDates, levelFor, summarize,
-  missedSql, levelSql, normalizeMedicines, validateScheduleInput,
+  missedSql, dueNowSql, levelSql, normalizeMedicines, validateScheduleInput,
 };

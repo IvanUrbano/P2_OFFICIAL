@@ -20,6 +20,7 @@ const med = require('../services/medicationSchedule');
 
 const TODAY = `(NOW() AT TIME ZONE 'Asia/Manila')::date`;
 const MISSED = med.missedSql('s', TODAY);
+const DUE_NOW = med.dueNowSql('s', TODAY);
 
 // Patients listed: validated, live cases still on treatment — the TB Records listing rule
 // (routes/csvImport.js TB_RECORDS_LISTED) narrowed to case status ON TREATMENT.
@@ -70,8 +71,40 @@ async function editableSchedule(req, scheduleId) {
 }
 
 /**
+ * The list's barangay and search filters (appended to `params`) — shared by the list and
+ * "assign to all matching", so a bulk assignment covers exactly the patients shown.
+ */
+function listFilters(req, params, query = req.query) {
+  let filters = '';
+  if (query.barangay) {
+    // Same as TB Records: a barangay id, or a name resolved to its id.
+    const raw = String(query.barangay).trim();
+    const asNumber = /^\d+$/.test(raw) ? Number(raw) : null;
+    const byId = asNumber != null && asNumber >= 1 && asNumber <= 2147483647;
+    params.push(byId ? asNumber : raw);
+    filters += byId ? ` AND v.barangay_id = $${params.length}` : ` AND v.barangay_id = barangay_ref_id($${params.length})`;
+  }
+  if (query.search) {
+    params.push(`%${String(query.search).trim()}%`);
+    const p = `$${params.length}`;
+    // Names are searchable only while they would be shown (Records PIN unlocked) —
+    // the same identity rule as TB Records.
+    const searchable = pinService.isUnlocked(req)
+      ? (pinService.namesEnabled() ? `v.identity_class IN ('historical', 'operational')` : `v.identity_class = 'historical'`)
+      : null;
+    const names = searchable
+      ? `(${searchable} AND (v.last_name ILIKE ${p} OR v.first_name ILIKE ${p} OR v.middle_name ILIKE ${p}
+         OR (v.last_name || ', ' || v.first_name) ILIKE ${p})) OR `
+      : '';
+    filters += ` AND (${names}v.source_case_id ILIKE ${p} OR v.case_no ILIKE ${p} OR v.barangay_name ILIKE ${p})`;
+  }
+  return filters;
+}
+
+/**
  * GET / — patients on treatment with their schedule's warning level.
- * Query: level = none | ok | warning | critical (warning = 1st or 2nd), search, page, limit.
+ * Query: level = none | ok | warning | critical (warning = 1st or 2nd) | due (expected at the
+ * center now), barangay (id or name), search (Case ID, barangay; names once unlocked), page, limit.
  * Sorted: most missed first, then patients without a schedule, then those on track.
  */
 router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
@@ -82,21 +115,18 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
     const scope = getCaseListScope(req.user, userScope, 'v');
     const params = [...scope.params];
 
-    let search = '';
-    if (req.query.search) {
-      params.push(`%${String(req.query.search).trim()}%`);
-      const p = `$${params.length}`;
-      search = ` AND (v.source_case_id ILIKE ${p} OR v.case_no ILIKE ${p} OR v.barangay_name ILIKE ${p})`;
-    }
+    const filters = listFilters(req, params);
     const rowsSql = `SELECT ${CASE_COLUMNS}, s.id AS schedule_id, s.medicines, s.interval_days,
         s.start_date::text AS start_date, s.end_date::text AS end_date,
-        CASE WHEN s.id IS NULL THEN NULL ELSE ${MISSED} END AS missed
+        CASE WHEN s.id IS NULL THEN NULL ELSE ${MISSED} END AS missed,
+        (s.id IS NOT NULL AND ${DUE_NOW}) AS due_now
       FROM validated_tb_cases v
       LEFT JOIN medication_schedules s ON s.validated_case_id = v.id AND s.status = 'active'
-      WHERE ${scope.where} AND ${ON_TREATMENT}${search}`;
+      WHERE ${scope.where} AND ${ON_TREATMENT}${filters}`;
 
     const level = req.query.level;
     const levelWhere = level === 'none' ? 'r.schedule_id IS NULL'
+      : level === 'due' ? 'r.due_now'
       : med.levelSql(level, 'r.missed') ? `r.schedule_id IS NOT NULL AND ${med.levelSql(level, 'r.missed')}` : 'TRUE';
 
     const [countsRes, dataRes] = await Promise.all([
@@ -105,7 +135,8 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
           COUNT(*) FILTER (WHERE r.schedule_id IS NULL)::int AS "none",
           COUNT(*) FILTER (WHERE r.missed = 0)::int AS "ok",
           COUNT(*) FILTER (WHERE r.missed BETWEEN 1 AND 2)::int AS "warning",
-          COUNT(*) FILTER (WHERE r.missed >= 3)::int AS "critical"
+          COUNT(*) FILTER (WHERE r.missed >= 3)::int AS "critical",
+          COUNT(*) FILTER (WHERE r.due_now)::int AS "due"
         FROM (${rowsSql}) r`, params),
       db.pool.query(`SELECT r.* FROM (${rowsSql}) r WHERE ${levelWhere}
         ORDER BY CASE WHEN r.missed > 0 THEN 0 WHEN r.schedule_id IS NULL THEN 1 ELSE 2 END,
@@ -125,7 +156,7 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
       if (r.schedule_id) {
         const sum = med.summarize(r, recorded.filter(p => String(p.schedule_id) === String(r.schedule_id)), today);
         Object.assign(out, { missed: sum.missed, level: sum.level, collected: sum.collected, total: sum.total,
-          next_pickup: sum.next_pickup, next_state: sum.next_state, finished: sum.finished });
+          next_pickup: sum.next_pickup, next_state: sum.next_state, due_now: sum.due_now, finished: sum.finished });
       } else {
         out.level = null;
       }
@@ -133,7 +164,7 @@ router.get('/', authenticate, authorizeRoles('admin', 'staff'), async (req, res)
     });
 
     const total = level === 'none' ? countsRes.rows[0].none
-      : level === 'ok' || level === 'warning' || level === 'critical' ? countsRes.rows[0][level]
+      : ['ok', 'warning', 'critical', 'due'].includes(level) ? countsRes.rows[0][level]
         : countsRes.rows[0].all;
     res.json({
       patients: pinService.maskUnlessUnlocked(req, patients),
@@ -205,6 +236,95 @@ router.post('/:caseId/schedule', authenticate, authorizeRoles('admin', 'staff'),
     res.status(201).json({ message: 'Schedule assigned.', id: created.id });
   } catch (err) {
     fail(res, err, 'Failed to assign the schedule');
+  }
+});
+
+const MAX_BULK = 3000;
+
+/**
+ * POST /bulk-schedule — one schedule form for many patients.
+ * Body: the schedule form + start_mode ('same' | 'treatment_start', see planForCase) and
+ * either case_ids: [...] or all_matching: { barangay, search } (every patient on treatment
+ * without a schedule that the list would show). Each patient is checked like a single
+ * assignment; anyone who cannot be given one is skipped, never changed.
+ * Returns { created, skipped: [{ id, case_id, reason }] }.
+ */
+router.post('/bulk-schedule', authenticate, authorizeRoles('admin', 'staff'), async (req, res) => {
+  try {
+    const mode = req.body?.start_mode || 'same';
+    if (!med.START_MODES.includes(mode)) throw httpError(400, 'Choose how the first pickup date is set.');
+    const { value, error } = med.validateScheduleInput(req.body);
+    if (error) throw httpError(400, error);
+
+    const userScope = await resolveUserScope(req.user);
+    let rows;
+    if (req.body.all_matching) {
+      const scope = getCaseListScope(req.user, userScope, 'v');
+      const params = [...scope.params];
+      const filters = listFilters(req, params, req.body.all_matching);
+      rows = (await db.pool.query(
+        `SELECT ${CASE_COLUMNS} FROM validated_tb_cases v
+         WHERE ${scope.where} AND ${ON_TREATMENT}${filters}
+           AND NOT EXISTS (SELECT 1 FROM medication_schedules s WHERE s.validated_case_id = v.id AND s.status = 'active')
+         ORDER BY v.id LIMIT ${MAX_BULK + 1}`,
+        params
+      )).rows;
+    } else {
+      const ids = [...new Set((req.body.case_ids || []).map(Number).filter(n => Number.isInteger(n) && n > 0))];
+      if (ids.length === 0) throw httpError(400, 'Select at least one patient.');
+      if (ids.length > MAX_BULK) throw httpError(400, `Up to ${MAX_BULK} patients at a time.`);
+      rows = (await db.pool.query(`SELECT ${CASE_COLUMNS} FROM validated_tb_cases v WHERE v.id = ANY($1::bigint[])`, [ids])).rows;
+    }
+    if (rows.length > MAX_BULK) throw httpError(400, `More than ${MAX_BULK} patients match. Narrow it down with the barangay filter.`);
+    if (rows.length === 0) throw httpError(400, 'No patients to assign: every matching patient already has a schedule.');
+
+    const existing = new Set((await db.pool.query(
+      `SELECT validated_case_id FROM medication_schedules WHERE status = 'active' AND validated_case_id = ANY($1::bigint[])`,
+      [rows.map(r => r.id)]
+    )).rows.map(r => String(r.validated_case_id)));
+
+    const today = med.manilaToday();
+    const plans = [];
+    const skipped = [];
+    for (const record of rows) {
+      const skip = (reason) => skipped.push({ id: record.id, case_id: record.source_case_id, reason });
+      if (!casePermissions(req.user, userScope, record).edit) { skip('view only for your account'); continue; }
+      if (record.case_status !== 'ON TREATMENT') { skip('not on treatment'); continue; }
+      if (existing.has(String(record.id))) { skip('already has a schedule'); continue; }
+      const plan = med.planForCase(value, mode, record, today);
+      if (plan.skip) { skip(plan.skip); continue; }
+      plans.push({ id: record.id, ...plan });
+    }
+
+    let created = 0;
+    if (plans.length) {
+      // One statement for all of them; a schedule added meanwhile is left alone (partial unique index).
+      const inserted = await db.pool.query(
+        `INSERT INTO medication_schedules (validated_case_id, medicines, interval_days, start_date, end_date, notes, created_by, updated_by)
+         SELECT p.id, $4::jsonb, $5, p.start_date, p.end_date, $6, $7, $7
+         FROM unnest($1::bigint[], $2::date[], $3::date[]) AS p(id, start_date, end_date)
+         ON CONFLICT (validated_case_id) WHERE status = 'active' DO NOTHING
+         RETURNING validated_case_id`,
+        [plans.map(p => p.id), plans.map(p => p.start_date), plans.map(p => p.end_date),
+          JSON.stringify(value.medicines), value.interval_days, value.notes, req.user.id]
+      );
+      created = inserted.rows.length;
+      const done = new Set(inserted.rows.map(r => String(r.validated_case_id)));
+      plans.filter(p => !done.has(String(p.id))).forEach(p => {
+        skipped.push({ id: p.id, case_id: rows.find(r => r.id === p.id)?.source_case_id, reason: 'already has a schedule' });
+      });
+    }
+    await audit(req, 'MEDICATION_SCHEDULE_BULK_CREATE', 'bulk', {
+      created, skipped: skipped.length, start_mode: mode, interval_days: value.interval_days,
+      duration: `${value.duration_value} ${value.duration_unit}`, medicines: value.medicines.map(m => m.name),
+    });
+    res.status(created ? 201 : 200).json({
+      message: `Assigned ${created} schedule${created === 1 ? '' : 's'}${skipped.length ? `, skipped ${skipped.length}` : ''}.`,
+      created,
+      skipped,
+    });
+  } catch (err) {
+    fail(res, err, 'Failed to assign the schedules');
   }
 });
 

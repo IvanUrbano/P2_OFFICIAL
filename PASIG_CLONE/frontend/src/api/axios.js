@@ -27,7 +27,9 @@ instance.interceptors.request.use((requestConfig) => {
 instance.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 || error.response?.status === 403) {
+    // skipAuthRedirect: the request answers 401 for its own reason (a wrong Records PIN),
+    // not because the session ended — the caller shows the error instead of logging out.
+    if (!error.config?.skipAuthRedirect && (error.response?.status === 401 || error.response?.status === 403)) {
       localStorage.removeItem('user');
       if (window.location.pathname !== '/login') {
         window.location.replace('/login');

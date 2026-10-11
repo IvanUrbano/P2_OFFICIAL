@@ -42,6 +42,15 @@ function poolQuery(sql, params = []) {
     ] };
   }
   if (q.startsWith('SELECT schedule_id, due_date::text')) return { rows: [] };
+  if (q.includes('NOT EXISTS (SELECT 1 FROM medication_schedules')) {
+    listed.push({ q, params });
+    return { rows: [{ ...base, id: 5, barangay_id: 17, barangay_name: 'Rosario', responsible_barangay_id: null }] };
+  }
+  if (q.includes('FROM validated_tb_cases v WHERE v.id = ANY')) return { rows: cases.filter(c => params[0].map(Number).includes(c.id)) };
+  if (q.startsWith('SELECT validated_case_id FROM medication_schedules')) {
+    return { rows: schedules.filter(s => s.status === 'active' && params[0].map(Number).includes(s.validated_case_id)).map(s => ({ validated_case_id: s.validated_case_id })) };
+  }
+  if (q.includes('FROM unnest(')) { writes.push({ q, params }); return { rows: params[0].map(id => ({ validated_case_id: id })) }; }
   if (/^(INSERT|UPDATE|DELETE)/.test(q)) {
     writes.push({ q, params });
     return { rows: q.startsWith('INSERT INTO medication_schedules') ? [{ id: 99 }] : [] };
@@ -145,6 +154,18 @@ describe('viewing', () => {
     assert.strictEqual(data.params[1], '%ROS%');
   });
 
+  it('filters by barangay and Due now, and searches names only once the PIN is unlocked', async () => {
+    await call('GET', '/?level=due&barangay=17&search=Cruz');
+    const data = listed.find(l => l.q.startsWith('SELECT r.* FROM'));
+    assert.match(data.q, /WHERE r\.due_now/);
+    assert.match(data.q, /v\.barangay_id = \$2/);
+    assert.strictEqual(data.params[1], 17);
+    assert.doesNotMatch(data.q, /last_name ILIKE/);                       // locked: no name search
+    listed = [];
+    await call('GET', '/?barangay=Rosario');
+    assert.match(listed[0].q, /barangay_ref_id\(\$2\)/);                  // a name resolves to its id
+  });
+
   it('a view-only patient\'s schedule can be seen but says it cannot be changed', async () => {
     const r = await call('GET', '/2');
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
@@ -163,6 +184,38 @@ describe('viewing', () => {
     assert.strictEqual(r.body.schedule.missed, 2);           // two weekly pickups passed, none collected
     assert.strictEqual(r.body.schedule.level, 'warning2');
     assert.deepStrictEqual(r.body.history.map(s => s.id), [12]);
+  });
+});
+
+describe('assigning to many patients at once', () => {
+  it('creates one schedule each for the patients the user may edit, and skips the rest unchanged', async () => {
+    cases.push({ ...base, id: 6, barangay_id: 17, barangay_name: 'Rosario', responsible_barangay_id: null, date_started_treatment: null });
+    const r = await call('POST', '/bulk-schedule', { ...form, start_mode: 'same', case_ids: [1, 2, 3, 4, 6] });
+    assert.strictEqual(r.status, 201, JSON.stringify(r.body));
+    assert.strictEqual(r.body.created, 1);
+    const ins = writes.find(w => w.q.includes('FROM unnest('));
+    assert.deepStrictEqual(ins.params[0], [6]);
+    assert.deepStrictEqual(ins.params[1], [today]);
+    assert.match(ins.q, /ON CONFLICT \(validated_case_id\) WHERE status = 'active' DO NOTHING/);
+    const why = Object.fromEntries(r.body.skipped.map(s => [s.id, s.reason]));
+    assert.deepStrictEqual(why, { 1: 'already has a schedule', 2: 'view only for your account', 3: 'view only for your account', 4: 'not on treatment' });
+  });
+
+  it('"all matching" uses the list filters and only patients without a schedule', async () => {
+    const r = await call('POST', '/bulk-schedule', { ...form, start_mode: 'same', all_matching: { barangay: '17', search: 'ROS' } });
+    assert.strictEqual(r.status, 201, JSON.stringify(r.body));
+    const sel = listed.find(l => l.q.includes('NOT EXISTS (SELECT 1 FROM medication_schedules'));
+    assert.match(sel.q, /v\.case_status = 'ON TREATMENT'/);
+    assert.match(sel.q, /v\.barangay_id = \$2/);
+    assert.deepStrictEqual(sel.params.slice(0, 3), [17, 17, '%ROS%']);   // staff scope, barangay, search
+    assert.strictEqual(r.body.created, 1);                                // case 5 (the stub's match)
+  });
+
+  it('checks the form and the selection first', async () => {
+    assert.strictEqual((await call('POST', '/bulk-schedule', { ...form, case_ids: [] })).status, 400);
+    assert.strictEqual((await call('POST', '/bulk-schedule', { ...form, start_mode: 'weird', case_ids: [1] })).status, 400);
+    assert.strictEqual((await call('POST', '/bulk-schedule', { ...form, medicines: [], case_ids: [1] })).status, 400);
+    assert.strictEqual(writes.length, 0);
   });
 });
 
