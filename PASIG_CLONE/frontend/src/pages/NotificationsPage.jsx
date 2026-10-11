@@ -85,7 +85,7 @@ export default function NotificationsPage() {
             onClick={() => { setTab(t.key); setPage(0); }}
             className="relative px-5 py-3 text-left whitespace-nowrap"
           >
-            <p className="text-[13px] font-bold" style={{ color: tab === t.key ? '#0F2D52' : '#94A3B8' }}>
+            <p className="text-[13px] font-bold" style={{ color: tab === t.key ? '#0F2D52' : '#334155' }}>
               {t.title}
               {t.key === 'unread' && unread > 0 && (
                 <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[9px] font-bold px-1.5" style={{ background: tab === t.key ? 'rgba(15,45,82,0.08)' : '#F1F5F9', color: tab === t.key ? '#0F2D52' : '#64748B' }}>
@@ -93,7 +93,7 @@ export default function NotificationsPage() {
                 </span>
               )}
             </p>
-            <p className="text-[11px] mt-0.5" style={{ color: tab === t.key ? '#64748B' : '#CBD5E1' }}>{t.desc}</p>
+            <p className="text-[11px] mt-0.5" style={{ color: tab === t.key ? '#475569' : '#64748B' }}>{t.desc}</p>
             {tab === t.key && <div className="absolute bottom-0 left-0 right-0 h-[2px]" style={{ background: '#0F2D52' }} />}
           </button>
         ))}

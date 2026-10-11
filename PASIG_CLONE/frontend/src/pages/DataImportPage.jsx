@@ -238,10 +238,10 @@ export default function DataImportPage() {
                 className="relative px-6 py-3 text-left transition-colors whitespace-nowrap"
                 style={{ background: 'transparent' }}
               >
-                <p className="text-[13px] font-bold" style={{ color: mainTab === tab.key ? '#0F2D52' : '#94A3B8' }}>
+                <p className="text-[13px] font-bold" style={{ color: mainTab === tab.key ? '#0F2D52' : '#334155' }}>
                   {tab.label}
                 </p>
-                <p className="text-[11px] mt-0.5" style={{ color: mainTab === tab.key ? '#64748B' : '#CBD5E1' }}>
+                <p className="text-[11px] mt-0.5" style={{ color: mainTab === tab.key ? '#475569' : '#64748B' }}>
                   {tab.desc}
                 </p>
                 {mainTab === tab.key && (
@@ -417,10 +417,10 @@ export default function DataImportPage() {
                   className="relative px-6 py-3 text-left transition-colors whitespace-nowrap"
                   style={{ background: 'transparent' }}
                 >
-                  <p className="text-[13px] font-bold" style={{ color: historyTab === tab.key ? '#0F2D52' : '#94A3B8' }}>
+                  <p className="text-[13px] font-bold" style={{ color: historyTab === tab.key ? '#0F2D52' : '#334155' }}>
                     {tab.label}
                   </p>
-                  <p className="text-[11px] mt-0.5" style={{ color: historyTab === tab.key ? '#64748B' : '#CBD5E1' }}>
+                  <p className="text-[11px] mt-0.5" style={{ color: historyTab === tab.key ? '#475569' : '#64748B' }}>
                     {tab.desc}
                   </p>
                   {historyTab === tab.key && (

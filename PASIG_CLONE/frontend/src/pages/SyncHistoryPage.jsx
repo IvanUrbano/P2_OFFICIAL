@@ -117,7 +117,7 @@ export default function SyncHistoryPage() {
                 className="relative px-6 py-3 text-left transition-colors whitespace-nowrap"
                 style={{ background: 'transparent' }}
               >
-                <p className="text-[13px] font-bold" style={{ color: filter === tab.key ? '#0F2D52' : '#94A3B8' }}>
+                <p className="text-[13px] font-bold" style={{ color: filter === tab.key ? '#0F2D52' : '#334155' }}>
                   {tab.title}
                   {counts[tab.key] > 0 && (
                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[9px] font-bold px-1.5" style={{ background: filter === tab.key ? 'rgba(15,45,82,0.08)' : '#F1F5F9', color: filter === tab.key ? '#0F2D52' : '#64748B' }}>
@@ -125,7 +125,7 @@ export default function SyncHistoryPage() {
                     </span>
                   )}
                 </p>
-                <p className="text-[11px] mt-0.5" style={{ color: filter === tab.key ? '#64748B' : '#CBD5E1' }}>
+                <p className="text-[11px] mt-0.5" style={{ color: filter === tab.key ? '#475569' : '#64748B' }}>
                   {tab.desc}
                 </p>
                 {filter === tab.key && (

@@ -19,6 +19,7 @@ const AuditLogsPage = lazy(() => import('./pages/AuditLogsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
+const MedicationSchedulePage = lazy(() => import('./pages/MedicationSchedulePage'));
 
 function PageFallback() {
   return (
@@ -40,6 +41,7 @@ export default function App() {
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/facilities" element={<HealthFacilitiesPage />} />
                 <Route path="/records" element={<TBRecordsPage />} />
+                <Route path="/medication" element={<MedicationSchedulePage />} />
                 <Route path="/import" element={<DataImportPage />} />
                 <Route path="/validation" element={<ValidationPage />} />
                 <Route path="/sync" element={<SyncPage />} />

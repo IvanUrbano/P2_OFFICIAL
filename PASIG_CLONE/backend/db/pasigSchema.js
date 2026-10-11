@@ -212,6 +212,16 @@ async function initSchema() {
       console.error('[pasig-clone] Migration 019 failed (continuing):', err.message);
     }
   }
+
+  const mig020Path = path.join(__dirname, 'migrations', '020_medication_schedules.sql');
+  if (fs.existsSync(mig020Path)) {
+    try {
+      await execSql(fs.readFileSync(mig020Path, 'utf8'));
+      console.log('[pasig-clone] Migration 020 (medicine pickup schedules) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 020 failed (continuing):', err.message);
+    }
+  }
 }
 
 // --- CRUD Helpers ---

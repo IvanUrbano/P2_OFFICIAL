@@ -435,7 +435,7 @@ export default function TBRecordsPage() {
           <div className="flex gap-0 overflow-x-auto">
             {tabs.map(tab => (
               <button key={tab.key} onClick={() => switchView(tab.key)} className="relative px-6 py-3 text-left whitespace-nowrap" style={{ background: 'transparent' }}>
-                <p className="text-[13px] font-bold" style={{ color: view === tab.key ? '#0F2D52' : '#94A3B8' }}>
+                <p className="text-[13px] font-bold" style={{ color: view === tab.key ? '#0F2D52' : '#334155' }}>
                   {tab.title}
                   {tab.count > 0 && (
                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[9px] font-bold px-1.5"
@@ -444,7 +444,7 @@ export default function TBRecordsPage() {
                     </span>
                   )}
                 </p>
-                <p className="text-[11px] mt-0.5" style={{ color: view === tab.key ? '#64748B' : '#CBD5E1' }}>{tab.desc}</p>
+                <p className="text-[11px] mt-0.5" style={{ color: view === tab.key ? '#475569' : '#64748B' }}>{tab.desc}</p>
                 {view === tab.key && <div className="absolute bottom-0 left-0 right-0 h-[2px]" style={{ background: '#0F2D52' }} />}
               </button>
             ))}

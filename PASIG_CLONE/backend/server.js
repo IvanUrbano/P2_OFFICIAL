@@ -59,6 +59,7 @@ app.use('/api', csrfProtection);
 app.use('/api/auth/pin', require('./routes/pin'));
 app.use('/api/auth', authRoutes);
 app.use('/api/data/validation-queue', validationQueueRoutes);
+app.use('/api/data/medication', require('./routes/medication'));
 app.use('/api/data', csvImportRoutes);
 app.use('/api/data', validationRoutes);
 app.use('/api/data', manualEntryRoutes);

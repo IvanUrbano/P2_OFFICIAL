@@ -157,7 +157,7 @@ export default function ValidationPage() {
             const n = tabCount[t.key];
             return (
               <button key={t.key} onClick={() => setTab(t.key)} className="relative px-6 py-3 text-left whitespace-nowrap" style={{ background: 'transparent' }}>
-                <p className="text-[13px] font-bold" style={{ color: active ? '#0F2D52' : '#94A3B8' }}>
+                <p className="text-[13px] font-bold" style={{ color: active ? '#0F2D52' : '#334155' }}>
                   {t.title}
                   {n > 0 && (
                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[9px] font-bold px-1.5" style={{ background: BADGE[t.key].bg, color: BADGE[t.key].color }}>
@@ -165,7 +165,7 @@ export default function ValidationPage() {
                     </span>
                   )}
                 </p>
-                <p className="text-[11px] mt-0.5" style={{ color: active ? '#64748B' : '#CBD5E1' }}>
+                <p className="text-[11px] mt-0.5" style={{ color: active ? '#475569' : '#64748B' }}>
                   {t.key === 'assignment' && counts.assignmentDetail?.facilityNames > 0
                     ? `Location · ${counts.assignmentDetail.facilityNames} facility name${counts.assignmentDetail.facilityNames === 1 ? '' : 's'} to map`
                     : t.desc}
