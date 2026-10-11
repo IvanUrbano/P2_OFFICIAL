@@ -717,18 +717,24 @@ export default function MedicationSchedulePage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
+  // Each list request takes about a second: only the newest one may update the page, so
+  // an older, slower answer (e.g. from before the search was typed) cannot overwrite it.
+  const requestSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++requestSeq.current;
     setLoading(true);
     try {
       const res = await API.get('/api/data/medication', { params: { level: level || undefined, barangay: barangay || undefined, search: search || undefined, page, limit: pageSize } });
+      if (seq !== requestSeq.current) return;
       setData(res.data);
       // Names come back in full only while the Records PIN is unlocked.
       setNamesUnlocked((res.data.patients || []).some(p => !p.identity_masked));
       setError('');
     } catch (err) {
+      if (seq !== requestSeq.current) return;
       setError(errorText(err, 'Failed to load medication schedules.'));
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   }, [level, barangay, search, page, pageSize]);
   useEffect(() => { load(); }, [load]);
@@ -830,7 +836,18 @@ export default function MedicationSchedulePage() {
         ) : error ? (
           <ErrorState message={error} onRetry={load} />
         ) : patients.length === 0 ? (
-          <EmptyState icon="ri-capsule-line" title="No patients found" description={level ? 'No patients on treatment are in this group.' : 'There are no patients on treatment matching your search.'} />
+          <EmptyState
+            icon="ri-capsule-line"
+            title="No patients found"
+            description={level && search && counts.all > 0
+              ? `No match in this tab, but ${counts.all.toLocaleString()} patient${counts.all === 1 ? '' : 's'} on treatment match "${search}" in other tabs.`
+              : level ? 'No patients on treatment are in this group.' : 'There are no patients on treatment matching your search.'}
+            action={level && search && counts.all > 0 ? (
+              <button type="button" onClick={() => { setLevel(''); setPage(1); }} className="px-4 py-2 text-xs font-semibold" style={primaryBtn}>
+                Show all matches
+              </button>
+            ) : null}
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left" style={{ borderCollapse: 'collapse' }}>
