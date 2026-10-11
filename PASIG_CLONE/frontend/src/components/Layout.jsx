@@ -183,7 +183,12 @@ export default function Layout() {
       {/* ── Tier 1: Brand Bar ── */}
       <header className="sticky top-0 z-[1100] w-full shrink-0">
         <div className="flex min-w-0 items-center justify-between gap-2 px-3 sm:px-6 lg:px-8" style={{ background: '#0B1D35', minHeight: '52px' }}>
-          <div className="flex items-center cursor-pointer" onClick={() => navigate('/facilities')}>
+          <div className="flex items-center gap-3 cursor-pointer shrink-0" onClick={() => navigate('/facilities')}>
+            <img
+              src="/images/pasig-tb-is-logo.png"
+              alt="Pasig City Tuberculosis Control Program logo"
+              className="h-9 w-9 shrink-0 object-contain"
+            />
             <div className="flex items-center gap-2.5">
               <span className="text-lg font-extrabold tracking-tight" style={{ color: '#ffffff' }}>PASIG TB-IS</span>
               {!isAdmin && (user.barangay_name || user.facility_name) && (
