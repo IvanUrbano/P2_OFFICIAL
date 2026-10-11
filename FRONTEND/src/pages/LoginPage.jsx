@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import { PASIG_CLONE_URL } from '../config/externalSystems';
-import Logo from '../../components/Logo';
 import ModalCloseButton from '../components/ModalCloseButton';
 import { getPrefs } from '../utils/preferences';
 
@@ -89,8 +88,16 @@ export default function LoginPage() {
       <div className="relative z-10 w-full flex items-center justify-center px-4">
         <div className="w-full max-w-[400px] p-8" style={{ background: '#ffffff', borderRadius: '5px', boxShadow: '0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08)' }}>
 
-          <div className="mb-4">
-            <Logo width={100} />
+          <div className="mb-5 flex flex-col items-center text-center">
+            <img
+              src="/images/tbinsight-icon.png"
+              alt="TBInsight logo"
+              className="h-24 w-24 shrink-0 object-contain"
+            />
+            <div className="mt-2">
+              <h1 className="text-[15px] font-extrabold leading-tight" style={{ color: '#0F2D52' }}>TBInsight</h1>
+              <p className="mt-0.5 text-[11px]" style={{ color: '#94A3B8' }}>Pasig City TB Surveillance</p>
+            </div>
           </div>
 
           <div className="mb-4">
