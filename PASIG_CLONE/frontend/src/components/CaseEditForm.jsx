@@ -60,8 +60,16 @@ export default function CaseEditForm({ record, identityUnlocked, deidentified, f
   }, []);
 
   const setValue = (k, v) => {
-    setValues(x => ({ ...x, [k]: v, ...(v && k === 'case_status' ? { treatment_outcome: '' } : v && k === 'treatment_outcome' ? { case_status: '' } : {}) }));
-    setTouched(x => ({ ...x, [k]: true }));
+    // Entering a treatment start date on a DIAGNOSED case means treatment has begun: switch
+    // the status to ON TREATMENT (still changeable before saving; the server does the same).
+    const startsTreatment = k === 'date_started_treatment' && v && !values.date_started_treatment
+      && values.case_status === 'DIAGNOSED';
+    setValues(x => ({
+      ...x, [k]: v,
+      ...(v && k === 'case_status' ? { treatment_outcome: '' } : v && k === 'treatment_outcome' ? { case_status: '' } : {}),
+      ...(startsTreatment ? { case_status: 'ON TREATMENT' } : {}),
+    }));
+    setTouched(x => ({ ...x, [k]: true, ...(startsTreatment ? { case_status: true } : {}) }));
   };
 
   const save = async (e) => {

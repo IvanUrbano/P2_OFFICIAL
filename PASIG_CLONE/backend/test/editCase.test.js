@@ -143,6 +143,46 @@ describe('PUT /records/:id', () => {
     assert.strictEqual(writes.length, 0);
   });
 
+  describe('treatment start date moves DIAGNOSED to ON TREATMENT', () => {
+    beforeEach(() => { cases[0].outcome_status = 'DIAGNOSED'; cases[0].date_started_treatment = null; });
+    const updateParams = () => {
+      const upd = writes.find(w => w.q.startsWith('UPDATE validated_tb_cases SET'));
+      const cols = upd.q.match(/SET (.*), updated_by/)[1].split(', ').map(s => s.split(' = ')[0]);
+      return Object.fromEntries(cols.map((c, i) => [c, upd.params[i + 1]]));
+    };
+
+    it('entering a start date on a DIAGNOSED case stores ON TREATMENT', async () => {
+      const r = await put(1, { date_started_treatment: '2025-03-10' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      assert.deepStrictEqual(r.body.changed.sort(), ['date_started_treatment', 'outcome_status']);
+      const saved = updateParams();
+      assert.strictEqual(saved.outcome_status, 'ON TREATMENT');
+      assert.strictEqual(saved.date_started_treatment, '2025-03-10');
+      const hist = writes.find(w => w.q.startsWith('INSERT INTO case_history'));
+      assert.strictEqual(hist.params[4], 'status_changed');
+      assert.deepStrictEqual(JSON.parse(hist.params[5]).outcome_status, { old: 'DIAGNOSED', new: 'ON TREATMENT' });
+    });
+
+    it('keeping DIAGNOSED explicitly alongside a start date still stores ON TREATMENT', async () => {
+      const r = await put(1, { date_started_treatment: '2025-03-10', outcome_status: 'diagnosed' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      assert.strictEqual(updateParams().outcome_status, 'ON TREATMENT');
+    });
+
+    it('never overrides a treatment outcome', async () => {
+      const r = await put(1, { date_started_treatment: '2025-03-10', outcome_status: 'CURED', date_of_outcome: '2025-09-01' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      assert.strictEqual(updateParams().outcome_status, 'CURED');
+    });
+
+    it('leaves DIAGNOSED alone without a start date and sets no outcome', async () => {
+      const r = await put(1, { date_of_screening: '2025-02-20' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      assert.deepStrictEqual(r.body.changed, ['date_of_screening']);
+      assert.ok(!('outcome_status' in updateParams()));
+    });
+  });
+
   describe('Case ID and screening date', () => {
     beforeEach(() => { cases[0].source_case_id = 'ROS-D-2025-00099'; });
 
