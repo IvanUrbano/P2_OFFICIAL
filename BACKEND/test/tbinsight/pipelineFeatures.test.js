@@ -503,7 +503,7 @@ describe('neighbor_risk with real (bordering) neighbours', () => {
     for (const r of rows) {
       assert.deepStrictEqual(Object.keys(r.features).sort(), [
         'high_share_12m', 'history_incidence', 'history_rank',
-        'incidence_3m', 'incidence_6m', 'incidence_rank', 'lag_12m', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk',
+        'incidence_3m', 'incidence_6m', 'incidence_rank', 'lag_1m', 'lag_2m', 'lag_3m', 'neighbor_risk',
         'prev_category', 'recent_trend', 'rolling_12m_incidence', 'seasonality_flag', 'volatility', 'yoy_change',
       ]);
     }
