@@ -4,8 +4,8 @@ TBInsight ML Service — Random Forest Classifier
 Predicts Low/Medium/High risk classes from historical/current case-data
 features only. Independent of ARIMA: no feature here is derived from a
 forecast, so RF classification does not require ARIMA to run or succeed.
-Uses 17 features: 12-, 6- and 3-month incidence, trend, seasonality, monthly lags
-(1-3 months and the same month last year, as incidence), volatility, year-over-year
+Uses 16 features: 12-, 6- and 3-month incidence, trend, seasonality, monthly lags
+(1-3 months, as incidence), volatility, year-over-year
 change, the incidence of the barangays that share a border (neighbor_risk), ranks
 against the other barangays that month, the incidence over all earlier months with
 its rank, and how often the barangay was in the High band over the last 12 months.
@@ -52,7 +52,7 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# Fixed feature order (17 features). historical_bias (past ARIMA error) was removed:
+# Fixed feature order (16 features). historical_bias (past ARIMA error) was removed:
 # it measured the forecaster rather than TB risk, contributed nothing in
 # walk-forward evaluation, and tied the classifier to ARIMA output.
 # Training and prediction rows MUST supply this exact key set, in any order
@@ -77,7 +77,6 @@ FEATURES = [
     "prev_category",          # band of the last 3 months (0 Low, 1 Medium, 2 High)
     "history_incidence",      # annualized incidence over ALL months before the target
     "history_rank",           # rank of history_incidence that month, 0..1
-    "lag_12m",                # incidence of the same month last year
     "incidence_6m",           # annualized incidence of the last 6 months
     "volatility",             # spread of monthly incidence over the last 12 months
     "yoy_change",             # last 12 months' incidence minus the 12 before

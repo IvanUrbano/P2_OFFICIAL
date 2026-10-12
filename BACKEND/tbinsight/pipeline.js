@@ -1300,7 +1300,6 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
       history_incidence: history.length > 0 ? _computeIncidence(historyMean, pop) : null,
       // Added after walk-forward tuning (Oct 2024-Jul 2025) and confirmed on unseen months
       // (Aug 2025-Jun 2026): with band filling (rf_classifier) accuracy 56% -> 63%.
-      lag_12m: t >= 12 ? incAt(t - 12) : meanInc(0, t),           // same month last year
       incidence_6m: meanInc(t - 6, t),
       volatility: last12.length && last12.every(v => v != null)
         ? Math.sqrt(last12.reduce((s, v) => s + (v - mean12) ** 2, 0) / last12.length) : null,

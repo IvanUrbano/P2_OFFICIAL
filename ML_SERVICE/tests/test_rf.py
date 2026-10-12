@@ -17,8 +17,8 @@ from rf_classifier import (
 )
 
 
-def test_features_are_the_fixed_seventeen():
-    """FEATURES: the original 7 (historical_bias removed), incidence_3m, the two ranks, the all-history pair and five more."""
+def test_features_are_the_fixed_sixteen():
+    """FEATURES: the original 7 (historical_bias removed), incidence_3m, the two ranks, the all-history pair and four more (lag_12m removed)."""
     assert FEATURES == [
         "rolling_12m_incidence",
         "incidence_3m",
@@ -32,7 +32,6 @@ def test_features_are_the_fixed_seventeen():
         "prev_category",
         "history_incidence",
         "history_rank",
-        "lag_12m",
         "incidence_6m",
         "volatility",
         "yoy_change",

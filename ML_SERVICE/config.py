@@ -16,7 +16,7 @@ if not ML_API_KEY:
 
 # ==================== MODEL CONFIG ====================
 
-MODEL_VERSION = "arima-v1.2-rf-v1.3"  # rf v1.3: 17 features, band filling, depth 5
+MODEL_VERSION = "arima-v1.2-rf-v1.3"  # rf v1.3: 16 features (lag_12m removed), band filling, depth 5
 
 # Worker processes for per-barangay ARIMA fits (1 = serial). Defaults to up to 4 cores.
 ML_N_JOBS = int(os.environ.get("ML_N_JOBS", "0")) or min(4, os.cpu_count() or 1)
@@ -76,7 +76,7 @@ ARIMA_EVAL_RESELECT_MONTHS = 12
 #
 # Retuned on 2022-2026 data (real 2025 + simulated years) with five more features
 # (lag_12m, incidence_6m, volatility, yoy_change, high_share_12m) and band filling
-# (RF_FILL_BANDS): grid over depth 3/5/unbounded x leaf 10/20 x max_features sqrt/0.5,
+# (RF_FILL_BANDS; lag_12m was later removed, the figures below were measured with it): grid over depth 3/5/unbounded x leaf 10/20 x max_features sqrt/0.5,
 # chosen on Oct 2024-Jul 2025 and checked on unseen Aug 2025-Jun 2026: accuracy
 # 56.4% -> 62.7%, quadratic kappa 0.480 -> 0.663, Low/High never confused 92.1% -> 96.1%.
 RF_MAX_DEPTH = 5
