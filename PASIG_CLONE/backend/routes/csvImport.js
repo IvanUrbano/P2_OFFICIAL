@@ -971,12 +971,6 @@ router.put('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
       merged.source_case_id = normalizeCaseId(changes.source_case_id);
     }
     const { record: cleaned } = cleanRecord(merged);
-    // A treatment start date means treatment has begun: DIAGNOSED becomes ON TREATMENT.
-    // Only DIAGNOSED is upgraded — other statuses and treatment outcomes are never set here
-    // (outcomes are decided by health workers).
-    const startsTreatment = Boolean(cleaned.date_started_treatment)
-      && String(cleaned.outcome_status ?? '').trim().toUpperCase() === 'DIAGNOSED';
-    if (startsTreatment) cleaned.outcome_status = 'ON TREATMENT';
     // Records saved before Age was required may lack it — editing them must still work.
     // Same for the Case ID on batches uploaded before it was required (migration 018).
     const { identityRuleFor } = require('../services/validator');
@@ -992,7 +986,7 @@ router.put('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
     const norm = (f, v) => (v === null || v === undefined || v === '' ? null : CASE_DATE_FIELDS.has(f) ? ymd(v) : String(v));
     const diff = {};
     for (const f of allowed) {
-      if (!Object.prototype.hasOwnProperty.call(changes, f) && !(f === 'outcome_status' && startsTreatment)) continue;
+      if (!Object.prototype.hasOwnProperty.call(changes, f)) continue;
       const before = norm(f, current[f]);
       const after = norm(f, cleaned[f]);
       if (before !== after) diff[f] = { old: before, new: after };
