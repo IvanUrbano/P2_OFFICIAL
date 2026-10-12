@@ -181,21 +181,18 @@ function _joinClauses(list) {
  * is classified. Sentence 2 lists only the figures that are present.
  */
 function buildBarangaySummary({
-  name, filterYear, availableYears, totalCases,
+  name, filterYear, totalCases,
   riskClass, riskLabelText, modelType,
   incidence, onTreatment, tsrRate, tsrCohortYear, cfrRate,
 }) {
   const cases = totalCases != null ? Number(totalCases).toLocaleString() : '—';
-  const span = availableYears && availableYears.length > 1
-    ? `${availableYears[availableYears.length - 1]}\u2013${availableYears[0]}`
-    : null;
   const classified = !!riskClass && riskClass !== 'No Data';
 
   let head;
   if (filterYear) {
     head = `${name} recorded ${cases} TB cases in ${filterYear}`;
   } else {
-    head = `${name} recorded ${cases} TB cases across all available years${span ? ` (${span})` : ''}`;
+    head = `${name} has no recorded TB cases`;
   }
 
   if (classified) {
@@ -359,14 +356,19 @@ export default function GisMap() {
   const [timelineMonth, setTimelineMonth] = useState(null);
   const [isAnimating, setIsAnimating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [filterYear, setFilterYear] = useState('');
+  const [pickedYear, setPickedYear] = useState('');
   const [availableYears, setAvailableYears] = useState([]);
-  // The page opens on the latest year with data (incidence needs a single year's
-  // population, so "All Years" has none); once the user picks a year it is left alone.
-  const yearChosen = useRef(false);
-  useEffect(() => {
-    if (!yearChosen.current && !filterYear && availableYears.length) setFilterYear(String(availableYears[0]));
-  }, [availableYears, filterYear]);
+  const [yearsLoaded, setYearsLoaded] = useState(false);
+  // Only a single year can be shown: incidence needs that year's population,
+  // and the risk levels are per-year snapshots, so mixing years is misleading.
+  // The page opens on the latest year with data, and a picked year that is
+  // not in the list (nothing picked yet, or a year that has since
+  // disappeared) falls back to the latest one.
+  const latestYear = availableYears.length ? String(availableYears[0]) : '';
+  const filterYear = availableYears.some(y => String(y) === pickedYear) ? pickedYear : latestYear;
+  // Map data is fetched only once the year list is in (yearsLoaded), so the
+  // page never loads a mixed all-years view. With no case years at all there
+  // is no year to pick and the map still loads (its risk layer needs none).
   const [gisInsight, setGisInsight] = useState(null);
   const [gisInsightLoading, setGisInsightLoading] = useState(false);
   const [gisInsightError, setGisInsightError] = useState(null);
@@ -436,11 +438,17 @@ export default function GisMap() {
       try {
         const res = await API.get('/api/tb/gis/years', { signal: controller.signal });
         setAvailableYears(res.data.years || []);
-      } catch {
-        // silently ignore
+        setYearsLoaded(true);
+      } catch (err) {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
+        // Without the year list there is no year to show. A later refresh
+        // that fails is ignored; a failed first load stops the loading state.
+        if (!yearsLoaded) { setError('Failed to load available years'); setLoading(false); }
       }
     })();
     return () => controller.abort();
+    // yearsLoaded is read only to tell a first load from a refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipelineRefreshTick]);
 
   // Shared fetch helpers (used by both useEffects and handleRefresh)
@@ -466,6 +474,7 @@ export default function GisMap() {
 
   // Fetch GeoJSON data (re-fetches when year changes)
   useEffect(() => {
+    if (!yearsLoaded) return undefined;
     const controller = new AbortController();
     (async () => {
       if (data) setRefreshing(true);
@@ -481,9 +490,10 @@ export default function GisMap() {
       }
     })();
     return () => controller.abort();
-  }, [fetchGeoData, pipelineRefreshTick]);
+  }, [fetchGeoData, pipelineRefreshTick, yearsLoaded]);
 
   useEffect(() => {
+    if (!yearsLoaded) return undefined;
     const controller = new AbortController();
     (async () => {
       try {
@@ -494,7 +504,7 @@ export default function GisMap() {
       }
     })();
     return () => controller.abort();
-  }, [fetchMonthlyData]);
+  }, [fetchMonthlyData, yearsLoaded]);
 
   // Pipeline run status: drives the "processing" banner and refreshes the map
   // automatically the moment a background run (auto-triggered by a record
@@ -576,10 +586,7 @@ export default function GisMap() {
     // Rows sort by the VISIBLE year-specific incidence (descending), with
     // total cases as tiebreak — never the legacy risk_score, which is no
     // longer displayed anywhere in this panel (kept only in the DB).
-    // All Years has no incidence (null), so every row ties at 0 and the
-    // fallback takes over: rows within each risk group order by total
-    // cases across available years (descending), then name. No combined
-    // multi-year risk score is invented to fake an all-years ranking.
+    // Rows without an incidence figure order by total cases, then name.
     Object.keys(groups).forEach(k => {
       groups[k].sort((a, b) =>
         (b.incidence_per_100k || 0) - (a.incidence_per_100k || 0) ||
@@ -665,7 +672,7 @@ export default function GisMap() {
   // "2026 (Jan–Sep)" for a year whose data does not cover all 12 months yet, so a part-year's
   // cases and incidence are not read as a full year's.
   const yearLabel = useMemo(() => {
-    if (!filterYear) return 'All Years';
+    if (!filterYear) return 'No case data';
     const months = [...new Set(Object.values(monthlyByBarangay).flat()
       .map(m => String(m.month).slice(0, 7)).filter(m => m.startsWith(String(filterYear))))].sort();
     if (months.length === 0 || months.length >= 12) return String(filterYear);
@@ -673,7 +680,8 @@ export default function GisMap() {
     return `${filterYear} (${name(months[0])}–${name(months[months.length - 1])})`;
   }, [filterYear, monthlyByBarangay]);
 
-  const hasActiveFilters = filterBarangay || filterRiskLevel || filterYear;
+  // The latest year is the default, not a filter to clear.
+  const hasActiveFilters = filterBarangay || filterRiskLevel || filterYear !== latestYear;
 
   // Data year is the year used to train the snapshot. Assessment year is the
   // calendar year of its stored prediction period; these can differ.
@@ -681,10 +689,9 @@ export default function GisMap() {
   const riskDataYear = data?.meta?.data_year ?? null;
   const riskAssessmentPeriod = data?.meta?.assessment_period ?? null;
 
-  // Period shown next to every snapshot-derived label. A specific year shows
-  // that year's own assessment (or says plainly that none was computed yet);
-  // "All Years" shows which snapshot the screen is actually using instead of
-  // implying the risk figures span the whole dataset.
+  // Period shown next to every snapshot-derived label: the selected year's
+  // own assessment, or says plainly that none was computed yet. Without any
+  // case year (no year to select) it names the snapshot the map is using.
   const riskPeriodLabel = React.useMemo(() => {
     if (filterYear) {
       return data?.meta?.requested_year_has_snapshot === false
@@ -1025,21 +1032,29 @@ export default function GisMap() {
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [geoData, grouped, yearsRes] = await Promise.all([
-        fetchGeoData(),
-        fetchMonthlyData(),
-        API.get('/api/tb/gis/years').catch(() => null),
-      ]);
-      setData(geoData);
-      if (yearsRes) setAvailableYears(yearsRes.data.years || []);
-      setError(null);
-      setMonthlyByBarangay(grouped);
+      const yearsRes = await API.get('/api/tb/gis/years').catch(() => null);
+      let yearChanged = false;
+      if (yearsRes) {
+        const years = (yearsRes.data.years || []).map(String);
+        const nextYear = years.includes(pickedYear) ? pickedYear : (years[0] || '');
+        yearChanged = nextYear !== filterYear;
+        setAvailableYears(yearsRes.data.years || []);
+        setYearsLoaded(true);
+      }
+      // If the year list moved the shown year (e.g. the picked year is gone),
+      // the effects above reload for the new year; don't load the old one here.
+      if (yearsLoaded && !yearChanged) {
+        const [geoData, grouped] = await Promise.all([fetchGeoData(), fetchMonthlyData()]);
+        setData(geoData);
+        setError(null);
+        setMonthlyByBarangay(grouped);
+      }
     } catch {
       // silently ignore
     } finally {
       setRefreshing(false);
     }
-  }, [fetchGeoData, fetchMonthlyData]);
+  }, [fetchGeoData, fetchMonthlyData, yearsLoaded, pickedYear, filterYear]);
 
   useEffect(() => {
     window.addEventListener('focus', handleRefresh);
@@ -1143,14 +1158,7 @@ export default function GisMap() {
             {/* GIS Year selects the snapshot trained on that year's data.
                 Assessment year and prediction period are shown separately. */}
             {(() => {
-              if (!filterYear) {
-                return data?.meta?.risk_assessment_period ? (
-                  <p className="text-[11px] text-[#64748B]" title="Showing the most recent risk assessment. Select a specific year to view its saved snapshot.">
-                    Data year {riskDataYear ?? '—'} · Assessment year {riskAssessmentYear ?? '—'} · Prediction period {riskAssessmentPeriod ?? '—'}
-                  </p>
-                ) : null;
-              }
-              if (data?.meta?.requested_year_has_snapshot === false) {
+              if (filterYear && data?.meta?.requested_year_has_snapshot === false) {
                 return <p className="text-[11px] font-semibold text-[#B45309]" title="An administrator can compute this from Settings > Backfill Historical Risk Snapshots.">No risk assessment for {filterYear} yet</p>;
               }
               return data?.meta?.risk_assessment_period ? (
@@ -1171,15 +1179,15 @@ export default function GisMap() {
               {availableRiskLevels.map(level => <option key={level} value={level}>{level === 'No Data' ? 'No Assessment' : `${riskLabel(level)} Risk`}</option>)}
             </FilterSelect>
 
-            <FilterSelect label="Year" value={filterYear} onChange={(v) => { yearChosen.current = true; setFilterYear(v); setSelectedBarangayName(null); resetGisInsight(); }}>
-              <option value="">All Years</option>
-              {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
+            <FilterSelect label="Year" value={filterYear} onChange={(v) => { setPickedYear(v); setSelectedBarangayName(null); resetGisInsight(); }}>
+              {availableYears.length === 0 && <option value="">{yearsLoaded ? 'No data' : 'Loading…'}</option>}
+              {availableYears.map((y) => <option key={y} value={String(y)}>{y}</option>)}
             </FilterSelect>
 
             <div className="ml-auto flex shrink-0 items-center gap-2 border-l border-[#E2E8F0] pl-3">
             {hasActiveFilters && (
               <button
-                onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); yearChosen.current = false; setFilterYear(availableYears.length ? String(availableYears[0]) : ''); setSelectedBarangayName(null); resetGisInsight(); }}
+                onClick={() => { setFilterBarangay(''); setFilterRiskLevel(''); setPickedYear(''); setSelectedBarangayName(null); resetGisInsight(); }}
                 aria-label="Clear all filters"
                 className="text-xs font-medium px-3 py-2"
                 style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }}
@@ -1316,7 +1324,7 @@ export default function GisMap() {
               </div>
               <AnalyticsInsightPanel
                 title="Map interpretation"
-                description={`Written findings for ${filterBarangay || 'all barangays'} · ${filterYear || 'all years'}.${filterRiskLevel ? ' The risk filter changes the map display only.' : ''}`}
+                description={`Written findings for ${filterBarangay || 'all barangays'} · ${filterYear || 'no case data'}.${filterRiskLevel ? ' The risk filter changes the map display only.' : ''}`}
                 titleId="map-interpretation-title"
                 data={gisInsightScope === `${filterBarangay}|${filterYear}` ? gisInsight : null}
                 loading={gisInsightLoading}
@@ -1471,15 +1479,6 @@ export default function GisMap() {
         const { groups, allBarangays, sections } = riskRankingData;
         const classifiedBarangays = allBarangays.length - (groups['No Data']?.length || 0);
         const totalBarangays = allBarangays.length;
-        // Dynamic case-data year range (fetched from /api/tb/gis/years —
-        // never hardcoded). Null when no case years exist -> the context
-        // line below is hidden rather than showing a fabricated range.
-        const minYear = availableYears.length ? availableYears[availableYears.length - 1] : null;
-        const maxYear = availableYears.length ? availableYears[0] : null;
-        const caseYearRange = minYear && maxYear ? `${minYear}\u2013${maxYear}` : null;
-        // All Years drops the per-100k column entirely (every row would be
-        // N/A — 30 rows of N/A is clutter without information). A specific
-        // year shows the same-year incidence normally.
         const showConfidenceColumn = (data?.features || []).some(f =>
           f.properties?.model_type === 'random_forest' && f.properties.classification_confidence != null);
         const rankByName = new Map(allBarangays.map((barangay, index) => [barangay.name, index + 1]));
@@ -1492,9 +1491,7 @@ export default function GisMap() {
                 <div>
                   <h3 className="text-lg font-semibold text-white">Barangay risk classifications</h3>
                   <p className="mt-1 text-xs leading-relaxed text-[#C9D9EA]">
-                    {!filterYear
-                      ? `Grouped by the latest saved risk assessment and ordered by total cases within each group — ${totalBarangays} Pasig City barangays`
-                      : `Grouped by saved risk assessment and ordered by ${filterYear} incidence within each group — ${totalBarangays} Pasig City barangays`}
+                    {`Grouped by saved risk assessment and ordered by ${filterYear ? `${filterYear} ` : ''}incidence within each group — ${totalBarangays} Pasig City barangays`}
                   </p>
                 </div>
                 <div className="shrink-0 border-l-[3px] border-[#66C6D3] pl-3">
@@ -1504,16 +1501,6 @@ export default function GisMap() {
                   <p className="mt-1 text-[11px] font-medium text-[#C9D9EA]">Barangays assessed</p>
                 </div>
               </div>
-              {/* All Years: risk class/confidence come from ONE snapshot while
-                  case totals span all available years — state this plainly so
-                  the columns are never read as a historical multi-year
-                  classification. Hidden entirely when no case years exist
-                  (a fabricated year range would be worse than none). */}
-              {!filterYear && data?.meta?.risk_assessment_period && caseYearRange && (
-                <p className="mt-3 text-xs leading-relaxed text-[#C9D9EA]">
-                  All Years combines available TB records from {caseYearRange}. Risk classification is based on the latest available risk assessment ({riskAssessmentYear}). Incidence per 100,000 is available only when a specific year is selected.
-                </p>
-              )}
             </div>
 
             <div className="space-y-5 px-5 py-5">
@@ -1543,12 +1530,8 @@ export default function GisMap() {
                           </span>
                           <span className="mt-3 flex w-full flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#64748B]">
                             <span><strong className="font-semibold tabular-nums text-[#0F2D52]">{formatNum(barangay.total_cases)}</strong> cases</span>
-                            {filterYear ? (
-                              <span><strong className="font-semibold tabular-nums text-[#0F2D52]">{barangay.incidence_per_100k != null ? formatNum(barangay.incidence_per_100k) : 'N/A'}</strong> per 100,000</span>
-                            ) : showConfidenceColumn ? (
-                              <span title="Model support for this risk label; not the chance of developing TB."><strong className="font-semibold tabular-nums text-[#0F2D52]">{hasRfConfidence ? `${Math.round(barangay.classification_confidence * 100)}%` : 'N/A'}</strong> model confidence</span>
-                            ) : null}
-                            {filterYear && showConfidenceColumn && (
+                            <span><strong className="font-semibold tabular-nums text-[#0F2D52]">{barangay.incidence_per_100k != null ? formatNum(barangay.incidence_per_100k) : 'N/A'}</strong> per 100,000</span>
+                            {showConfidenceColumn && (
                               <span title="Model support for this risk label; not the chance of developing TB."><strong className="font-semibold tabular-nums text-[#0F2D52]">{hasRfConfidence ? `${Math.round(barangay.classification_confidence * 100)}%` : 'N/A'}</strong> model confidence</span>
                             )}
                           </span>
@@ -1642,7 +1625,6 @@ export default function GisMap() {
               const barangaySummary = buildBarangaySummary({
                 name: merged.name || selectedBarangayName,
                 filterYear,
-                availableYears,
                 totalCases: merged.total_cases,
                 riskClass: merged.risk_class,
                 riskLabelText: riskLabel(merged.risk_class),
@@ -1780,11 +1762,6 @@ export default function GisMap() {
                       analytical view, never the explanation for this. */}
                   {merged.risk_class && (
                     <div id="gis-profile-risk" tabIndex={-1} className="scroll-mt-28 border-t border-[#DCE4ED] pt-6 outline-none">
-                      {/* All Years shows the NEWEST snapshot only — the
-                          ({riskPeriodLabel}) suffix in the heading above says
-                          which assessment year that is, so one year's RF
-                          output is never read as an all-history
-                          classification. */}
                       <h4 className="mb-2 text-base font-semibold text-[#0F2D52]">
                         Risk assessment
                         <span className="ml-1 font-normal text-[#64748B]">({riskPeriodLabel})</span>
