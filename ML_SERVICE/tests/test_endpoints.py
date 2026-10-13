@@ -329,6 +329,9 @@ def test_evaluate_walk_forward():
     # Reference scores are reported next to the model scores
     assert data["arima"]["baseline_mae"] is not None
     assert data["rf"]["baseline_accuracy"] is not None
+    assert data["rf"]["priority_accuracy"] is not None
+    assert data["rf"]["baseline_priority_accuracy"] is not None
+    assert data["rf"]["within_one_accuracy"] is not None
     # Every evaluated barangay's own result is kept (not just the longest one's steps), so a caller
     # can show results for one barangay, or a year range, from what was saved.
     per = data["arima"]["per_barangay"]

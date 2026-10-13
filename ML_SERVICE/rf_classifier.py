@@ -316,6 +316,24 @@ def classify_risk_simple(
     return results
 
 
+def priority_accuracy(actual: list[str], predicted: list[str]) -> Optional[float]:
+    """
+    Share of barangay-months put on the right side of High vs not High. The same
+    three-level predictions, scored on the question the levels are used for: which
+    barangays get priority resources. A Low/Medium mix-up does not count as a miss.
+    """
+    if not actual:
+        return None
+    return sum((a == "High") == (p == "High") for a, p in zip(actual, predicted)) / len(actual)
+
+
+def within_one_accuracy(actual: list[str], predicted: list[str]) -> Optional[float]:
+    """Share of barangay-months that are right or one level off (only Low<->High is a miss)."""
+    if not actual:
+        return None
+    return sum({a, p} != {"Low", "High"} for a, p in zip(actual, predicted)) / len(actual)
+
+
 def _month_index(month) -> Optional[int]:
     """'YYYY-MM-..' -> months since year 0, or None when the row carries no month."""
     if not month:
@@ -534,6 +552,11 @@ def walk_forward_rf(
         "baseline_kappa": kappa(all_baseline),
         "persistence_accuracy": round(float(accuracy_score(all_actuals, all_persistence)), 4),
         "persistence_kappa": kappa(all_persistence),
+        "priority_accuracy": round(priority_accuracy(all_actuals, list(all_predicted)), 4),
+        "baseline_priority_accuracy": round(priority_accuracy(all_actuals, all_baseline), 4),
+        "persistence_priority_accuracy": round(priority_accuracy(all_actuals, all_persistence), 4),
+        "within_one_accuracy": round(within_one_accuracy(all_actuals, list(all_predicted)), 4),
+        "baseline_within_one_accuracy": round(within_one_accuracy(all_actuals, all_baseline), 4),
     }
 
     logger.info(

@@ -375,6 +375,11 @@ def evaluate_models(req: EvaluateRequest):
             baseline_kappa=rf_result.get("baseline_kappa"),
             persistence_accuracy=rf_result.get("persistence_accuracy"),
             persistence_kappa=rf_result.get("persistence_kappa"),
+            priority_accuracy=rf_result.get("priority_accuracy"),
+            baseline_priority_accuracy=rf_result.get("baseline_priority_accuracy"),
+            persistence_priority_accuracy=rf_result.get("persistence_priority_accuracy"),
+            within_one_accuracy=rf_result.get("within_one_accuracy"),
+            baseline_within_one_accuracy=rf_result.get("baseline_within_one_accuracy"),
         )
 
         return EvaluateResponse(

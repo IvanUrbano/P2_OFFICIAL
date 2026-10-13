@@ -174,18 +174,40 @@ function formatEvaluationMonth(value) {
 
 const pct = (value, digits = 0) => `${(Number(value) * 100).toFixed(digits)}%`;
 
+/** High vs not High from the confusion matrix, for evaluations saved before it was stored. */
+function priorityFromConfusion(cm) {
+  if (!cm) return null;
+  let total = 0;
+  let right = 0;
+  for (const [actual, row] of Object.entries(cm)) {
+    for (const [predicted, n] of Object.entries(row)) {
+      total += n;
+      if ((actual === 'High') === (predicted === 'High')) right += n;
+    }
+  }
+  return total > 0 ? right / total : null;
+}
+
 /** The Random Forest's own evaluation (all barangays, all tested months). */
 function RiskClassificationEvaluation({ rf }) {
   if (!rf || rf.accuracy == null) return null;
   const highRecall = rf.recall?.High;
+  const priority = rf.priority_accuracy ?? priorityFromConfusion(rf.confusion_matrix);
   return (
     <div className="mt-3 rounded px-3 py-2.5" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
       <p className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>Risk levels (Random Forest)</p>
+      <div className="mt-1 grid grid-cols-2 gap-3">
+        <EvalMetric label="Priority barangays identified" value={priority != null ? pct(priority, 1) : '—'} />
+        <EvalMetric label="Simple ranking rule" value={rf.baseline_priority_accuracy != null ? pct(rf.baseline_priority_accuracy, 1) : '—'} />
+      </div>
+      <p className="px-3 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>
+        Whether each barangay was correctly called High priority or not (High vs Low/Medium).
+      </p>
       <div className="mt-1 grid grid-cols-2 gap-3 md:grid-cols-4">
         <EvalMetric label="Correct risk level" value={rf.ceiling_accuracy != null ? `${pct(rf.accuracy)} (best possible ${pct(rf.ceiling_accuracy)})` : pct(rf.accuracy)} />
         <EvalMetric label="Right or one level off" value={rf.low_high_confusion != null ? pct(1 - rf.low_high_confusion, 1) : '—'} />
         <EvalMetric label="High-risk barangays caught" value={highRecall != null ? pct(highRecall) : '—'} />
-        <EvalMetric label="Simple ranking rule" value={rf.baseline_accuracy != null ? pct(rf.baseline_accuracy) : '—'} />
+        <EvalMetric label="Simple ranking rule (exact level)" value={rf.baseline_accuracy != null ? pct(rf.baseline_accuracy) : '—'} />
       </div>
       <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>
         Risk level for the next 3 months, checked against the cases later reported ({rf.n_steps} months tested). "Simple ranking rule" ranks barangays by their last 12 months.
