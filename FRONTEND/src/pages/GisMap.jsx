@@ -1768,7 +1768,7 @@ export default function GisMap() {
                       </h4>
                       {hasSnapshot && merged.rf_features && (
                         <p className="mb-3 text-xs leading-relaxed text-[#64748B]">
-                          These indicators were used together to classify this barangay as {riskChipText.toLowerCase()}. They show the context of the assessment, not separate causes.
+                          The risk level ranks this barangay against the other Pasig barangays for the next 6 months (High = top third, Low = bottom 40%). These indicators, together with its long-term TB rate, were used to classify it as {riskChipText.toLowerCase()}. They show the context of the assessment, not separate causes.
                         </p>
                       )}
                       {/* Selected year has case data but no risk snapshot —

@@ -493,6 +493,7 @@ function buildGisRiskOverview(m) {
       'No risk classifications have been generated for the map yet. Run the prediction pipeline to classify barangays.';
   } else {
     text = `For ${cov.periodYear ? `the **${cov.periodYear}** assessment, ` : ''}**${rc.High || 0}** of **${total}** barangays are **High** risk, **${rc.Medium || 0}** are **Medium**, and **${rc.Low || 0}** are **Low**. **${rc['No Data'] || 0}** have **No Data**${cov.dataYear ? `; case data are from **${cov.dataYear}**` : ''}.`;
+    text += ' Risk levels compare barangays with each other: **High** is the top third expected to have the highest TB rate over the next 6 months, **Low** the bottom 40%.';
     if (m.focus) {
       const f = m.focus;
       text += ` **${f.name}** is classified **${f.risk_class}**${f.rank && f.incidence_per_100k != null ? ` and ranks ${f.rank} of ${f.total_scored} assessed barangays by incidence` : ''}.`;
