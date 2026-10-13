@@ -1,4 +1,5 @@
 import { Component } from 'react';
+import { isStaleChunkError, reloadOnceForStaleChunk } from '../src/utils/staleChunk.js';
 
 class ErrorBoundaryInner extends Component {
   constructor(props) {
@@ -8,6 +9,13 @@ class ErrorBoundaryInner extends Component {
 
   static getDerivedStateFromError(error) {
     return { hasError: true, error };
+  }
+
+  componentDidCatch(error) {
+    // An old deploy's page file is gone: reload once instead of showing the error.
+    if (isStaleChunkError(error)) {
+      reloadOnceForStaleChunk({ storage: window.sessionStorage, reload: () => window.location.reload() });
+    }
   }
 
   render() {
