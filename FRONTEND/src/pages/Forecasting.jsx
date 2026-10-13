@@ -6,7 +6,7 @@ import {
 import API from '../api/axios';
 import AnalyticsInsightPanel from '../components/AnalyticsInsightPanel';
 import ChartInsight from '../components/ChartInsight';
-import { forecastInsight, accuracyInsight, monthByMonthForecastInsight } from '../utils/chartInsights';
+import { forecastInsight, accuracyInsight, monthByMonthForecastInsight, accuracySummary, scopeLabel } from '../utils/chartInsights';
 import FilterSelect from '../components/FilterSelect';
 import ProgressOverlay from '../components/ProgressOverlay';
 import { getForecastingInsight } from '../services/insightService';
@@ -108,6 +108,39 @@ function ForecastTooltip({ active, payload, label }) {
             </span>
           </div>
         ))}
+      {payload[0]?.payload?.ci_lower != null && payload[0]?.payload?.ci_upper != null && (
+        <div className="mt-1 pt-1 text-[11px]" style={{ color: '#64748B', borderTop: '1px solid #F1F5F9' }}>
+          Likely range: {Number(payload[0].payload.ci_lower).toLocaleString()} – {Number(payload[0].payload.ci_upper).toLocaleString()} cases
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Actual-vs-predicted hover: both counts and the difference in plain words. */
+function AvpTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload || {};
+  const diff = row.Predicted != null && row.Actual != null ? row.Predicted - row.Actual : null;
+  const diffText = diff == null ? null
+    : diff === 0 ? 'Exactly right'
+      : `Predicted ${Math.abs(diff).toLocaleString()} ${diff > 0 ? 'more' : 'fewer'} than actual`;
+  return (
+    <div className="bg-white px-3 py-2.5 text-xs shadow-md" style={{ border: '1px solid #CBD5E1', borderRadius: 6, minWidth: 190 }}>
+      <div className="text-[12px] font-bold mb-1.5" style={{ color: '#0F2D52' }}>{label}</div>
+      <div className="flex justify-between gap-4 py-0.5"><span style={{ color: '#475569' }}>Actual (reported)</span><span className="font-bold" style={{ color: '#0F2D52' }}>{row.Actual?.toLocaleString() ?? '\u2014'}</span></div>
+      <div className="flex justify-between gap-4 py-0.5"><span style={{ color: '#475569' }}>Predicted by the model</span><span className="font-bold" style={{ color: '#3F7F6B' }}>{row.Predicted?.toLocaleString() ?? '\u2014'}</span></div>
+      {diffText && <div className="mt-1 pt-1 text-[11px] font-semibold" style={{ color: '#64748B', borderTop: '1px solid #F1F5F9' }}>{diffText}</div>}
+    </div>
+  );
+}
+
+/** Big, plain headline figure above a chart. */
+function SummaryStat({ value, label }) {
+  return (
+    <div className="rounded-lg px-4 py-3" style={{ background: '#F1F5F9', border: '1px solid #E2E8F0' }}>
+      <div className="text-2xl font-extrabold leading-tight" style={{ color: '#0F2D52' }}>{value}</div>
+      <div className="mt-0.5 text-xs font-medium" style={{ color: '#475569' }}>{label}</div>
     </div>
   );
 }
@@ -878,6 +911,8 @@ export default function Forecasting() {
       });
   }, [backtestData, appliedBarangay, appliedStartYear, appliedEndYear]);
 
+  const avpSummary = useMemo(() => accuracySummary(avpChartData), [avpChartData]);
+
   /** Metric card computations */
   const totalForecasted = useMemo(() => {
     const modeled = filteredForecasts.filter(r => r.hasForecast);
@@ -1084,7 +1119,7 @@ export default function Forecasting() {
       { key: 'periodLabel', label: 'MONTH' },
       { key: 'actual', label: 'REPORTED' },
       { key: 'forecasted', label: 'FORECAST' },
-      { key: 'confidence', label: '95% RANGE' },
+      { key: 'confidence', label: 'LIKELY RANGE' },
       { key: 'growthRate', label: 'CHANGE' },
       { key: 'method', label: 'METHOD' },
     ],
@@ -1507,8 +1542,11 @@ export default function Forecasting() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E2E8F0] px-5 py-4">
               <div className="flex items-center gap-3">
                 <div>
-                  <h3 className="text-sm font-semibold text-[#0F2D52]">Historical and forecasted TB cases</h3>
-                  <p className="mt-1 text-xs text-[#64748B]">Reported cases and projected cases for the selected period.</p>
+                  <h3 className="text-base font-bold text-[#0F2D52]">TB cases: reported and forecast — {scopeLabel(appliedBarangay)}</h3>
+                  <p className="mt-1 text-xs text-[#475569]">
+                    {forecastChartData.length > 0 ? `${forecastChartData[0].label} – ${forecastChartData[forecastChartData.length - 1].label}. ` : ''}
+                    Solid line: cases actually reported each month. Dashed line: cases the model expects in the coming months.
+                  </p>
                   {forecastTier === 'insufficient_data' && (
                     <p className="text-[10px] mt-0.5 font-medium" style={{ color: '#B91C1C' }}>
                       Insufficient Historical Data — no forecast is shown for the selected scope.
@@ -1534,7 +1572,7 @@ export default function Forecasting() {
                 {forecastChartData.some((row) => row.ci_upper != null) && (
                   <div className="flex items-center gap-1.5">
                     <span className="h-2 w-4 bg-[#DCEBE5]" aria-hidden="true" />
-                    <span className="text-[11px] text-[#64748B]">95% range</span>
+                    <span className="text-[11px] text-[#64748B]" title="The real count will most likely fall inside the shaded area">Likely range</span>
                   </div>
                 )}
                 {showCompare && compareBarangay && (
@@ -1547,23 +1585,25 @@ export default function Forecasting() {
             </div>
             <div className="px-5 pb-5">
               {forecastChartData.length > 0 ? (
-                <div className="h-[320px] w-full" role="img" aria-label="Historical and forecasted TB cases line chart">
+                <div className="h-[380px] w-full" role="img" aria-label={`Reported and forecast TB cases per month, ${scopeLabel(appliedBarangay)}`}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={forecastChartData} margin={{ top: 20, right: 25, left: 5, bottom: 0 }}>
+                    <LineChart data={forecastChartData} margin={{ top: 20, right: 25, left: 15, bottom: 20 }}>
                       <CartesianGrid vertical={false} stroke="#E8EDF2" />
                       <XAxis
                         dataKey="label"
-                        tick={{ fontSize: 10, fill: '#94A3B8' }}
+                        tick={{ fontSize: 12, fill: '#475569' }}
                         axisLine={false}
                         tickLine={false}
                         tickMargin={8}
+                        label={{ value: 'Month', position: 'insideBottom', offset: -14, fontSize: 12, fill: '#64748B' }}
                       />
                       <YAxis
-                        tick={{ fontSize: 10, fill: '#94A3B8' }}
+                        tick={{ fontSize: 12, fill: '#475569' }}
                         axisLine={false}
                         tickLine={false}
                         tickMargin={4}
-                        width={40}
+                        width={48}
+                        label={{ value: 'TB cases per month', angle: -90, position: 'insideLeft', offset: -2, fontSize: 12, fill: '#64748B', style: { textAnchor: 'middle' } }}
                       />
                       <Tooltip content={<ForecastTooltip />} />
 
@@ -1591,24 +1631,24 @@ export default function Forecasting() {
                         type="monotone"
                         dataKey="Actual"
                         stroke="#0F2D52"
-                        strokeWidth={2}
+                        strokeWidth={3}
                         dot={{ fill: '#0F2D52', r: 3, strokeWidth: 0 }}
-                        activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }}
+                        activeDot={{ r: 6, strokeWidth: 2, stroke: '#ffffff' }}
                         connectNulls={false}
-                        name="Actual Cases"
+                        name="Reported cases"
                       />
 
                       {/* Forecasted Cases line */}
                       <Line
                         type="monotone"
                         dataKey="Forecast"
-                        stroke="#6B9E8A"
-                        strokeWidth={2}
+                        stroke="#3F7F6B"
+                        strokeWidth={3}
                         strokeDasharray="8 4"
-                        dot={{ fill: '#6B9E8A', r: 3, strokeWidth: 1, stroke: '#ffffff' }}
+                        dot={{ fill: '#3F7F6B', r: 3.5, strokeWidth: 1, stroke: '#ffffff' }}
                         activeDot={{ r: 6, strokeWidth: 2, stroke: '#ffffff' }}
                         connectNulls={false}
-                        name="Forecasted Cases"
+                        name="Forecast cases"
                       />
 
                       {/* Comparison Forecast line */}
@@ -1657,8 +1697,11 @@ export default function Forecasting() {
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E2E8F0] px-5 py-4">
                 <div className="flex items-center gap-3">
                   <div>
-                    <h3 className="text-sm font-semibold text-[#0F2D52]">Actual and predicted cases</h3>
-                    <p className="mt-1 text-xs text-[#64748B]">Each month was predicted by the forecasting model using only the records before it, then compared with the cases reported later.</p>
+                    <h3 className="text-base font-bold text-[#0F2D52]">How accurate were the forecasts? — {scopeLabel(appliedBarangay)}</h3>
+                    <p className="mt-1 text-xs text-[#475569]">
+                      {avpSummary ? `${avpSummary.first} – ${avpSummary.last}. ` : ''}
+                      For each past month the model predicted the cases using only earlier records; the chart puts that prediction next to the cases actually reported.
+                    </p>
                     {backtestEvaluatedAt && (
                       <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>
                         From the model test saved {new Date(backtestEvaluatedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}.
@@ -1668,53 +1711,63 @@ export default function Forecasting() {
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="flex items-center gap-1.5">
-                    <span className="w-6 h-[3px]" style={{ background: '#0F2D52' }} />
-                    <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Actual</span>
+                    <span className="w-7 h-[4px]" style={{ background: '#0F2D52' }} />
+                    <span className="text-xs font-semibold" style={{ color: '#0F2D52' }}>Actual (reported)</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="w-6 h-[3px] rounded-full" style={{ background: '#6B9E8A' }} />
-                    <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Predicted</span>
+                    <span className="w-7 h-0 border-t-[3px]" style={{ borderColor: '#3F7F6B', borderStyle: 'dashed' }} />
+                    <span className="text-xs font-semibold" style={{ color: '#3F7F6B' }}>Predicted by the model</span>
                   </div>
                 </div>
               </div>
               <div className="px-5 pb-5">
+                {avpSummary && (
+                  <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-3">
+                    <SummaryStat value={`${avpSummary.accuracy}%`} label="accurate overall (predicted vs reported cases)" />
+                    <SummaryStat value={`± ${avpSummary.avgOff.toLocaleString()} cases`} label="typical difference in a month" />
+                    <SummaryStat value={avpSummary.months} label={`months tested (${avpSummary.first} – ${avpSummary.last})`} />
+                  </div>
+                )}
                 {avpChartData.length > 0 ? (
-                  <div className="h-[300px] w-full" role="img" aria-label="Actual and predicted TB cases line chart">
+                  <div className="mt-4 h-[420px] w-full" role="img" aria-label={`Actual and predicted TB cases per month, ${scopeLabel(appliedBarangay)}`}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={avpChartData} margin={{ top: 20, right: 25, left: 5, bottom: 0 }}>
+                      <LineChart data={avpChartData} margin={{ top: 10, right: 25, left: 15, bottom: 20 }}>
                         <CartesianGrid vertical={false} stroke="#E8EDF2" />
                         <XAxis
                           dataKey="label"
-                          tick={{ fontSize: 10, fill: '#94A3B8' }}
+                          tick={{ fontSize: 12, fill: '#475569' }}
                           axisLine={false}
                           tickLine={false}
                           tickMargin={8}
+                          label={{ value: 'Month', position: 'insideBottom', offset: -14, fontSize: 12, fill: '#64748B' }}
                         />
                         <YAxis
-                          tick={{ fontSize: 10, fill: '#94A3B8' }}
+                          tick={{ fontSize: 12, fill: '#475569' }}
                           axisLine={false}
                           tickLine={false}
                           tickMargin={4}
-                          width={40}
+                          width={48}
+                          label={{ value: 'TB cases per month', angle: -90, position: 'insideLeft', offset: -2, fontSize: 12, fill: '#64748B', style: { textAnchor: 'middle' } }}
                         />
-                        <Tooltip content={<ForecastTooltip />} />
+                        <Tooltip content={<AvpTooltip />} />
                         <Line
                           type="monotone"
                           dataKey="Actual"
                           stroke="#0F2D52"
-                          strokeWidth={2}
-                          dot={{ fill: '#0F2D52', r: 2.5, strokeWidth: 0 }}
-                          activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }}
-                          name="Actual Cases"
+                          strokeWidth={3}
+                          dot={{ fill: '#0F2D52', r: 3, strokeWidth: 0 }}
+                          activeDot={{ r: 6, strokeWidth: 2, stroke: '#ffffff' }}
+                          name="Actual (reported)"
                         />
                         <Line
                           type="monotone"
                           dataKey="Predicted"
-                          stroke="#6B9E8A"
-                          strokeWidth={2}
-                          dot={{ fill: '#6B9E8A', r: 2.5, strokeWidth: 0 }}
-                          activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff' }}
-                          name="Predicted Cases"
+                          stroke="#3F7F6B"
+                          strokeWidth={3}
+                          strokeDasharray="8 4"
+                          dot={{ fill: '#3F7F6B', r: 3, strokeWidth: 0 }}
+                          activeDot={{ r: 6, strokeWidth: 2, stroke: '#ffffff' }}
+                          name="Predicted by the model"
                         />
                       </LineChart>
                     </ResponsiveContainer>
@@ -1729,8 +1782,8 @@ export default function Forecasting() {
             {/* ─── 6. FORECAST DETAILS TABLE ─── */}
             <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
               <div className="border-b border-[#E2E8F0] px-5 py-4">
-                <h3 className="text-sm font-semibold text-[#0F2D52]">Month-by-month forecast</h3>
-                <p className="mt-1 text-xs text-[#64748B]">Each row is a forecast month. The 95% range shows uncertainty around the estimate; a dash means no value is available.</p>
+                <h3 className="text-base font-bold text-[#0F2D52]">Month-by-month forecast — {scopeLabel(appliedBarangay)}</h3>
+                <p className="mt-1 text-xs text-[#475569]">Each row is one month. <span className="font-semibold">Forecast</span> is the model's best guess; <span className="font-semibold">Likely range</span> is where the real count will most likely fall (the dot is the forecast). A dash means no value is available.</p>
               </div>
               <div className="px-5 pb-5">
                 {sortedForecastTable.length > 0 ? (
@@ -1802,7 +1855,7 @@ export default function Forecasting() {
                                     {row.ci_lower.toLocaleString()}
                                   </span>
                                   <div className="relative flex-1 h-2 rounded-full" style={{ background: '#E2E8F0' }}
-                                    title={`Forecast: ${row.forecasted.toLocaleString()} | CI: ${row.ci_lower.toLocaleString()} – ${row.ci_upper.toLocaleString()}`}
+                                    title={`Forecast ${row.forecasted.toLocaleString()} cases; most likely between ${row.ci_lower.toLocaleString()} and ${row.ci_upper.toLocaleString()}`}
                                   >
                                     <div
                                       className="absolute top-0 h-full rounded-full"

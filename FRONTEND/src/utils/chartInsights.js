@@ -147,14 +147,37 @@ export function monthByMonthForecastInsight(rows) {
     : `Across ${projected.length} forecast months, monthly estimates range from ${fmt(lowest)} to ${fmt(peak.forecasted)} cases. ${peak.periodLabel} has the highest estimate.`;
   const ranged = projected.filter((row) => row.ci_lower != null && row.ci_upper != null && Number(row.ci_lower) <= Number(row.ci_upper));
   if (ranged.length === projected.length) {
-    text += ' The 95% ranges show uncertainty; actual case counts may differ.';
+    text += ' Each month also has a likely range: the real count will most likely fall inside it.';
   } else if (ranged.length > 0) {
-    text += ` A 95% range is available for ${ranged.length} of ${projected.length} months; actual counts may differ.`;
+    text += ` A likely range is available for ${ranged.length} of ${projected.length} months; the real count will most likely fall inside it.`;
   } else {
-    text += ' No 95% range is available, so these estimates should be treated cautiously.';
+    text += ' No likely range is available, so these estimates should be treated cautiously.';
   }
   if (unavailable > 0) text += ` ${unavailable} ${unavailable === 1 ? 'month has' : 'months have'} no estimate because case history is too short.`;
   return text;
+}
+
+/** "Barangay X" or the whole city, for chart titles. */
+export function scopeLabel(barangay) {
+  return barangay ? `Barangay ${barangay}` : 'Pasig City (all barangays)';
+}
+
+/**
+ * Headline figures for the actual-vs-predicted chart: accuracy = 100% minus the total
+ * difference as a share of all actual cases, and the average difference per month.
+ */
+export function accuracySummary(points, { actualKey = 'Actual', predictedKey = 'Predicted' } = {}) {
+  const rows = (points || []).filter((p) => p[actualKey] != null && p[predictedKey] != null);
+  const totalActual = sum(rows.map((p) => p[actualKey]));
+  if (rows.length === 0 || totalActual <= 0) return null;
+  const errors = rows.map((p) => Math.abs(p[predictedKey] - p[actualKey]));
+  return {
+    accuracy: Math.max(0, Math.round(100 - (sum(errors) / totalActual) * 100)),
+    avgOff: Math.round(avg(errors)),
+    months: rows.length,
+    first: rows[0].label,
+    last: rows[rows.length - 1].label,
+  };
 }
 
 /** Actual vs predicted (back-test): typical error size. */
