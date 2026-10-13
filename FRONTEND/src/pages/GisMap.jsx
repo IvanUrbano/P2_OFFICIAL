@@ -10,6 +10,7 @@ import API from '../api/axios';
 import AnalyticsInsightPanel from '../components/AnalyticsInsightPanel';
 import FilterSelect from '../components/FilterSelect';
 import RiskClassificationGuide from '../components/RiskClassificationGuide';
+import { riskWindowLabel, RISK_WINDOW_MONTHS } from '../utils/riskWindow';
 import ModalCloseButton from '../components/ModalCloseButton';
 import { getGisInsight } from '../services/insightService';
 
@@ -692,14 +693,16 @@ export default function GisMap() {
   // Period shown next to every snapshot-derived label: the selected year's
   // own assessment, or says plainly that none was computed yet. Without any
   // case year (no year to select) it names the snapshot the map is using.
+  const riskWindow = riskWindowLabel(riskAssessmentPeriod);
   const riskPeriodLabel = React.useMemo(() => {
+    if (riskWindow && !(filterYear && data?.meta?.requested_year_has_snapshot === false)) return riskWindow;
     if (filterYear) {
       return data?.meta?.requested_year_has_snapshot === false
         ? 'No Snapshot'
         : `${riskAssessmentYear ?? 'Unknown'} Assessment (Data ${riskDataYear ?? filterYear})`;
     }
     return riskAssessmentYear != null ? `${riskAssessmentYear} Assessment` : 'No Snapshot';
-  }, [filterYear, data, riskAssessmentYear, riskDataYear]);
+  }, [filterYear, data, riskAssessmentYear, riskDataYear, riskWindow]);
 
   // The risk band cut points live on the latest completed pipeline run, so
   // they are only true for that run's own snapshot. Showing them next to an
@@ -1162,7 +1165,9 @@ export default function GisMap() {
                 return <p className="text-[11px] font-semibold text-[#B45309]" title="An administrator can compute this from Settings > Backfill Historical Risk Snapshots.">No risk assessment for {filterYear} yet</p>;
               }
               return data?.meta?.risk_assessment_period ? (
-                <p className="text-[11px] text-[#64748B]">Data year {riskDataYear ?? '—'} · Assessment year {riskAssessmentYear ?? '—'} · Prediction period {riskAssessmentPeriod ?? '—'}</p>
+                <p className="text-xs text-[#475569]">
+                  Risk levels cover <span className="font-semibold text-[#0F2D52]">{riskWindow ?? '—'}</span> (the {RISK_WINDOW_MONTHS} months after the assessment){riskDataYear != null ? <> · based on cases up to <span className="font-semibold text-[#0F2D52]">{riskDataYear}</span></> : null}
+                </p>
               ) : null;
             })()}
           </div>

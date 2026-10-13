@@ -74,8 +74,8 @@ const LEADING_TRIM_SHARE = 0.2;
 // exact level 59.8% -> 61.1%, High vs not High 75.9% -> 76.8%, High<->Low
 // mix-ups 49 -> 26. One month is dominated by noise in small barangays; twelve
 // fell behind the simple ranking rule. Must match RF_LABEL_HORIZON_MONTHS in
-// ML_SERVICE/config.py.
-const LABEL_HORIZON_MONTHS = 6;
+// ML_SERVICE/config.py; defined in riskWindow.js so the page text uses the same number.
+const { RISK_WINDOW_MONTHS: LABEL_HORIZON_MONTHS } = require('./riskWindow');
 
 /**
  * Put every barangay on ONE shared monthly calendar with zero-filled gaps.

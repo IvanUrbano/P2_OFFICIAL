@@ -507,6 +507,12 @@ describe('generateGisInsight', () => {
     assert.match(text, /top third/);
   });
 
+  it('risk overview names the months covered when the period is known', () => {
+    const metrics = { ...baseMetrics, coverage: { ...baseMetrics.coverage, period: '2026-01-01' } };
+    const text = sectionId(generateGisInsight(metrics), 'riskOverview').text;
+    assert.match(text, /\*\*Jan – Jun 2026\*\*/);
+  });
+
   it('top hotspots includes incidence per 100k when incidence is available', () => {
     const result = generateGisInsight(baseMetrics);
     const text = sectionId(result, 'topHotspots').text;
