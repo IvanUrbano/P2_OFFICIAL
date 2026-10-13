@@ -140,9 +140,59 @@ async function evaluateHotspotAlerts(poolOrClient, period) {
   return created;
 }
 
+// Monthly barangay counts are mostly chance (see AGENTS.md "Data reality"): comparing one
+// month with the month before flagged ~9 barangays a month. A rise only counts when it is
+// big, at least a few cases, and unlikely to be chance. The comparison is with the same
+// months a year earlier so the city-wide Jul-Sep peak does not read as a surge.
+const CASE_INCREASE = {
+  WINDOW_MONTHS: 3,
+  MIN_EXTRA_CASES: 3,
+  MAX_CHANCE: 0.05,
+};
+
+/**
+ * Probability of a rise at least this large if the true rate did not change.
+ * Under an unchanged rate, of the recent + prior cases each is equally likely to fall in
+ * either window, so recent ~ Binomial(recent + prior, 0.5). One-sided upper tail.
+ */
+function riseProbabilityByChance(recent, prior) {
+  const n = recent + prior;
+  if (n === 0 || recent <= prior) return 1;
+  // Sum in log space: 0.5^n underflows for large n.
+  let logC = 0; // log C(n, 0)
+  const logHalfN = n * Math.log(0.5);
+  let tail = 0;
+  for (let i = 0; i <= n; i++) {
+    if (i > 0) logC += Math.log((n - i + 1) / i);
+    if (i >= recent) tail += Math.exp(logC + logHalfN);
+  }
+  return Math.min(1, tail);
+}
+
+function isCaseIncrease(recent, prior) {
+  if (recent - prior < CASE_INCREASE.MIN_EXTRA_CASES) return false;
+  if (prior > 0 && ((recent - prior) / prior) * 100 < THRESHOLDS.CASE_INCREASE_PERCENT) return false;
+  return riseProbabilityByChance(recent, prior) < CASE_INCREASE.MAX_CHANCE;
+}
+
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function windowLabel(endMonth) {
+  const year = Number(endMonth.slice(0, 4));
+  const end = Number(endMonth.slice(5, 7)) - 1;
+  const start = (end - (CASE_INCREASE.WINDOW_MONTHS - 1) + 12) % 12;
+  const startYear = start > end ? year - 1 : year;
+  return {
+    label: `${MONTH_ABBR[start]}${startYear !== year ? ` ${startYear}` : ''}–${MONTH_ABBR[end]} ${year}`,
+    priorYear: year - 1,
+  };
+}
+
 /**
  * Rapid Increase in TB Cases
- * Compares current month case count with previous month per barangay.
+ * Per barangay, cases in the last 3 complete months vs the same 3 months a year earlier.
+ * `period` may be a forecast month with no cases yet, so the window ends at the latest
+ * month with data on or before it, skipping the unfinished current month (Philippine time).
  * Creates a single summary alert listing all affected barangays.
  */
 async function evaluateCaseIncreaseAlerts(poolOrClient, period) {
@@ -150,47 +200,68 @@ async function evaluateCaseIncreaseAlerts(poolOrClient, period) {
   await deleteStaleAlerts(poolOrClient, { alertType: 'case_increase', period });
 
   const result = await poolOrClient.query(
-    `SELECT
-       curr.barangay_name,
-       curr.case_count AS current_count,
-       prev.case_count AS previous_count
-     FROM monthly_case_summary curr
-     LEFT JOIN monthly_case_summary prev
-       ON curr.barangay_name = prev.barangay_name
-       AND prev.month = curr.month - INTERVAL '1 month'
-     WHERE curr.month = $1
-       AND prev.case_count IS NOT NULL
-       AND prev.case_count > 0`,
-    [period]
+    `WITH window_end AS (
+       SELECT MAX(month) AS m FROM monthly_case_summary
+       WHERE month <= date_trunc('month', $1::date)
+         AND month < date_trunc('month', now() AT TIME ZONE 'Asia/Manila')
+     )
+     SELECT s.barangay_name,
+            w.m::date::text AS end_month,
+            COALESCE(SUM(s.case_count) FILTER (
+              WHERE s.month > w.m - make_interval(months => $2::int)), 0)::int AS recent_count,
+            COALESCE(SUM(s.case_count) FILTER (
+              WHERE s.month <= w.m - INTERVAL '12 months'), 0)::int AS prior_count,
+            COUNT(*) FILTER (WHERE s.month <= w.m - INTERVAL '12 months')::int AS prior_rows
+     FROM monthly_case_summary s
+     CROSS JOIN window_end w
+     WHERE w.m IS NOT NULL
+       AND s.month <= w.m
+       AND (s.month > w.m - make_interval(months => $2::int)
+            OR (s.month <= w.m - INTERVAL '12 months'
+                AND s.month > w.m - INTERVAL '12 months' - make_interval(months => $2::int)))
+     GROUP BY s.barangay_name, w.m`,
+    [period, CASE_INCREASE.WINDOW_MONTHS]
   );
+
+  if (result.rows.length === 0) return created;
+  // No data at all for the same months last year (the first year of records): nothing to compare.
+  if (!result.rows.some(r => r.prior_rows > 0)) return created;
 
   const affected = [];
   for (const row of result.rows) {
-    const pctChange = ((row.current_count - row.previous_count) / row.previous_count) * 100;
-    if (pctChange >= THRESHOLDS.CASE_INCREASE_PERCENT) {
+    if (isCaseIncrease(row.recent_count, row.prior_count)) {
+      const pctChange = row.prior_count > 0
+        ? ((row.recent_count - row.prior_count) / row.prior_count) * 100
+        : null;
       affected.push({ ...row, pctChange });
     }
   }
 
   if (affected.length === 0) return created;
 
-  affected.sort((a, b) => b.pctChange - a.pctChange);
-  const maxPct = Math.max(...affected.map(r => r.pctChange));
-  const severity = maxPct >= 50 ? 'critical' : 'high';
+  const rise = r => r.pctChange ?? Infinity;
+  affected.sort((a, b) => rise(b) - rise(a));
+  const severity = affected.some(r => rise(r) >= 50) ? 'critical' : 'high';
 
   const topList = affected.slice(0, 5).map(r =>
-    `${r.barangay_name} (+${r.pctChange.toFixed(1)}%, ${r.current_count} vs ${r.previous_count})`
+    `${r.barangay_name} (${r.pctChange != null ? `+${r.pctChange.toFixed(1)}%, ` : ''}${r.recent_count} vs ${r.prior_count})`
   ).join('; ');
   const suffix = affected.length > 5 ? ` and ${affected.length - 5} more` : '';
+  const endMonth = result.rows[0].end_month;
+  const { label, priorYear } = windowLabel(endMonth);
 
   const id = await insertAlert(poolOrClient, {
     alertType: 'case_increase',
     severity,
     title: affected.length === 1 ? 'Rapid Increase in TB Cases' : `Rapid Increase in TB Cases — ${affected.length} Barangays`,
-    message: `${affected.length} barangay${affected.length > 1 ? 's' : ''} showed a ≥${THRESHOLDS.CASE_INCREASE_PERCENT}% increase in TB cases compared to the previous period: ${topList}${suffix}.`,
+    message: `${affected.length} barangay${affected.length > 1 ? 's' : ''} had at least ${THRESHOLDS.CASE_INCREASE_PERCENT}% more TB cases in ${label} than in the same months in ${priorYear}, a rise unlikely to be chance: ${topList}${suffix}.`,
     recommendation: `Investigate the surge across affected barangays. Consider expanding case finding and contact tracing.`,
     barangayName: null,
-    metadata: { affected_barangays: affected.map(row => row.barangay_name) },
+    metadata: {
+      affected_barangays: affected.map(row => row.barangay_name),
+      window_end: endMonth,
+      window_months: CASE_INCREASE.WINDOW_MONTHS,
+    },
     period,
     sourceModule: 'analytics',
   });
@@ -326,6 +397,9 @@ async function evaluateAllAlerts(poolOrClient, period) {
 
 module.exports = {
   THRESHOLDS,
+  CASE_INCREASE,
+  isCaseIncrease,
+  riseProbabilityByChance,
   deleteStaleAlerts,
   deduplicateAlert,
   insertAlert,

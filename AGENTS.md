@@ -164,7 +164,7 @@ BACKEND/
 - **Actual-vs-predicted chart**: `GET /api/tb/forecast/backtest` serves the latest saved evaluation's per-barangay steps (real model predictions); empty until one exists. It no longer shows "same month last year" RF: accuracy, macro-F1, quadratic-weighted kappa, against ranked 12-month incidence and against last-3-months band carried forward
 - **Risk classification (authoritative)**: Random Forest's own predicted class, persisted with model_type/model_version/classification_confidence in `barangay_risk_scores` — this is what GIS displays
 - **Legacy weighted risk_score**: 45% incidence + 25% trend + 20% neighbor risk + 10% forecast error — a separate analytical index only, does NOT determine risk_class or GIS color
-- **Alert rules**: Rule-based — escalation (Medium→High), danger (High), surge (>30% increase)
+- **Alert rules**: Rule-based — escalation (Medium→High), danger (High), surge (`case_increase`: last 3 complete months vs the same 3 months a year earlier, ≥20% AND ≥3 more cases AND < 5% chance under an unchanged rate — binomial test; month-vs-previous-month fired for ~31% of barangay-months)
 - **Pipeline idempotency**: DELETE + INSERT per period — safe to re-run
 - **Module format**: CommonJS (`require`/`module.exports`) — matches existing codebase
 - **DB pool**: Reuses `BACKEND/db.js` — no duplicate pools

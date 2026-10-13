@@ -309,7 +309,7 @@ export function ModelStatusPanel() {
         <Row label="Risk classification" note="The Random Forest class decides the map colour and High/Medium/Low counts">Random Forest</Row>
         <Row label="Model inputs">{RF_FEATURES.join('; ')}</Row>
         <Row label="Neighbouring barangays" note="Barangays within 50 m of each other">Shared borders</Row>
-        <Row label="Alert rules" note="Evaluated after each pipeline run">Escalation, High risk, Surge (&gt;30% rise)</Row>
+        <Row label="Alert rules" note="Evaluated after each pipeline run">Escalation, High risk, Surge (3-month rise vs last year)</Row>
       </Card>
     </div>
   );
@@ -342,7 +342,7 @@ export function NotificationSettings() {
       <Card title="Alert Rules" subtitle="Alerts are created automatically after each prediction pipeline run." badge={<ReadOnlyBadge />}>
         <Row label="Escalation" note="A barangay moves from Medium to High risk">Automatic</Row>
         <Row label="High risk" note="A barangay is classified High risk">Automatic</Row>
-        <Row label="Surge" note="Cases rise by more than 30%">Automatic</Row>
+        <Row label="Surge" note="Cases in the last 3 months are at least 20% (and 3 cases) above the same months last year, a rise unlikely to be chance">Automatic</Row>
         {counts.data && (
           <p className="text-[10px] mt-3" style={{ color: t.textMuted }}>
             Open now: {counts.data.critical ?? 0} critical, {counts.data.high ?? 0} high severity, {counts.data.unread ?? 0} unread.

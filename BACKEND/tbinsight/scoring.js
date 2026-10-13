@@ -11,7 +11,7 @@
  *
  * Alerts: rule-based, generated after each pipeline run.
  *   - high_risk_escalation: forecast enters High band
- *   - critical_surge: >30% case increase in recent window
+ *   - critical_surge: currently High risk (the case-increase surge rule is in alertEngine.js)
  *   - low_success_rate: treatment success < 60%
  */
 
