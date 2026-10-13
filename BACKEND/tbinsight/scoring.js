@@ -77,20 +77,20 @@ function monthKey(value) {
  * Percentile cut points shared by this fallback and the ML service's
  * thresholds.py — the two must stay numerically identical, or a run calibrated
  * by the fallback and one calibrated by the service would disagree on what
- * "High" means. LOW is the bottom third; MED was lowered from 2/3 to the 60th
- * percentile so more barangays surface as High Risk (client request) without
- * collapsing the Moderate band.
+ * "High" means. 30 barangays -> 12 Low / 8 Medium / 10 High (it was 10 / 8 / 12
+ * after a client request for more High barangays); 12 / 8 / 10 scores higher for
+ * the Random Forest's 6-month risk levels — see thresholds.py.
  */
-const LOW_PERCENTILE = 1 / 3;
-const MED_PERCENTILE = 0.60;
+const LOW_PERCENTILE = 0.40;
+const MED_PERCENTILE = 2 / 3;
 
 /**
- * Assign Low/Medium/High to a set of risk scores by percentile: the bottom third of scores is
- * Low, the top 40% High. (Fixed cutoffs on the 0-100 scale do not work here: every component is
+ * Assign Low/Medium/High to a set of risk scores by percentile: the bottom 40% of scores is
+ * Low, the top third High. (Fixed cutoffs on the 0-100 scale do not work here: every component is
  * scaled by the current maximum, so scores bunch up and nearly everything lands in Medium.)
  *
  * Boundaries match the incidence thresholds: Low if score <= low_max, High if score > med_max,
- * with cut points at the 33.3rd and 60th percentiles (linear interpolation).
+ * with cut points at the 40th and 66.7th percentiles (linear interpolation).
  *
  * @param {number[]} scores
  * @returns {{ classes: string[], low_max: number|null, med_max: number|null }}

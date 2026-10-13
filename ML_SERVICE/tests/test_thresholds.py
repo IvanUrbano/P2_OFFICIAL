@@ -26,15 +26,15 @@ def test_classify_incidence_boundaries():
     assert classify_incidence(51, low_max=20, med_max=50) == "High"
 
 
-def test_percentile_basis_is_third_low_sixty_high():
-    """The Moderate|High cut sits at the 60th percentile (lowered from 2/3)."""
-    assert LOW_PERCENTILE == 100.0 / 3.0
-    assert MED_PERCENTILE == 60.0
+def test_percentile_basis_is_forty_low_two_thirds_high():
+    """Low below the 40th percentile, High from the 66.7th: 30 barangays -> 12 / 8 / 10."""
+    assert LOW_PERCENTILE == 40.0
+    assert MED_PERCENTILE == 200.0 / 3.0
     assert LOW_PERCENTILE < MED_PERCENTILE < 100.0
 
 
 def test_tertile_lower_third_low_rest_high():
-    """low_max = 33.3 pct, med_max = 60 pct -> 10 Low / 8 Medium / 12 High."""
+    """low_max = 40 pct, med_max = 66.7 pct -> 12 Low / 8 Medium / 10 High."""
     inc = list(range(1, 31))  # 1..30
     t = tertile_thresholds(inc)
     assert t["method"] == "tertile"
@@ -42,10 +42,10 @@ def test_tertile_lower_third_low_rest_high():
     assert t["low_pct"] == LOW_PERCENTILE
     assert t["med_pct"] == MED_PERCENTILE
     bands = [classify_incidence(x, t["low_max"], t["med_max"]) for x in inc]
-    # cut points are 10.67 (low) and 18.4 (med) after linear interpolation
-    assert bands.count("Low") == 10
+    # cut points are 12.6 (low) and 20.33 (med) after linear interpolation
+    assert bands.count("Low") == 12
     assert bands.count("Medium") == 8
-    assert bands.count("High") == 12
+    assert bands.count("High") == 10
 
 
 def test_jenks_returns_two_ordered_breaks():

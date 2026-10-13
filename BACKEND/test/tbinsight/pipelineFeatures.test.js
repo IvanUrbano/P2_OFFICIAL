@@ -153,9 +153,9 @@ describe('buildTrainingRows', () => {
 
   it('yields rows from 12 months of history (window shrinks to 6)', () => {
     const rows = build({ A: twelve(10), B: twelve(5) }, { A: 100000, B: 100000 });
-    // 12 months, window 6 -> 6 target months, minus the last 2 that lack a full
-    // 3-month forward label window (LABEL_HORIZON_MONTHS) -> 4 x 2 barangays
-    assert.strictEqual(rows.length, 8);
+    // 12 months, window 6 -> 6 target months, minus the last 5 that lack a full
+    // 6-month forward label window (LABEL_HORIZON_MONTHS) -> 1 x 2 barangays
+    assert.strictEqual(rows.length, 2);
   });
 
   it('returns no rows when history is too short', () => {
@@ -216,7 +216,9 @@ describe('buildTrainingRows', () => {
   });
 
   it('emits rows month-major so walk-forward evaluation can group by month', () => {
-    const rows = build({ A: twelve(10), B: twelve(20) }, { A: 100000, B: 100000 });
+    // 14 months: window 7, and two target months still have a full 6-month label window.
+    const fourteen = level => Array(14).fill(level);
+    const rows = build({ A: fourteen(10), B: fourteen(20) }, { A: 100000, B: 100000 });
     // Pairs (A, B) per month: incidences alternate 120, 240
     assert.deepStrictEqual(rows.slice(0, 4).map(r => Math.round(r.incidence)), [120, 240, 120, 240]);
   });
@@ -430,24 +432,26 @@ describe('_ruleBasedClassify (rename check)', () => {
 });
 
 describe('classifyByTertile', () => {
-  it('splits 30 scores into 10 Low / 8 Medium / 12 High (33.3 / 60 percentile)', () => {
+  it('splits 30 scores into 12 Low / 8 Medium / 10 High (40 / 66.7 percentile)', () => {
     // Scores 30..45 like a real run: fixed 33/66 cutoffs would call almost all of these Medium.
-    // The Moderate|High cut sits at the 60th percentile, so the top 40% is High.
+    // The Moderate|High cut sits at the 66.7th percentile, so the top third is High.
     const scores = Array.from({ length: 30 }, (_, i) => 30 + i * 0.5);
     const { classes } = classifyByTertile(scores);
     const count = (c) => classes.filter(x => x === c).length;
-    assert.strictEqual(count('Low'), 10);
+    assert.strictEqual(count('Low'), 12);
     assert.strictEqual(count('Medium'), 8);
-    assert.strictEqual(count('High'), 12);
+    assert.strictEqual(count('High'), 10);
   });
 
   it('keeps input order and ranks the highest score High, the lowest Low', () => {
+    // 10..60: Low <= 30 (40th percentile), High > 43.3 (66.7th), Medium between.
     const { classes } = classifyByTertile([50, 10, 30, 20, 40, 60]);
     assert.strictEqual(classes[0], 'High');
     assert.strictEqual(classes[5], 'High');
     assert.strictEqual(classes[1], 'Low');
     assert.strictEqual(classes[3], 'Low');
-    assert.strictEqual(classes[2], 'Medium');
+    assert.strictEqual(classes[2], 'Low');
+    assert.strictEqual(classes[4], 'Medium');
   });
 
   it('uses Low <= low_max and High > med_max', () => {
@@ -497,7 +501,8 @@ describe('neighbor_risk with real (bordering) neighbours', () => {
   });
 
   it('feature rows no longer carry historical_bias', () => {
-    const series = { A: mk('A', [1, 2, 3, 4, 5, 6, 7, 8]), B: mk('B', [8, 7, 6, 5, 4, 3, 2, 1]) };
+    // 12 months: long enough for one target month with a full 6-month label window.
+    const series = { A: mk('A', [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]), B: mk('B', [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]) };
     const rows = buildTrainingRows(series, popMapByYear, null);
     assert.ok(rows.length > 0);
     for (const r of rows) {
@@ -510,7 +515,7 @@ describe('neighbor_risk with real (bordering) neighbours', () => {
   });
 
   it('history_incidence averages every month before the target, and history_rank orders it', () => {
-    const series = { A: mk('A', [6, 6, 6, 6, 0, 0, 0, 0]), B: mk('B', [0, 0, 0, 0, 3, 3, 3, 3]) };
+    const series = { A: mk('A', [6, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0]), B: mk('B', [0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3]) };
     const rows = buildTrainingRows(series, popMapByYear, null);
     const last = name => rows.filter(r => r.barangay_name === name).at(-1);
     const a = last('A'), b = last('B');
@@ -522,15 +527,16 @@ describe('neighbor_risk with real (bordering) neighbours', () => {
 });
 
 describe('addCrossSectionFeatures', () => {
-  it('bands prev_category at the risk-threshold percentiles, like the RF labels (10 / 8 / 12)', () => {
+  it('bands prev_category at the risk-threshold percentiles, like the RF labels (12 / 8 / 10)', () => {
     const rows = Array.from({ length: 30 }, (_, i) => ({
       barangay_name: `B${i}`, features: { rolling_12m_incidence: i, incidence_3m: i },
     }));
     addCrossSectionFeatures(rows);
     const count = c => rows.filter(r => r.features.prev_category === c).length;
-    assert.deepStrictEqual([count(0), count(1), count(2)], [10, 8, 12]);
-    assert.strictEqual(rows[9].features.prev_category, 0);
-    assert.strictEqual(rows[18].features.prev_category, 2);
+    assert.deepStrictEqual([count(0), count(1), count(2)], [12, 8, 10]);
+    assert.strictEqual(rows[11].features.prev_category, 0);
+    assert.strictEqual(rows[19].features.prev_category, 1);
+    assert.strictEqual(rows[20].features.prev_category, 2);
   });
 });
 

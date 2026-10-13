@@ -666,8 +666,8 @@ as a reported incidence for that year.
 
 **Target labels**: incidence bands, auto-calibrated **per pipeline run**
 from that run's own incidence distribution (`ML_SERVICE/thresholds.py`) —
-the Moderate→High cut sits at the run's **60th percentile** (Low→Moderate
-stays at the 33.3rd) — not a fixed cutoff, and not an official
+the Moderate→High cut sits at the run's **66.7th percentile** and the
+Low→Moderate cut at the **40th** (30 barangays → 12 Low / 8 Moderate / 10 High) — not a fixed cutoff, and not an official
 epidemiological threshold. **These are data-derived model classification
 boundaries and must not be presented as official DOH epidemiological
 thresholds unless separately validated.**
@@ -797,7 +797,7 @@ pytest
 
 | Test File | Tests | What's Tested |
 |---|---|---|
-| `tests/test_thresholds.py` | 6 | Classification boundaries, percentile cuts (33.3 / 60) |
+| `tests/test_thresholds.py` | 6 | Classification boundaries, percentile cuts (40 / 66.7) |
 | `tests/test_arima.py` | 14 | Fallback detection, forecasting, trends |
 | `tests/test_rf.py` | 16 | Feature validation, RF prediction, evaluation |
 | `tests/test_calibration.py` | 10 | Threshold auto-calibration edge cases |

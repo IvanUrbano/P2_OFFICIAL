@@ -68,10 +68,14 @@ const MIN_STORED_HORIZON = 3;
 const LEADING_TRIM_SHARE = 0.2;
 
 // Months averaged to form one RF training label, starting at the target month
-// and running forward (see buildTrainingRows). Three scored best in walk-forward
-// evaluation: one month is dominated by noise in small barangays, while six
-// discards twice as many rows for no gain.
-const LABEL_HORIZON_MONTHS = 3;
+// and running forward (see buildTrainingRows): risk levels cover the next half
+// year, the planning period for DOTS staff and supplies. On the same 660
+// walk-forward predictions (Jan 2024-Oct 2025, 5 seeds) six months beat three:
+// exact level 59.8% -> 61.1%, High vs not High 75.9% -> 76.8%, High<->Low
+// mix-ups 49 -> 26. One month is dominated by noise in small barangays; twelve
+// fell behind the simple ranking rule. Must match RF_LABEL_HORIZON_MONTHS in
+// ML_SERVICE/config.py.
+const LABEL_HORIZON_MONTHS = 6;
 
 /**
  * Put every barangay on ONE shared monthly calendar with zero-filled gaps.
@@ -1111,7 +1115,7 @@ function _nextMonth(dateStr) {
  * using rolling 12-month windows. With 30 barangays × 24+ valid months = 720+ rows.
  *
  * Each row: { features: {7 features}, incidence: float, month }
- * Labels derived in Python by ranking barangays within each month (bottom third Low, top 40% High).
+ * Labels derived in Python by ranking barangays within each month (bottom 40% Low, top third High).
  *
  * Features are computed with rolling windows to prevent data leakage:
  *   - rolling_12m_incidence: annualized cases from the 12-month lookback window
@@ -1311,7 +1315,7 @@ function buildFeatureRow({ name, t, seriesByBarangay, popMapByYear, window, neig
 }
 
 /**
- * For every month index k >= 3: was each barangay in the High band (top 40%, the label
+ * For every month index k >= 3: was each barangay in the High band (top third, the label
  * rule) when ranked by its mean incidence over months k-3..k-1? Computed once per run
  * and read by buildFeatureRow's high_share_12m. Uses only months before k.
  * @returns {Object} { name: number[] } 1 = High at k, 0 = not (or unknown)
@@ -1345,7 +1349,7 @@ function _highRiskHistory(seriesByBarangay, popMapByYear) {
  *   - incidence_rank: position of rolling_12m_incidence among the barangays
  *     that month, 0 (lowest) to 1 (highest)
  *   - prev_category: the band the last 3 months would get under the label
- *     rule (bottom third Low, top 40% High): 0 Low, 1 Medium, 2 High
+ *     rule (bottom 40% Low, top third High): 0 Low, 1 Medium, 2 High
  * The labels are relative (bands within a month), so the model needs inputs
  * on the same relative scale. Both read only months before the target.
  * A row with unknown incidence gets the middle (0.5 / 1) rather than Low.
@@ -1355,7 +1359,7 @@ function _highRiskHistory(seriesByBarangay, popMapByYear) {
  */
 function addCrossSectionFeatures(rows) {
   // Same cut points as the RF labels (rf_classifier.band_for_rank) and the
-  // risk thresholds: bottom third Low, top 40% High.
+  // risk thresholds: bottom 40% Low, top third High.
   const positions = key => {
     const known = rows.filter(r => r.features[key] != null).sort((a, b) => a.features[key] - b.features[key]);
     const pos = new Map();

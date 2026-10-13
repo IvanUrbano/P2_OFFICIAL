@@ -65,9 +65,9 @@ describe('riskBandCeiling', () => {
 });
 
 describe('bandsByRank and lowHighConfusion', () => {
-  it('bands 30 barangays 10 / 8 / 12 like the RF labels', () => {
+  it('bands 30 barangays 12 / 8 / 10 like the RF labels', () => {
     const b = bandsByRank(Array.from({ length: 30 }, (_, i) => i));
-    assert.deepStrictEqual([0, 1, 2].map(k => b.filter(x => x === k).length), [10, 8, 12]);
+    assert.deepStrictEqual([0, 1, 2].map(k => b.filter(x => x === k).length), [12, 8, 10]);
   });
 
   it('counts only Low<->High mix-ups', () => {

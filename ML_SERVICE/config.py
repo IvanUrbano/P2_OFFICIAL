@@ -86,7 +86,7 @@ RF_MIN_SAMPLES_SPLIT = 4
 RF_MIN_SAMPLES_LEAF = 10
 RF_MAX_FEATURES = 0.5         # share of features tried at each split
 
-# Each month's labels have fixed band sizes (bottom third Low, top 40% High), so instead
+# Each month's labels have fixed band sizes (bottom 40% Low, top third High), so instead
 # of taking each barangay's most likely class on its own, the barangays are ranked by
 # their expected band (P(Medium) + 2 x P(High)) and the bands filled in that order, the
 # same way the labels are made. Used when a whole month (>= 3 barangays) is classified.
@@ -105,7 +105,7 @@ RF_SMALL_MIN_SAMPLES_LEAF = 5
 # Months averaged into one RF label: the target month and the ones after it. Must
 # match LABEL_HORIZON_MONTHS in BACKEND/tbinsight/pipeline.js. Walk-forward
 # evaluation uses it to keep labels that reach into the test month out of training.
-RF_LABEL_HORIZON_MONTHS = 3
+RF_LABEL_HORIZON_MONTHS = 6
 
 # Below this many training rows the RF is not trained; the classifier applies the
 # incidence thresholds directly (the RF labels ARE those thresholds, so an RF fit on

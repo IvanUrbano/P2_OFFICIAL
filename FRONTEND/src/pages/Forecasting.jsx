@@ -210,7 +210,7 @@ function RiskClassificationEvaluation({ rf }) {
         <EvalMetric label="Simple ranking rule (exact level)" value={rf.baseline_accuracy != null ? pct(rf.baseline_accuracy) : '—'} />
       </div>
       <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>
-        Risk level for the next 3 months, checked against the cases later reported ({rf.n_steps} months tested). "Simple ranking rule" ranks barangays by their last 12 months.
+        Risk level for the next 6 months, checked against the cases later reported ({rf.n_steps} months tested). "Simple ranking rule" ranks barangays by their last 12 months.
       </p>
     </div>
   );

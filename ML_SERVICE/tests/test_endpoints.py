@@ -52,8 +52,8 @@ def test_thresholds_tertile():
     assert body["low_max"] < body["med_max"]
     # Percentile basis is reported so the UI can label the bands as
     # data-derived rather than an official epidemiological threshold.
-    assert body["low_pct"] == 100.0 / 3.0
-    assert body["med_pct"] == 60.0
+    assert body["low_pct"] == 40.0
+    assert body["med_pct"] == 200.0 / 3.0
     print(f"  PASS: test_thresholds_tertile (low={body['low_max']:.1f}, med={body['med_max']:.1f}, pct={body['low_pct']:.1f}/{body['med_pct']:.1f})")
 
 

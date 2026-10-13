@@ -88,7 +88,7 @@ export function outcomeInsight(items, { nameKey = 'name', valueKey = 'Cases', sc
   return `${text}.${note ? ` ${note}` : ''}`;
 }
 
-/** Risk classification counts. Risk levels are relative (Pasig's barangays ranked by incidence: bottom third Low, top 40% High). */
+/** Risk classification counts. Risk levels are relative (Pasig's barangays ranked by incidence: bottom 40% Low, top third High). */
 export function riskInsight(rows, { nameKey = 'name', classKey = 'risk_class' } = {}) {
   const list = (rows || []).filter((r) => r && r[classKey] && String(r[classKey]).toLowerCase() !== 'no data');
   if (list.length === 0) return null;

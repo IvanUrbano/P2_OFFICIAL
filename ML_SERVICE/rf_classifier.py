@@ -166,7 +166,7 @@ def derive_labels(train: list[dict], low_max: float, med_max: float) -> list[str
 
     Each month's barangays are ranked by incidence and cut at the same
     percentiles as the risk thresholds (thresholds.LOW_PERCENTILE /
-    MED_PERCENTILE: bottom third Low, top 40% High, 30 barangays -> 10 / 8 / 12),
+    MED_PERCENTILE: bottom 40% Low, top third High, 30 barangays -> 12 / 8 / 10),
     so the Random Forest and the rule-based fallback agree on what "High" means.
     Every month contributes the same mix of bands, and it is the relative
     question the risk map actually asks: which barangays are the worst affected
@@ -182,7 +182,7 @@ def derive_labels(train: list[dict], low_max: float, med_max: float) -> list[str
     Rows without a 'month' fall back to the absolute cut points, which keeps older
     callers and the /classify contract working.
 
-    Note this makes the band explicitly relative: about 40% of barangays are
+    Note this makes the band explicitly relative: about a third of barangays are
     always High, and a barangay moves band only by moving relative to the others.
     """
     rows_with_month = [r for r in train if r.get("month")]
