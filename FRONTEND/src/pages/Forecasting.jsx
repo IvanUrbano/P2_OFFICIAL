@@ -367,14 +367,21 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
                             </tr>
                           </thead>
                           <tbody>
-                            {view.rows.map(row => (
-                              <tr key={row.month} style={{ borderTop: '1px solid #F1F5F9', color: '#334155' }}>
-                                <td className="px-3 py-2">{formatEvaluationMonth(row.month)}</td>
-                                <td className="px-3 py-2">{formatCount(row.actual)}</td>
-                                <td className="px-3 py-2">{formatCount(row.predicted)}</td>
-                                <td className="px-3 py-2">{formatCount(row.error)}</td>
-                              </tr>
-                            ))}
+                            {view.rows.map(row => {
+                              // Whole cases: a fraction of a case reads as false precision. The
+                              // difference is taken from the rounded figures so the row adds up.
+                              const predicted = row.predicted == null ? null : Math.round(Number(row.predicted));
+                              const actual = row.actual == null ? null : Math.round(Number(row.actual));
+                              const difference = predicted == null || actual == null ? row.error : Math.abs(predicted - actual);
+                              return (
+                                <tr key={row.month} style={{ borderTop: '1px solid #F1F5F9', color: '#334155' }}>
+                                  <td className="px-3 py-2">{formatEvaluationMonth(row.month)}</td>
+                                  <td className="px-3 py-2">{formatCount(actual)}</td>
+                                  <td className="px-3 py-2">{formatCount(predicted)}</td>
+                                  <td className="px-3 py-2">{formatCount(difference == null ? null : Math.round(Number(difference)))}</td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
