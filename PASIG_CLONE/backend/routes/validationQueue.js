@@ -36,7 +36,7 @@ const {
 } = require('../policies/permissions');
 const {
   LIVE, NEEDS_LOCATION, NEEDS_FACILITY, MATCH_PENDING, READY, SENDS_TO_TBINSIGHT,
-  categorizeMatch, issueType, issueField, protectedIdentityChanges, suggestFacility, ymd, normFacility,
+  categorizeMatch, issueType, issueField, protectedIdentityChanges, suggestFacility, ymd, normFacility, normLocationKey,
 } = require('../services/validationQueue');
 const { cleanRecord, PASIG_BARANGAYS } = require('../services/dataCleaner');
 const { validateRecord, getValidBarangays, INSERT_COLUMNS, rowValues, identityRuleFor, currentIssueErrors } = require('../services/validator');
@@ -46,6 +46,7 @@ const { resyncSyncedCases, logReviews } = require('../services/caseFollowUp');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PAGE_SIZE = 50;
+const locationGroupSql = (column) => `lower(trim(regexp_replace(COALESCE(${column}, ''), '[[:space:]]+', ' ', 'g')))`;
 const canonicalBarangay = (name) => {
   const n = String(name ?? '').trim().toLowerCase();
   return n ? PASIG_BARANGAYS.find(b => b.toLowerCase() === n) || null : null;
@@ -275,12 +276,14 @@ router.get('/assignment', authenticate, authorizeRoles('admin', 'staff'), async 
     const { where, params } = await caseScope(req);
     const [locations, facilities, options] = await Promise.all([
       db.pool.query(
-        `SELECT COALESCE(NULLIF(trim(v.barangay_name), ''), '') AS barangay_text,
-                COALESCE(NULLIF(trim(v.city), ''), '') AS city_text,
+        `SELECT MIN(COALESCE(NULLIF(trim(v.barangay_name), ''), '')) AS barangay_text,
+                MIN(COALESCE(NULLIF(trim(v.city), ''), '')) AS city_text,
+                ${locationGroupSql('v.barangay_name')} AS barangay_key,
+                ${locationGroupSql('v.city')} AS city_key,
                 COUNT(*)::int AS records,
                 MIN(v.date_of_diagnosis) AS first_dx, MAX(v.date_of_diagnosis) AS last_dx
          FROM validated_tb_cases v WHERE ${where} AND ${NEEDS_LOCATION}
-         GROUP BY 1, 2 ORDER BY records DESC, 1 LIMIT 300`,
+         GROUP BY 3, 4 ORDER BY records DESC, barangay_text LIMIT 300`,
         params
       ),
       db.pool.query(
@@ -330,10 +333,12 @@ router.get('/assignment', authenticate, authorizeRoles('admin', 'staff'), async 
 const isPasigCityText = (city) => ['pasig city', 'pasig', ''].includes(String(city ?? '').trim().toLowerCase());
 
 function locationGroupWhere(q, startParams) {
-  const params = [...startParams, String(q.barangay_text ?? ''), String(q.city_text ?? '')];
+  const barangayKey = normLocationKey(q.barangay_key ?? q.barangay_text);
+  const cityKey = normLocationKey(q.city_key ?? q.city_text);
+  const params = [...startParams, barangayKey, cityKey];
   let where = `${LIVE} AND ${NEEDS_LOCATION}
-    AND COALESCE(NULLIF(trim(v.barangay_name), ''), '') = $${params.length - 1}
-    AND COALESCE(NULLIF(trim(v.city), ''), '') = $${params.length}`;
+    AND ${locationGroupSql('v.barangay_name')} = $${params.length - 1}
+    AND ${locationGroupSql('v.city')} = $${params.length}`;
   if (q.batch && UUID_RE.test(q.batch)) {
     params.push(q.batch);
     where += ` AND v.batch_id = $${params.length}`;

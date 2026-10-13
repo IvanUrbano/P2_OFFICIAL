@@ -1538,13 +1538,13 @@ export default function Forecasting() {
                       <CartesianGrid vertical={false} stroke="#E8EDF2" />
                       <XAxis
                         dataKey="label"
-                        tick={{ fontSize: 10, fill: '#94A3B8' }}
+                        tick={{ fontSize: 12, fill: '#94A3B8' }}
                         axisLine={false}
                         tickLine={false}
                         tickMargin={8}
                       />
                       <YAxis
-                        tick={{ fontSize: 10, fill: '#94A3B8' }}
+                        tick={{ fontSize: 12, fill: '#94A3B8' }}
                         axisLine={false}
                         tickLine={false}
                         tickMargin={4}
@@ -1622,7 +1622,7 @@ export default function Forecasting() {
                             value: 'Forecast Start',
                             position: 'top',
                              fill: '#92400E',
-                            fontSize: 10,
+                            fontSize: 12,
                             fontWeight: 700,
                           }}
                         />
@@ -1670,13 +1670,13 @@ export default function Forecasting() {
                         <CartesianGrid vertical={false} stroke="#E8EDF2" />
                         <XAxis
                           dataKey="label"
-                          tick={{ fontSize: 10, fill: '#94A3B8' }}
+                          tick={{ fontSize: 12, fill: '#94A3B8' }}
                           axisLine={false}
                           tickLine={false}
                           tickMargin={8}
                         />
                         <YAxis
-                          tick={{ fontSize: 10, fill: '#94A3B8' }}
+                          tick={{ fontSize: 12, fill: '#94A3B8' }}
                           axisLine={false}
                           tickLine={false}
                           tickMargin={4}

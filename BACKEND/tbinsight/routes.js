@@ -2871,6 +2871,64 @@ router.get('/reports/summary', async (req, res) => {
     const latestRes = await pool.query(`SELECT MAX(c.date_of_diagnosis)::TEXT AS latest FROM tb_cases c ${whereClause}`, params);
     const latestCaseDate = latestRes.rows[0]?.latest || null;
 
+    // Comparison: the period immediately before this one, and the same period a year earlier.
+    const [sy, sm] = startDate.split('-').map(Number);
+    const [ey, em] = endDate.split('-').map(Number);
+    const spanMonths = (ey - sy) * 12 + (em - sm) + 1;
+    const periodName = (y, m) => {
+      if (spanMonths === 12) return String(y);
+      if (spanMonths === 3) return `Q${Math.floor((m - 1) / 3) + 1} ${y}`;
+      return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    };
+    const prevStart = new Date(Date.UTC(sy, sm - 1 - spanMonths, 1));
+    const cmpParams = [startDate, spanMonths];
+    if (barangay) cmpParams.push(barangay);
+    const cmpRes = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE c.date_of_diagnosis >= $1::date - make_interval(months => $2::int)
+                           AND c.date_of_diagnosis < $1::date)::INTEGER AS previous_cases,
+        COUNT(*) FILTER (WHERE c.date_of_diagnosis >= $1::date - INTERVAL '12 months'
+                           AND c.date_of_diagnosis < ($1::date + make_interval(months => $2::int)) - INTERVAL '12 months')::INTEGER AS yoy_cases
+      FROM tb_cases c
+      WHERE c.date_of_diagnosis >= $1::date - INTERVAL '12 months'
+        AND c.date_of_diagnosis < $1::date
+        AND ${countedCases('c')}
+        ${barangay ? 'AND TRIM(c.barangay_name) = $3' : ''}
+    `, cmpParams);
+    const comparison = {
+      previousLabel: periodName(prevStart.getUTCFullYear(), prevStart.getUTCMonth() + 1),
+      previousCases: cmpRes.rows[0]?.previous_cases ?? 0,
+      yearAgoLabel: periodName(sy - 1, sm),
+      yearAgoCases: cmpRes.rows[0]?.yoy_cases ?? 0,
+      sameAsPrevious: spanMonths === 12,
+    };
+
+    // Alerts raised for the period (the alert's period is the first day of its month).
+    const alertParams = [startDate, endDate];
+    if (barangay) alertParams.push(barangay);
+    const alertsRes = await pool.query(`
+      SELECT COALESCE(title, alert_type) AS title, alert_type, severity, status, barangay_name, message
+      FROM alerts
+      WHERE COALESCE(type, 'alert') = 'alert'
+        AND period >= $1::date AND period <= $2::date
+        ${barangay ? `AND (TRIM(barangay_name) = $3 OR metadata->'affected_barangays' ? $3)` : ''}
+      ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'danger' THEN 0 WHEN 'high' THEN 1 WHEN 'warning' THEN 2 WHEN 'medium' THEN 2 ELSE 3 END,
+               created_at DESC
+      LIMIT 25
+    `, alertParams);
+
+    // Interventions created or due within the period.
+    const intParams = [startDate, endDate];
+    if (barangay) intParams.push(barangay);
+    const interventionsRes = await pool.query(`
+      SELECT title, intervention_type, barangay_name, priority, status, assigned_to, target_date::TEXT AS target_date
+      FROM interventions
+      WHERE (created_at::date BETWEEN $1::date AND $2::date OR target_date BETWEEN $1::date AND $2::date)
+        ${barangay ? 'AND TRIM(barangay_name) = $3' : ''}
+      ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at DESC
+      LIMIT 25
+    `, intParams);
+
     res.json({
       report: {
         type,
@@ -2891,6 +2949,9 @@ router.get('/reports/summary', async (req, res) => {
       barangayDistribution,
       riskSummary,
       forecast,
+      comparison,
+      alerts: alertsRes.rows,
+      interventions: interventionsRes.rows,
       barangayProfile,
       riskAssessmentPeriod,
       incidenceLabel,

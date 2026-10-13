@@ -786,25 +786,25 @@ export default function GisMap() {
         // predicted class \u2014 only shown when it actually came from RF.
         const confidenceRow = p.model_type === 'random_forest' && p.classification_confidence != null
           ? `<div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
-              <span style="font-size: 10px; color: #94A3B8;">Model confidence</span>
-              <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${Math.round(p.classification_confidence * 100)}%</span>
+              <span style="font-size: 12px; color: #94A3B8;">Model confidence</span>
+              <span style="font-size: 12px; font-weight: 600; color: #0F2D52;">${Math.round(p.classification_confidence * 100)}%</span>
             </div>`
           : '';
         const tooltipHtml = `
-          <div style="font-family: Inter, sans-serif; min-width: 220px; padding: 2px;">
+          <div style="font-family: 'Public Sans', 'Segoe UI', sans-serif; min-width: 220px; padding: 2px;">
             <div style="font-size: 13px; font-weight: 700; color: #0F2D52; margin-bottom: 4px;">${escapeHtml(p.name) || 'Unknown'}</div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
-              <span style="font-size: 10px; color: #94A3B8;">Risk</span>
-              <span style="font-size: 10px; font-weight: 700; color: ${riskColor};">${escapeHtml(p.risk_class) || 'No Data'}</span>
+              <span style="font-size: 12px; color: #94A3B8;">Risk</span>
+              <span style="font-size: 12px; font-weight: 700; color: ${riskColor};">${escapeHtml(p.risk_class) || 'No Data'}</span>
             </div>
             ${confidenceRow}
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
-              <span style="font-size: 10px; color: #94A3B8;">Trend</span>
-              <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${trendArrow} ${escapeHtml(p.trend_direction) || 'Stable'}</span>
+              <span style="font-size: 12px; color: #94A3B8;">Trend</span>
+              <span style="font-size: 12px; font-weight: 600; color: #0F2D52;">${trendArrow} ${escapeHtml(p.trend_direction) || 'Stable'}</span>
             </div>
             <div style="display: flex; justify-content: space-between;">
-              <span style="font-size: 10px; color: #94A3B8;">Cases</span>
-              <span style="font-size: 10px; font-weight: 600; color: #0F2D52;">${formatNum(p.total_cases)}</span>
+              <span style="font-size: 12px; color: #94A3B8;">Cases</span>
+              <span style="font-size: 12px; font-weight: 600; color: #0F2D52;">${formatNum(p.total_cases)}</span>
             </div>
           </div>
         `;
@@ -1957,10 +1957,10 @@ export default function GisMap() {
                         <ResponsiveContainer width="100%" height="100%">
                           <LineChart data={trendChartData} margin={{ top: 10, right: 12, left: -12, bottom: 0 }}>
                             <CartesianGrid vertical={false} stroke="#E7EDF4" />
-                            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748B' }} tickLine={false} axisLine={false} minTickGap={14} />
-                            <YAxis tick={{ fontSize: 11, fill: '#64748B' }} tickLine={false} axisLine={false} allowDecimals={false} />
+                            <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#64748B' }} tickLine={false} axisLine={false} minTickGap={14} />
+                            <YAxis tick={{ fontSize: 12, fill: '#64748B' }} tickLine={false} axisLine={false} allowDecimals={false} />
                             <Tooltip
-                              contentStyle={{ background: '#ffffff', border: '1px solid #DCE4ED', borderRadius: 6, color: '#0F2D52', fontSize: 12 }}
+                              contentStyle={{ background: '#ffffff', border: '1px solid #DCE4ED', borderRadius: 6, color: '#0F2D52', fontSize: 13 }}
                               labelStyle={{ color: '#64748B' }}
                               itemStyle={{ color: '#0F2D52' }}
                             />
@@ -1985,10 +1985,10 @@ export default function GisMap() {
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart data={demoChartData} layout="vertical" margin={{ top: 0, right: 10, left: 0, bottom: 0 }} barGap={2}>
                             <CartesianGrid horizontal={false} stroke="#E7EDF4" />
-                            <XAxis type="number" tick={{ fontSize: 10, fill: '#64748B' }} tickLine={false} axisLine={false} allowDecimals={false} />
-                            <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#475569' }} tickLine={false} axisLine={false} width={54} />
+                            <XAxis type="number" tick={{ fontSize: 12, fill: '#64748B' }} tickLine={false} axisLine={false} allowDecimals={false} />
+                            <YAxis type="category" dataKey="name" tick={{ fontSize: 12, fill: '#475569' }} tickLine={false} axisLine={false} width={54} />
                             <Tooltip
-                              contentStyle={{ background: '#ffffff', border: '1px solid #DCE4ED', borderRadius: 6, color: '#0F2D52', fontSize: 12 }}
+                              contentStyle={{ background: '#ffffff', border: '1px solid #DCE4ED', borderRadius: 6, color: '#0F2D52', fontSize: 13 }}
                               labelStyle={{ color: '#64748B' }}
                             />
                             <Bar dataKey="Male" fill="#0F2D52" radius={[0, 3, 3, 0]} barSize={9} />

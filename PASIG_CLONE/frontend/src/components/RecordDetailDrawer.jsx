@@ -200,11 +200,10 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
 
             <div className="flex gap-1 border-b" style={{ borderColor: '#E2E8F0' }}>
               {RECORD_TABS.map(([key, label]) => (
-                <button key={key} onClick={() => { setTab(key); setMsg(null); }} className="px-3 py-2 text-[11px] font-bold -mb-px"
-                  style={tab === key
-                    ? { color: '#0F2D52', borderBottom: '2px solid #0F2D52' }
-                    : { color: '#94A3B8', borderBottom: '2px solid transparent' }}>
+                <button key={key} onClick={() => { setTab(key); setMsg(null); }} className="relative -mb-px px-3 py-2 text-[11px] font-bold"
+                  style={{ color: tab === key ? '#0F2D52' : '#94A3B8' }}>
                   {label}
+                  {tab === key && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#0F2D52]" aria-hidden="true" />}
                 </button>
               ))}
             </div>

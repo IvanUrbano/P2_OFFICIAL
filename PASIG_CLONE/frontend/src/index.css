@@ -30,7 +30,7 @@
   --color-desc: #475569;
   --color-muted: #64748B;
 
-  --font-sans: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: 'Public Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
 /* ==================== Global Base ==================== */
@@ -46,6 +46,71 @@ body {
   color: var(--color-text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Authenticated application typography.
+   The login route renders outside .app-interface and retains its original scale. */
+@media screen {
+  .app-interface {
+    font-size: 17px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .app-interface :not(i).text-\[8px\],
+  .app-interface :not(i).text-\[9px\],
+  .app-interface :not(i).text-\[9\.5px\],
+  .app-interface :not(i).text-\[10px\] {
+    font-size: 12px;
+    line-height: 1rem;
+  }
+
+  .app-interface :not(i).text-\[11px\] {
+    font-size: 13px;
+    line-height: 1.125rem;
+  }
+
+  .app-interface :not(i).text-\[11\.5px\],
+  .app-interface :not(i).text-\[12px\],
+  .app-interface :not(i).text-xs {
+    font-size: 14px;
+    line-height: 1.25rem;
+  }
+
+  .app-interface :not(i).text-\[13px\] {
+    font-size: 14px;
+    line-height: 1.25rem;
+  }
+
+  .app-interface :not(i).text-\[14px\],
+  .app-interface :not(i).text-sm {
+    font-size: 15px;
+  }
+
+  .app-interface :not(i).text-\[15px\] {
+    font-size: 16px;
+  }
+
+  .app-interface :not(i).text-base {
+    font-size: 17px;
+  }
+
+  .app-interface :not(i).text-\[17px\],
+  .app-interface :not(i).text-lg {
+    font-size: 19px;
+  }
+
+  .app-interface :not(i).text-xl {
+    font-size: 21px;
+  }
+
+  .app-interface :not(i).text-2xl {
+    font-size: 26px;
+  }
+
+  .app-interface :not(i).text-3xl {
+    font-size: 32px;
+  }
+
 }
 
 button {

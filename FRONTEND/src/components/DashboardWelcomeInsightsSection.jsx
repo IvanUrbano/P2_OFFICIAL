@@ -141,8 +141,8 @@ export default function DashboardWelcomeInsightsSection({
   return (
     <div className="grid grid-cols-1 gap-5 md:grid-cols-12">
       {/* Welcome and data context */}
-      <section className="flex min-w-0 w-full flex-col rounded-lg border border-[#0F2D52] bg-[#0F2D52] px-5 py-5 sm:px-6 md:col-span-7 lg:col-span-8">
-        <div className="flex flex-wrap items-start justify-between gap-3">
+      <section className="flex min-w-0 w-full flex-col overflow-hidden rounded-[10px] border border-[#0F2D52] bg-[#0F2D52] shadow-[0_2px_8px_rgba(15,23,42,0.08)] md:col-span-7 lg:col-span-8">
+        <div className="flex flex-wrap items-start justify-between gap-3 bg-[#0F2D52] px-5 py-5 sm:px-6">
           <div className="min-w-0">
             <h2 className="break-words text-xl font-semibold tracking-tight text-white sm:text-2xl">
               Welcome back, {user?.username || 'User'}
@@ -156,16 +156,16 @@ export default function DashboardWelcomeInsightsSection({
             type="button"
             onClick={onRefresh}
             disabled={refreshing}
-            className="shrink-0 border border-white/40 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+            className="shrink-0 border border-white bg-white px-3 py-1.5 text-xs font-semibold text-[#0F2D52] hover:bg-[#F1F5F9] disabled:cursor-not-allowed disabled:opacity-60"
             title="Refresh dashboard data"
           >
             {refreshing ? 'Refreshing…' : 'Refresh data'}
           </button>
         </div>
 
-        <div className="mt-5 border-t border-white/20 pt-4">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-[#CBD5E1]">Latest overview</h3>
-          <p className="mt-2 text-[13px] leading-relaxed text-white">
+        <div className="border-b border-white/15 px-5 py-5 sm:px-6">
+          <h3 className="text-xs font-bold uppercase tracking-wide text-[#BFD3E6]">Latest overview</h3>
+          <p className="mt-2 text-sm leading-relaxed text-white">
             {insightData?.summary
               ? renderFormattedText(insightData.summary)
               : insightLoading
@@ -176,54 +176,57 @@ export default function DashboardWelcomeInsightsSection({
           </p>
         </div>
 
-        <dl className="mt-5 grid grid-cols-1 gap-x-5 gap-y-4 border-t border-white/20 pt-4 sm:grid-cols-2 xl:grid-cols-4">
+        <dl className="grid grid-cols-1 gap-x-5 gap-y-4 bg-[#12365F] px-5 py-4 sm:grid-cols-2 sm:px-6 xl:grid-cols-4">
           <div className="min-w-0">
-            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#CBD5E1]">Data source</dt>
-            <dd className="mt-1 text-xs font-medium text-white">{dataSourceLabel}</dd>
+            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#AFC6DC]">Data source</dt>
+            <dd className="mt-1 text-xs font-semibold text-white">{dataSourceLabel}</dd>
           </div>
-          <div className="min-w-0">
-            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#CBD5E1]">Monitoring period</dt>
-            <dd className="mt-1 text-xs font-medium text-white">{monitoringPeriodLabel}</dd>
+          <div className="min-w-0 xl:border-l xl:border-white/15 xl:pl-5">
+            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#AFC6DC]">Monitoring period</dt>
+            <dd className="mt-1 text-xs font-semibold text-white">{monitoringPeriodLabel}</dd>
           </div>
-          <div className="min-w-0">
-            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#CBD5E1]">Last data sync</dt>
-            <dd className="mt-1 text-xs font-medium leading-snug text-white">{freshnessUnavailable ? 'Unavailable' : formattedLastSynced}</dd>
+          <div className="min-w-0 xl:border-l xl:border-white/15 xl:pl-5">
+            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#AFC6DC]">Last data sync</dt>
+            <dd className="mt-1 text-xs font-semibold leading-snug text-white">{freshnessUnavailable ? 'Unavailable' : formattedLastSynced}</dd>
             {!freshnessUnavailable && lastSyncedRelative && (
-              <dd className="mt-0.5 text-[10px] leading-snug text-[#CBD5E1]">
+              <dd className="mt-0.5 text-[10px] leading-snug text-[#BFD3E6]">
                 {lastSyncedRelative}
                 {syncSource === 'import' ? ' · file import' : ''}
                 {syncSource === 'webhook' ? ' · webhook sync' : ''}
               </dd>
             )}
           </div>
-          <div className="min-w-0">
-            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#CBD5E1]">Last model run</dt>
-            <dd className="mt-1 text-xs font-medium leading-snug text-white">{formattedLastModelRun}</dd>
-            {lastModelRunRelative && <dd className="mt-0.5 text-[10px] text-[#CBD5E1]">{lastModelRunRelative}</dd>}
+          <div className="min-w-0 xl:border-l xl:border-white/15 xl:pl-5">
+            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#AFC6DC]">Last model run</dt>
+            <dd className="mt-1 text-xs font-semibold leading-snug text-white">{formattedLastModelRun}</dd>
+            {lastModelRunRelative && <dd className="mt-0.5 text-[10px] text-[#BFD3E6]">{lastModelRunRelative}</dd>}
           </div>
         </dl>
       </section>
 
       {/* The welcome panel determines the desktop row height; insight text scrolls inside it. */}
       <div className="relative min-w-0 md:col-span-5 lg:col-span-4">
-        <section className="flex h-[360px] min-w-0 flex-col overflow-hidden rounded-lg border border-[#E2E8F0] bg-white px-5 py-5 sm:px-6 md:absolute md:inset-0 md:h-auto" aria-label="Overall TB insights">
-          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[#E2E8F0] pb-3">
-            <div>
-              <h3 className="text-sm font-semibold text-[#0F2D52]">Overall TB insights</h3>
-              <p className="mt-0.5 text-[11px] text-[#64748B]">Current data summary</p>
+        <section className="flex h-[360px] min-w-0 flex-col overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)] md:absolute md:inset-0 md:h-auto" aria-label="Overall TB insights">
+          <div className="flex shrink-0 items-start justify-between gap-3 bg-[#0F2D52] px-5 py-3.5">
+            <div className="flex min-w-0 items-start gap-2.5">
+              <i className="ri-lightbulb-line mt-0.5 shrink-0 text-lg text-[#93C5FD]" aria-hidden="true" />
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-white">Overall TB insights</h3>
+                <p className="mt-0.5 text-xs text-[#CBD5E1]">Current data summary</p>
+              </div>
             </div>
-            <span className="shrink-0 text-[11px] text-[#64748B]" aria-label={`Insight ${activeSlide + 1} of ${slides.length}`}>
+            <span className="shrink-0 rounded-full bg-white/10 px-2.5 py-1 text-xs font-semibold text-[#D9E9F8]" aria-label={`Insight ${activeSlide + 1} of ${slides.length}`}>
               {activeSlide + 1} of {slides.length}
             </span>
           </div>
 
         {/* Insight content */}
         {insightLoading ? (
-          <div className="min-h-0 flex-1 py-5" role="status">
+          <div className="min-h-0 flex-1 px-5 py-5" role="status">
             <p className="text-xs text-[#64748B]">Loading insights…</p>
           </div>
         ) : insightError ? (
-          <div className="min-h-0 flex-1 py-5" role="alert">
+          <div className="min-h-0 flex-1 px-5 py-5" role="alert">
             <p className="text-xs font-semibold text-[#991B1B]">Insights are unavailable.</p>
             <p className="mt-1 text-xs text-[#64748B]">The dashboard metrics are still available.</p>
             <button
@@ -235,13 +238,13 @@ export default function DashboardWelcomeInsightsSection({
             </button>
           </div>
         ) : (
-          <div key={activeSlide} className="min-h-0 flex-1 overflow-y-auto py-4" tabIndex={0} aria-label={`${currentSlide.title} insight`}>
-            <h4 className="text-[13px] font-semibold text-[#0F2D52]">{currentSlide.title}</h4>
+          <div key={activeSlide} className="min-h-0 flex-1 overflow-y-auto px-5 py-5" tabIndex={0} aria-label={`${currentSlide.title} insight`}>
+            <h4 className="text-sm font-semibold text-[#0F2D52]">{currentSlide.title}</h4>
             <p className="mt-2 text-xs leading-relaxed text-[#334155]">{renderFormattedText(currentSlide.text)}</p>
           </div>
         )}
 
-          <nav className="flex shrink-0 items-center justify-between border-t border-[#E2E8F0] pt-3" aria-label="Insight navigation">
+          <nav className="flex shrink-0 items-center justify-between border-t border-[#E2E8F0] bg-[#F8FAFC] px-5 py-3" aria-label="Insight navigation">
             <button type="button" onClick={prevSlide} aria-label="Previous insight" title="Previous insight" className="flex h-8 w-8 items-center justify-center text-[#0F2D52] hover:text-[#2E6FAF] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F2D52]">
               <i className="ri-arrow-left-line text-base" aria-hidden="true" />
             </button>

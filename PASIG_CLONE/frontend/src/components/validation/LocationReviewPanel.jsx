@@ -25,7 +25,13 @@ export default function LocationReviewPanel({ group, batch, onClose, onChanged }
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ barangay_text: group.barangay_text, city_text: group.city_text, page });
+      const params = new URLSearchParams({
+        barangay_text: group.barangay_text,
+        city_text: group.city_text,
+        barangay_key: group.barangay_key ?? group.barangay_text,
+        city_key: group.city_key ?? group.city_text,
+        page,
+      });
       if (batch) params.set('batch', batch);
       const res = await API.get(`/api/data/validation-queue/assignment/location/records?${params}`);
       setData(res.data);
@@ -73,7 +79,9 @@ export default function LocationReviewPanel({ group, batch, onClose, onChanged }
     setBusy('bulk');
     try {
       const res = await API.post('/api/data/validation-queue/assignment/location', {
-        barangay_text: group.barangay_text, city_text: group.city_text, action: 'outside_pasig', batch: batch || undefined,
+        barangay_text: group.barangay_text, city_text: group.city_text,
+        barangay_key: group.barangay_key, city_key: group.city_key,
+        action: 'outside_pasig', batch: batch || undefined,
       });
       setNotice({ type: 'success', text: res.data.message });
       onChanged?.();

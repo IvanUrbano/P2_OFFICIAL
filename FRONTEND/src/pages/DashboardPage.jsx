@@ -232,25 +232,39 @@ function RiskBadge({ risk }) {
   );
 }
 
+const SECTION_ICONS = {
+  'TB case trend': 'ri-line-chart-line',
+  'Barangay risk overview': 'ri-map-pin-line',
+  'Priority barangays': 'ri-alarm-warning-line',
+  'Age distribution': 'ri-group-line',
+  'Sex distribution': 'ri-user-3-line',
+  'Treatment outcomes and case status': 'ri-heart-pulse-line',
+  'Forecast summary': 'ri-bar-chart-grouped-line',
+  'Recent alerts': 'ri-notification-3-line',
+};
+
 function SectionCard({ title, description, action, actionTo, insight, children }) {
   const navigate = useNavigate();
+  const icon = SECTION_ICONS[title] || 'ri-bar-chart-box-line';
   return (
-    <section className="flex flex-col overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
-      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[#E2E8F0] px-5 py-4">
+    <section className="flex flex-col overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+      <div className="flex shrink-0 items-start gap-2.5 bg-[#0F2D52] px-5 py-3.5">
+        <i className={`${icon} mt-0.5 shrink-0 text-lg text-[#93C5FD]`} aria-hidden="true" />
         <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-[#0F2D52]">{title}</h3>
-          {description && <p className="mt-1 text-xs leading-snug text-[#64748B]">{description}</p>}
+          <h3 className="text-sm font-bold text-white">{title}</h3>
+          {description && <p className="mt-0.5 text-xs leading-snug text-[#CBD5E1]">{description}</p>}
         </div>
       </div>
       <div className="flex-1 px-5 py-5">{children}<ChartInsight text={insight} plain /></div>
       {action && (
-        <div className="border-t border-[#E2E8F0] px-5 py-3">
+        <div className="mt-auto border-t border-[#E2E8F0] bg-[#F8FAFC] px-5 py-3">
           <button
             type="button"
             onClick={() => actionTo && navigate(actionTo)}
-            className="cursor-pointer text-[12px] font-semibold text-[#047857] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#047857]"
+            className="group flex w-full cursor-pointer items-center justify-between gap-3 text-left text-xs font-semibold text-[#0F2D52] transition-colors hover:text-[#2E6FAF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2E6FAF] focus-visible:ring-offset-2"
           >
-            {action} &rarr;
+            <span>{action}</span>
+            <i className="ri-arrow-right-line shrink-0 text-sm text-[#64748B] transition-all group-hover:translate-x-1 group-hover:text-[#2E6FAF]" aria-hidden="true" />
           </button>
         </div>
       )}
@@ -262,8 +276,8 @@ import SkeletonBlock from '../../components/SkeletonBlock';
 
 function SkeletonCard() {
   return (
-    <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
-      <div className="border-b border-[#E2E8F0] px-5 py-4"><SkeletonBlock className="h-4 w-32" /></div>
+    <div className="overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+      <div className="bg-[#0F2D52] px-5 py-4"><SkeletonBlock className="h-4 w-32" /></div>
       <div className="px-5 py-5"><SkeletonBlock className="h-48 w-full" /></div>
     </div>
   );
@@ -996,7 +1010,7 @@ export default function DashboardPage() {
         </div>
         {/* Chart skeletons */}
         <SkeletonCard />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><SkeletonCard /><SkeletonCard /></div>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2"><SkeletonCard /><SkeletonCard /></div>
       </div>
     );
   }
@@ -1211,7 +1225,7 @@ export default function DashboardPage() {
           />
 
           {/* ─── 4. TB Cases Trend + 5. Barangay Risk Overview ─── */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             {/* TB Cases Trend */}
             <SectionCard
               title="TB case trend"
@@ -1228,8 +1242,8 @@ export default function DashboardPage() {
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={trendChartData} margin={{ top: 10, right: 15, left: 0, bottom: 0 }}>
                       <CartesianGrid vertical={false} stroke="#E8EDF2" />
-                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748B' }} axisLine={false} tickLine={false} tickMargin={8} minTickGap={18} />
-                      <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#64748B' }} axisLine={false} tickLine={false} width={42} tickMargin={4} />
+                      <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} tickMargin={8} minTickGap={18} />
+                      <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} width={42} tickMargin={4} />
                       <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#E2E8F0', strokeWidth: 1 }} />
                       <Line type="monotone" dataKey="cases" stroke="#2E6FAF" strokeWidth={2} dot={{ r: 2.5, fill: '#2E6FAF', strokeWidth: 0 }} activeDot={{ r: 4, strokeWidth: 2, stroke: '#ffffff' }} name="Cases" connectNulls={false} isAnimationActive={false} />
                     </LineChart>
@@ -1277,7 +1291,7 @@ export default function DashboardPage() {
           </div>
 
           {/* ─── 6. Top Priority Barangays + Treatment Outcomes ─── */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             {/* Top High-Risk Barangays */}
             <SectionCard
               title="Priority barangays"
@@ -1350,7 +1364,7 @@ export default function DashboardPage() {
           </div>
 
           {/* ─── 7. Demographics — Sex + Treatment Outcomes ─── */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             {/* Sex Distribution */}
             <SectionCard
               title="Sex distribution"
@@ -1448,7 +1462,7 @@ export default function DashboardPage() {
           </div>
 
           {/* ─── 8. Forecasting Summary + Recent Alerts ─── */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             {/* Forecasting Summary */}
             <SectionCard
               title="Forecast summary"
@@ -1491,8 +1505,8 @@ export default function DashboardPage() {
                         <ResponsiveContainer width="100%" height="100%">
                           <LineChart data={forecastChartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
                             <CartesianGrid vertical={false} stroke="#E8EDF2" />
-                            <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#64748B' }} axisLine={false} tickLine={false} tickMargin={6} minTickGap={14} />
-                            <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: '#64748B' }} axisLine={false} tickLine={false} width={40} tickMargin={4} />
+                            <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} tickMargin={6} minTickGap={14} />
+                            <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} width={40} tickMargin={4} />
                             <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#E2E8F0', strokeWidth: 1 }} />
                             <Line type="monotone" dataKey="actual" stroke="#2E6FAF" strokeWidth={2} dot={false} activeDot={{ r: 4 }} name="Reported" connectNulls={false} isAnimationActive={false} />
                             <Line type="monotone" dataKey="projected" stroke="#0D9488" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#0D9488', strokeWidth: 0 }} activeDot={{ r: 4 }} name="Forecasted" connectNulls={false} isAnimationActive={false} />

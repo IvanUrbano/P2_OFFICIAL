@@ -72,7 +72,7 @@ export default function AssignmentTab({ batch, refreshKey, onChanged }) {
     }
   };
 
-  const locKey = (l) => `${l.barangay_text}|${l.city_text}`;
+  const locKey = (l) => `${l.barangay_key ?? l.barangay_text}|${l.city_key ?? l.city_text}`;
   // Only groups whose city is clearly not Pasig can be classified in bulk; barangays are
   // always assigned record by record (Review Records).
   const nonPasigCity = (l) => !['pasig city', 'pasig', ''].includes(String(l.city_text || '').trim().toLowerCase());
@@ -84,7 +84,9 @@ export default function AssignmentTab({ batch, refreshKey, onChanged }) {
       variant: 'danger',
     }))) return;
     run(`loc:${locKey(l)}`, () => API.post('/api/data/validation-queue/assignment/location', {
-      barangay_text: l.barangay_text, city_text: l.city_text, action: 'outside_pasig', batch: batch || undefined,
+      barangay_text: l.barangay_text, city_text: l.city_text,
+      barangay_key: l.barangay_key, city_key: l.city_key,
+      action: 'outside_pasig', batch: batch || undefined,
     }));
   };
 

@@ -181,7 +181,7 @@ export default function Layout() {
   };
 
   return (
-    <div className="h-screen relative flex flex-col overflow-hidden">
+    <div className="app-interface h-screen relative flex flex-col overflow-hidden">
       {/* ── Tier 1: Brand Bar ── */}
       <header className="sticky top-0 z-[1100] w-full shrink-0">
         <div className="flex min-w-0 items-center justify-between gap-2 px-3 sm:px-6 lg:px-8" style={{ background: '#0B1D35', minHeight: '52px' }}>
