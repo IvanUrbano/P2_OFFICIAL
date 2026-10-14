@@ -67,7 +67,12 @@ export default function LoginPage() {
     } catch (err) {
       const status = err.response?.status;
       const data = err.response?.data;
-      setError(data?.error || 'Invalid credentials. Please try again.');
+      // No response at all: the server is down or still starting (Render wakes up slowly), not a wrong password.
+      if (!err.response) {
+        setError('Cannot reach the server. It may still be starting up. Wait a moment and try again.');
+        return;
+      }
+      setError(data?.error || (status >= 500 ? 'The server had a problem. Please try again.' : 'Invalid credentials. Please try again.'));
       if (status === 429 && data?.retryAfter) {
         setLockoutSeconds(data.retryAfter);
       } else if (status === 423 && data?.retryAfter) {
