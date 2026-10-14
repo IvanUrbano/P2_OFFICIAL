@@ -57,7 +57,7 @@ export default function RiskClassificationGuide({ thresholds, source, percentile
     <section className="mt-3 pt-3" style={{ borderTop: '1px solid #E2E8F0' }}>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <h3 className="text-[11px] font-bold" style={{ color: '#475569' }}>
-          Risk Classification Guide
+          Incidence ranges for comparison
         </h3>
         <span
           className="text-[10px]"
@@ -70,7 +70,9 @@ export default function RiskClassificationGuide({ thresholds, source, percentile
           ⓘ How is this calculated?
         </span>
       </div>
-      <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>TB incidence per 100,000</p>
+      <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>
+        TB incidence per 100,000. The risk level above comes from the Random Forest, which also weighs trends, neighbouring barangays and long-term history, so it can differ from these ranges.
+      </p>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-3 gap-y-1 mt-1">
         <p className="text-[11px] font-semibold" style={{ color: '#B45309' }}>
           🟡 Low: ≤ {formatWholeNumber(lowMaximumDisplay)}

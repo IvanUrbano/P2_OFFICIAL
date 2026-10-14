@@ -95,8 +95,8 @@ describe('threshold resolution — scale matching', () => {
       callThresholds: async () => ({ low_max: 180, med_max: 320 }),
     });
     assert.deepStrictEqual(stale.percentiles, { low_pct: LOW_PERCENTILE * 100, med_pct: MED_PERCENTILE * 100 });
-    assert.strictEqual(MED_PERCENTILE, 0.60,
-      'the Moderate|High cut must stay at the 60th percentile, matching thresholds.py');
+    assert.strictEqual(LOW_PERCENTILE, 0.40, 'the Low|Moderate cut sits at the 40th percentile, matching thresholds.py');
+    assert.strictEqual(MED_PERCENTILE, 2 / 3, 'the Moderate|High cut sits at the 66.7th percentile, matching thresholds.py');
 
     // A caller-supplied override is a fixed number with no percentile basis,
     // and neither is the last-resort default.

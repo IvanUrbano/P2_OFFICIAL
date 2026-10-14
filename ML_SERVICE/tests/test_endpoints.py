@@ -52,8 +52,8 @@ def test_thresholds_tertile():
     assert body["low_max"] < body["med_max"]
     # Percentile basis is reported so the UI can label the bands as
     # data-derived rather than an official epidemiological threshold.
-    assert body["low_pct"] == 100.0 / 3.0
-    assert body["med_pct"] == 60.0
+    assert body["low_pct"] == 40.0
+    assert body["med_pct"] == 200.0 / 3.0
     print(f"  PASS: test_thresholds_tertile (low={body['low_max']:.1f}, med={body['med_max']:.1f}, pct={body['low_pct']:.1f}/{body['med_pct']:.1f})")
 
 
@@ -329,6 +329,9 @@ def test_evaluate_walk_forward():
     # Reference scores are reported next to the model scores
     assert data["arima"]["baseline_mae"] is not None
     assert data["rf"]["baseline_accuracy"] is not None
+    assert data["rf"]["priority_accuracy"] is not None
+    assert data["rf"]["baseline_priority_accuracy"] is not None
+    assert data["rf"]["within_one_accuracy"] is not None
     # Every evaluated barangay's own result is kept (not just the longest one's steps), so a caller
     # can show results for one barangay, or a year range, from what was saved.
     per = data["arima"]["per_barangay"]

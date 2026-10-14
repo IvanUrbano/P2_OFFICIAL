@@ -157,6 +157,23 @@ function lowHighConfusion(confusionMatrix) {
   return ((confusionMatrix.Low?.High || 0) + (confusionMatrix.High?.Low || 0)) / total;
 }
 
+/**
+ * Share of barangay-months put on the right side of High vs not High, from the RF
+ * confusion matrix. Used for evaluations saved before the ML service reported it.
+ */
+function priorityAccuracy(confusionMatrix) {
+  if (!confusionMatrix) return null;
+  let total = 0;
+  let right = 0;
+  for (const [actual, row] of Object.entries(confusionMatrix)) {
+    for (const [predicted, n] of Object.entries(row)) {
+      total += n;
+      if ((actual === 'High') === (predicted === 'High')) right += n;
+    }
+  }
+  return total === 0 ? null : right / total;
+}
+
 module.exports = {
   poissonMeanAbsDeviation,
   trueRates,
@@ -164,4 +181,5 @@ module.exports = {
   riskBandCeiling,
   lowHighConfusion,
   bandsByRank,
+  priorityAccuracy,
 };

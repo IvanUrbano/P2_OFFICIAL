@@ -282,6 +282,13 @@ class RfEvaluation(BaseModel):
     # Second reference: last 3 months' band carried forward unchanged.
     persistence_accuracy: Optional[float] = None
     persistence_kappa: Optional[float] = None
+    # The same predictions scored High vs not High (priority barangays), and right or
+    # one level off, for the model and the references.
+    priority_accuracy: Optional[float] = None
+    baseline_priority_accuracy: Optional[float] = None
+    persistence_priority_accuracy: Optional[float] = None
+    within_one_accuracy: Optional[float] = None
+    baseline_within_one_accuracy: Optional[float] = None
 
 
 class EvaluateResponse(BaseModel):

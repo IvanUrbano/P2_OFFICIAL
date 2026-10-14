@@ -6,7 +6,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const {
-  poissonMeanAbsDeviation, trueRates, forecastErrorFloor, riskBandCeiling, lowHighConfusion, bandsByRank,
+  poissonMeanAbsDeviation, trueRates, forecastErrorFloor, riskBandCeiling, lowHighConfusion, bandsByRank, priorityAccuracy,
 } = require('../../tbinsight/achievable');
 
 const months = n => Array.from({ length: n }, (_, i) =>
@@ -65,14 +65,21 @@ describe('riskBandCeiling', () => {
 });
 
 describe('bandsByRank and lowHighConfusion', () => {
-  it('bands 30 barangays 10 / 8 / 12 like the RF labels', () => {
+  it('bands 30 barangays 12 / 8 / 10 like the RF labels', () => {
     const b = bandsByRank(Array.from({ length: 30 }, (_, i) => i));
-    assert.deepStrictEqual([0, 1, 2].map(k => b.filter(x => x === k).length), [10, 8, 12]);
+    assert.deepStrictEqual([0, 1, 2].map(k => b.filter(x => x === k).length), [12, 8, 10]);
   });
 
   it('counts only Low<->High mix-ups', () => {
     const cm = { Low: { Low: 8, Medium: 1, High: 1 }, Medium: { Low: 1, Medium: 6, High: 1 }, High: { Low: 1, Medium: 1, High: 10 } };
     assert.strictEqual(lowHighConfusion(cm), 2 / 30);
     assert.strictEqual(lowHighConfusion(null), null);
+  });
+
+  it('priority accuracy counts High vs not High only (a Low/Medium mix-up is right)', () => {
+    const cm = { Low: { Low: 8, Medium: 1, High: 1 }, Medium: { Low: 1, Medium: 6, High: 1 }, High: { Low: 1, Medium: 1, High: 10 } };
+    // Right: 8 + 1 + 1 + 6 (both not High) + 10 (both High) = 26 of 30
+    assert.strictEqual(priorityAccuracy(cm), 26 / 30);
+    assert.strictEqual(priorityAccuracy(null), null);
   });
 });

@@ -166,7 +166,7 @@ def derive_labels(train: list[dict], low_max: float, med_max: float) -> list[str
 
     Each month's barangays are ranked by incidence and cut at the same
     percentiles as the risk thresholds (thresholds.LOW_PERCENTILE /
-    MED_PERCENTILE: bottom third Low, top 40% High, 30 barangays -> 10 / 8 / 12),
+    MED_PERCENTILE: bottom 40% Low, top third High, 30 barangays -> 12 / 8 / 10),
     so the Random Forest and the rule-based fallback agree on what "High" means.
     Every month contributes the same mix of bands, and it is the relative
     question the risk map actually asks: which barangays are the worst affected
@@ -182,7 +182,7 @@ def derive_labels(train: list[dict], low_max: float, med_max: float) -> list[str
     Rows without a 'month' fall back to the absolute cut points, which keeps older
     callers and the /classify contract working.
 
-    Note this makes the band explicitly relative: about 40% of barangays are
+    Note this makes the band explicitly relative: about a third of barangays are
     always High, and a barangay moves band only by moving relative to the others.
     """
     rows_with_month = [r for r in train if r.get("month")]
@@ -314,6 +314,24 @@ def classify_risk_simple(
         })
 
     return results
+
+
+def priority_accuracy(actual: list[str], predicted: list[str]) -> Optional[float]:
+    """
+    Share of barangay-months put on the right side of High vs not High. The same
+    three-level predictions, scored on the question the levels are used for: which
+    barangays get priority resources. A Low/Medium mix-up does not count as a miss.
+    """
+    if not actual:
+        return None
+    return sum((a == "High") == (p == "High") for a, p in zip(actual, predicted)) / len(actual)
+
+
+def within_one_accuracy(actual: list[str], predicted: list[str]) -> Optional[float]:
+    """Share of barangay-months that are right or one level off (only Low<->High is a miss)."""
+    if not actual:
+        return None
+    return sum({a, p} != {"Low", "High"} for a, p in zip(actual, predicted)) / len(actual)
 
 
 def _month_index(month) -> Optional[int]:
@@ -534,6 +552,11 @@ def walk_forward_rf(
         "baseline_kappa": kappa(all_baseline),
         "persistence_accuracy": round(float(accuracy_score(all_actuals, all_persistence)), 4),
         "persistence_kappa": kappa(all_persistence),
+        "priority_accuracy": round(priority_accuracy(all_actuals, list(all_predicted)), 4),
+        "baseline_priority_accuracy": round(priority_accuracy(all_actuals, all_baseline), 4),
+        "persistence_priority_accuracy": round(priority_accuracy(all_actuals, all_persistence), 4),
+        "within_one_accuracy": round(within_one_accuracy(all_actuals, list(all_predicted)), 4),
+        "baseline_within_one_accuracy": round(within_one_accuracy(all_actuals, all_baseline), 4),
     }
 
     logger.info(

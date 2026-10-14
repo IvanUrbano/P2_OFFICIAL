@@ -53,17 +53,13 @@ const palettes = {
 const ThemeContext = createContext(null);
 
 export function ThemeProvider({ children }) {
-  const [mode, setMode] = useState(() => {
-    try {
-      return localStorage.getItem('tb-theme') || 'light';
-    } catch {
-      return 'light';
-    }
-  });
+  // The app has no theme switch, so it always opens light. A 'dark' value saved by an
+  // older version (key 'tb-theme') would otherwise lock a browser in dark mode.
+  const [mode, setMode] = useState('light');
 
   useEffect(() => {
     try {
-      localStorage.setItem('tb-theme', mode);
+      localStorage.removeItem('tb-theme');
     } catch { /* storage unavailable */ }
     // Drive CSS variable overrides in index.css ([data-theme='dark'])
     document.documentElement.setAttribute('data-theme', mode);

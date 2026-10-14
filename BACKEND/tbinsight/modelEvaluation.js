@@ -3,7 +3,7 @@ const { evaluate, thresholds: callThresholds } = require('./mlClient');
 const { getPopulationMap } = require('./populationService');
 const { monthKey } = require('./scoring');
 const { pasigResidentOnly } = require('./locationScope');
-const { forecastErrorFloor, riskBandCeiling, lowHighConfusion } = require('./achievable');
+const { forecastErrorFloor, riskBandCeiling, lowHighConfusion, priorityAccuracy } = require('./achievable');
 
 const MIN_TRAIN_MONTHS = 24;
 const MODEL_VERSION = 'arima-v1.2-rf-v1.3';
@@ -168,6 +168,12 @@ async function executeEvaluation(minTrain = MIN_TRAIN_MONTHS) {
       confusion_matrix: result.rf?.confusion_matrix || null,
       ceiling_accuracy: rfCeiling,
       low_high_confusion: lowHighConfusion(result.rf?.confusion_matrix),
+      // High vs not High: the same predictions scored on which barangays get priority.
+      priority_accuracy: result.rf?.priority_accuracy ?? priorityAccuracy(result.rf?.confusion_matrix),
+      baseline_priority_accuracy: result.rf?.baseline_priority_accuracy ?? null,
+      persistence_priority_accuracy: result.rf?.persistence_priority_accuracy ?? null,
+      within_one_accuracy: result.rf?.within_one_accuracy ?? null,
+      baseline_within_one_accuracy: result.rf?.baseline_within_one_accuracy ?? null,
     },
   };
 

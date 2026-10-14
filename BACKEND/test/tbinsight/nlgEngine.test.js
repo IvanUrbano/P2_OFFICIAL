@@ -500,6 +500,19 @@ describe('generateGisInsight', () => {
     assert.ok(text.includes('**San Jose** is classified **High**'));
   });
 
+  it('risk overview says what the levels mean: relative, for the next 6 months', () => {
+    const text = sectionId(generateGisInsight(baseMetrics), 'riskOverview').text;
+    assert.match(text, /compare barangays with each other/);
+    assert.match(text, /next 6 months/);
+    assert.match(text, /top third/);
+  });
+
+  it('risk overview names the months covered when the period is known', () => {
+    const metrics = { ...baseMetrics, coverage: { ...baseMetrics.coverage, period: '2026-01-01' } };
+    const text = sectionId(generateGisInsight(metrics), 'riskOverview').text;
+    assert.match(text, /\*\*Jan – Jun 2026\*\*/);
+  });
+
   it('top hotspots includes incidence per 100k when incidence is available', () => {
     const result = generateGisInsight(baseMetrics);
     const text = sectionId(result, 'topHotspots').text;

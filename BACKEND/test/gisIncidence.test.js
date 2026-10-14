@@ -407,22 +407,16 @@ describe('GisMap.jsx risk-ranking UI contract (source assertions)', () => {
     assert.ok(!ranking.includes('sec.subtitle'), 'no subtitle render in the table');
   });
 
-  it('M: ranking states a classification grouping; All Years context; per-100k hidden', () => {
+  it('M: ranking states a classification grouping; one year at a time, incidence always shown', () => {
     assert.ok(ranking.includes('Barangay risk classifications'), 'header states classification, not a generated ranking');
     assert.ok(!ranking.includes('Risk-Ranked Barangays'), 'old header removed');
     assert.ok(
-      ranking.includes('Grouped by the latest saved risk assessment and ordered by total cases within each group'),
-      'All Years helper documents grouping + total-cases ordering'
+      ranking.includes('Grouped by saved risk assessment and ordered by ${filterYear ?'),
+      'helper documents grouping + incidence ordering for the shown year'
     );
-    assert.ok(
-      ranking.includes('Grouped by saved risk assessment and ordered by ${filterYear} incidence within each group'),
-      'specific-year helper documents grouping + incidence ordering'
-    );
-    assert.ok(ranking.includes('All Years combines available TB records from'), 'context line uses dynamic year range');
-    assert.ok(ranking.includes('Incidence per 100,000 is available only when a specific year is selected'), 'context line explains per-100k availability');
-    assert.ok(ranking.includes('caseYearRange'), 'year range is dynamic, not hardcoded');
+    // All Years was removed from GIS Mapping: it showed no incidence and mixed years of cases with the latest risk levels.
+    assert.ok(!src.includes('All Years'), 'no All Years option or context line');
     assert.ok(ranking.includes('classifiedBarangays'), 'counter uses classified/total');
-    assert.ok(ranking.includes('{filterYear ? ('), 'per-100k shown only for a specific year');
     assert.ok(
       ranking.includes("barangay.incidence_per_100k != null ? formatNum(barangay.incidence_per_100k) : 'N/A'"),
       'null incidence renders as N/A, never a fabricated number'

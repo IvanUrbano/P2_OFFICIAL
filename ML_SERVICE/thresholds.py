@@ -10,11 +10,12 @@ Classification rule:
   Medium otherwise
 
 Percentile basis (method "tertile"):
-  The Low|Moderate cut sits at the 33.3 percentile (bottom third = Low) and
-  the Moderate|High cut at the 60th percentile. The Moderate|High cut was
-  lowered from the 66.7 percentile so more barangays surface as High Risk
-  (client request) without collapsing the Moderate band — a 40th percentile
-  cut leaves only 2 of 30 barangays Moderate. These are data-derived model
+  The Low|Moderate cut sits at the 40th percentile and the Moderate|High cut
+  at the 66.7th: 30 barangays -> 12 Low / 8 Moderate / 10 High. (It was 33.3 /
+  60, i.e. 10 / 8 / 12, after a client request for more High barangays.) The
+  Random Forest's 6-month risk levels score higher with 12 / 8 / 10 (walk-forward,
+  Sep 2024-Apr 2026: exact level 58.4% -> 63.2%, High vs not High 75.8% ->
+  77.6%), at the cost of fewer barangays shown High. These are data-derived model
   classification boundaries recomputed on every pipeline run, NOT official
   DOH epidemiological thresholds, and must never be presented as such.
 """
@@ -26,10 +27,10 @@ import jenkspy
 
 logger = logging.getLogger(__name__)
 
-# Percentile cut points for the "tertile" method. LOW_PERCENTILE is
-# unchanged; MED_PERCENTILE is the lowered Moderate|High cut.
-LOW_PERCENTILE = 100.0 / 3.0
-MED_PERCENTILE = 60.0
+# Percentile cut points for the "tertile" method (see module docstring).
+# Must match BACKEND/tbinsight/scoring.js.
+LOW_PERCENTILE = 40.0
+MED_PERCENTILE = 200.0 / 3.0
 
 
 def classify_incidence(x: float, low_max: float, med_max: float) -> str:
@@ -53,7 +54,7 @@ def classify_incidence(x: float, low_max: float, med_max: float) -> str:
 
 def tertile_thresholds(incidences: list[float]) -> dict:
     """
-    Compute percentile cut points (33.3 / 60.0).
+    Compute percentile cut points (40 / 66.7).
 
     The method name "tertile" is the endpoint's method id; the split itself
     is LOW_PERCENTILE and MED_PERCENTILE (see module docstring).

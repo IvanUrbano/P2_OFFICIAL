@@ -14,6 +14,8 @@ from rf_classifier import (
     train_and_predict,
     classify_risk_simple,
     walk_forward_rf,
+    priority_accuracy,
+    within_one_accuracy,
 )
 
 
@@ -224,6 +226,39 @@ def test_walk_forward_rf_keeps_labels_that_reach_the_test_month_out_of_training(
     assert honest["steps"][0]["train_size"] == min_train - 2 * n_b
 
 
+def test_priority_accuracy_counts_only_high_versus_not_high():
+    """Medium called Low is still right on priority; High called Medium is not."""
+    actual = ["High", "Medium", "Low", "High"]
+    predicted = ["High", "Low", "Medium", "Medium"]
+    assert priority_accuracy(actual, predicted) == 0.75
+
+
+def test_within_one_accuracy_misses_only_low_high_swaps():
+    actual = ["High", "Low", "Medium", "Low"]
+    predicted = ["Low", "Medium", "High", "Low"]
+    assert within_one_accuracy(actual, predicted) == 0.75
+
+
+def test_walk_forward_rf_reports_priority_scores_for_model_and_rule():
+    train_rows = []
+    for m in range(14):
+        for b in range(12):
+            base = 50 + b * 30 + (m % 3) * 7
+            train_rows.append({
+                "barangay_name": f"B{b:02d}",
+                "month": f"{2023 + (m // 12)}-{m % 12 + 1:02d}-01",
+                "features": {"rolling_12m_incidence": base, "lag_1m": base},
+                "incidence": base,
+            })
+    result = walk_forward_rf(train_rows, min_train=6 * 12, n_barangays=12)
+    for key in ("priority_accuracy", "baseline_priority_accuracy", "persistence_priority_accuracy",
+                "within_one_accuracy", "baseline_within_one_accuracy"):
+        assert 0 <= result[key] <= 1, key
+    # Collapsing Low/Medium can only keep or add correct answers.
+    assert result["priority_accuracy"] >= result["accuracy"]
+    assert result["within_one_accuracy"] >= result["accuracy"]
+
+
 if __name__ == "__main__":
     tests = [
         test_features_are_the_fixed_eight,
@@ -264,12 +299,12 @@ if __name__ == "__main__":
 
 
 def test_labels_use_the_risk_threshold_percentiles():
-    """RF labels cut at the same percentiles as the thresholds: 30 barangays -> 10 / 8 / 12."""
+    """RF labels cut at the same percentiles as the thresholds: 30 barangays -> 12 / 8 / 10."""
     from rf_classifier import derive_labels, band_for_rank
     from thresholds import LOW_PERCENTILE, MED_PERCENTILE
 
     labels = derive_labels([{"month": "2026-01-01", "incidence": float(i)} for i in range(30)], 0, 0)
-    assert {b: labels.count(b) for b in ("Low", "Medium", "High")} == {"Low": 10, "Medium": 8, "High": 12}
-    assert labels[:10] == ["Low"] * 10 and labels[-12:] == ["High"] * 12
+    assert {b: labels.count(b) for b in ("Low", "Medium", "High")} == {"Low": 12, "Medium": 8, "High": 10}
+    assert labels[:12] == ["Low"] * 12 and labels[-10:] == ["High"] * 10
     assert band_for_rank(LOW_PERCENTILE / 100 - 1e-9) == "Low"
     assert band_for_rank(MED_PERCENTILE / 100) == "High"
