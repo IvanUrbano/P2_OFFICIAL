@@ -20,9 +20,9 @@ const TABS = [
   { key: '', title: 'All on treatment', desc: 'Every patient on treatment', countKey: 'all' },
   { key: 'critical', title: 'Red', desc: '3 or more missed pickups', countKey: 'critical', dot: '#EF4444', tone: '#991B1B', toneBg: 'rgba(239,68,68,0.12)' },
   { key: 'warning', title: 'Yellow', desc: '1 or 2 missed pickups', countKey: 'warning', dot: '#F59E0B', tone: '#92400E', toneBg: 'rgba(245,158,11,0.16)' },
-  { key: 'due', title: 'Due now', desc: 'Expected at the center today', countKey: 'due', icon: 'ri-calendar-event-line', tone: '#1D4ED8', toneBg: 'rgba(59,130,246,0.12)' },
+  { key: 'due', title: 'Due now', desc: 'Expected at the center today', countKey: 'due', tone: '#1D4ED8', toneBg: 'rgba(59,130,246,0.12)' },
   { key: 'ok', title: 'On track', desc: 'No missed pickups', countKey: 'ok', dot: '#10B981', tone: '#047857', toneBg: 'rgba(16,185,129,0.12)' },
-  { key: 'outcome', title: 'Outcome due', desc: 'On treatment over 6 months', countKey: 'outcome', icon: 'ri-file-warning-line', tone: '#9A3412', toneBg: 'rgba(234,88,12,0.12)' },
+  { key: 'outcome', title: 'Outcome due', desc: 'On treatment over 6 months', countKey: 'outcome', tone: '#9A3412', toneBg: 'rgba(234,88,12,0.12)' },
   { key: 'none', title: 'No schedule', desc: 'Needs a schedule assigned', countKey: 'none', dot: '#94A3B8' },
 ];
 
@@ -790,7 +790,6 @@ export default function MedicationSchedulePage() {
                 style={{ background: active ? '#F8FAFC' : 'transparent' }}>
                 <p className="flex items-center text-[13px] font-bold" style={{ color: active ? '#0F2D52' : '#334155' }}>
                   {tab.dot && <span className="mr-1.5 h-2.5 w-2.5 rounded-full" style={{ background: tab.dot }} aria-hidden="true" />}
-                  {tab.icon && <i className={`${tab.icon} mr-1.5 text-sm`} style={{ color: tab.tone }} aria-hidden="true" />}
                   {tab.title}
                   {n > 0 && (
                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[22px] h-5 rounded-full text-[10px] font-bold px-1.5" style={{ background: tab.toneBg || '#E2E8F0', color: tab.tone || '#334155' }}>

@@ -27,12 +27,15 @@ const C = {
 };
 
 /* Shared dark-blue header for dashboard detail cards. */
-function CardHeader({ title, tag }) {
+function CardHeader({ title, icon, tag }) {
   return (
-    <div className="shrink-0 flex items-center justify-between gap-3 px-5 py-3" style={{ background: C.brand }}>
-      <h2 className="text-[13px] font-semibold" style={{ color: '#ffffff' }}>{title}</h2>
+    <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-2.5" style={{ background: C.brand }}>
+      <div className="flex min-w-0 items-center gap-2.5">
+        <i className={`${icon} shrink-0 text-lg text-[#93C5FD] drop-shadow-[0_1px_1px_rgba(0,0,0,0.16)]`} aria-hidden="true" />
+        <h2 className="truncate text-[14px] font-bold text-white">{title}</h2>
+      </div>
       {tag && (
-        <span className="max-w-[55%] truncate text-right text-[11px] font-medium" style={{ color: '#CBD5E1' }} title={tag}>{tag}</span>
+        <span className="max-w-[45%] truncate rounded-full bg-white/12 px-2.5 py-1 text-right text-[10px] font-semibold text-[#D9E9F8]" title={tag}>{tag}</span>
       )}
     </div>
   );
@@ -40,9 +43,17 @@ function CardHeader({ title, tag }) {
 
 function CardFooter({ label, onClick }) {
   return (
-    <div className="mt-auto border-t border-[#E2E8F0] px-5 py-3">
-      <button type="button" onClick={onClick} className="text-[12px] font-semibold text-[#0F2D52] hover:underline focus-visible:underline">
-        {label} <span aria-hidden="true">→</span>
+    <div className="mt-auto border-t border-[#E2E8F0] bg-[#F8FAFC] px-5 py-3">
+      <button
+        type="button"
+        onClick={onClick}
+        className="group flex w-full items-center justify-between gap-3 text-left text-[12px] font-semibold text-[#0F2D52] transition-colors duration-200 hover:text-[#2E6FAF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2E6FAF] focus-visible:ring-offset-2"
+      >
+        <span>{label}</span>
+        <i
+          className="ri-arrow-right-line shrink-0 text-sm text-[#64748B] transition-all duration-200 group-hover:translate-x-1 group-hover:text-[#2E6FAF]"
+          aria-hidden="true"
+        />
       </button>
     </div>
   );
@@ -257,7 +268,11 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-6 lg:items-stretch">
         {/* Pending Actions */}
         <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-2">
-          <CardHeader title="Pending Actions" />
+          <CardHeader
+            title="Pending Actions"
+            icon="ri-error-warning-line"
+            tag={`${actionRows.length} ${actionRows.length === 1 ? 'action type' : 'action types'}`}
+          />
           <div className="flex-1 px-5 py-3">
             {actionRows.length === 0 ? (
               <p className="py-5 text-[13px]" style={{ color: C.green }}>Nothing needs review right now.</p>
@@ -266,28 +281,31 @@ export default function DashboardPage() {
                 {actionRows.map((row) => (
                   <button
                     type="button"
-                    key={row.tab}
+                    key={row.label}
                     onClick={() => navigate(`/validation?tab=${row.tab}`)}
-                    className="flex w-full items-center justify-between gap-3 border-b border-[#E8EDF2] py-3.5 text-left last:border-b-0 hover:bg-[#F8FAFC] focus-visible:bg-[#F8FAFC] focus-visible:outline-none"
+                    className="flex w-full items-center justify-between gap-3 border-b border-[#E8EDF2] px-2.5 py-3.5 text-left last:border-b-0 hover:bg-[#F8FAFC] focus-visible:bg-[#F8FAFC] focus-visible:outline-none"
                   >
-                    <span className="min-w-0">
-                      <span className="block text-[13px] font-semibold" style={{ color: C.navy }}>{row.label}</span>
-                      <span className="mt-0.5 block text-[11px] leading-4" style={{ color: C.sub }}>{row.detail}</span>
+                    <span className="flex min-w-0 items-start gap-2.5">
+                      <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: row.color }} aria-hidden="true" />
+                      <span className="min-w-0">
+                        <span className="block text-[13px] font-semibold" style={{ color: C.navy }}>{row.label}</span>
+                        <span className="mt-0.5 block text-[11px] leading-4" style={{ color: C.sub }}>{row.detail}</span>
+                      </span>
                     </span>
-                    <span className="flex shrink-0 items-center gap-1 text-[17px] font-semibold tabular-nums" style={{ color: row.color }}>
-                      {row.n.toLocaleString()} <i className="ri-arrow-right-s-line text-sm text-[#94A3B8]" aria-hidden="true" />
+                    <span className="flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[14px] font-bold tabular-nums" style={{ color: row.color, background: `${row.color}12` }}>
+                      {row.n.toLocaleString()} <i className="ri-arrow-right-s-line text-sm" aria-hidden="true" />
                     </span>
                   </button>
                 ))}
               </div>
             )}
           </div>
-          <CardFooter label="View validation" onClick={() => navigate('/validation')} />
+          <CardFooter label="Open validation" onClick={() => navigate('/validation')} />
         </section>
 
         {/* Recent Imports */}
         <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-2">
-          <CardHeader title="Recent Imports" />
+          <CardHeader title="Recent Imports" icon="ri-file-upload-line" tag={`Latest ${Math.min(recentImports.length, 3)}`} />
           <div className="flex-1 px-5 py-3">
             {recentImports.length === 0 ? (
               <p className="py-5 text-[13px]" style={{ color: C.sub }}>No imports yet.</p>
@@ -296,32 +314,38 @@ export default function DashboardPage() {
                 {recentImports.slice(0, 3).map((batch, i) => {
                   const badge = importBadge(batch);
                   return (
-                    <div key={batch.id} className={`py-3.5 ${i > 0 ? 'border-t border-[#E8EDF2]' : ''}`}>
-                      <div className="flex min-w-0 items-start justify-between gap-3">
-                        <p className="min-w-0 truncate text-[13px] font-semibold" style={{ color: C.navy }} title={batch.filename}>{batch.filename || 'Unnamed import'}</p>
-                        <span className="shrink-0 text-[11px] font-semibold" style={{ color: badge.color }}>{badge.text}</span>
+                    <div key={batch.id} className={`flex items-start gap-3 py-3.5 ${i > 0 ? 'border-t border-[#E8EDF2]' : ''}`}>
+                      <i className="ri-file-excel-2-line mt-0.5 shrink-0 text-xl text-[#2E6FAF]" aria-hidden="true" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-start justify-between gap-3">
+                          <p className="min-w-0 truncate text-[13px] font-semibold" style={{ color: C.navy }} title={batch.filename}>{batch.filename || 'Unnamed import'}</p>
+                          <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ color: badge.color, background: `${badge.color}12` }}>{badge.text}</span>
+                        </div>
+                        <p className="mt-1 text-[11px] leading-relaxed" style={{ color: C.sub }}>
+                          {(batch.total_rows || 0).toLocaleString()} records{batch.username ? ` · ${batch.username}` : ''} · {fmtDateTime(batch.created_at)}
+                        </p>
                       </div>
-                      <p className="text-[11px] mt-1" style={{ color: C.sub }}>{(batch.total_rows || 0).toLocaleString()} records{batch.username ? ` · ${batch.username}` : ''}</p>
-                      <p className="mt-0.5 text-[11px]" style={{ color: C.faint }}>{fmtDateTime(batch.created_at)}</p>
                     </div>
                   );
                 })}
               </div>
             )}
           </div>
-          <CardFooter label="View all imports" onClick={() => navigate('/import?tab=history')} />
+          <CardFooter label="Browse import history" onClick={() => navigate('/import?tab=history')} />
         </section>
 
         {/* Recent Activity */}
         <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-2">
-          <CardHeader title="Recent Activity" tag={activity.length > 5 ? 'Latest 5' : null} />
+          <CardHeader title="Recent Activity" icon="ri-pulse-line" tag={`Latest ${Math.min(activity.length, 5)}`} />
           <div className="flex-1 px-5 py-3">
             {activity.length === 0 ? (
               <p className="py-5 text-[13px]" style={{ color: C.sub }}>No recent activity.</p>
             ) : (
-              <div>
+              <div className="py-1">
                 {activity.slice(0, 5).map((ev, i) => (
-                  <div key={ev.id} className={`py-3 ${i > 0 ? 'border-t border-[#E8EDF2]' : ''}`}>
+                  <div key={ev.id} className="relative py-3 pl-6">
+                    {i < Math.min(activity.length, 5) - 1 && <span className="absolute bottom-[-12px] left-[7px] top-5 w-px bg-[#DCE6EF]" aria-hidden="true" />}
+                    <span className="absolute left-1 top-4 h-2 w-2 rounded-full border-2 border-white bg-[#2E6FAF] ring-2 ring-[#DCEAF7]" aria-hidden="true" />
                     <p className="text-[13px] leading-snug" style={{ color: C.text }}>{ev.text}</p>
                     <p className="mt-1 text-[11px]" style={{ color: C.faint }}>{timeAgoFull(ev.createdAt)}</p>
                   </div>
@@ -329,12 +353,12 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
-          {isAdmin && <CardFooter label="View audit logs" onClick={() => navigate('/audit-logs')} />}
+          {isAdmin && <CardFooter label="Open audit logs" onClick={() => navigate('/audit-logs')} />}
         </section>
 
         {/* Incoming Referrals */}
         <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-3">
-          <CardHeader title="Incoming Referrals" tag={refTag} />
+          <CardHeader title="Incoming Referrals" icon="ri-share-forward-line" tag={refTag} />
           <div className="flex-1 px-5 py-3">
             {referrals.length === 0 ? (
               <div className="py-5">
@@ -365,12 +389,12 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
-          <CardFooter label="View all referrals" onClick={() => navigate('/records?view=referrals')} />
+          <CardFooter label="Open all referrals" onClick={() => navigate('/records?view=referrals')} />
         </section>
 
         {/* Latest TBInsight Sync */}
         <section style={detailCard} className="flex min-w-0 flex-col overflow-hidden lg:col-span-3">
-          <CardHeader title="Latest TBInsight Sync" />
+          <CardHeader title="Latest TBInsight Sync" icon="ri-refresh-line" tag={latestSync ? 'Most recent' : null} />
           <div className="flex-1 px-5 py-4">
             {latestSync ? (
               latestSync.status === 'sent' ? (
@@ -395,7 +419,7 @@ export default function DashboardPage() {
               <p className="py-3 text-[13px]" style={{ color: C.sub }}>No synchronizations yet.</p>
             )}
           </div>
-          <CardFooter label="View sync history" onClick={() => navigate('/sync-history')} />
+          <CardFooter label="Open sync history" onClick={() => navigate('/sync-history')} />
         </section>
       </div>
     </div>

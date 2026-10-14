@@ -170,7 +170,7 @@ export default function LoginPage() {
                   onChange={(e) => setRememberMe(e.target.checked)}
                   className="w-4 h-4 rounded border-gray-300 accent-[#0F2D52] cursor-pointer"
                 />
-                <span>Remember username</span>
+                <span>Remember me</span>
               </label>
               <button
                 type="button"
@@ -223,12 +223,12 @@ export default function LoginPage() {
       {showForgotModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px]" onClick={() => setShowForgotModal(false)}>
           <div className="bg-white border border-gray-200 shadow-xl w-full max-w-[380px] mx-4 overflow-hidden" style={{ borderRadius: '5px' }} onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100" style={{ background: '#FAFCFF' }}>
+            <div className="flex items-center justify-between px-5 py-4 border-b" style={{ background: '#0F2D52', borderColor: '#0F2D52' }}>
               <div className="flex items-center gap-2">
-                <i className="ri-information-line text-lg" style={{ color: '#0F2D52' }} />
-                <h3 className="text-sm font-bold" style={{ color: '#0F2D52' }}>Password Reset Assistance</h3>
+                <i className="ri-information-line text-lg" style={{ color: '#FFFFFF' }} />
+                <h3 className="text-sm font-bold" style={{ color: '#FFFFFF' }}>Password Reset Assistance</h3>
               </div>
-              <ModalCloseButton onClick={() => setShowForgotModal(false)} />
+              <ModalCloseButton light onClick={() => setShowForgotModal(false)} />
             </div>
 
             <div className="p-5 space-y-3">

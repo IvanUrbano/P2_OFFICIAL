@@ -40,9 +40,9 @@ const pct = value => (value != null ? `${value}%` : 'N/A');
 function buildReport(data, config) {
   const { summary = {}, outcomes, demographics, trend, barangayDistribution, riskSummary, recommendations,
     cases, caseProfile, forecast, facilityPerformance, barangayProfile, outcomeReconciliation,
-    riskAssessmentPeriod, incidenceLabel } = data;
+    riskAssessmentPeriod, incidenceLabel, comparison, alerts, interventions } = data;
   const meta = data.report || {};
-  const { type, barangay, month, quarter, year } = config;
+  const { type, barangay, month, quarter, year, allBarangays: barangays } = config;
   const isCitywide = !barangay;
   const scopeText = isCitywide ? 'across Pasig City' : `in Barangay ${barangay}`;
 
@@ -89,6 +89,10 @@ function buildReport(data, config) {
   const executive = [
     `${total} TB case${total === 1 ? ' was' : 's were'} recorded in ${type === 'annual' || type === 'barangay' ? year : periodText} ${scopeText}.`,
   ];
+  if (comparison && comparison.previousCases > 0) {
+    const diff = total - comparison.previousCases;
+    executive.push(`This is ${diff === 0 ? 'unchanged from' : `${Math.abs(diff)} case${Math.abs(diff) === 1 ? '' : 's'} ${diff > 0 ? 'more than' : 'fewer than'}`} ${comparison.previousLabel} (${comparison.previousCases}).`);
+  }
   if (summary.onTreatmentCases > 0) {
     executive.push(`${summary.onTreatmentCases} case${summary.onTreatmentCases === 1 ? ' is' : 's are'} recorded as on treatment.`);
   }
@@ -119,6 +123,30 @@ function buildReport(data, config) {
     kpiRows.push([barangayProfile.incidenceLabel || 'Incidence / 100k', barangayProfile.incidence != null ? barangayProfile.incidence : 'N/A']);
   }
   blocks.push({ id: 'summary', title: 'Summary', kind: 'kv', rows: kpiRows });
+
+  // Comparison with earlier periods
+  if (comparison) {
+    const change = prev => {
+      if (!prev) return total ? 'New (none before)' : '0%';
+      const diff = ((total - prev) / prev) * 100;
+      return `${diff > 0 ? '+' : ''}${diff.toFixed(1)}%`;
+    };
+    const cmpRows = [[`${periodText} (this report)`, total, '—'],
+      [comparison.previousLabel, comparison.previousCases, change(comparison.previousCases)]];
+    if (!comparison.sameAsPrevious) cmpRows.push([comparison.yearAgoLabel, comparison.yearAgoCases, change(comparison.yearAgoCases)]);
+    blocks.push({
+      id: 'comparison', title: 'Comparison with Previous Periods', kind: 'table',
+      headers: ['Period', 'Cases', 'Change vs. Previous'], rows: cmpRows,
+    });
+  }
+
+  // Counts over the case list the report is built on
+  const tally = (list, keyFn) => {
+    const map = {};
+    list?.forEach(c => { const k = keyFn(c) || 'Unknown'; map[k] = (map[k] || 0) + 1; });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  };
+  const countRows = entries => entries.map(([label, count]) => [label, count, `${cases?.length ? Number(((count / cases.length) * 100).toFixed(1)) : 0}%`]);
 
   blocks.push({
     id: 'outcomes', title: 'Treatment Outcome Breakdown', kind: 'table',
@@ -154,6 +182,41 @@ function buildReport(data, config) {
     .map(([status, count]) => [status, count, `${cases.length ? Number(((count / cases.length) * 100).toFixed(1)) : 0}%`]);
   blocks.push({ id: 'bact', title: 'Bacteriological Status', kind: 'table', headers: ['Status', 'Count', 'Percentage'], rows: bactRows });
 
+  if (cases?.length) {
+    blocks.push({ id: 'status', title: 'Case Status', kind: 'table', headers: ['Status', 'Count', 'Percentage'], rows: countRows(tally(cases, c => c.case_status)) });
+    blocks.push({ id: 'regGroup', title: 'Registration Group', kind: 'table', headers: ['Registration Group', 'Count', 'Percentage'], rows: countRows(tally(cases, c => c.registration_group)) });
+    blocks.push({ id: 'site', title: 'Anatomical Site', kind: 'table', headers: ['Anatomical Site', 'Count', 'Percentage'], rows: countRows(tally(cases, c => c.anatomical_site)) });
+
+    // Sex by age group
+    const AGE_ORDER = ['0-14', '15-24', '25-34', '35-44', '45-54', '55-64', '65+', 'Unknown'];
+    const ageOf = a => (a == null ? 'Unknown' : a <= 14 ? '0-14' : a <= 24 ? '15-24' : a <= 34 ? '25-34' : a <= 44 ? '35-44' : a <= 54 ? '45-54' : a <= 64 ? '55-64' : '65+');
+    const sexKey = c => { const s = String(c.sex || '').trim().toUpperCase(); return s.startsWith('M') ? 'Male' : s.startsWith('F') ? 'Female' : 'Unknown'; };
+    const grid = {};
+    cases.forEach(c => { const ag = ageOf(c.age); grid[ag] = grid[ag] || { Male: 0, Female: 0, Unknown: 0 }; grid[ag][sexKey(c)] += 1; });
+    const gridRows = AGE_ORDER.filter(ag => grid[ag]).map(ag => [ag, grid[ag].Male, grid[ag].Female, grid[ag].Unknown, grid[ag].Male + grid[ag].Female + grid[ag].Unknown]);
+    blocks.push({ id: 'sexAge', title: 'Cases by Age Group and Sex', kind: 'table', headers: ['Age Group', 'Male', 'Female', 'Unknown', 'Total'], rows: gridRows });
+
+    // Weekly pattern within a single month
+    const isSingleMonth = type === 'monthly';
+    if (isSingleMonth) {
+      const weeks = {};
+      cases.forEach(c => {
+        if (!c.date_of_diagnosis) return;
+        const day = Number(String(c.date_of_diagnosis).slice(8, 10));
+        if (!day) return;
+        const w = Math.ceil(day / 7);
+        weeks[w] = (weeks[w] || 0) + 1;
+      });
+      const lastDay = new Date(Number(year), Number(month), 0).getDate();
+      const weekRows = [1, 2, 3, 4, 5].filter(w => (w - 1) * 7 + 1 <= lastDay).map(w => {
+        const from = (w - 1) * 7 + 1; const to = Math.min(w * 7, lastDay);
+        const n = weeks[w] || 0;
+        return [`Week ${w} (${monthLabel(month)} ${from}–${to})`, n, `${cases.length ? Number(((n / cases.length) * 100).toFixed(1)) : 0}%`];
+      });
+      blocks.push({ id: 'weekly', title: 'Weekly Distribution of Diagnoses', kind: 'table', headers: ['Week', 'Cases', 'Percentage'], rows: weekRows });
+    }
+  }
+
   if (facilityPerformance?.length) {
     blocks.push({
       id: 'facility', title: 'Facility Performance', kind: 'table',
@@ -188,6 +251,70 @@ function buildReport(data, config) {
         r.incidence != null ? r.incidence : 'N/A', riskBy[r.barangay]?.riskLevel || 'No Data', riskBy[r.barangay]?.trendDirection || 'N/A',
       ]),
       textColumns: [0, 4, 5],
+    });
+  }
+
+  if (isCitywide && riskSummary?.length) {
+    const levels = ['Very High', 'High', 'Medium', 'Low', 'No Data'];
+    const byLevel = {};
+    riskSummary.forEach(r => { (byLevel[r.riskLevel] = byLevel[r.riskLevel] || []).push(r); });
+    const levelRows = levels.filter(l => byLevel[l]).map(l => [
+      l, byLevel[l].length, byLevel[l].reduce((s, r) => s + (r.cases || 0), 0),
+      [...byLevel[l]].sort((a, b) => (b.cases || 0) - (a.cases || 0)).slice(0, 5).map(r => r.barangay).join(', ') + (byLevel[l].length > 5 ? ', …' : ''),
+    ]);
+    blocks.push({
+      id: 'riskDist', title: 'Risk Classification Summary', kind: 'table',
+      headers: ['Risk Level', 'Barangays', 'Cases in Period', 'Barangays (top by cases)'], rows: levelRows, textColumns: [0, 3],
+    });
+  }
+
+  if (isCitywide && barangayDistribution?.length) {
+    const top = [...barangayDistribution].sort((a, b) => (b.cases - a.cases) || ((b.incidence ?? -1) - (a.incidence ?? -1))).slice(0, 5);
+    const share = n => (total ? `${Number(((n / total) * 100).toFixed(1))}%` : '0%');
+    blocks.push({
+      id: 'topBarangays', title: 'Barangays with the Most Cases', kind: 'table',
+      headers: ['Rank', 'Barangay', 'Cases', 'Share of City Total', incidenceLabel || 'Incidence / 100k'],
+      rows: top.map((r, i) => [i + 1, r.barangay, r.cases, share(r.cases), r.incidence != null ? r.incidence : 'N/A']),
+      textColumns: [0, 1],
+    });
+    const withCases = new Set(barangayDistribution.map(r => r.barangay));
+    const none = barangays?.filter(b => !withCases.has(b)) || [];
+    if (none.length) {
+      blocks.push({ id: 'noCases', title: 'Barangays with No Recorded Cases', kind: 'text', items: [none.join(', ')] });
+    }
+  }
+
+  if (alerts?.length) {
+    blocks.push({
+      id: 'alerts', title: 'Alerts Raised in the Period', kind: 'table',
+      headers: ['Severity', 'Alert', 'Barangay', 'Status'],
+      rows: alerts.map(a => [String(a.severity || '').toUpperCase(), a.title, a.barangay_name || 'Multiple / City-wide', a.status || '—']),
+      textColumns: [0, 1, 2, 3],
+    });
+  }
+
+  if (interventions?.length) {
+    blocks.push({
+      id: 'interventions', title: 'Interventions in the Period', kind: 'table',
+      headers: ['Intervention', 'Type', 'Barangay', 'Priority', 'Status', 'Target Date'],
+      rows: interventions.map(i => [i.title, String(i.intervention_type || '').replace(/_/g, ' '), i.barangay_name || '—', i.priority || '—',
+        String(i.status || '').replace(/_/g, ' '), i.target_date ? fmtDate(i.target_date) : '—']),
+      textColumns: [0, 1, 2, 3, 4, 5],
+    });
+  }
+
+  // Case line list: only for a single-barangay report, where it stays a readable length.
+  if (!isCitywide && cases?.length && cases.length <= 150) {
+    blocks.push({
+      id: 'lineList', title: 'Case Line List', kind: 'table',
+      headers: ['Case ID', 'Diagnosed', 'Sex', 'Age', 'Site', 'Bacteriological', 'Outcome'],
+      rows: cases.map(c => [
+        c.source_case_id || c.case_no || 'No Case ID',
+        c.date_of_diagnosis ? new Date(c.date_of_diagnosis).toLocaleDateString('en-US') : '—',
+        c.sex || '—', c.age ?? '—', c.anatomical_site || '—', c.bacteriological_status || '—',
+        c.outcome_status || c.case_status || '—',
+      ]),
+      textColumns: [0, 1, 2, 4, 5, 6],
     });
   }
 
@@ -231,7 +358,7 @@ function ReportBlock({ block }) {
           <thead>
             <tr style={{ background: '#0F2D52' }}>
               {headers.map((h, hi) => (
-                <th key={hi} className={`py-2 px-3 font-bold uppercase ${textCols.includes(hi) ? 'text-left' : 'text-right'}`} style={{ color: '#ffffff', fontSize: 9, borderBottom: '1px solid #0F2D52' }}>{h}</th>
+                <th key={hi} className={`py-2 px-3 font-bold uppercase ${textCols.includes(hi) ? 'text-left' : 'text-right'}`} style={{ color: '#ffffff', fontSize: 12, borderBottom: '1px solid #0F2D52' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -398,6 +525,7 @@ export default function Reports() {
       const params = { type: reportType, year: filterYear };
       if (reportType === 'monthly') {
         params.month = filterMonth;
+        if (filterBarangay) params.barangay = filterBarangay;
       }
       if (reportType === 'quarterly') {
         params.quarter = filterQuarter;
@@ -413,7 +541,7 @@ export default function Reports() {
       try {
         const built = buildReport(res.data, {
           type: reportType, barangay: filterBarangay,
-          month: filterMonth, quarter: filterQuarter, year: filterYear,
+          month: filterMonth, quarter: filterQuarter, year: filterYear, allBarangays: barangays,
         });
         setReport(built);
       } catch {
@@ -425,7 +553,7 @@ export default function Reports() {
     } finally {
       setLoading(false);
     }
-  }, [reportType, filterMonth, filterQuarter, filterYear, filterBarangay]);
+  }, [reportType, filterMonth, filterQuarter, filterYear, filterBarangay, barangays]);
 
   useEffect(() => {
     if (regenerateTrigger > 0) handleGenerate();
@@ -536,6 +664,10 @@ export default function Reports() {
                 </FilterSelect>
                 <FilterSelect label="Month" value={filterMonth} onChange={setFilterMonth}>
                   {availableMonths.map(month => <option key={month} value={month}>{monthLabel(month)}</option>)}
+                </FilterSelect>
+                <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 160 }}>
+                  <option value="">All Barangays (City-wide)</option>
+                  {barangays.map(b => <option key={b} value={b}>{b}</option>)}
                 </FilterSelect>
               </>
             )}

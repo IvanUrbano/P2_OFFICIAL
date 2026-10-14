@@ -5,12 +5,20 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
-const { categorizeMatch, issueType, issueField, protectedIdentityChanges, suggestFacility, NEEDS_LOCATION, READY } = require('../services/validationQueue');
+const { categorizeMatch, issueType, issueField, protectedIdentityChanges, suggestFacility, normLocationKey, NEEDS_LOCATION, READY } = require('../services/validationQueue');
 
 const existing = {
   case_no: 'CS-2025-000010', date_of_diagnosis: '2025-03-04', outcome_status: 'ON TREATMENT',
   date_of_outcome: null, date_started_treatment: '2025-03-10', treatment_facility: 'ROSARIO HEALTH CENTER - IDOTS',
 };
+
+describe('normLocationKey', () => {
+  it('collapses case and whitespace variants into one assignment-group key', () => {
+    assert.strictEqual(normLocationKey('  San   Joaquin  '), 'san joaquin');
+    assert.strictEqual(normLocationKey('SAN JOAQUIN'), 'san joaquin');
+    assert.strictEqual(normLocationKey(null), '');
+  });
+});
 
 describe('categorizeMatch', () => {
   it('same diagnosis date, nothing new → duplicate (suggest same case)', () => {

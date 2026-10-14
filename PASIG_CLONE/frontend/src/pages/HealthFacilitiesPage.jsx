@@ -55,24 +55,6 @@ function Field({ label, required, optional, hint, children }) {
   );
 }
 
-function DetailRow({ label, children }) {
-  return (
-    <div className="flex items-start justify-between gap-4">
-      <dt className="text-[11px] shrink-0" style={{ color: '#94A3B8' }}>{label}</dt>
-      <dd className="text-xs font-semibold text-right min-w-0 break-words" style={{ color: '#0F2D52' }}>{children ?? '—'}</dd>
-    </div>
-  );
-}
-
-function DetailSection({ title, children }) {
-  return (
-    <section>
-      <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>{title}</h3>
-      <dl className="space-y-2.5">{children}</dl>
-    </section>
-  );
-}
-
 function formatDateTime(value, fallback = '—') {
   if (!value) return fallback;
   const d = new Date(value);
@@ -529,33 +511,37 @@ export default function HealthFacilitiesPage() {
             return (
               <div
                 key={f.id}
-                className="rounded-xl overflow-hidden flex flex-col cursor-default transition-shadow shadow-[0_4px_16px_rgba(15,23,42,0.04)] hover:shadow-[0_6px_20px_rgba(15,45,82,0.10)]"
+                className="rounded-lg overflow-hidden flex flex-col cursor-default transition-all hover:border-[#CBD5E1] hover:shadow-sm"
                 style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}
               >
-                <div className="px-5 pt-5 pb-3">
-                  <div className="flex items-center gap-1.5">
-                    <i className="ri-map-pin-line text-[13px]" style={{ color: '#64748B' }} />
-                    <span className="text-[11px] font-medium uppercase tracking-wider truncate" style={{ color: '#64748B' }}>{brgy}</span>
+                <div className="px-4 py-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="flex items-center gap-1.5 min-w-0 text-[11px] truncate" style={{ color: '#64748B' }}>
+                      <i className="ri-map-pin-line text-[13px] shrink-0" aria-hidden="true" />
+                      {brgy}
+                    </span>
+                    <span className="flex items-center gap-1.5 shrink-0 text-[11px] font-semibold" style={{ color: active ? '#15803D' : '#64748B' }}>
+                      <span className="h-1.5 w-1.5 rounded-full" style={{ background: active ? '#16A34A' : '#94A3B8' }} />
+                      {active ? 'Active' : 'Inactive'}
+                    </span>
                   </div>
-                  <p className="text-[17px] font-extrabold leading-snug line-clamp-2 mt-1.5" style={{ color: '#0F2D52' }}>{f.name}</p>
-                  {f.address && (
-                    <p className="text-[12px] mt-1" style={{ color: '#94A3B8' }}>{f.address}</p>
-                  )}
+                  <p className="text-[15px] font-bold leading-snug line-clamp-2 mt-3" style={{ color: '#0F2D52' }}>{f.name}</p>
+                  <p className="text-[12px] leading-relaxed line-clamp-2 mt-1" style={{ color: f.address ? '#64748B' : '#94A3B8' }}>
+                    {f.address || 'No address provided'}
+                  </p>
                 </div>
                 <div className="mt-auto" style={{ borderTop: '1px solid #F1F5F9' }}>
-                  <div className="px-5 py-2.5 flex items-center justify-between gap-2">
-                    <span className="text-[12px] min-w-0 truncate" style={{ color: '#64748B' }}>
+                  <div className="px-4 py-3 flex items-center justify-between gap-3">
+                    <span className="text-[11px] min-w-0 truncate" style={{ color: '#64748B' }}>
                       {FACILITY_TYPE_LABELS[f.facility_type] || f.facility_type || '—'}
-                      <span style={{ color: '#CBD5E1' }}> · </span>
-                      <span className="font-semibold" style={{ color: active ? '#16A34A' : '#64748B' }}>{active ? 'Active' : 'Inactive'}</span>
                     </span>
                     <button
                       onClick={() => setDetail(f)}
-                      className="shrink-0 px-3 py-1.5 text-[12px] font-semibold transition-colors"
-                      style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 }}
-                      onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}
-                    >View</button>
+                      className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold transition-colors"
+                      style={{ color: '#0F2D52' }}
+                      onMouseEnter={e => { e.currentTarget.style.color = '#2563EB'; }}
+                      onMouseLeave={e => { e.currentTarget.style.color = '#0F2D52'; }}
+                    >View details <i className="ri-arrow-right-line text-xs" aria-hidden="true" /></button>
                   </div>
                 </div>
               </div>
@@ -713,23 +699,50 @@ export default function HealthFacilitiesPage() {
             </>
           ) : (
             <>
-              <DetailSection title="Facility">
-                <DetailRow label="Name">{detail.name}</DetailRow>
-                <DetailRow label="Type">{FACILITY_TYPE_LABELS[detail.facility_type] || detail.facility_type}</DetailRow>
-                <DetailRow label="Status"><StatusBadge status={detail.is_active !== false ? 'Active' : 'Inactive'} /></DetailRow>
-              </DetailSection>
-              <div style={{ borderTop: '1px solid #E2E8F0' }} />
-              <DetailSection title="Location">
-                <DetailRow label="Barangay">{detail.barangay_name || '—'}</DetailRow>
-                <DetailRow label="Address">{detail.address || '—'}</DetailRow>
-              </DetailSection>
-              <div style={{ borderTop: '1px solid #E2E8F0' }} />
-              <DetailSection title="Details">
-                <DetailRow label="Ownership">{capitalize(detail.ownership)}</DetailRow>
-                <DetailRow label="Notes">{detail.notes || '—'}</DetailRow>
-              </DetailSection>
-              <div style={{ borderTop: '1px solid #E2E8F0' }} />
-              <DetailSection title="Facility Aliases">
+              <section>
+                <h3 className="text-xs font-bold mb-3" style={{ color: '#0F2D52' }}>Facility details</h3>
+                <dl className="grid grid-cols-2 gap-x-6 gap-y-4">
+                  <div>
+                    <dt className="text-[11px] mb-1" style={{ color: '#94A3B8' }}>Facility type</dt>
+                    <dd className="text-xs font-semibold" style={{ color: '#334155' }}>{FACILITY_TYPE_LABELS[detail.facility_type] || detail.facility_type || '—'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[11px] mb-1" style={{ color: '#94A3B8' }}>Ownership</dt>
+                    <dd className="text-xs font-semibold" style={{ color: '#334155' }}>{capitalize(detail.ownership)}</dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section className="pt-4" style={{ borderTop: '1px solid #E2E8F0' }}>
+                <h3 className="text-xs font-bold mb-3" style={{ color: '#0F2D52' }}>Location</h3>
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-[11px] mb-1" style={{ color: '#94A3B8' }}>Barangay</p>
+                    <p className="text-xs font-semibold" style={{ color: '#334155' }}>{detail.barangay_name || '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] mb-1" style={{ color: '#94A3B8' }}>Address</p>
+                    <p className="text-xs leading-relaxed" style={{ color: detail.address ? '#334155' : '#94A3B8' }}>{detail.address || 'No address provided'}</p>
+                  </div>
+                </div>
+              </section>
+
+              <section className="pt-4" style={{ borderTop: '1px solid #E2E8F0' }}>
+                <h3 className="text-xs font-bold mb-2" style={{ color: '#0F2D52' }}>Notes</h3>
+                <p className="text-xs leading-relaxed" style={{ color: detail.notes ? '#334155' : '#94A3B8' }}>
+                  {detail.notes || 'No additional notes'}
+                </p>
+              </section>
+
+              <section className="pt-4" style={{ borderTop: '1px solid #E2E8F0' }}>
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <h3 className="text-xs font-bold" style={{ color: '#0F2D52' }}>Facility aliases</h3>
+                  {canManageAliases && !addingAlias && (
+                    <button type="button" onClick={() => { setAddingAlias(true); setAliasError(''); }} className="text-[11px] font-semibold" style={{ color: '#2E6FAF' }}>
+                      Add alias
+                    </button>
+                  )}
+                </div>
                 {aliasError && (
                   <div className="px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,0.05)', color: '#991B1B', border: '1px solid rgba(239,68,68,0.12)' }}>{aliasError}</div>
                 )}
@@ -738,9 +751,9 @@ export default function HealthFacilitiesPage() {
                 ) : aliases.length === 0 ? (
                   <p className="text-xs" style={{ color: '#94A3B8' }}>No aliases yet. Other spellings of this name will appear here.</p>
                 ) : (
-                  <ul className="space-y-2">
+                  <ul>
                     {aliases.map((a) => (
-                      <li key={a.alias_norm} className="flex items-start justify-between gap-3">
+                      <li key={a.alias_norm} className="flex items-center justify-between gap-3 py-2" style={{ borderBottom: '1px solid #F1F5F9' }}>
                         {canManageAliases && editingAlias === a.alias_norm ? (
                           <form onSubmit={submitAlias} className="flex items-center gap-2 w-full">
                             <input
@@ -756,7 +769,7 @@ export default function HealthFacilitiesPage() {
                           </form>
                         ) : (
                           <>
-                            <span className="text-xs break-words" style={{ color: '#0F2D52' }}>{a.alias_text}</span>
+                            <span className="text-xs break-words" style={{ color: '#334155' }}>{a.alias_text}</span>
                             {canManageAliases && (
                               <span className="flex items-center gap-2 shrink-0">
                                 <button
@@ -791,7 +804,7 @@ export default function HealthFacilitiesPage() {
                     ))}
                   </ul>
                 )}
-                {canManageAliases && (addingAlias ? (
+                {canManageAliases && addingAlias && (
                   <form onSubmit={submitAlias} className="flex items-center gap-2 mt-2">
                     <input
                       autoFocus
@@ -805,13 +818,9 @@ export default function HealthFacilitiesPage() {
                     <button type="submit" disabled={aliasBusy} className="px-3 py-2 text-[11px] font-semibold shrink-0 disabled:opacity-50" style={{ background: '#0F2D52', color: '#ffffff', borderRadius: 4 }}>{aliasBusy ? 'Adding…' : 'Add'}</button>
                     <button type="button" onClick={() => { setAddingAlias(false); setNewAlias(''); setAliasError(''); }} disabled={aliasBusy} className="px-3 py-2 text-[11px] shrink-0 disabled:opacity-50" style={secondaryBtn}>Cancel</button>
                   </form>
-                ) : (
-                  <div className="flex justify-end mt-1">
-                    <button type="button" onClick={() => { setAddingAlias(true); setAliasError(''); }} className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>+ Add Alias</button>
-                  </div>
-                ))}
+                )}
                 {aliasSuggestions.length > 0 && (
-                  <div className="mt-3 pt-3" style={{ borderTop: '1px solid #E2E8F0' }}>
+                  <div className="mt-4 pt-4" style={{ borderTop: '1px solid #E2E8F0' }}>
                     <div className="flex items-center justify-between gap-2 mb-1.5">
                       <p className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>Found in imported records</p>
                       {canManageAliases && (
@@ -847,12 +856,18 @@ export default function HealthFacilitiesPage() {
                     </ul>
                   </div>
                 )}
-              </DetailSection>
-              <div style={{ borderTop: '1px solid #E2E8F0' }} />
-              <DetailSection title="Record">
-                <DetailRow label="Created">{formatDateTime(detail.created_at)}</DetailRow>
-                <DetailRow label="Last Updated">{formatDateTime(detail.updated_at)}</DetailRow>
-              </DetailSection>
+              </section>
+
+              <section className="grid grid-cols-2 gap-6 pt-4" style={{ borderTop: '1px solid #E2E8F0' }}>
+                <div>
+                  <p className="text-[10px] mb-1" style={{ color: '#94A3B8' }}>Created</p>
+                  <p className="text-[11px]" style={{ color: '#64748B' }}>{formatDateTime(detail.created_at)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] mb-1" style={{ color: '#94A3B8' }}>Last updated</p>
+                  <p className="text-[11px]" style={{ color: '#64748B' }}>{formatDateTime(detail.updated_at)}</p>
+                </div>
+              </section>
             </>
           )}
         </SidePanel>

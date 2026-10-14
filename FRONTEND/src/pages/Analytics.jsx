@@ -1132,8 +1132,8 @@ export default function Analytics() {
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={mergedTrendData} margin={{ top: 10, right: 15, left: -10, bottom: 0 }}>
                       <CartesianGrid vertical={false} stroke="#E8EDF2" />
-                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={6} />
-                      <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={40} tickMargin={4} />
+                      <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={6} />
+                      <YAxis tick={{ fontSize: 12, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={40} tickMargin={4} />
                       <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#E2E8F0', strokeWidth: 1 }} />
                       <Line type="monotone" dataKey="Cases" stroke="#2E6FAF" strokeWidth={2} dot={{ fill: '#2E6FAF', r: 2.5, strokeWidth: 0 }} activeDot={{ r: 4, strokeWidth: 2, stroke: '#ffffff' }} name="Cases" connectNulls={false} isAnimationActive={false} />
                       {compareYear && prevYearLabel && previousComparison.available && (
@@ -1304,11 +1304,11 @@ export default function Analytics() {
                           interval={0}
                           width={136}
                           tickFormatter={(v) => (String(v).length > 21 ? `${String(v).slice(0, 20)}…` : v)}
-                          tick={{ fontSize: 10, fill: '#475569' }}
+                          tick={{ fontSize: 12, fill: '#475569' }}
                           axisLine={false}
                           tickLine={false}
                         />
-                        <XAxis type="number" allowDecimals={false} tick={{ fontSize: 10, fill: '#64748B' }} axisLine={false} tickLine={false} />
+                        <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} />
                         <Tooltip content={<ChartTooltip />} cursor={{ fill: '#F8FAFC' }} />
                         <Bar dataKey="Cases" fill="#6B7FA3" radius={[0, 6, 6, 0]} barSize={12} name="Cases" isAnimationActive={false} />
                       </BarChart>
@@ -1411,8 +1411,8 @@ export default function Analytics() {
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={ageData} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
-                          <XAxis type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
-                          <YAxis type="category" dataKey="group" tick={{ fontSize: 10, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={50} tickMargin={4} />
+                          <XAxis type="number" tick={{ fontSize: 12, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
+                          <YAxis type="category" dataKey="group" tick={{ fontSize: 12, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={50} tickMargin={4} />
                           <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
                           <Bar dataKey="Cases" radius={[0, 6, 6, 0]} barSize={16} name="Cases">
                             {ageData.map((entry) => (

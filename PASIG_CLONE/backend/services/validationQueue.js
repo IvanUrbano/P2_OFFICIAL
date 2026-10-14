@@ -29,6 +29,9 @@ const normFacility = (s) => String(s || '').toLowerCase()
   .replace(/\s*-\s*(idots|mtbn)\s*$/, '')
   .replace(/[^a-z0-9]/g, '');
 
+/** Canonical key for grouping source location labels without case/spacing duplicates. */
+const normLocationKey = (s) => String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+
 const LIVE = `v.is_archived = false AND v.merged_into_case_no IS NULL`;
 const PASIG_CITY = `(v.city IS NULL OR lower(trim(v.city)) IN ('pasig city', 'pasig'))`;
 
@@ -172,5 +175,5 @@ function suggestFacility(text, facilities) {
 
 module.exports = {
   LIVE, NEEDS_LOCATION, NEEDS_FACILITY, MATCH_PENDING, READY, SENDS_TO_TBINSIGHT, PASIG_CITY,
-  categorizeMatch, issueType, issueField, protectedIdentityChanges, suggestFacility, ymd, normFacility,
+  categorizeMatch, issueType, issueField, protectedIdentityChanges, suggestFacility, ymd, normFacility, normLocationKey,
 };

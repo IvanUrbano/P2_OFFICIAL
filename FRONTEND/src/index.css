@@ -36,7 +36,7 @@
   --color-desc: #475569;
   --color-muted: #64748B;
 
-  --font-sans: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: 'Public Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
 /* ==================== Global Base ==================== */
@@ -52,6 +52,75 @@ body {
   color: var(--color-text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Authenticated application typography.
+   Landing and login routes render outside .app-interface and retain their original scale. */
+@media screen {
+  .app-interface {
+    font-size: 17px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .app-interface :not(i).text-\[8px\],
+  .app-interface :not(i).text-\[9px\],
+  .app-interface :not(i).text-\[9\.5px\],
+  .app-interface :not(i).text-\[10px\] {
+    font-size: 12px;
+    line-height: 1rem;
+  }
+
+  .app-interface :not(i).text-\[11px\] {
+    font-size: 13px;
+    line-height: 1.125rem;
+  }
+
+  .app-interface :not(i).text-\[11\.5px\],
+  .app-interface :not(i).text-\[12px\],
+  .app-interface :not(i).text-xs {
+    font-size: 14px;
+    line-height: 1.25rem;
+  }
+
+  .app-interface :not(i).text-\[13px\] {
+    font-size: 14px;
+    line-height: 1.25rem;
+  }
+
+  .app-interface :not(i).text-\[14px\],
+  .app-interface :not(i).text-sm {
+    font-size: 15px;
+  }
+
+  .app-interface :not(i).text-\[15px\] {
+    font-size: 16px;
+  }
+
+  .app-interface :not(i).text-base {
+    font-size: 17px;
+  }
+
+  .app-interface :not(i).text-\[17px\],
+  .app-interface :not(i).text-lg {
+    font-size: 19px;
+  }
+
+  .app-interface :not(i).text-xl {
+    font-size: 21px;
+  }
+
+  .app-interface :not(i).text-2xl {
+    font-size: 26px;
+  }
+
+  .app-interface :not(i).text-3xl {
+    font-size: 32px;
+  }
+
+  .app-interface .recharts-cartesian-axis-tick-value,
+  .app-interface .recharts-legend-item-text {
+    font-size: 13px;
+  }
 }
 
 /* ==================== Dark Mode Overrides ==================== */
@@ -200,6 +269,214 @@ body {
   animation: pulse-dot 1.2s ease-in-out infinite;
 }
 
+/* ==================== Landing Page Motion ==================== */
+@keyframes landing-background-drift {
+  0%, 100% { transform: scale(1.01) translate3d(0, 0, 0); }
+  50% { transform: scale(1.035) translate3d(-0.35%, -0.2%, 0); }
+}
+
+@keyframes landing-reveal {
+  from { opacity: 0; transform: translateY(15px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes landing-logo-reveal {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes landing-highlight-reveal {
+  from { background-size: 0 32%; }
+  to { background-size: 100% 32%; }
+}
+
+@keyframes landing-divider-reveal {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes landing-radar-pulse {
+  0% { opacity: 0; transform: scale(0.65); }
+  30% { opacity: 0.18; }
+  100% { opacity: 0; transform: scale(1.25); }
+}
+
+@keyframes landing-alert-ring {
+  0%, 100% { transform: rotate(0); }
+  25% { transform: rotate(12deg); }
+  75% { transform: rotate(-12deg); }
+}
+
+@keyframes landing-heartbeat {
+  0%, 100% { transform: scale(1); }
+  35% { transform: scale(1.2); }
+  55% { transform: scale(1.05); }
+  75% { transform: scale(1.14); }
+}
+
+.landing-page {
+  isolation: isolate;
+  background: #f8fbff;
+}
+
+.landing-motion-paused,
+.landing-motion-paused * {
+  animation-play-state: paused !important;
+}
+
+.landing-background {
+  position: absolute;
+  inset: -2%;
+  z-index: -2;
+  background: url('/images/LANDING_BG.png') center 90% / cover no-repeat;
+  animation: landing-background-drift 22s ease-in-out infinite;
+  will-change: transform;
+}
+
+.landing-radar {
+  position: absolute;
+  z-index: -1;
+  right: 15%;
+  bottom: 27%;
+  width: 110px;
+  aspect-ratio: 1;
+  border: 1px solid rgba(46, 111, 175, 0.3);
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  animation: landing-radar-pulse 5s ease-out infinite;
+}
+
+.landing-radar-two { animation-delay: 2.5s; }
+
+.landing-reveal {
+  opacity: 0;
+  animation: landing-reveal 650ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.landing-reveal-logo {
+  animation-name: landing-logo-reveal;
+  animation-delay: 80ms;
+}
+
+.landing-reveal-eyebrow { animation-delay: 180ms; }
+.landing-reveal-heading { animation-delay: 280ms; }
+.landing-reveal-copy { animation-delay: 390ms; }
+.landing-reveal-actions { animation-delay: 500ms; }
+
+.landing-headline-highlight {
+  background-image: linear-gradient(90deg, rgba(147, 197, 253, 0.35), rgba(96, 165, 250, 0.18));
+  background-repeat: no-repeat;
+  background-position: 0 88%;
+  background-size: 0 32%;
+  animation: landing-highlight-reveal 750ms 650ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.landing-cta {
+  position: relative;
+  overflow: hidden;
+  transition: color 220ms ease, border-color 220ms ease, box-shadow 220ms ease, transform 220ms ease;
+}
+
+.landing-cta:active { transform: translateY(0) scale(0.98); }
+
+.landing-cta:focus-visible {
+  outline: 3px solid rgba(46, 111, 175, 0.3);
+  outline-offset: 3px;
+}
+
+.landing-cta-primary {
+  color: #fff;
+  background: #0f2d52;
+  box-shadow: 0 4px 14px rgba(15, 45, 82, 0.25);
+}
+
+.landing-cta-primary:hover {
+  background: #174a7e;
+  box-shadow: 0 8px 20px rgba(15, 45, 82, 0.3);
+  transform: translateY(-2px);
+}
+
+.landing-cta-secondary {
+  color: #0f2d52;
+  border: 2px solid #0f2d52;
+  background: linear-gradient(90deg, #0f2d52 0 50%, transparent 50% 100%);
+  background-size: 205% 100%;
+  background-position: 100% 0;
+  transition: color 250ms ease, background-position 250ms ease, box-shadow 220ms ease, transform 220ms ease;
+}
+
+.landing-cta-secondary:hover {
+  color: #fff;
+  background-position: 0 0;
+  box-shadow: 0 7px 18px rgba(15, 45, 82, 0.2);
+  transform: translateY(-2px);
+}
+
+.landing-divider {
+  transform: scaleX(0);
+  transform-origin: left;
+  animation: landing-divider-reveal 850ms 620ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.landing-feature-wrap {
+  opacity: 0;
+  animation: landing-reveal 520ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(700ms + var(--feature-index) * 85ms);
+}
+
+.landing-feature {
+  border-radius: 12px;
+  transition: transform 220ms ease;
+}
+
+.landing-feature-icon {
+  transition: background-color 220ms ease, box-shadow 220ms ease, transform 220ms ease;
+}
+
+.landing-feature:hover { transform: translateY(-3px); }
+
+.landing-feature:hover .landing-feature-icon {
+  background: #dbeafe !important;
+  box-shadow: 0 6px 14px rgba(46, 111, 175, 0.15);
+  transform: translateY(-2px);
+}
+
+.landing-feature i {
+  display: inline-block;
+  transition: transform 220ms ease;
+}
+
+.landing-feature:hover .landing-icon-pin { animation: pulse-dot 800ms ease-in-out; }
+.landing-feature:hover .landing-icon-chart { transform: scaleY(1.18); transform-origin: bottom; }
+.landing-feature:hover .landing-icon-alert { animation: landing-alert-ring 500ms ease-in-out; }
+.landing-feature:hover .landing-icon-dashboard { transform: scale(1.16) rotate(-3deg); }
+.landing-feature:hover .landing-icon-intervention { animation: landing-heartbeat 700ms ease-in-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-background,
+  .landing-radar,
+  .landing-reveal,
+  .landing-headline-highlight,
+  .landing-divider,
+  .landing-feature-wrap,
+  .landing-feature:hover i {
+    animation: none !important;
+  }
+
+  .landing-reveal,
+  .landing-feature-wrap { opacity: 1; }
+  .landing-divider { transform: none; }
+  .landing-headline-highlight { background-size: 100% 32%; }
+
+  .landing-cta,
+  .landing-feature,
+  .landing-feature-icon,
+  .landing-feature i {
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ==================== Sidebar Active Indicator (Glowing Neon Dark Blue) ==================== */
 .nav-active-bar {
   position: absolute;
@@ -237,13 +514,13 @@ body {
 
 .zone-label-main {
   fill: var(--color-text);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 
 .zone-label-sub {
   fill: var(--color-danger);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -360,7 +637,7 @@ body {
   border-radius: 3px !important;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5) !important;
   font-family: var(--font-sans) !important;
-  font-size: 11px !important;
+  font-size: 12px !important;
   font-weight: 700 !important;
   color: #ffffff !important;
   letter-spacing: 0.3px;
@@ -415,7 +692,7 @@ body {
   border-radius: 3px !important;
   box-shadow: 0 1px 4px rgba(37, 99, 235, 0.12) !important;
   font-family: var(--font-sans) !important;
-  font-size: 10px !important;
+  font-size: 12px !important;
   font-weight: 700 !important;
   color: #0F2D52 !important;
   letter-spacing: 0.3px;

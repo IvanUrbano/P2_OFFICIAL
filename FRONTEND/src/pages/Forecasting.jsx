@@ -1684,7 +1684,7 @@ export default function Forecasting() {
                             value: 'Forecast Start',
                             position: 'top',
                              fill: '#92400E',
-                            fontSize: 10,
+                            fontSize: 12,
                             fontWeight: 700,
                           }}
                         />

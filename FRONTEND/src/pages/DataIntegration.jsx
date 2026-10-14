@@ -23,6 +23,23 @@ function SyncStatusBadge({ status }) {
   );
 }
 
+function SectionHeader({ title, description, icon, meta, titleId }) {
+  return (
+    <div className="flex items-start justify-between gap-3 bg-[#0F2D52] px-5 py-3.5">
+      <div className="flex min-w-0 items-start gap-2.5">
+        <i className={`${icon} mt-0.5 shrink-0 text-lg text-[#93C5FD]`} aria-hidden="true" />
+        <div className="min-w-0">
+          <h2 id={titleId} className="text-sm font-bold text-white">{title}</h2>
+          {description && <p className="mt-0.5 text-xs leading-snug text-[#CBD5E1]">{description}</p>}
+        </div>
+      </div>
+      {meta != null && (
+        <span className="shrink-0 rounded-full bg-white/10 px-2.5 py-1 text-xs font-semibold text-[#D9E9F8]">{meta}</span>
+      )}
+    </div>
+  );
+}
+
 const formatDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'Asia/Manila' }) : '—';
 const formatTime = (d) => d ? new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Manila' }) + ' PHT' : '';
 
@@ -121,7 +138,7 @@ export default function DataIntegrationPage() {
       />
 
       {/* Page header */}
-      <div className="overflow-hidden rounded-xl bg-white shadow-[0_2px_16px_rgba(15,45,82,0.07),0_1px_3px_rgba(15,45,82,0.04)]">
+      <div className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_2px_16px_rgba(15,45,82,0.07),0_1px_3px_rgba(15,45,82,0.04)]">
         <div className="flex flex-col justify-between gap-3 border-b border-[#DBEAFE] px-6 py-3.5 sm:flex-row sm:items-center">
           <div>
             <h1 className="text-lg font-extrabold tracking-tight text-[#0F2D52]">Data Integration</h1>
@@ -156,7 +173,7 @@ export default function DataIntegrationPage() {
       )}
 
       {/* Integration KPIs */}
-      <section aria-label="Integration metrics" className="overflow-hidden rounded-xl bg-white shadow-[0_4px_24px_rgba(15,45,82,0.12),0_2px_8px_rgba(15,45,82,0.08)]">
+      <section aria-label="Integration metrics" className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_4px_24px_rgba(15,45,82,0.12),0_2px_8px_rgba(15,45,82,0.08)]">
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
           {[
             { label: 'Sync batches', value: status?.stats?.totalBatches, icon: 'ri-stack-line', color: '#6B7FA3', note: 'Webhook deliveries' },
@@ -180,10 +197,8 @@ export default function DataIntegrationPage() {
       </section>
 
       {/* Connection overview */}
-      <section className="overflow-hidden rounded-lg border border-[#DCE4ED] bg-white">
-        <div className="bg-[#0F2D52] px-5 py-3.5">
-          <h2 className="text-sm font-semibold text-white">Integration overview</h2>
-        </div>
+      <section className="overflow-hidden rounded-[10px] border border-[#DCE4ED] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+        <SectionHeader title="Integration overview" description="Connection health and latest successful data transfer." icon="ri-links-line" />
         <div className="grid divide-y divide-[#E2E8F0] md:grid-cols-2 md:divide-x md:divide-y-0">
           <div className="px-5 py-5">
             <p className="text-xs font-medium uppercase tracking-wide text-[#64748B]">Source connection</p>
@@ -212,20 +227,14 @@ export default function DataIntegrationPage() {
       </section>
 
       {/* Incoming webhook batches */}
-      <section className="overflow-hidden rounded-lg border border-[#DCE4ED] bg-white">
-        <div className="flex items-center justify-between gap-3 px-5 py-4">
-          <div>
-            <h2 className="text-sm font-semibold text-[#0F2D52]">Incoming batches</h2>
-            <p className="mt-0.5 text-xs text-[#64748B]">Webhook deliveries from PASIG TB-IS.</p>
-          </div>
-          <span className="text-xs text-[#64748B]">{webhookLogs.length} shown</span>
-        </div>
+      <section className="overflow-hidden rounded-[10px] border border-[#DCE4ED] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+        <SectionHeader title="Incoming batches" description="Webhook deliveries from PASIG TB-IS." icon="ri-inbox-archive-line" meta={`${webhookLogs.length} shown`} />
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] text-left">
             <thead>
-              <tr className="bg-[#0F2D52]">
+              <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                 {['Date', 'Source', 'Batch ID', 'Received', 'Imported', 'Status', ...(isAdmin ? ['Action'] : [])].map((h) => (
-                  <th key={h} scope="col" className="whitespace-nowrap px-5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-white">{h}</th>
+                  <th key={h} scope="col" className="whitespace-nowrap px-5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-[#475569]">{h}</th>
                 ))}
               </tr>
             </thead>
@@ -272,17 +281,14 @@ export default function DataIntegrationPage() {
 
       {/* ── Undo History (admin) ── */}
       {isAdmin && undoHistory.length > 0 && (
-        <section className="overflow-hidden rounded-lg border border-[#DCE4ED] bg-white">
-          <div className="px-5 py-4">
-            <h2 className="text-sm font-semibold text-[#0F2D52]">Undo history</h2>
-            <p className="mt-0.5 text-xs text-[#64748B]">Imports removed by an administrator.</p>
-          </div>
+        <section className="overflow-hidden rounded-[10px] border border-[#DCE4ED] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+          <SectionHeader title="Undo history" description="Imports removed by an administrator." icon="ri-history-line" meta={undoHistory.length} />
           <div className="overflow-x-auto">
             <table className="w-full min-w-[650px] text-left">
               <thead>
-                <tr className="bg-[#0F2D52]">
+                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                   {['Undone', 'By', 'Batch ID', 'Cases Removed', 'Raw Rows Removed'].map((h) => (
-                    <th key={h} scope="col" className="whitespace-nowrap px-5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-white">{h}</th>
+                    <th key={h} scope="col" className="whitespace-nowrap px-5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-[#475569]">{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -306,18 +312,15 @@ export default function DataIntegrationPage() {
       )}
 
       {/* Synchronization history */}
-      <section className="overflow-hidden rounded-lg border border-[#DCE4ED] bg-white">
-        <div className="px-5 py-4">
-          <h2 className="text-sm font-semibold text-[#0F2D52]">Synchronization history</h2>
-          <p className="mt-0.5 text-xs text-[#64748B]">Select a batch to review its processing details.</p>
-        </div>
+      <section className="overflow-hidden rounded-[10px] border border-[#DCE4ED] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+        <SectionHeader title="Synchronization history" description="Select a batch to review its processing details." icon="ri-refresh-line" meta={`${syncHistory.length} batches`} />
 
         <div className="overflow-x-auto">
           <table className="w-full min-w-[700px] text-left">
             <thead>
-              <tr className="bg-[#0F2D52]">
+              <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                 {['Batch ID', 'Records', 'Accepted', 'Rejected', 'Status', 'Date'].map((h) => (
-                  <th key={h} scope="col" className="whitespace-nowrap px-5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-white">{h}</th>
+                  <th key={h} scope="col" className="whitespace-nowrap px-5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-[#475569]">{h}</th>
                 ))}
               </tr>
             </thead>
@@ -353,10 +356,8 @@ export default function DataIntegrationPage() {
       </section>
 
       {/* Source details */}
-      <section className="overflow-hidden rounded-lg border border-[#DCE4ED] bg-white" aria-labelledby="data-route-title">
-        <div className="border-b border-[#E2E8F0] bg-[#F8FAFC] px-5 py-3">
-          <h2 id="data-route-title" className="text-sm font-semibold text-[#0F2D52]">Data route</h2>
-        </div>
+      <section className="overflow-hidden rounded-[10px] border border-[#DCE4ED] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]" aria-labelledby="data-route-title">
+        <SectionHeader title="Data route" description="How validated records move into TBInsight." icon="ri-route-line" titleId="data-route-title" />
         <div className="grid items-center gap-2 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1.1fr)_auto_minmax(0,1.3fr)] sm:gap-4">
           <div className="min-w-0">
             <p className="text-[11px] font-medium uppercase tracking-wide text-[#64748B]">Source</p>
@@ -425,9 +426,12 @@ export default function DataIntegrationPage() {
       {selectedSync && (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-[#0F2D52]/35 px-4" role="dialog" aria-modal="true" aria-labelledby="sync-detail-title" onClick={() => setSelectedSync(null)}>
           <div className="relative w-full max-w-md overflow-hidden rounded-lg border border-[#DCE4ED] bg-white shadow-[0_20px_50px_rgba(15,45,82,0.2)]" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-[#E2E8F0] px-6 py-4">
-              <h3 id="sync-detail-title" className="text-base font-semibold text-[#0F2D52]">Synchronization details</h3>
-              <ModalCloseButton onClick={() => setSelectedSync(null)} />
+            <div className="flex items-center justify-between bg-[#0F2D52] px-6 py-4">
+              <div className="flex items-center gap-2.5">
+                <i className="ri-file-list-3-line text-lg text-[#93C5FD]" aria-hidden="true" />
+                <h3 id="sync-detail-title" className="text-base font-semibold text-white">Synchronization details</h3>
+              </div>
+              <ModalCloseButton onClick={() => setSelectedSync(null)} light />
             </div>
             <div className="space-y-3 px-6 py-5">
               {[
@@ -451,7 +455,7 @@ export default function DataIntegrationPage() {
                 </div>
               )}
             </div>
-            <div className="flex justify-end border-t border-[#E2E8F0] px-6 py-4">
+            <div className="flex justify-end border-t border-[#E2E8F0] bg-[#F8FAFC] px-6 py-4">
               <button type="button"
                 onClick={() => setSelectedSync(null)}
                 className="rounded bg-[#0F2D52] px-4 py-2 text-xs font-semibold text-white hover:bg-[#174A7E]"
