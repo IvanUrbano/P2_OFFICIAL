@@ -88,6 +88,23 @@ const SOURCE_STYLES = {
 };
 
 
+// Returning patient marker: the registration group says previously treated (Relapse,
+// treatment after failure / lost to follow-up, previous outcome unknown) and/or another
+// episode of the same Patient # is on file.
+function ReturningBadge({ record }) {
+  const others = Number(record.other_episodes) || 0;
+  if (!record.treatment_history && others === 0) return null;
+  const label = record.treatment_history || 'Returning patient';
+  const episodes = others > 0 ? ` · ${others + 1} episodes` : '';
+  return (
+    <span className="block mt-0.5 w-fit max-w-full truncate text-[10px] font-bold px-1.5 py-[1px] rounded"
+      style={{ background: '#F5F3FF', color: '#6D28D9' }}
+      title={others > 0 ? `${label}. ${others} other TB episode${others > 1 ? 's' : ''} of this patient on file.` : `${label}. No earlier episode is recorded in this system.`}>
+      {label}{episodes}
+    </span>
+  );
+}
+
 export default function TBRecordsPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -97,14 +114,14 @@ export default function TBRecordsPage() {
   // Possible Matches and Needs Assignment moved to the Validation page.
   // Incoming Referrals keeps legacy ?view=transfers links; archived cases have their own list.
   const initialView = searchParams.get('view');
-  const [view, setView] = useState(['referrals', 'transfers'].includes(initialView) ? 'referrals' : initialView === 'archived' ? 'archived' : 'all');
+  const [view, setView] = useState(['referrals', 'transfers'].includes(initialView) ? 'referrals' : ['archived', 'previously_treated'].includes(initialView) ? initialView : 'all');
   useEffect(() => {
     const old = searchParams.get('view');
     if (old === 'matches') navigate('/validation?tab=matches', { replace: true });
     if (old === 'unassigned') navigate('/validation?tab=assignment', { replace: true });
   }, [searchParams, navigate]);
   const [records, setRecords] = useState([]);
-  const [counts, setCounts] = useState({ all: 0, matches: 0, unassigned: null, archived: 0 });
+  const [counts, setCounts] = useState({ all: 0, matches: 0, unassigned: null, archived: 0, previously_treated: 0 });
   const [pagination, setPagination] = useState({ page: 1, totalPages: 0, total: 0 });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -129,7 +146,7 @@ export default function TBRecordsPage() {
   // Notification links: ?view=referrals opens Incoming Referrals, ?record=<id> opens that case.
   useEffect(() => {
     if (['referrals', 'transfers'].includes(searchParams.get('view'))) setView('referrals');
-    else if (searchParams.get('view') === 'archived') setView('archived');
+    else if (['archived', 'previously_treated'].includes(searchParams.get('view'))) setView(searchParams.get('view'));
     const recordId = Number(searchParams.get('record'));
     if (Number.isInteger(recordId) && recordId > 0) {
       setView('all');
@@ -399,6 +416,7 @@ export default function TBRecordsPage() {
 
   const tabs = [
     { key: 'all', title: 'All Records', desc: 'Validated cases with their Case ID', count: counts.all },
+    { key: 'previously_treated', title: 'Previously Treated', desc: 'Relapse and other returning patients', count: counts.previously_treated },
     { key: 'archived', title: 'Archived Cases', desc: 'Stored cases removed from active lists', count: counts.archived },
     { key: 'referrals', title: 'Incoming Referrals', desc: isAdmin ? 'Referrals between barangays' : 'Cases referred to your barangay', count: referralCount },
   ];
@@ -544,8 +562,10 @@ export default function TBRecordsPage() {
           <ErrorState message={error} onRetry={fetchRecords} />
         ) : records.length === 0 ? (
           <EmptyState icon="ri-file-list-line"
-            title={view === 'archived' ? 'No Archived Cases' : 'No Records Found'}
-            description={view === 'archived' ? 'There are no archived cases matching your search.' : 'There are no records matching your search.'} />
+            title={view === 'archived' ? 'No Archived Cases' : view === 'previously_treated' ? 'No Previously Treated Patients' : 'No Records Found'}
+            description={view === 'archived' ? 'There are no archived cases matching your search.'
+              : view === 'previously_treated' ? 'No relapse or other returning patients match your search.'
+              : 'There are no records matching your search.'} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full table-fixed text-left" style={{ borderCollapse: 'collapse' }}>
@@ -590,7 +610,7 @@ export default function TBRecordsPage() {
                 {records.map((r, i) => (
                   <tr key={r.id} className={`hover:bg-blue-50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]'}`} style={{ borderBottom: '1px solid #E2E8F0' }}>
                     <td className="pl-3 pr-1.5 py-2.5 text-[11px] font-mono font-bold whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }} title={caseIdOf(r) || undefined}>{caseIdOf(r) || <span className="font-normal italic" style={{ color: '#94A3B8' }}>No Case ID</span>}{!caseIdOf(r) && systemRefOf(r) && <span className="block text-[10px] font-normal not-italic" style={{ color: '#94A3B8' }}>System Reference {systemRefOf(r)}</span>}</td>
-                    <td className="px-1.5 py-2.5 text-[11px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }} title={fullName(r)}>{fullName(r)}</td>
+                    <td className="px-1.5 py-2.5 text-[11px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: '#0F2D52', borderRight: '1px solid #E2E8F0' }} title={fullName(r)}>{fullName(r)}<ReturningBadge record={r} /></td>
                     <td className="px-1.5 py-2.5 text-[11px]" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>
                       {r.barangay_name || '—'}
                       {/* Responsibility moved by an accepted referral (patient barangay itself never changes) */}
@@ -686,7 +706,7 @@ export default function TBRecordsPage() {
         </div>
       )}
       {detailId && (
-        <RecordDetailDrawer key={`${detailId}-${detailMode}`} recordId={detailId} initialMode={detailMode} facilities={facilities} barangays={barangayRefs} onClose={() => setDetailId(null)} onChanged={fetchRecords} />
+        <RecordDetailDrawer key={`${detailId}-${detailMode}`} recordId={detailId} initialMode={detailMode} facilities={facilities} barangays={barangayRefs} onClose={() => setDetailId(null)} onChanged={fetchRecords} onOpenRecord={(id) => openDetail(id)} />
       )}
 
       {/* ── Slide-over: Add TB Record ── */}

@@ -36,3 +36,6 @@ BACKEND/backups/
 __pycache__/
 *.py[cod]
 *.pyc
+
+# Brainstorming mockups (local only)
+.superpowers/

@@ -81,6 +81,20 @@ describe('GET /records list views and sorting', () => {
     assert.ok(!archived.sql.includes('v.is_archived = false'), archived.sql);
   });
 
+  it('lists previously treated patients (registered history or an earlier episode) in their own view', async () => {
+    const r = await fetchOrder('?view=previously_treated');
+    assert.strictEqual(r.status, 200);
+    assert.ok(r.sql.includes('v.is_archived = false'), r.sql);
+    assert.ok(r.sql.includes("LIKE '%RELAPSE%'"), r.sql);
+    assert.ok(r.sql.includes('o.patient_id = v.patient_id'), r.sql);
+  });
+
+  it('reports the previously treated count with the other tab counts', async () => {
+    const res = await fetch(`${base}/records`, { headers: { authorization: 'Bearer ' + token('admin') } });
+    const body = await res.json();
+    assert.ok('previously_treated' in body.counts, JSON.stringify(body.counts));
+  });
+
   it('allows only admins to restore an archived record', async () => {
     const staffResponse = await fetch(`${base}/records/9/restore`, {
       method: 'PATCH',

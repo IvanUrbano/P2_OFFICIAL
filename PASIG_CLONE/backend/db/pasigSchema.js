@@ -222,6 +222,16 @@ async function initSchema() {
       console.error('[pasig-clone] Migration 020 failed (continuing):', err.message);
     }
   }
+
+  const mig021Path = path.join(__dirname, 'migrations', '021_episode_history.sql');
+  if (fs.existsSync(mig021Path)) {
+    try {
+      await execSql(fs.readFileSync(mig021Path, 'utf8'));
+      console.log('[pasig-clone] Migration 021 (TB episode history entries) completed.');
+    } catch (err) {
+      console.error('[pasig-clone] Migration 021 failed (continuing):', err.message);
+    }
+  }
 }
 
 // --- CRUD Helpers ---
