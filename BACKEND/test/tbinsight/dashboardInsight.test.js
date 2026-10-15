@@ -628,7 +628,7 @@ describe('buildHeadline — names the barangays the cards cannot show', () => {
 
   it('quiet month: says nothing unusual and where rates are highest', () => {
     assert.deepStrictEqual(buildHeadline(base),
-      { text: 'No unusual rises; highest TB rates in Rosario, Manggahan and Santolan', tone: 'good' });
+      { text: 'No unusual rises flagged; highest TB rates in Rosario, Manggahan and Santolan', tone: 'good' });
   });
 
   it('an unusual rise comes first, tone alert', () => {

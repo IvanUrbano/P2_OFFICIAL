@@ -314,19 +314,20 @@ async function evaluateForecastAlerts(poolOrClient, period) {
 
 /**
  * Treatment Success Rate Below Target
- * Calculates overall treatment success rate from outcome_summary.
+ * City-wide cohort Treatment Success Rate (computeTreatmentSuccessRate), against
+ * TREATMENT_SUCCESS_TARGET.
  */
 async function evaluateTreatmentAlerts(poolOrClient, period) {
   const created = [];
   // Clean up stale alerts for this type/period before re-evaluating
   await deleteStaleAlerts(poolOrClient, { alertType: 'low_treatment_success', period });
 
-  // The same cohort Treatment Success Rate the cards and reports show: patients who started
-  // treatment the year before the period's year. It used to read one month of outcome_summary
-  // for `period` — the pipeline's forecast month, which has no outcomes yet — so it never fired,
-  // and its own formula (finished outcomes only) disagreed with the cards.
-  const year = Number(String(period).slice(0, 4));
-  const { successRate, cohortYear } = await computeTreatmentSuccessRate(poolOrClient, { year });
+  // The same cohort Treatment Success Rate the Dashboard card shows: no year, so patients who
+  // started treatment in the previous calendar year. Not the year of `period` — the pipeline's
+  // forecast month — which in December points at January and would judge a cohort still on
+  // treatment. It used to read one month of outcome_summary for `period` (no outcomes yet), so it
+  // never fired, and its own formula (finished outcomes only) disagreed with the cards.
+  const { successRate, cohortYear } = await computeTreatmentSuccessRate(poolOrClient, {});
   if (successRate == null) return created;
 
   if (successRate < THRESHOLDS.TREATMENT_SUCCESS_TARGET) {

@@ -674,9 +674,9 @@ function buildHeadline(m) {
   const top = (m.highRiskRanked || []).slice(0, 3).map((r) => r.name);
   const checkedNoRise = Array.isArray(m.surge) && m.riskCounts != null;
   if (checkedNoRise && top.length > 0) {
-    return { text: `No unusual rises; highest TB rates in ${nameList(top)}`, tone: 'good' };
+    return { text: `No unusual rises flagged; highest TB rates in ${nameList(top)}`, tone: 'good' };
   }
-  if (checkedNoRise) return { text: 'No unusual rises in any barangay', tone: 'good' };
+  if (checkedNoRise) return { text: 'No unusual rises flagged', tone: 'good' };
   if (top.length > 0) return { text: `Highest TB rates in ${nameList(top)}`, tone: 'neutral' };
   return null;
 }

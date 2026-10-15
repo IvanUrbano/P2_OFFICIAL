@@ -32,10 +32,11 @@ test('a cohort below target raises the alert with the same rate the cards show',
   const pool = poolWith(below);
   const ids = await evaluateTreatmentAlerts(pool, '2026-10-01');
   assert.deepEqual(ids, [7]);
+  const cohortYear = new Date().getFullYear() - 1;
   const cohortQuery = pool.calls.find((c) => c.sql.includes('AS total_patients'));
-  assert.deepEqual(cohortQuery.params, [2025], 'the period year 2026 reports the 2025 treatment cohort');
+  assert.deepEqual(cohortQuery.params, [cohortYear], 'the same cohort as the cards: the previous calendar year');
   const [insert] = pool.inserts();
-  assert.match(insert.params[3], /2025 treatment cohort is 74\.5%/);
+  assert.ok(insert.params[3].includes(`${cohortYear} treatment cohort is 74.5%`), insert.params[3]);
   assert.match(insert.params[3], new RegExp(`below the ${TREATMENT_SUCCESS_TARGET}% target`));
 });
 
@@ -48,6 +49,13 @@ test('a cohort on target raises nothing', async () => {
 test('an empty cohort raises nothing (no rate, not 0%)', async () => {
   const pool = poolWith({ total_patients: 0, cured_count: 0, completed_count: 0 });
   assert.deepEqual(await evaluateTreatmentAlerts(pool, '2026-10-01'), []);
+});
+
+test('the cohort does not follow the pipeline period (a January forecast month must not pick a cohort still on treatment)', async () => {
+  const pool = poolWith(below);
+  await evaluateTreatmentAlerts(pool, `${new Date().getFullYear() + 1}-01-01`);
+  const cohortQuery = pool.calls.find((c) => c.sql.includes('AS total_patients'));
+  assert.deepEqual(cohortQuery.params, [new Date().getFullYear() - 1]);
 });
 
 test('no longer reads one month of outcome_summary', async () => {
