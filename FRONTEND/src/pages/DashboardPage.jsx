@@ -15,7 +15,7 @@ import ChartInsight from '../components/ChartInsight';
 import { trendInsight, riskInsight, shareInsight, outcomeInsight, forecastInsight } from '../utils/chartInsights';
 import { getDashboardInsight } from '../services/insightService';
 import {
-  dataYears, barangayNames, scopeByBarangay, scopeMonthly, filterQuery, recommendFilters,
+  dataYears, yearSpan, barangayNames, scopeByBarangay, scopeMonthly, filterQuery, recommendFilters,
 } from '../utils/dashboardFilters';
 import { summarizeForecast, topBarangayRanking } from '../utils/dashboardForecast';
 import {
@@ -274,6 +274,25 @@ function SectionCard({ title, description, action, actionTo, insight, children }
 
 import SkeletonBlock from '../../components/SkeletonBlock';
 
+/** { assessment_year, data_year } of a choropleth response, or null when it has none. */
+function snapshotYears(data) {
+  return data?.assessment_year ? { assessment_year: data.assessment_year, data_year: data.data_year ?? null } : null;
+}
+
+/** Small tag on a KPI card naming the year(s) its figure covers. Renders nothing without a label. */
+function YearTag({ label, title }) {
+  if (!label) return null;
+  return (
+    <span
+      className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
+      style={{ background: '#EEF2F7', color: '#475569' }}
+      title={title}
+    >
+      {label}
+    </span>
+  );
+}
+
 function SkeletonCard() {
   return (
     <div className="overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
@@ -336,6 +355,8 @@ export default function DashboardPage() {
   // capped slice, so their length is not the unresolved count.
   const [alertsTotal, setAlertsTotal] = useState(null);
   const [riskAll, setRiskAll] = useState([]);
+  // Years of the latest risk snapshot: { assessment_year, data_year } from the choropleth response.
+  const [riskYearsAll, setRiskYearsAll] = useState(null);
   const [pipelineStatus, setPipelineStatus] = useState(null);
   const [demographicsAll, setDemographicsAll] = useState([]);
   const [statusSummary, setStatusSummary] = useState(null); // diagnosed / on treatment counts
@@ -400,7 +421,7 @@ export default function DashboardPage() {
   const filterKey = JSON.stringify([filters.year, scopeNames]);
   const filtersActive = Boolean(filters.year || filters.scope);
 
-  const [riskForYear, setRiskForYear] = useState(null);   // { year, rows } — risk snapshot of the chosen year
+  const [riskForYear, setRiskForYear] = useState(null);   // { year, rows, years } — risk snapshot of the chosen year
   const [scopedKey, setScopedKey] = useState(null);       // filter set the server figures currently belong to
   const scopedSeq = useRef(0);
   const requestedKey = useRef(null);
@@ -450,7 +471,7 @@ export default function DashboardPage() {
     setStatusSummary(statusRes.data?.summary || null);
     setTsrData(tsrRes.data || null);
     setCfrData(cfrRes.data || null);
-    setRiskForYear(riskRes ? { year: f.year, rows: riskRes.data?.choropleth || [] } : null);
+    setRiskForYear(riskRes ? { year: f.year, rows: riskRes.data?.choropleth || [], years: snapshotYears(riskRes.data) } : null);
     setScopedKey(key);
     return [outcomesRes, demoRes, statusRes, tsrRes, cfrRes].some((r) => r.ok);
   }, [settle]);
@@ -489,6 +510,7 @@ export default function DashboardPage() {
     setAlertsAll(alertsRes.data?.alerts || []);
     setAlertsTotal(alertsRes.data?.pagination?.total ?? null);
     setRiskAll(riskRes.data?.choropleth || []);
+    setRiskYearsAll(snapshotYears(riskRes.data));
     setPipelineStatus(pipelineRes.data?.latest_run || null);
     setFreshness(freshRes.data || null);
 
@@ -522,7 +544,9 @@ export default function DashboardPage() {
     () => scopeMonthly(monthlyAll, { year: filters.year, barangays: scopeNames }),
     [monthlyAll, filters.year, scopeNames]
   );
-  const riskSource = filters.year && riskForYear?.year === filters.year ? riskForYear.rows : riskAll;
+  const riskForChosenYear = Boolean(filters.year && riskForYear?.year === filters.year);
+  const riskSource = riskForChosenYear ? riskForYear.rows : riskAll;
+  const riskYears = riskForChosenYear ? riskForYear.years : riskYearsAll;
   const riskData = useMemo(() => scopeByBarangay(riskSource, scopeNames, 'name'), [riskSource, scopeNames]);
   const forecastsData = useMemo(() => scopeByBarangay(forecastsAll, scopeNames), [forecastsAll, scopeNames]);
   const outcomesData = useMemo(() => scopeByBarangay(outcomesAll, scopeNames), [outcomesAll, scopeNames]);
@@ -741,6 +765,10 @@ export default function DashboardPage() {
     try { return new Date(last).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); } catch { return ''; }
   }, [monthlyAll]);
 
+  /* ── Year tags on the KPI cards: which year(s) of data each figure covers ── */
+  const casesYearSpan = useMemo(() => yearSpan(monthlyData), [monthlyData]);
+  const forecastYear = forecastSummary.period ? forecastSummary.period.slice(-4) : '';
+
   const sexData = useMemo(() => {
     const totals = { Male: 0, Female: 0 };
     demographicsData.forEach((r) => {
@@ -921,16 +949,12 @@ export default function DashboardPage() {
   // Unresolved alerts inside the current filter (all of them when no barangay filter is on).
   const alertsCount = scopeNames ? alertsData.length : alertsTotal;
 
-  /* ── Freshness timestamps ──
-   * Last Synced and Last Model Run are DIFFERENT things and are kept apart.
+  /* ── Freshness timestamp ──
+   * Last Model Run. Last Synced is shown in the top bar, not here.
    * This used to be a single "Last Updated" value that took the model
    * pipeline's trained_at and, failing that, fell back to the newest
    * date_of_diagnosis — a clinical date describing data coverage, not a
    * system timestamp, presented under a freshness label. */
-  const lastSynced = useMemo(
-    () => (freshness?.lastSynced ? new Date(freshness.lastSynced) : null),
-    [freshness]
-  );
   const lastModelRun = useMemo(() => {
     if (freshness?.lastModelRun) return new Date(freshness.lastModelRun);
     if (pipelineStatus?.trained_at) return new Date(pipelineStatus.trained_at);
@@ -952,7 +976,6 @@ export default function DashboardPage() {
     return `${Math.floor(diffDays / 30)}mo ago`;
   }, [now]);
 
-  const lastSyncedRelative = useMemo(() => relativeTime(lastSynced), [relativeTime, lastSynced]);
   const lastModelRunRelative = useMemo(() => relativeTime(lastModelRun), [relativeTime, lastModelRun]);
 
   /* ── Animated KPI numbers ── */
@@ -1054,6 +1077,7 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-2">
                   <i className="ri-database-2-line text-sm" style={{ color: '#6B7FA3' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Total TB Cases</span>
+                  <YearTag label={failed.monthly ? '' : casesYearSpan} title="Years of diagnosis included in this total" />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
@@ -1070,6 +1094,7 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-2">
                   <i className="ri-calendar-check-line text-sm" style={{ color: '#B8956A' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>New Cases</span>
+                  <YearTag label={failed.monthly || !monthOverMonth.month ? '' : String(monthOverMonth.month).slice(0, 4)} title="Year of the latest month with recorded cases" />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
@@ -1094,6 +1119,7 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-2">
                   <i className="ri-checkbox-circle-line text-sm" style={{ color: '#6B9E8A' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Success Rate</span>
+                  <YearTag label={failed.tsr || !successRate.cohortYear ? '' : `${successRate.cohortYear} cohort`} title={successRate.cohortYear ? `Patients who started treatment in ${successRate.cohortYear}` : undefined} />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
@@ -1118,6 +1144,7 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-2">
                   <i className="ri-heart-pulse-line text-sm" style={{ color: '#B07070' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Fatality Rate</span>
+                  <YearTag label={failed.cfr ? '' : casesYearSpan} title="Years of diagnosis included in this rate" />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
@@ -1142,6 +1169,10 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-2">
                   <i className="ri-alarm-warning-line text-sm" style={{ color: '#C4886A' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>City Risk Classification</span>
+                  <YearTag
+                    label={failed.risk || !riskYears?.data_year ? '' : String(riskYears.data_year)}
+                    title={riskYears?.data_year ? `${riskYears.assessment_year} risk assessment, based on case data from ${riskYears.data_year}` : undefined}
+                  />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
@@ -1166,6 +1197,7 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-2">
                   <i className="ri-line-chart-line text-sm" style={{ color: '#6B9E9E' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Forecasted</span>
+                  <YearTag label={failed.forecasts || forecastSummary.tier === 'insufficient_data' ? '' : forecastYear} title={forecastSummary.period ? `Forecast for ${forecastSummary.period}` : undefined} />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
@@ -1207,13 +1239,8 @@ export default function DashboardPage() {
           {/* ─── Welcome + NLG Overall Insights Section ─── */}
           <DashboardWelcomeInsightsSection
             user={user}
-            lastSynced={lastSynced}
-            lastSyncedRelative={lastSyncedRelative}
             lastModelRun={lastModelRun}
             lastModelRunRelative={lastModelRunRelative}
-            syncSource={freshness?.syncSource || null}
-            dataSource={freshness?.dataSource || null}
-            freshnessUnavailable={!!failed.freshness}
             refreshing={refreshing}
             onRefresh={handleRefresh}
             insightData={dashboardInsight}

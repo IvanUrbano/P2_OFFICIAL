@@ -6,13 +6,14 @@
  */
 
 const pool = require('../db');
-const { NORMALIZE_OUTCOME_SQL, SUCCESS_OUTCOMES, EVALUATED_TERMINAL_OUTCOMES } = require('./outcomeNormalization');
+const { TREATMENT_SUCCESS_TARGET } = require('./targets');
+const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 
 // ── Thresholds ──────────────────────────────────────────────────────────────
 const THRESHOLDS = {
   CASE_INCREASE_PERCENT: 20,
   FORECAST_INCIDENCE: 4200,  // Annual incidence per 100k (was 350 monthly × 12)
-  TREATMENT_SUCCESS_TARGET: 85,
+  TREATMENT_SUCCESS_TARGET,
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -320,20 +321,14 @@ async function evaluateTreatmentAlerts(poolOrClient, period) {
   // Clean up stale alerts for this type/period before re-evaluating
   await deleteStaleAlerts(poolOrClient, { alertType: 'low_treatment_success', period });
 
-  const result = await poolOrClient.query(
-    `SELECT
-       SUM(CASE WHEN ${NORMALIZE_OUTCOME_SQL} = ANY($2) THEN case_count ELSE 0 END) AS success_count,
-       SUM(CASE WHEN ${NORMALIZE_OUTCOME_SQL} = ANY($3) THEN case_count ELSE 0 END) AS total_count
-     FROM outcome_summary
-     WHERE month = $1`,
-    [period, SUCCESS_OUTCOMES, EVALUATED_TERMINAL_OUTCOMES]
-  );
+  // The same cohort Treatment Success Rate the cards and reports show: patients who started
+  // treatment the year before the period's year. It used to read one month of outcome_summary
+  // for `period` — the pipeline's forecast month, which has no outcomes yet — so it never fired,
+  // and its own formula (finished outcomes only) disagreed with the cards.
+  const year = Number(String(period).slice(0, 4));
+  const { successRate, cohortYear } = await computeTreatmentSuccessRate(poolOrClient, { year });
+  if (successRate == null) return created;
 
-  if (!result.rows.length) return created;
-  const { success_count, total_count } = result.rows[0];
-  if (!total_count || total_count === 0) return created;
-
-  const successRate = (success_count / total_count) * 100;
   if (successRate < THRESHOLDS.TREATMENT_SUCCESS_TARGET) {
     const diff = THRESHOLDS.TREATMENT_SUCCESS_TARGET - successRate;
     const severity = successRate < 70 ? 'critical' : 'high';
@@ -341,7 +336,7 @@ async function evaluateTreatmentAlerts(poolOrClient, period) {
       alertType: 'low_treatment_success',
       severity,
       title: 'Treatment Success Rate Below Target',
-      message: `Treatment success rate for the reporting period is ${successRate.toFixed(1)}%, which is below the ${THRESHOLDS.TREATMENT_SUCCESS_TARGET}% target (difference: ${diff.toFixed(1)} percentage points).`,
+      message: `Treatment success for the ${cohortYear} treatment cohort is ${successRate.toFixed(1)}%, below the ${THRESHOLDS.TREATMENT_SUCCESS_TARGET}% target (difference: ${diff.toFixed(1)} percentage points).`,
       recommendation: `Review treatment adherence programs. Identify patients lost to follow-up and initiate re-engagement measures.`,
       barangayName: null,
       period,

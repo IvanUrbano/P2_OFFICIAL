@@ -29,6 +29,7 @@ const assert = require('node:assert');
 const {
   buildDashboardMetrics,
   generateDashboardInsight,
+  buildHeadline,
   MIN_MONTHS_FOR_COMPLETE_YEAR,
 } = require('../../tbinsight/dashboardInsight');
 
@@ -43,6 +44,8 @@ function createPool({
   monthly = [],
   yearly = [],
   risk = [],
+  prevRisk = [],
+  surge = [],
   forecast = [],
   totals = { total_cases: 0, barangays_with_data: 0, months_covered: 0, earliest_date: null, latest_date: null },
   onTreatment = 0,
@@ -67,6 +70,12 @@ function createPool({
       // must not be reached before the summary branch.
       if (s.includes('AS year') && s.includes('AS months_covered')) {
         maybeFail('yearly'); return { rows: yearly };
+      }
+      if (s.includes('FROM alerts')) {
+        maybeFail('surge'); return { rows: surge };
+      }
+      if (s.includes('barangay_risk_scores') && s.includes('period <')) {
+        maybeFail('prevRisk'); return { rows: prevRisk };
       }
       if (s.includes('barangay_risk_scores')) {
         maybeFail('risk'); return { rows: risk };
@@ -608,5 +617,128 @@ describe('generateDashboardInsight — map interpretation', () => {
   it('reports no High Risk area when none exist', () => {
     const t = text(base({ riskCounts: { high: 0, medium: 3, low: 6, noData: 0, assessed: 9, assessmentYear: 2026 }, highRiskBarangays: [] }));
     assert.match(t, /No barangay is classified High Risk/);
+  });
+});
+
+// ==================== HEADLINE ====================
+
+describe('buildHeadline — names the barangays the cards cannot show', () => {
+  const high = (...names) => names.map((n) => ({ name: n, incidence: 100 }));
+  const base = { riskCounts: { high: 10, assessed: 30 }, surge: [], newlyHigh: [], highRiskRanked: high('Rosario', 'Manggahan', 'Santolan', 'Pinagbuhatan') };
+
+  it('quiet month: says nothing unusual and where rates are highest', () => {
+    assert.deepStrictEqual(buildHeadline(base),
+      { text: 'No unusual rises; highest TB rates in Rosario, Manggahan and Santolan', tone: 'good' });
+  });
+
+  it('an unusual rise comes first, tone alert', () => {
+    assert.deepStrictEqual(buildHeadline({ ...base, surge: ['Ugong'] }),
+      { text: 'Unusual rise in Ugong', tone: 'alert' });
+  });
+
+  it('many barangays are shortened to "and N others"', () => {
+    assert.strictEqual(buildHeadline({ ...base, surge: ['A', 'B', 'C', 'D', 'E'] }).text, 'Unusual rise in A, B and 3 others');
+  });
+
+  it('newly High Risk barangays, tone watch', () => {
+    assert.deepStrictEqual(buildHeadline({ ...base, newlyHigh: ['Ugong', 'Bambang'] }),
+      { text: 'Ugong and Bambang newly High Risk', tone: 'watch' });
+  });
+
+  it('both, two barangays each (live case): every name is shown', () => {
+    assert.deepStrictEqual(buildHeadline({ ...base, surge: ['Ugong', 'San Miguel'], newlyHigh: ['Bagong Katipunan', 'Manggahan'] }),
+      { text: 'Unusual rise in Ugong and San Miguel; Bagong Katipunan and Manggahan newly High Risk', tone: 'alert' });
+  });
+
+  it('both, three or more: one name and "N others"', () => {
+    assert.strictEqual(buildHeadline({ ...base, surge: ['A', 'B', 'C'], newlyHigh: ['D'] }).text,
+      'Unusual rise in A and 2 others; D newly High Risk');
+  });
+
+  it('both: rise first, then newly High Risk', () => {
+    assert.deepStrictEqual(buildHeadline({ ...base, surge: ['Rosario'], newlyHigh: ['Ugong'] }),
+      { text: 'Unusual rise in Rosario; Ugong newly High Risk', tone: 'alert' });
+  });
+
+  it('never claims "no unusual rises" when that could not be checked', () => {
+    assert.deepStrictEqual(buildHeadline({ ...base, surge: null }),
+      { text: 'Highest TB rates in Rosario, Manggahan and Santolan', tone: 'neutral' });
+    // No risk assessment yet means the alert rules have not run either.
+    assert.strictEqual(buildHeadline({ ...base, riskCounts: null, highRiskRanked: null }), null);
+  });
+
+  it('does not repeat the card figures (trend, success rate, High Risk count)', () => {
+    const h = buildHeadline({ ...base, trend: { direction: 'increasing', changePercent: 30 }, treatment: { successRate: 70 } });
+    assert.ok(!/%|success|cases up|10/i.test(h.text), h.text);
+  });
+
+  it('stays short enough to read at a glance', () => {
+    const h = buildHeadline({ ...base, surge: ['Kapitolyo', 'San Miguel', 'Caniogan', 'X'], newlyHigh: ['Santa Lucia', 'Dela Paz', 'Y', 'Z'] });
+    assert.ok(h.text.split(' ').length <= 16, h.text);
+  });
+});
+
+describe('buildDashboardMetrics — headline inputs', () => {
+  it('reads the barangays named by the active surge alert', async () => {
+    const m = await buildDashboardMetrics(createPool(healthyOptions({
+      surge: [{ metadata: { affected_barangays: ['Ugong', 'Rosario'] } }],
+    })));
+    assert.deepStrictEqual(m.surge, ['Ugong', 'Rosario']);
+  });
+
+  it('no active surge alert is an empty list; a failed lookup is null', async () => {
+    assert.deepStrictEqual((await buildDashboardMetrics(createPool(healthyOptions()))).surge, []);
+    assert.strictEqual((await buildDashboardMetrics(createPool(healthyOptions({ fail: ['surge'] })))).surge, null);
+  });
+
+  it('finds barangays that are High now but were not in the previous assessment', async () => {
+    const m = await buildDashboardMetrics(createPool(healthyOptions({
+      prevRisk: [
+        { barangay_name: 'High1', risk_class: 'Medium' },
+        { barangay_name: 'High2', risk_class: 'High' },
+        { barangay_name: 'High3', risk_class: 'Low' },
+      ],
+    })));
+    assert.deepStrictEqual(m.newlyHigh, ['High1', 'High3']);
+  });
+
+  it('no previous assessment means newly-High is unknown, not none', async () => {
+    assert.strictEqual((await buildDashboardMetrics(createPool(healthyOptions()))).newlyHigh, null);
+  });
+
+  it('ranks High Risk barangays by their 12-month rate and skips ones without a rate', async () => {
+    const m = await buildDashboardMetrics(createPool(healthyOptions({
+      risk: [
+        { barangay_name: 'A', risk_class: 'High', rate_12m: 300, period_year: 2026 },
+        { barangay_name: 'B', risk_class: 'High', rate_12m: null, period_year: 2026 },
+        { barangay_name: 'C', risk_class: 'High', rate_12m: 500, period_year: 2026 },
+        { barangay_name: 'D', risk_class: 'Low', rate_12m: 900, period_year: 2026 },
+      ],
+    })));
+    assert.deepStrictEqual(m.highRiskRanked.map((r) => r.name), ['C', 'A']);
+  });
+
+  it('never ranks by the legacy single-month figure', async () => {
+    // Live case: Bagong Katipunan had a legacy figure of 0.0 (no cases in the latest month)
+    // while its 12-month rate was 816.8.
+    const pool = createPool(healthyOptions({
+      risk: [
+        { barangay_name: 'Santa Rosa', risk_class: 'High', rate_12m: 1150.5, incidence_per_100k: 2301.1, period_year: 2026 },
+        { barangay_name: 'Kapasigan', risk_class: 'High', rate_12m: 1405.1, incidence_per_100k: 1187.4, period_year: 2026 },
+      ],
+    }));
+    const m = await buildDashboardMetrics(pool);
+    assert.deepStrictEqual(m.highRiskRanked.map((r) => r.name), ['Kapasigan', 'Santa Rosa']);
+    const riskSql = pool.calls.find((c) => c.sql.includes('FROM barangay_risk_scores') && c.sql.includes('risk_class') && !c.sql.includes('period <')).sql;
+    assert.match(riskSql, /rolling_12m_incidence/);
+  });
+
+  it('the insight response carries the headline; none without records', async () => {
+    const insight = generateDashboardInsight(await buildDashboardMetrics(createPool(healthyOptions())));
+    assert.ok(['alert', 'watch', 'good', 'neutral'].includes(insight.headline.tone));
+    const empty = generateDashboardInsight(await buildDashboardMetrics(createPool({
+      totals: { total_cases: 0, barangays_with_data: 0, months_covered: 0, earliest_date: null, latest_date: null },
+    })));
+    assert.strictEqual(empty.headline, null);
   });
 });

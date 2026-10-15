@@ -26,6 +26,15 @@ export function dataYears(monthly) {
     .reverse();
 }
 
+/** The years the rows cover as a label: '2023–2025', '2025', or '' when there are none. */
+export function yearSpan(monthly) {
+  const years = dataYears(monthly);
+  if (years.length === 0) return '';
+  const first = years[years.length - 1];
+  const last = years[0];
+  return first === last ? last : `${first}–${last}`;
+}
+
 /** Barangay names that exist anywhere in the data, A-Z. */
 export function barangayNames(monthly, risk) {
   const seen = new Map();

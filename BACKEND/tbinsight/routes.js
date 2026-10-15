@@ -22,6 +22,7 @@ const { computeCaseFatalityRate } = require('./caseFatalityRate');
 const { pasigResidentOnly, countedCases } = require('./locationScope');
 const { barangayCondition } = require('./barangayFilter');
 const { loadAdjacency } = require('./barangayAdjacency');
+const { TREATMENT_SUCCESS_TARGET } = require('./targets');
 const {
   getPopulation, getPopulationMap, calculateAnnualizedIncidence,
   getAvailablePopulationYears, getPopulationReferences, getPopulationByYear,
@@ -2846,8 +2847,8 @@ router.get('/reports/summary', async (req, res) => {
 
     // Recommendations (rule-based)
     const recommendations = [];
-    if (successRate !== null && successRate < 85) {
-      recommendations.push('Treatment success rate is below the 85% target. Strengthen treatment adherence monitoring and patient follow-up.');
+    if (successRate !== null && successRate < TREATMENT_SUCCESS_TARGET) {
+      recommendations.push(`Treatment success rate is below the ${TREATMENT_SUCCESS_TARGET}% target. Strengthen treatment adherence monitoring and patient follow-up.`);
     }
     const highRiskBarangays = riskRes.rows.filter(r => (r.risk_class === 'High' || r.risk_class === 'Very High')
       && (!barangay || r.barangay_name === barangay));
@@ -3261,8 +3262,9 @@ router.get('/insights/analytics', async (req, res) => {
  * overview page and must not render the seven-section Analytics narrative.
  * Takes no filters — the Dashboard has no global filter controls.
  *
- * Returns { type, summary, sections, meta }. `summary` is the headline
- * paragraph the Dashboard highlight panel renders.
+ * Returns { type, headline, summary, sections, meta }. `headline` is the
+ * one-line { text, tone } at the top of the Dashboard welcome panel;
+ * `summary` is the overview paragraph under it.
  */
 router.get('/insights/dashboard', async (req, res) => {
   try {

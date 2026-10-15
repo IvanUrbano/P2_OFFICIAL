@@ -4,6 +4,7 @@ import Logo from './Logo';
 import API from '../src/api/axios';
 import { avatarColorForRole, initialsForUsername } from '../src/utils/userIdentity';
 import { getPrefs, onPrefsChange } from '../src/utils/preferences';
+import { formatSyncStamp } from '../src/utils/syncStamp';
 
 const NAV_ITEMS = [
   { icon: 'ri-pie-chart-fill', label: 'Dashboard', path: '/dashboard' },
@@ -40,6 +41,9 @@ export default function Topbar({ user }) {
   const [showBellCount, setShowBellCount] = useState(() => getPrefs().bellCount);
   useEffect(() => onPrefsChange(() => setShowBellCount(getPrefs().bellCount)), []);
   const [recentNotifs, setRecentNotifs] = useState([]);
+  // undefined until the first response; null when no sync has been recorded.
+  const [lastSynced, setLastSynced] = useState(undefined);
+  const [syncFailed, setSyncFailed] = useState(false);
 
   const storedUser = user ?? (() => {
     const s = localStorage.getItem('user');
@@ -93,6 +97,22 @@ export default function Topbar({ user }) {
     return () => clearInterval(interval);
   }, []);
 
+  // Last Synced = when data last arrived from PASIG TB-IS (same source as the Dashboard).
+  useEffect(() => {
+    const fetchFreshness = async () => {
+      try {
+        const res = await API.get('/api/tb/data-freshness');
+        setLastSynced(res.data?.lastSynced ?? null);
+        setSyncFailed(false);
+      } catch {
+        setSyncFailed(true);
+      }
+    };
+    fetchFreshness();
+    const interval = setInterval(fetchFreshness, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
   const handleLogout = async () => {
     try {
       await API.post('/api/auth/logout');
@@ -101,13 +121,6 @@ export default function Topbar({ user }) {
     localStorage.removeItem('tbinsight_session');
     sessionStorage.removeItem('csrf_token');
     navigate('/login');
-  };
-
-  const formatSyncTime = () => {
-    const now = new Date();
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${days[now.getDay()]}, ${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()} | ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
   };
 
   return (
@@ -142,7 +155,7 @@ export default function Topbar({ user }) {
                 <i className="ri-refresh-line text-[11px]" style={{ color: '#60A5FA' }} />
               </div>
               <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
-                Last Synced: <span style={{ color: '#CBD5E1' }}>{formatSyncTime()}</span>
+                Last Synced: <span style={{ color: '#CBD5E1' }}>{formatSyncStamp(lastSynced, { failed: syncFailed })}</span>
               </span>
             </div>
 

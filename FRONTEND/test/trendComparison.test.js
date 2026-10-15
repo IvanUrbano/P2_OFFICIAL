@@ -203,6 +203,21 @@ describe('matchesNonYearFilters', () => {
     assert.equal(matchesNonYearFilters(c, { barangay: '', sex: '' }), true);
   });
 
+  it('every filter at once narrows to the one matching case', () => {
+    const all = { barangay: 'Pinagbuhatan', sex: 'Female', ageGroup: '35-44', outcome: 'DIED', status: 'CLOSED', bacteriological: 'Bacteriologically-confirmed TB' };
+    const target = { ...c, case_status: 'CLOSED' };
+    const others = [
+      { ...target, barangay_name: 'Oranbo' },
+      { ...target, sex: 'Male' },
+      { ...target, age: 30 },
+      { ...target, outcome_status: 'CURED' },
+      { ...target, case_status: 'ON TREATMENT' },
+      { ...target, bacteriological_status: 'Clinically-diagnosed TB' },
+    ];
+    const hits = [target, ...others].filter((x) => matchesNonYearFilters(x, all));
+    assert.deepEqual(hits, [target]);
+  });
+
   it('multiple filters must ALL pass (AND)', () => {
     assert.equal(
       matchesNonYearFilters(c, { barangay: 'Pinagbuhatan', sex: 'Female', outcome: 'DIED' }),

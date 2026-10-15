@@ -4,13 +4,11 @@ import renderFormattedText from '../utils/renderFormattedText.jsx';
 /**
  * Dashboard welcome header + NLG overview panel.
  *
- * Freshness: three DISTINCT concepts, displayed separately and never merged
- * under an ambiguous "Last Updated" label:
+ * Freshness: DISTINCT concepts, displayed separately and never merged
+ * under an ambiguous "Last Updated" label (Last Synced is shown in the top
+ * bar, not here):
  *   MONITORING PERIOD — latest reporting period represented by the TB case
  *     data (derived from date_of_diagnosis), e.g. "December 2025".
- *   LAST DATA SYNC   — most recent SUCCESSFUL transfer/import of TB data into
- *     TBInsight. Unchanged by opening or refreshing the Dashboard, by NLG
- *     generation, or by a pipeline run that brought no new data.
  *   LAST MODEL RUN   — latest normal analytics/model pipeline execution
  *     (run_type = 'pipeline'). Unchanged by merely viewing or refreshing.
  * This component previously received a single `lastUpdated` prop that was the
@@ -25,15 +23,19 @@ import renderFormattedText from '../utils/renderFormattedText.jsx';
  * headline always fell back to placeholder copy. This is template-based NLG;
  * it is not an LLM and is not described as one.
  */
+// Dot colour for the headline's tone (from GET /api/tb/insights/dashboard): an unusual rise,
+// newly High Risk barangays, nothing unusual, or nothing to judge. The words carry the meaning too.
+const HEADLINE_TONE = {
+  alert: '#F87171',
+  watch: '#FBBF24',
+  good: '#34D399',
+  neutral: '#94A3B8',
+};
+
 export default function DashboardWelcomeInsightsSection({
   user = null,
-  lastSynced = null,
-  lastSyncedRelative = '',
   lastModelRun = null,
   lastModelRunRelative = '',
-  syncSource = null,
-  dataSource = null,
-  freshnessUnavailable = false,
   refreshing = false,
   onRefresh = () => { },
   insightData = null,
@@ -58,15 +60,10 @@ export default function DashboardWelcomeInsightsSection({
     }
   };
 
-  const formattedLastSynced = useMemo(() => formatStamp(lastSynced), [lastSynced]);
   const formattedLastModelRun = useMemo(() => formatStamp(lastModelRun), [lastModelRun]);
 
   const monitoringPeriodLabel = monitoringPeriod || 'N/A';
 
-  // Data Source describes the actual architecture. TBInsight receives records
-  // from the Pasig TB Information System; it does not integrate directly with
-  // DOH ITIS, and must not claim to.
-  const dataSourceLabel = dataSource || 'PASIG TB-IS';
   const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
   const assignedBarangay = user?.barangay?.name || user?.barangay_name || user?.facility?.barangay_name || null;
   const assignedFacility = user?.facility?.name || user?.facility_name || null;
@@ -165,7 +162,17 @@ export default function DashboardWelcomeInsightsSection({
 
         <div className="border-b border-white/15 px-5 py-5 sm:px-6">
           <h3 className="text-xs font-bold uppercase tracking-wide text-[#BFD3E6]">Latest overview</h3>
-          <p className="mt-2 text-sm leading-relaxed text-white">
+          {insightData?.headline?.text && (
+            <p className="mt-2 flex items-start gap-2 text-base font-semibold leading-snug text-white sm:text-lg">
+              <span
+                aria-hidden="true"
+                className="mt-[0.45em] h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ background: HEADLINE_TONE[insightData.headline.tone] || HEADLINE_TONE.neutral }}
+              />
+              {insightData.headline.text}
+            </p>
+          )}
+          <p className={`${insightData?.headline?.text ? 'mt-2 text-[13px] text-[#CBD5E1]' : 'mt-2 text-sm text-white'} leading-relaxed`}>
             {insightData?.summary
               ? renderFormattedText(insightData.summary)
               : insightLoading
@@ -176,27 +183,12 @@ export default function DashboardWelcomeInsightsSection({
           </p>
         </div>
 
-        <dl className="grid grid-cols-1 gap-x-5 gap-y-4 bg-[#12365F] px-5 py-4 sm:grid-cols-2 sm:px-6 xl:grid-cols-4">
+        <dl className="grid grid-cols-1 gap-x-5 gap-y-4 bg-[#12365F] px-5 py-4 sm:grid-cols-2 sm:px-6">
           <div className="min-w-0">
-            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#AFC6DC]">Data source</dt>
-            <dd className="mt-1 text-xs font-semibold text-white">{dataSourceLabel}</dd>
-          </div>
-          <div className="min-w-0 xl:border-l xl:border-white/15 xl:pl-5">
             <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#AFC6DC]">Monitoring period</dt>
             <dd className="mt-1 text-xs font-semibold text-white">{monitoringPeriodLabel}</dd>
           </div>
-          <div className="min-w-0 xl:border-l xl:border-white/15 xl:pl-5">
-            <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#AFC6DC]">Last data sync</dt>
-            <dd className="mt-1 text-xs font-semibold leading-snug text-white">{freshnessUnavailable ? 'Unavailable' : formattedLastSynced}</dd>
-            {!freshnessUnavailable && lastSyncedRelative && (
-              <dd className="mt-0.5 text-[10px] leading-snug text-[#BFD3E6]">
-                {lastSyncedRelative}
-                {syncSource === 'import' ? ' · file import' : ''}
-                {syncSource === 'webhook' ? ' · webhook sync' : ''}
-              </dd>
-            )}
-          </div>
-          <div className="min-w-0 xl:border-l xl:border-white/15 xl:pl-5">
+          <div className="min-w-0 sm:border-l sm:border-white/15 sm:pl-5">
             <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#AFC6DC]">Last model run</dt>
             <dd className="mt-1 text-xs font-semibold leading-snug text-white">{formattedLastModelRun}</dd>
             {lastModelRunRelative && <dd className="mt-0.5 text-[10px] text-[#BFD3E6]">{lastModelRunRelative}</dd>}

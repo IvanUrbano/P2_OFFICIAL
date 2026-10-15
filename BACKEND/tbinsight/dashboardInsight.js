@@ -75,7 +75,7 @@ async function buildDashboardMetrics(pool) {
     return null;
   });
 
-  const [monthlyRes, yearlyRes, riskRes, forecastRes, totalRes, onTreatmentRes] = await Promise.all([
+  const [monthlyRes, yearlyRes, riskRes, forecastRes, totalRes, onTreatmentRes, prevRiskRes, surgeRes] = await Promise.all([
     // Monthly counts, newest first — drives the 3-month trend comparison.
     safe(pool.query(`
       SELECT DATE_TRUNC('month', date_of_diagnosis)::DATE AS month,
@@ -115,9 +115,11 @@ async function buildDashboardMetrics(pool) {
     // one for any timezone east of UTC.
     safe(pool.query(`
       SELECT barangay_name, risk_class, model_type,
+             (features->>'rolling_12m_incidence')::DOUBLE PRECISION AS rate_12m,
              EXTRACT(YEAR FROM period)::INTEGER AS period_year
       FROM barangay_risk_scores
       WHERE period = (SELECT MAX(period) FROM barangay_risk_scores)
+      ORDER BY rate_12m DESC NULLS LAST, barangay_name
     `), 'risk'),
 
     // Persisted forecast rows for ONE period: the first forecast month after the latest
@@ -154,6 +156,24 @@ async function buildDashboardMetrics(pool) {
       WHERE case_status = 'ON TREATMENT'
         AND ${countedCases()}
     `), 'onTreatment'),
+
+    // The risk assessment before the latest one, to find barangays that just became High.
+    safe(pool.query(`
+      SELECT barangay_name, risk_class
+      FROM barangay_risk_scores
+      WHERE period = (SELECT MAX(period) FROM barangay_risk_scores
+                      WHERE period < (SELECT MAX(period) FROM barangay_risk_scores))
+    `), 'prevRisk'),
+
+    // The active "unusual rise" alert. Each alert evaluation deletes the unresolved ones
+    // before writing new ones, so at most one is current; a resolved one has been handled.
+    safe(pool.query(`
+      SELECT metadata
+      FROM alerts
+      WHERE alert_type = 'case_increase' AND status <> 'resolved'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `), 'surge'),
   ]);
 
   // --- 3-month trend (same comparison shape as the Analytics insight) ---
@@ -255,6 +275,7 @@ async function buildDashboardMetrics(pool) {
   // snapshot does not have.
   let riskCounts = null;
   let highRiskBarangays = null;
+  let highRiskRanked = null;
   if (riskRes) {
     const counts = { high: 0, medium: 0, low: 0, noData: 0, assessed: 0, assessmentYear: null };
     const highNames = [];
@@ -278,12 +299,32 @@ async function buildDashboardMetrics(pool) {
     if (counts.assessed > 0) {
       riskCounts = counts;
       highRiskBarangays = highNames;
+      // Highest 12-month rate first: the Random Forest's rolling_12m_incidence (annualised cases
+      // per 100k over the 12 months before the assessment), the rate the GIS page explains. Not
+      // incidence_per_100k, a legacy latest-month × 12 figure (a High barangay with no cases that
+      // month reads 0). A barangay with no rate is left out so "highest TB rates" is never
+      // claimed for it.
+      highRiskRanked = riskRes.rows
+        .filter((r) => (r.risk_class || '').toLowerCase() === 'high' && r.rate_12m != null)
+        .map((r) => ({ name: r.barangay_name, incidence: Number(r.rate_12m) }))
+        .sort((a, b) => b.incidence - a.incidence);
     } else {
       // Nothing was classified — "no assessment exists" is not "zero High
       // Risk barangays", so the metric is reported unavailable instead.
       unavailable.push('risk');
     }
   }
+
+  // --- Headline inputs: what changed, by barangay (the cards only give counts) ---
+  // null = could not be determined; [] = checked, none.
+  let newlyHigh = null;
+  if (highRiskBarangays && prevRiskRes && prevRiskRes.rows.length > 0) {
+    const prev = new Map(prevRiskRes.rows.map((r) => [r.barangay_name, (r.risk_class || '').toLowerCase()]));
+    newlyHigh = highRiskBarangays.filter((n) => prev.has(n) && prev.get(n) !== 'high' && prev.get(n) !== '');
+  }
+  const surge = surgeRes
+    ? (surgeRes.rows[0]?.metadata?.affected_barangays || [])
+    : null;
 
   // --- Map pattern: connected groups of High Risk barangays (shared borders) ---
   let mapPattern = null;
@@ -394,6 +435,9 @@ async function buildDashboardMetrics(pool) {
     annual,
     riskCounts,
     highRiskBarangays,
+    highRiskRanked,
+    newlyHigh,
+    surge,
     mapPattern,
     treatment,
     forecast,
@@ -584,6 +628,60 @@ function buildOverallSummary(m) {
 }
 
 /**
+ * 'A' · 'A and B' · 'A, B and C' · 'A, B and 3 others' — keeps the headline short.
+ * maxNames 2 gives 'A and B', or 'A and 2 others' for three (used when the headline has two parts).
+ */
+function nameList(names, maxNames = 3) {
+  if (names.length <= maxNames) {
+    return names.length <= 2 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  }
+  const shown = names.slice(0, Math.max(1, maxNames - 1));
+  const rest = names.length - shown.length;
+  return `${shown.join(', ')} and ${rest} other${rest === 1 ? '' : 's'}`;
+}
+
+/**
+ * One-line headline: WHERE to look, by barangay name. The cards under it already show the
+ * counts and rates (cases, success rate, fatality rate, number of High Risk barangays), so
+ * the headline repeats none of them. In order of urgency:
+ *   1. an unusual rise (the active case_increase alert: last 3 months vs the same months a
+ *      year earlier, tested against chance)            → tone 'alert'
+ *   2. barangays that became High Risk in the latest assessment → tone 'watch'
+ *   3. otherwise: no unusual rises, and the High Risk barangays with the highest incidence
+ *      → tone 'good' ('neutral' when the rise check is unavailable)
+ * "No unusual rises" needs both the alert lookup and a risk assessment (the pipeline that
+ * runs the alert rules); without them it is not claimed.
+ *
+ * @returns {{text: string, tone: string}|null}
+ */
+function buildHeadline(m) {
+  const parts = [];
+  let tone = 'neutral';
+  const rising = m.surge && m.surge.length > 0;
+  const newly = m.newlyHigh && m.newlyHigh.length > 0;
+  // Two parts at once: at most two names each, so the line stays short.
+  const maxNames = rising && newly ? 2 : 3;
+  if (rising) {
+    parts.push(`Unusual rise in ${nameList(m.surge, maxNames)}`);
+    tone = 'alert';
+  }
+  if (newly) {
+    parts.push(`${nameList(m.newlyHigh, maxNames)} newly High Risk`);
+    if (tone !== 'alert') tone = 'watch';
+  }
+  if (parts.length > 0) return { text: parts.join('; '), tone };
+
+  const top = (m.highRiskRanked || []).slice(0, 3).map((r) => r.name);
+  const checkedNoRise = Array.isArray(m.surge) && m.riskCounts != null;
+  if (checkedNoRise && top.length > 0) {
+    return { text: `No unusual rises; highest TB rates in ${nameList(top)}`, tone: 'good' };
+  }
+  if (checkedNoRise) return { text: 'No unusual rises in any barangay', tone: 'good' };
+  if (top.length > 0) return { text: `Highest TB rates in ${nameList(top)}`, tone: 'neutral' };
+  return null;
+}
+
+/**
  * Generate the Dashboard insight from pre-computed metrics.
  *
  * Template-based NLG: it formats numbers that buildDashboardMetrics already
@@ -591,13 +689,14 @@ function buildOverallSummary(m) {
  * section builder omits only its own section.
  *
  * @param {object} metrics - output of buildDashboardMetrics
- * @returns {{type: string, summary: string, sections: object[], meta: object}}
+ * @returns {{type: string, headline: object|null, summary: string, sections: object[], meta: object}}
  */
 function generateDashboardInsight(metrics) {
   const noData = !metrics.summary || !metrics.summary.totalCases;
   if (noData) {
     return {
       type: 'dashboard',
+      headline: null,
       summary: 'No TB records are available yet, so no overview can be generated. Import or synchronise TB records to populate the Dashboard.',
       sections: [],
       meta: {
@@ -626,6 +725,13 @@ function generateDashboardInsight(metrics) {
     }
   }
 
+  let headline = null;
+  try {
+    headline = buildHeadline(metrics);
+  } catch (err) {
+    console.error('Dashboard NLG headline builder failed:', err.message);
+  }
+
   let summary;
   try {
     summary = buildOverallSummary(metrics);
@@ -645,6 +751,7 @@ function generateDashboardInsight(metrics) {
 
   return {
     type: 'dashboard',
+    headline,
     summary,
     sections,
     meta: {
@@ -660,5 +767,6 @@ function generateDashboardInsight(metrics) {
 module.exports = {
   buildDashboardMetrics,
   generateDashboardInsight,
+  buildHeadline,
   MIN_MONTHS_FOR_COMPLETE_YEAR,
 };
