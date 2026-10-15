@@ -200,6 +200,12 @@ function SkillValue({ skill }) {
   );
 }
 
+/** Forecast accuracy = 100% − WAPE (share of cases missed), never below 0%. */
+function forecastAccuracy(wape) {
+  if (wape == null || !Number.isFinite(Number(wape))) return '—';
+  return `${Math.max(0, 100 - Number(wape)).toFixed(1)}%`;
+}
+
 /** ARIMA accuracy, one row per scope, most useful first. */
 function ForecastAccuracyTable({ rows }) {
   return (
@@ -213,8 +219,8 @@ function ForecastAccuracyTable({ rows }) {
           <thead>
             <tr style={{ color: '#64748B' }}>
               <th className="px-4 py-2 font-semibold">Forecast of</th>
+              <th className="px-4 py-2 text-right font-semibold">Accuracy</th>
               <th className="px-4 py-2 text-right font-semibold">Average miss</th>
-              <th className="px-4 py-2 text-right font-semibold">Share missed</th>
               <th className="px-4 py-2 text-right font-semibold">Better than 12-month average</th>
             </tr>
           </thead>
@@ -225,8 +231,8 @@ function ForecastAccuracyTable({ rows }) {
                   <span className="font-semibold text-[#0F2D52]">{row.label}</span>
                   <span className="block text-[11px] text-[#64748B]">{row.hint}</span>
                 </td>
+                <td className="whitespace-nowrap px-4 py-2.5 text-right text-sm font-extrabold tabular-nums text-[#0F2D52]">{forecastAccuracy(row.wape)}</td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-[#334155]">{row.mae == null ? '—' : `${Number(row.mae).toFixed(1)} cases`}</td>
-                <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-[#334155]">{row.wape == null ? '—' : `${Number(row.wape).toFixed(1)}%`}</td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-right"><SkillValue skill={row.skill} /></td>
               </tr>
             ))}
@@ -234,6 +240,7 @@ function ForecastAccuracyTable({ rows }) {
         </table>
       </div>
       <p className="px-4 py-2.5 text-[11px] leading-relaxed text-[#64748B]" style={{ borderTop: '1px solid #F1F5F9' }}>
+        <strong className="text-[#475569]">Accuracy:</strong> 100% minus the share of cases the forecast missed (WAPE).{' '}
         <strong className="text-[#475569]">Better than 12-month average:</strong> how much smaller the miss is than simply repeating the past 12-month average. Above 0% means the forecast is more useful.
       </p>
     </div>
