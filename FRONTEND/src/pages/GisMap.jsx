@@ -349,11 +349,6 @@ export default function GisMap() {
   const [barangayCfr, setBarangayCfr] = useState(null);
   const [barangayInterventionCount, setBarangayInterventionCount] = useState(0);
   const [hoveredBarangay, setHoveredBarangay] = useState(null);
-  // Legacy weighted risk_score breakdown — hidden by default (see item 12 of
-  // the GIS/RF audit follow-up): it must not be presented alongside the RF
-  // classification as if it explained it, so it stays out of sight until
-  // explicitly opened.
-  const [showLegacyIndex, setShowLegacyIndex] = useState(false);
   const [timelineMonth, setTimelineMonth] = useState(null);
   const [isAnimating, setIsAnimating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -1842,61 +1837,6 @@ export default function GisMap() {
                           source={thresholdsForSnapshot.source}
                           percentiles={thresholdsForSnapshot.percentiles}
                         />
-                      )}
-                    </div>
-                  )}
-
-                  {/* Legacy weighted risk_score — a separate analytical
-                      index, hidden by default. It does NOT determine
-                      risk_class above and must not be read as the reason
-                      for it; its own <=33/34-66/>66 bands are internal to
-                      this index only. */}
-                  {merged.risk_score != null && (
-                    <div>
-                      <button
-                        type="button"
-                        onClick={() => setShowLegacyIndex(v => !v)}
-                        className="flex items-center gap-1.5 text-[11px] font-semibold"
-                        style={{ color: '#94A3B8' }}
-                      >
-                        <i className={`ri-arrow-${showLegacyIndex ? 'down' : 'right'}-s-line`} />
-                        Legacy risk index
-                      </button>
-                      {showLegacyIndex && (
-                        <div className="mt-3">
-                          <p className="mb-3 text-xs leading-relaxed text-[#64748B]">
-                            A separate research measure. It does not determine the risk classification above.
-                          </p>
-                          <div className="space-y-2.5">
-                            {(() => {
-                              const factors = [
-                                { label: 'Incidence', weight: 0.45, value: merged.norm_incidence || 0 },
-                                { label: 'Trend', weight: 0.25, value: merged.norm_trend || 0 },
-                                { label: 'Neighbor Risk', weight: 0.20, value: merged.norm_neighbor_risk || 0 },
-                                { label: 'Forecast Error', weight: 0.10, value: merged.norm_forecast_error || 0 },
-                              ];
-                              return factors.map(f => {
-                                const pct = Math.min(f.value * 100, 100);
-                                return (
-                                  <div key={f.label}>
-                                    <div className="flex items-center justify-between mb-1">
-                                      <span className="text-[11px] font-semibold" style={{ color: '#475569' }}>{f.label} <span style={{ color: '#94A3B8' }}>({Math.round(f.weight * 100)}%)</span></span>
-                                      <span className="text-[10px] font-bold" style={{ color: '#64748B' }}>{pct.toFixed(0)}%</span>
-                                    </div>
-                                    <div className="h-2 rounded-full overflow-hidden" style={{ background: '#E2E8F0' }}>
-                                      <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: '#94A3B8' }} />
-                                    </div>
-                                  </div>
-                                );
-                              });
-                            })()}
-
-                            <div className="flex items-center justify-between text-[11px] pt-1">
-                              <span className="font-semibold" style={{ color: '#475569' }}>Index score (0-100)</span>
-                              <span className="font-bold" style={{ color: '#64748B' }}>{formatNum(merged.risk_score)}</span>
-                            </div>
-                          </div>
-                        </div>
                       )}
                     </div>
                   )}

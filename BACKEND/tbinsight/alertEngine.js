@@ -112,8 +112,9 @@ async function evaluateHotspotAlerts(poolOrClient, period) {
     // The same 12-month rate as the High risk alert (scoring.alertRateByName), read as text
     // and converted below so one malformed stored value cannot fail the query. Not
     // incidence_per_100k: a legacy latest-month x 12 figure (Santa Rosa read 2301.1 here
-    // while the High risk alert said 1150.5).
-    `SELECT barangay_name, risk_score, features->>'rolling_12m_incidence' AS rate_12m
+    // while the High risk alert said 1150.5). Not risk_score either: the legacy weighted index
+    // does not decide the risk level and disagrees with it (a High barangay scored 6.0).
+    `SELECT barangay_name, features->>'rolling_12m_incidence' AS rate_12m
      FROM barangay_risk_scores
      WHERE period = $1 AND risk_class = 'High'`,
     [period]
@@ -121,16 +122,13 @@ async function evaluateHotspotAlerts(poolOrClient, period) {
 
   if (result.rows.length === 0) return created;
 
-  const sorted = result.rows.sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0));
-  const maxScore = Math.max(...sorted.map(r => r.risk_score || 0));
-  const severity = maxScore >= 80 ? 'critical' : 'high';
-
   const rate = r => (r.rate_12m != null && r.rate_12m !== '' && Number.isFinite(Number(r.rate_12m)) ? Number(r.rate_12m) : null);
+  // Highest 12-month rate first, like the High risk alert; a barangay without a rate goes last.
+  const sorted = result.rows.sort((a, b) => (rate(b) ?? -1) - (rate(a) ?? -1));
+  const severity = 'high';
+
   const top = sorted.slice(0, 5);
-  const topList = top.map(r => {
-    const score = `score: ${(r.risk_score ?? 0).toFixed(1)}`;
-    return rate(r) != null ? `${r.barangay_name} (${score}, ${rate(r).toFixed(1)}/100k)` : `${r.barangay_name} (${score})`;
-  }).join('; ');
+  const topList = top.map(r => (rate(r) != null ? `${r.barangay_name} (${rate(r).toFixed(1)}/100k)` : r.barangay_name)).join('; ');
   const rateNote = top.some(r => rate(r) != null) ? ' Rates are cases per 100,000 over the past 12 months.' : '';
   const suffix = sorted.length > 5 ? ` and ${sorted.length - 5} more` : '';
 
