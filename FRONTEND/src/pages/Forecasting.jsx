@@ -189,11 +189,63 @@ function ModelOverview() {
 
 /* ─── Model Evaluation (saved walk-forward metrics from the ML service) ─── */
 
-function EvalMetric({ label, value }) {
+/** "+29.9%" in green when the forecast beat the 12-month average, red when it did worse. */
+function SkillValue({ skill }) {
+  if (skill == null || !Number.isFinite(Number(skill))) return <span style={{ color: '#94A3B8' }}>—</span>;
+  const v = Number(skill) * 100;
   return (
-    <div className="px-3 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#94A3B8' }}>{label}</div>
-      <div className="text-sm font-extrabold mt-0.5" style={{ color: '#0F2D52' }}>{value}</div>
+    <span className="font-bold tabular-nums" style={{ color: v > 0 ? '#047857' : v < 0 ? '#B91C1C' : '#334155' }}>
+      {`${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
+    </span>
+  );
+}
+
+/** ARIMA accuracy, one row per scope, most useful first. */
+function ForecastAccuracyTable({ rows }) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-[#E2E8F0]">
+      <div className="px-4 py-3" style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+        <h3 className="text-xs font-bold text-[#0F2D52]">Case forecasts (ARIMA)</h3>
+        <p className="mt-0.5 text-[11px] text-[#64748B]">How far each forecast was from the cases reported later.</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead>
+            <tr style={{ color: '#64748B' }}>
+              <th className="px-4 py-2 font-semibold">Forecast of</th>
+              <th className="px-4 py-2 text-right font-semibold">Average miss</th>
+              <th className="px-4 py-2 text-right font-semibold">Share missed</th>
+              <th className="px-4 py-2 text-right font-semibold">Better than 12-month average</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.label} style={{ borderTop: '1px solid #F1F5F9' }}>
+                <td className="px-4 py-2.5">
+                  <span className="font-semibold text-[#0F2D52]">{row.label}</span>
+                  <span className="block text-[11px] text-[#64748B]">{row.hint}</span>
+                </td>
+                <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-[#334155]">{row.mae == null ? '—' : `${Number(row.mae).toFixed(1)} cases`}</td>
+                <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-[#334155]">{row.wape == null ? '—' : `${Number(row.wape).toFixed(1)}%`}</td>
+                <td className="whitespace-nowrap px-4 py-2.5 text-right"><SkillValue skill={row.skill} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="px-4 py-2.5 text-[11px] leading-relaxed text-[#64748B]" style={{ borderTop: '1px solid #F1F5F9' }}>
+        <strong className="text-[#475569]">Better than 12-month average:</strong> how much smaller the miss is than simply repeating the past 12-month average. Above 0% means the forecast is more useful.
+      </p>
+    </div>
+  );
+}
+
+function RiskTile({ value, label, hint }) {
+  return (
+    <div className="min-w-0 rounded-md px-3 py-3" style={{ background: '#F8FAFC', border: '1px solid #EEF2F7' }}>
+      <div className="text-xl font-extrabold tabular-nums text-[#0F2D52]">{value}</div>
+      <div className="mt-0.5 text-xs font-semibold text-[#334155]">{label}</div>
+      <div className="mt-0.5 text-[11px] leading-snug text-[#64748B]">{hint}</div>
     </div>
   );
 }
@@ -227,17 +279,23 @@ function RiskClassificationEvaluation({ rf }) {
   const highRecall = rf.recall?.High;
   const priority = rf.priority_accuracy ?? priorityFromConfusion(rf.confusion_matrix);
   return (
-    <div className="mt-3 rounded px-3 py-2.5" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-      <p className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>Risk levels (Random Forest)</p>
-      <div className="mt-1 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <EvalMetric label="Priority barangays identified" value={priority != null ? pct(priority, 1) : '—'} />
-        <EvalMetric label="Correct risk level" value={rf.ceiling_accuracy != null ? `${pct(rf.accuracy)} (best possible ${pct(rf.ceiling_accuracy)})` : pct(rf.accuracy)} />
-        <EvalMetric label="Right or one level off" value={rf.low_high_confusion != null ? pct(1 - rf.low_high_confusion, 1) : '—'} />
-        <EvalMetric label="High-risk barangays caught" value={highRecall != null ? pct(highRecall) : '—'} />
+    <div className="mt-4 overflow-hidden rounded-lg border border-[#E2E8F0]">
+      <div className="px-4 py-3" style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+        <h3 className="text-xs font-bold text-[#0F2D52]">Risk levels (Random Forest)</h3>
+        <p className="mt-0.5 text-[11px] text-[#64748B]">
+          Each barangay's Low / Medium / High level for the next 6 months, checked against the cases reported later ({rf.n_steps} months, all barangays).
+        </p>
       </div>
-      <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>
-        Risk level for the next 6 months, checked against the cases later reported ({rf.n_steps} months tested). "Priority barangays identified": each barangay correctly called High priority or not (High vs Low/Medium).
-      </p>
+      <div className="grid grid-cols-2 gap-3 p-4 lg:grid-cols-4">
+        <RiskTile value={priority != null ? pct(priority, 1) : '—'} label="Priority calls correct" hint="Correctly called High, or correctly not High" />
+        <RiskTile
+          value={pct(rf.accuracy)}
+          label="Exact level correct"
+          hint={rf.ceiling_accuracy != null ? `Best possible on this data: about ${pct(rf.ceiling_accuracy)}` : 'Low, Medium or High exactly right'}
+        />
+        <RiskTile value={rf.low_high_confusion != null ? pct(1 - rf.low_high_confusion, 1) : '—'} label="Right or one level off" hint="Never mixed up Low and High" />
+        <RiskTile value={highRecall != null ? pct(highRecall) : '—'} label="High barangays caught" hint="Of the barangays that turned out High" />
+      </div>
     </div>
   );
 }
@@ -300,8 +358,10 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
           ) : (
             <>
               {error && <p className="text-[10px] mb-2" style={{ color: '#B91C1C' }}>Could not refresh the saved evaluation: {error}. Showing the last loaded result.</p>}
-              <p className="text-[11px] mb-3" style={{ color: '#64748B' }}>
-                Showing <strong style={{ color: '#0F2D52' }}>{view.scopeLabel}</strong> · <strong style={{ color: '#0F2D52' }}>{view.rangeLabel}</strong>
+              <p className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]" style={{ color: '#64748B' }}>
+                <strong style={{ color: '#0F2D52' }}>{view.scopeLabel}</strong>
+                <span aria-hidden="true">·</span>
+                <span>Months tested: <strong style={{ color: '#0F2D52' }}>{evaluationPeriod}</strong></span>
               </p>
 
               {view.state === 'barangay_unavailable' && (
@@ -320,35 +380,25 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
 
               {view.state === 'ready' && (
                 <>
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-0">
-                    <EvalMetric label="Average error" value={view.mae == null ? '—' : `${Number(view.mae).toFixed(1)} cases`} />
-                    <EvalMetric label="Cases missed (WAPE)" value={view.wape == null ? '—' : `${Number(view.wape).toFixed(1)}%`} />
-                    <EvalMetric label="vs. 12-month average" value={view.skill == null ? '—' : `${view.skill >= 0 ? '+' : ''}${(Number(view.skill) * 100).toFixed(1)}%`} />
-                    <EvalMetric label="Months tested" value={evaluationPeriod} />
-                  </div>
-                  {view.total3m?.wape != null && (
-                    <div className="mt-3 rounded px-3 py-2.5" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                      <p className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>3-month totals</p>
-                      <div className="mt-1 grid grid-cols-3 gap-3">
-                        <EvalMetric label="Average error" value={`${Number(view.total3m.mae).toFixed(1)} cases`} />
-                        <EvalMetric label="Cases missed (WAPE)" value={`${Number(view.total3m.wape).toFixed(1)}%`} />
-                        <EvalMetric label="vs. 12-month average" value={view.total3m.skill == null ? '—' : `${view.total3m.skill >= 0 ? '+' : ''}${(Number(view.total3m.skill) * 100).toFixed(1)}%`} />
-                      </div>
-                      <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>Chance ups and downs even out over 3 months: the better guide for planning supplies and staff.</p>
-                    </div>
-                  )}
-                  {view.city?.wape != null && (
-                    <div className="mt-3 rounded px-3 py-2.5" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                      <p className="text-[11px] font-bold" style={{ color: '#0F2D52' }}>City-wide total</p>
-                      <div className="mt-1 grid grid-cols-3 gap-3">
-                        <EvalMetric label="Average error" value={`${Number(view.city.mae).toFixed(1)} cases`} />
-                        <EvalMetric label="Cases missed (WAPE)" value={`${Number(view.city.wape).toFixed(1)}%`} />
-                        <EvalMetric label="vs. 12-month average" value={view.city.skill == null ? '—' : `${view.city.skill >= 0 ? '+' : ''}${(Number(view.city.skill) * 100).toFixed(1)}%`} />
-                      </div>
-                      <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: '#64748B' }}>All barangays added up each month; small misses cancel out. The figure for city-wide planning.</p>
-                    </div>
-                  )}
-                  <p className="mt-3 text-[11px] leading-relaxed text-[#475569]">"vs. 12-month average": above 0% means the forecast beat simply using each barangay's average of the past 12 months.</p>
+                  <ForecastAccuracyTable
+                    rows={[
+                      view.city?.wape != null && {
+                        label: 'Whole city, one month',
+                        hint: 'All barangays added up; small misses cancel out',
+                        mae: view.city.mae, wape: view.city.wape, skill: view.city.skill,
+                      },
+                      view.total3m?.wape != null && {
+                        label: `${filters.barangay ? view.scopeLabel : 'Each barangay'}, 3 months`,
+                        hint: 'Best guide for planning supplies and staff',
+                        mae: view.total3m.mae, wape: view.total3m.wape, skill: view.total3m.skill,
+                      },
+                      {
+                        label: `${filters.barangay ? view.scopeLabel : 'Each barangay'}, one month`,
+                        hint: 'Hardest: a few cases a month vary by chance',
+                        mae: view.mae, wape: view.wape, skill: view.skill,
+                      },
+                    ].filter(Boolean)}
+                  />
                   <RiskClassificationEvaluation rf={record?.metrics?.rf} />
 
                   {view.rows.length > 0 ? (
