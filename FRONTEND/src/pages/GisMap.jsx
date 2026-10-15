@@ -334,7 +334,6 @@ export default function GisMap() {
   const geojsonLayerRef = useRef(null);
   const outlineLayerRef = useRef(null);
   const labelsRef = useRef([]);
-  const animationIntervalRef = useRef(null);
   const [data, setData] = useState(null);
   const [monthlyByBarangay, setMonthlyByBarangay] = useState({});
   const [loading, setLoading] = useState(true);
@@ -349,8 +348,6 @@ export default function GisMap() {
   const [barangayCfr, setBarangayCfr] = useState(null);
   const [barangayInterventionCount, setBarangayInterventionCount] = useState(0);
   const [hoveredBarangay, setHoveredBarangay] = useState(null);
-  const [timelineMonth, setTimelineMonth] = useState(null);
-  const [isAnimating, setIsAnimating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [pickedYear, setPickedYear] = useState('');
   const [availableYears, setAvailableYears] = useState([]);
@@ -835,70 +832,6 @@ export default function GisMap() {
     });
   }, [hoveredBarangay]);
 
-  // Timeline animation: update polygon colors per month
-  useEffect(() => {
-    if (!geojsonLayerRef.current || !data?.features) return;
-    if (!timelineMonth) {
-      // Reset to default risk colors when not animating
-      geojsonLayerRef.current.eachLayer(layer => {
-        if (!layer.feature) return;
-        geojsonLayerRef.current.resetStyle(layer);
-      });
-      return;
-    }
-
-    // Compute case count per barangay for the current timeline month
-    const monthCases = {};
-    Object.entries(monthlyByBarangay).forEach(([name, months]) => {
-      const entry = months.find(m => m.month === timelineMonth);
-      monthCases[name] = entry ? Number(entry.case_count || 0) : 0;
-    });
-
-    // Compute incidence per 100k — requires the year-matched population.
-    // A missing population must never be faked with a denominator of 1
-    // (that would invent an enormous incidence); such barangays are
-    // excluded from the coloring below and keep their default risk color.
-    const withIncidence = data.features.map(f => {
-      const name = f.properties?.name;
-      const pop = f.properties?.population;
-      const cases = monthCases[name] || 0;
-      const incidence = pop && pop > 0 ? (cases / pop) * 100000 : null;
-      return { name, incidence, cases };
-    });
-
-    // Sort by incidence to compute tertiles (only barangays with a valid
-    // year-matched population participate)
-    const sorted = withIncidence.filter(x => x.incidence != null)
-      .sort((a, b) => a.incidence - b.incidence);
-    const n = sorted.length;
-    const lowMax = Math.floor(n / 3);
-    const medMax = Math.floor((2 * n) / 3);
-    const riskMap = {};
-    sorted.forEach((item, i) => {
-      let riskClass;
-      if (i < lowMax) riskClass = 'Low';
-      else if (i < medMax) riskClass = 'Medium';
-      else riskClass = 'High';
-      riskMap[item.name] = { riskClass, cases: item.cases, incidence: item.incidence };
-    });
-
-    // Update polygon colors
-    geojsonLayerRef.current.eachLayer(layer => {
-      if (!layer.feature) return;
-      const name = layer.feature.properties?.name;
-      const risk = riskMap[name];
-      if (!risk) return;
-      const color = RISK_COLORS[risk.riskClass] || RISK_COLORS['No Data'];
-      layer.setStyle({
-        fillColor: color,
-        weight: 0.5,
-        opacity: 1,
-        color: 'rgba(0,0,0,0.35)',
-        fillOpacity: 0.6,
-      });
-    });
-  }, [timelineMonth, data, monthlyByBarangay]);
-
   const stats = React.useMemo(() => {
     if (!filteredFeatures.length) return { classes: { High: 0, Medium: 0, Low: 0, 'No Data': 0 }, totalCases: 0, totalPop: 0, total: 0 };
     const features = filteredFeatures.map(f => f.properties);
@@ -1003,28 +936,10 @@ export default function GisMap() {
     return () => controller.abort();
   }, [selectedBarangayName, filterYear]);
 
-  // Build timeline data: { 'YYYY-MM': { barangayName: caseCount } }
-  const timelineMonths = React.useMemo(() => {
-    if (!data?.features) return [];
-    const allMonths = new Set();
-    Object.values(monthlyByBarangay).forEach(arr => arr.forEach(m => allMonths.add(m.month)));
-    return [...allMonths].sort();
-  }, [data, monthlyByBarangay]);
-
   // Export map as PDF via browser print
   const handleExportMap = useCallback(() => {
     window.print();
   }, []);
-
-  // Stop animation and reset timeline when year filter changes
-  useEffect(() => {
-    if (animationIntervalRef.current) {
-      clearInterval(animationIntervalRef.current);
-      animationIntervalRef.current = null;
-    }
-    setIsAnimating(false);
-    setTimelineMonth(null);
-  }, [filterYear]);
 
   // Refresh map data
   const handleRefresh = useCallback(async () => {
@@ -1058,35 +973,6 @@ export default function GisMap() {
     window.addEventListener('focus', handleRefresh);
     return () => window.removeEventListener('focus', handleRefresh);
   }, [handleRefresh]);
-
-  // Timeline animation
-  const animateTimeline = useCallback(() => {
-    if (timelineMonths.length === 0) return;
-    setIsAnimating(true);
-    let idx = 0;
-    const interval = setInterval(() => {
-      if (idx >= timelineMonths.length) {
-        clearInterval(interval);
-        animationIntervalRef.current = null;
-        setIsAnimating(false);
-        setTimelineMonth(null);
-        return;
-      }
-      setTimelineMonth(timelineMonths[idx]);
-      idx++;
-    }, 800);
-    animationIntervalRef.current = interval;
-  }, [timelineMonths]);
-
-  // Clean up animation interval on unmount
-  useEffect(() => {
-    return () => {
-      if (animationIntervalRef.current) {
-        clearInterval(animationIntervalRef.current);
-        animationIntervalRef.current = null;
-      }
-    };
-  }, []);
 
   if (loading) {
     return (
@@ -1355,34 +1241,6 @@ export default function GisMap() {
 
         {/* ── Floating: Barangay Count Badge (top-right) ── */}
         <div className="absolute top-4 right-4 z-[1000] flex items-center gap-2">
-          {timelineMonth && (
-            <div
-              className="rounded-lg px-3 py-1.5"
-              style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)' }}
-            >
-              <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>
-                {new Date(timelineMonth.includes('T') ? timelineMonth : timelineMonth + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-              </span>
-            </div>
-          )}
-          {timelineMonths.length > 0 && !isFullscreen && (
-            <button
-              onClick={isAnimating ? () => { if (animationIntervalRef.current) { clearInterval(animationIntervalRef.current); animationIntervalRef.current = null; } setIsAnimating(false); setTimelineMonth(null); } : animateTimeline}
-              aria-label={isAnimating ? 'Stop timeline animation' : 'Play timeline animation'}
-              className="rounded-lg px-3 py-1.5 text-xs font-semibold"
-              style={{
-                background: isAnimating ? '#EF4444' : 'rgba(255,255,255,0.92)',
-                color: isAnimating ? '#ffffff' : '#0F2D52',
-                border: `1px solid ${isAnimating ? '#EF4444' : '#DBEAFE'}`,
-                backdropFilter: 'blur(8px)',
-                boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)',
-                transition: 'background 0.15s, color 0.15s',
-              }}
-            >
-              <i className={`${isAnimating ? 'ri-stop-line' : 'ri-play-line'} mr-1`} />
-              {isAnimating ? 'Stop' : 'Animate'}
-            </button>
-          )}
           <div
             className="rounded-lg px-3 py-1.5"
             style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: '1px solid #DBEAFE', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.1)' }}
