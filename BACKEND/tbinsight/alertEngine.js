@@ -109,7 +109,11 @@ async function evaluateHotspotAlerts(poolOrClient, period) {
   await deleteStaleAlerts(poolOrClient, { alertType: 'high_risk_hotspot', period });
 
   const result = await poolOrClient.query(
-    `SELECT barangay_name, risk_score, incidence_per_100k
+    // The same 12-month rate as the High risk alert (scoring.alertRateByName), read as text
+    // and converted below so one malformed stored value cannot fail the query. Not
+    // incidence_per_100k: a legacy latest-month x 12 figure (Santa Rosa read 2301.1 here
+    // while the High risk alert said 1150.5).
+    `SELECT barangay_name, risk_score, features->>'rolling_12m_incidence' AS rate_12m
      FROM barangay_risk_scores
      WHERE period = $1 AND risk_class = 'High'`,
     [period]
@@ -121,16 +125,20 @@ async function evaluateHotspotAlerts(poolOrClient, period) {
   const maxScore = Math.max(...sorted.map(r => r.risk_score || 0));
   const severity = maxScore >= 80 ? 'critical' : 'high';
 
-  const topList = sorted.slice(0, 5).map(r =>
-    `${r.barangay_name} (score: ${r.risk_score?.toFixed(1)}, incidence: ${r.incidence_per_100k?.toFixed(1)}/100k)`
-  ).join('; ');
+  const rate = r => (r.rate_12m != null && r.rate_12m !== '' && Number.isFinite(Number(r.rate_12m)) ? Number(r.rate_12m) : null);
+  const top = sorted.slice(0, 5);
+  const topList = top.map(r => {
+    const score = `score: ${(r.risk_score ?? 0).toFixed(1)}`;
+    return rate(r) != null ? `${r.barangay_name} (${score}, ${rate(r).toFixed(1)}/100k)` : `${r.barangay_name} (${score})`;
+  }).join('; ');
+  const rateNote = top.some(r => rate(r) != null) ? ' Rates are cases per 100,000 over the past 12 months.' : '';
   const suffix = sorted.length > 5 ? ` and ${sorted.length - 5} more` : '';
 
   const id = await insertAlert(poolOrClient, {
     alertType: 'high_risk_hotspot',
     severity,
     title: sorted.length === 1 ? 'High-Priority Barangay Detected' : `${sorted.length} High-Priority Barangays Detected`,
-    message: `${sorted.length} barangay${sorted.length > 1 ? 's' : ''} classified as High priority for TB: ${topList}${suffix}.`,
+    message: `${sorted.length} barangay${sorted.length > 1 ? 's' : ''} classified as High priority for TB: ${topList}${suffix}.${rateNote}`,
     recommendation: `Increase surveillance and resource allocation in affected barangays. Review TB case management and contact tracing activities.`,
     barangayName: null,
     metadata: { affected_barangays: sorted.map(row => row.barangay_name) },
