@@ -179,7 +179,7 @@ export async function exportPDF(report) {
       doc.setPage(i);
       doc.setFontSize(7);
       doc.setTextColor(...GRAY);
-      doc.text(`TBInsight \u00B7 Pasig City Health Office \u00B7 ${report.footerPeriod || ''}`, margin, pageHeight - 10);
+      doc.text(`TBInsight \u00B7 Pasig City Health Office \u00B7 ${report.footerPeriod || ''}${report.reportRef ? ` · Ref ${report.reportRef}` : ''}`, margin, pageHeight - 10);
       doc.text(`Page ${i} of ${totalPages}`, pageWidth - margin, pageHeight - 10, { align: 'right' });
       doc.setDrawColor(200, 200, 200);
       doc.setLineWidth(0.2);
@@ -233,6 +233,7 @@ export async function exportPDF(report) {
   // Prepared by
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.3);
+  if (report.preparedBy) doc.text(report.preparedBy, margin, y - 1.5);
   doc.line(margin, y, margin + sigWidth, y);
   y += 4;
   doc.text('Prepared by', margin, y);
