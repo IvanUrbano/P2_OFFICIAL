@@ -125,6 +125,7 @@ export default function Analytics() {
   const [barangays, setBarangays] = useState([]);
   const [riskData, setRiskData] = useState([]);
   const [riskYear, setRiskYear] = useState(null);
+  const [yearRisk, setYearRisk] = useState(null); // { year, rows, assessmentYear } — risk snapshot of the applied year
   const [filterOptions, setFilterOptions] = useState({ sex: [], bacteriological_status: [], outcome_status: [] });
 
   /* Filter state */
@@ -199,6 +200,22 @@ export default function Analytics() {
     window.addEventListener('focus', loadAll);
     return () => window.removeEventListener('focus', loadAll);
   }, [loadAll]);
+
+  // With a year applied, the High Risk KPI uses that year's risk snapshot, as the Dashboard does;
+  // without one (or until it loads) it shows the latest snapshot.
+  useEffect(() => {
+    if (!aYear) return undefined;
+    let cancelled = false;
+    API.get(`/api/tb/gis/choropleth?year=${encodeURIComponent(aYear)}`)
+      .then((res) => {
+        if (!cancelled) setYearRisk({ year: aYear, rows: res.data.choropleth || [], assessmentYear: res.data.assessment_year ?? res.data.year ?? null });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [aYear]);
+  const riskForYear = Boolean(aYear && yearRisk?.year === aYear);
+  const riskRows = riskForYear ? yearRisk.rows : riskData;
+  const riskShownYear = riskForYear ? yearRisk.assessmentYear : riskYear;
 
   /* ── Apply filters ── */
   const handleApply = useCallback(() => {
@@ -492,14 +509,14 @@ export default function Analytics() {
     let highRisk;
     if (aBarangay) {
       // /gis/choropleth rows key the barangay by `name`, not `barangay_name`.
-      const inRisk = riskData.find((r) => {
+      const inRisk = riskRows.find((r) => {
         const rc = (r.risk_class || '').toLowerCase();
         return rc === 'high' && r.name === aBarangay;
       });
       highRisk = inRisk ? 1 : 0;
     } else {
       const highRiskSet = new Set();
-      riskData.forEach((r) => {
+      riskRows.forEach((r) => {
         const rc = (r.risk_class || '').toLowerCase();
         if (rc === 'high') highRiskSet.add(r.name);
       });
@@ -507,14 +524,14 @@ export default function Analytics() {
     }
     // City-wide classification breakdown for the SAME snapshot
     const selectedRiskClass = aBarangay
-      ? riskData.find((r) => r.name === aBarangay)?.risk_class || null
+      ? riskRows.find((r) => r.name === aBarangay)?.risk_class || null
       : null;
     // 0 rows, or a snapshot in which nothing was ever assessed, must read
     // "no risk assessment available yet" — never a fabricated "0 of 30".
-    const hasRiskData = riskData.some(
+    const hasRiskData = riskRows.some(
       (r) => r.risk_class && (r.risk_class || '').trim().toLowerCase() !== 'no data'
     );
-    const totalBarangays = riskData.length || 30;
+    const totalBarangays = riskRows.length || 30;
     // Incidence per 100k: that year's cases / that same year's population x 100,000 (see
     // utils/analyticsKpis.js). The year is the selected one, else the latest complete year.
     const incidence = incidencePer100k(filteredCases, incidenceYear, yearPopulationMap, aBarangay);
@@ -523,7 +540,7 @@ export default function Analytics() {
       total, successRate, highRisk, incidence, fatalityRate,
       hasRiskData, totalBarangays, selectedRiskClass,
     };
-  }, [filteredCases, riskData, aBarangay, incidenceYear, tsrData, cfrData, yearPopulationMap]);
+  }, [filteredCases, riskRows, aBarangay, incidenceYear, tsrData, cfrData, yearPopulationMap]);
 
   /* ── Previous year metrics (for trend badges) ── */
   const previousMetrics = useMemo(() => {
@@ -1096,7 +1113,7 @@ export default function Analytics() {
                     <span
                       className="text-[11px] font-medium mt-1 leading-snug"
                       style={{ color: '#94A3B8' }}
-                      title={`Pasig barangays classified as High Risk in the ${riskYear || 'latest'} assessment.`}
+                      title={`Pasig barangays classified as High Risk in the ${riskShownYear || 'latest'} assessment.`}
                     >
                       of {metrics.totalBarangays} barangays classified as High Risk
                     </span>

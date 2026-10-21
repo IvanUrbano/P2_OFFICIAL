@@ -2817,7 +2817,8 @@ router.get('/reports/summary', async (req, res) => {
     }));
 
     // Forecast (single stored period; says so when it is not inside the report period)
-    const totalForecasted = forecastRes.rows.reduce((t, r) => t + Math.round(Number(r.forecasted_count || 0)), 0);
+    // Summed raw and rounded once, the same rule as the Dashboard's Forecasted figure.
+    const totalForecasted = Math.round(forecastRes.rows.reduce((t, r) => t + Number(r.forecasted_count || 0), 0));
     const forecastPeriod = forecastRes.rows.length > 0 ? forecastRes.rows[0].period : null;
     const forecastMethods = [...new Set(forecastRes.rows.map(r => r.method).filter(Boolean))];
     const forecast = {
