@@ -235,13 +235,27 @@ function RiskBadge({ risk }) {
 }
 
 
+const SECTION_ICONS = {
+  'TB case trend': 'ri-line-chart-line',
+  'Barangay risk overview': 'ri-map-pin-line',
+  'Priority barangays': 'ri-alarm-warning-line',
+  'Age and sex': 'ri-group-line',
+  'Treatment outcomes and case status': 'ri-heart-pulse-line',
+  'Forecast summary': 'ri-bar-chart-grouped-line',
+  'Recent alerts': 'ri-notification-3-line',
+};
+
 function SectionCard({ title, description, action, actionTo, insight, children }) {
   const navigate = useNavigate();
+  const icon = SECTION_ICONS[title] || 'ri-bar-chart-box-line';
   return (
     <section className="flex flex-col overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
-      <div className="shrink-0 border-b border-[#E2E8F0] px-5 py-3.5">
-        <h3 className="text-sm font-semibold text-[#0F2D52]">{title}</h3>
-        {description && <p className="mt-0.5 text-xs leading-snug text-[#64748B]">{description}</p>}
+      <div className="flex shrink-0 items-start gap-2.5 bg-[#0F2D52] px-5 py-3.5">
+        <i className={`${icon} mt-0.5 shrink-0 text-lg text-[#93C5FD]`} aria-hidden="true" />
+        <div className="min-w-0">
+          <h3 className="text-sm font-bold text-white">{title}</h3>
+          {description && <p className="mt-0.5 text-xs leading-snug text-[#CBD5E1]">{description}</p>}
+        </div>
       </div>
       <div className="flex-1 px-5 py-5">{children}<ChartInsight text={insight} plain /></div>
       {action && (
@@ -284,7 +298,7 @@ function YearTag({ label, title }) {
 function SkeletonCard() {
   return (
     <div className="overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
-      <div className="border-b border-[#E2E8F0] px-5 py-4"><SkeletonBlock className="h-4 w-32" /></div>
+      <div className="bg-[#0F2D52] px-5 py-4"><SkeletonBlock className="h-4 w-32" /></div>
       <div className="px-5 py-5"><SkeletonBlock className="h-48 w-full" /></div>
     </div>
   );
