@@ -1175,7 +1175,7 @@ export default function DashboardPage() {
               {/* Total TB Cases */}
               <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-database-2-line text-sm" style={{ color: '#94A3B8' }} />
+                  <i className="ri-database-2-line text-sm" style={{ color: '#64748B' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Total TB Cases</span>
                   <YearTag label={failed.monthly ? '' : casesYearSpan} title="Years of diagnosis included in this total" />
                 </div>
@@ -1183,7 +1183,7 @@ export default function DashboardPage() {
                 <p className="text-2xl font-bold tabular-nums lg:text-3xl" style={{ color: '#0F2D52' }}>
                   {failed.monthly ? 'Unavailable' : animatedTotalCases.toLocaleString()}
                 </p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }}>
                   {failed.monthly ? 'Could not be loaded' : `${totalCases.months} months recorded${filtersActive ? ' in this view' : ' (all-time)'}`}
                 </span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
@@ -1192,7 +1192,7 @@ export default function DashboardPage() {
               {/* New Cases (latest recorded month) */}
               <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-calendar-check-line text-sm" style={{ color: '#94A3B8' }} />
+                  <i className="ri-calendar-check-line text-sm" style={{ color: '#64748B' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>New Cases</span>
                   <YearTag label={failed.monthly || !monthOverMonth.month ? '' : String(monthOverMonth.month).slice(0, 4)} title="Year of the latest month with recorded cases" />
                 </div>
@@ -1201,7 +1201,7 @@ export default function DashboardPage() {
                   {failed.monthly ? 'Unavailable' : animatedNewCases.toLocaleString()}
                 </p>
                 <div className="flex items-center gap-1.5 mt-1">
-                  <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+                  <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>
                     {failed.monthly ? 'Could not be loaded' : (monitoringPeriodLabel || 'No data yet')}
                   </span>
                   {monthOverMonth.previous > 0 && (
@@ -1217,7 +1217,7 @@ export default function DashboardPage() {
               {/* Treatment Success Rate */}
               <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-checkbox-circle-line text-sm" style={{ color: '#94A3B8' }} />
+                  <i className="ri-checkbox-circle-line text-sm" style={{ color: '#64748B' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Success Rate</span>
                   <YearTag label={failed.tsr || !successRate.cohortYear ? '' : `${successRate.cohortYear} cohort`} title={successRate.cohortYear ? `Patients who started treatment in ${successRate.cohortYear}` : undefined} />
                 </div>
@@ -1227,7 +1227,7 @@ export default function DashboardPage() {
                 </p>
                 <span
                   className="text-[11px] font-medium mt-1"
-                  style={{ color: '#94A3B8' }}
+                  style={{ color: '#64748B' }}
                   title="Treatment Success Rate based on the previous-year treatment cohort: (Cured + Treatment Completed) divided by all patients whose treatment started in that year."
                 >
                   {failed.tsr
@@ -1242,7 +1242,7 @@ export default function DashboardPage() {
               {/* Case Fatality Rate */}
               <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-heart-pulse-line text-sm" style={{ color: '#94A3B8' }} />
+                  <i className="ri-heart-pulse-line text-sm" style={{ color: '#64748B' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Fatality Rate</span>
                   <YearTag label={failed.cfr ? '' : casesYearSpan} title="Years of diagnosis included in this rate" />
                 </div>
@@ -1252,7 +1252,7 @@ export default function DashboardPage() {
                 </p>
                 <span
                   className="text-[11px] font-medium mt-1"
-                  style={{ color: '#94A3B8' }}
+                  style={{ color: '#64748B' }}
                   title="Deaths among evaluated terminal outcomes (Cured, Treatment Completed, Died, Failed, Lost to FF-UP). On Treatment and Not Evaluated are excluded."
                 >
                   {failed.cfr
@@ -1267,7 +1267,7 @@ export default function DashboardPage() {
               {/* City Risk Classification */}
               <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-alarm-warning-line text-sm" style={{ color: '#94A3B8' }} />
+                  <i className="ri-alarm-warning-line text-sm" style={{ color: '#64748B' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>City Risk Classification</span>
                   <YearTag
                     label={failed.risk || !riskYears?.data_year ? '' : String(riskYears.data_year)}
@@ -1280,7 +1280,7 @@ export default function DashboardPage() {
                 </p>
                 <span
                   className="text-[11px] font-medium mt-1"
-                  style={{ color: '#94A3B8' }}
+                  style={{ color: '#64748B' }}
                   title="This represents the number of Pasig barangays classified as High Risk by the risk-classification model for the selected assessment period."
                 >
                   {failed.risk
@@ -1295,7 +1295,7 @@ export default function DashboardPage() {
               {/* Forecasted Cases */}
               <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-line-chart-line text-sm" style={{ color: '#94A3B8' }} />
+                  <i className="ri-line-chart-line text-sm" style={{ color: '#64748B' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Forecasted</span>
                   <YearTag label={failed.forecasts || forecastSummary.tier === 'insufficient_data' ? '' : forecastYear} title={forecastSummary.period ? `Forecast for ${forecastSummary.period}` : undefined} />
                 </div>
@@ -1305,7 +1305,7 @@ export default function DashboardPage() {
                     ? 'N/A'
                     : animatedForecasted.toLocaleString()}
                 </p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }} title={forecastSummary.methodNote || undefined}>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }} title={forecastSummary.methodNote || undefined}>
                   {failed.forecasts
                     ? 'Forecast could not be loaded'
                     : forecastSummary.tier === 'insufficient_data'
@@ -1486,7 +1486,7 @@ export default function DashboardPage() {
                 />
               )}
               {outcomeChart.excluded > 0 && (
-                <p className="text-[10px] mt-3" style={{ color: '#94A3B8' }}>
+                <p className="text-[10px] mt-3" style={{ color: '#64748B' }}>
                   Showing {outcomeChart.chartTotal.toLocaleString()} of {totalCases.total.toLocaleString()} records.
                   {' '}{outcomeChart.excluded.toLocaleString()} record{outcomeChart.excluded === 1 ? '' : 's'} carry a
                   source value without a final treatment outcome and are not charted.
@@ -1705,25 +1705,29 @@ export default function DashboardPage() {
             ) : interventionStats.total === 0 ? (
               <p className="py-14 text-center text-xs text-[#64748B]">No interventions have been planned for this view.</p>
             ) : (
-              <div className="grid grid-cols-1 gap-8 xl:grid-cols-2">
-                <div>
-                  <dl className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-4">
-                    {[
-                      { label: 'Pending', value: interventionStats.pending, color: INTERVENTION_STATUS_COLORS.pending },
-                      { label: 'In progress', value: interventionStats.inProgress, color: INTERVENTION_STATUS_COLORS.in_progress },
-                      { label: 'Completed', value: interventionStats.completed, color: INTERVENTION_STATUS_COLORS.completed },
-                      { label: 'Overdue', value: interventionStats.overdue, color: '#991B1B' },
-                    ].map((k) => (
-                      <div key={k.label} className="border-l-2 pl-3" style={{ borderColor: k.color }}>
-                        <dt className="text-[11px] text-[#64748B]">{k.label}</dt>
-                        <dd className="mt-0.5 text-xl font-semibold tabular-nums text-[#0F2D52]">{k.value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                  <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-[180px_minmax(0,1fr)]">
-                    <div>
-                      <p className="text-[11px] font-medium text-[#475569]">Status share</p>
-                      <div className="relative mx-auto mt-2 h-[170px] w-full max-w-[220px] md:max-w-none" role="img" aria-label="Donut chart of intervention status share">
+              <div>
+                <dl className="grid grid-cols-2 divide-[#E2E8F0] overflow-hidden rounded-lg border border-[#E2E8F0] sm:grid-cols-4 sm:divide-x">
+                  {[
+                    { label: 'Pending', value: interventionStats.pending, color: INTERVENTION_STATUS_COLORS.pending },
+                    { label: 'In progress', value: interventionStats.inProgress, color: INTERVENTION_STATUS_COLORS.in_progress },
+                    { label: 'Completed', value: interventionStats.completed, color: INTERVENTION_STATUS_COLORS.completed },
+                    { label: 'Overdue', value: interventionStats.overdue, color: '#991B1B' },
+                  ].map((k) => (
+                    <div key={k.label} className="kpi-tile px-4 py-3">
+                      <dt className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#475569]">
+                        <span className="h-2 w-2 rounded-full" style={{ background: k.color }} aria-hidden="true" />
+                        {k.label}
+                      </dt>
+                      <dd className="mt-1 text-2xl font-bold tabular-nums" style={{ color: k.label === 'Overdue' && k.value > 0 ? '#991B1B' : '#0F2D52' }}>{k.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+
+                <div className="mt-6 grid grid-cols-1 gap-8 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-[#334155]">Status share</p>
+                    <div className="mt-3 flex items-center gap-5">
+                      <div className="relative h-[150px] w-[150px] shrink-0" role="img" aria-label="Donut chart of intervention status share">
                         <ResponsiveContainer width="100%" height="100%">
                           <PieChart>
                             <Pie data={interventionStats.statusShare} dataKey="value" nameKey="name" innerRadius={44} outerRadius={68} paddingAngle={2} stroke="none" isAnimationActive={false}>
@@ -1733,59 +1737,74 @@ export default function DashboardPage() {
                           </PieChart>
                         </ResponsiveContainer>
                         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                          <span className="text-lg font-semibold tabular-nums text-[#0F2D52]">{interventionStats.total}</span>
-                          <span className="text-[10px] text-[#64748B]">planned</span>
+                          <span className="text-lg font-bold tabular-nums text-[#0F2D52]">{interventionStats.total}</span>
+                          <span className="text-[11px] text-[#64748B]">planned</span>
                         </div>
                       </div>
-                    </div>
-                    <div>
-                      <p className="text-[11px] font-medium text-[#475569]">Target dates by month</p>
-                      <div className="mt-2 h-[190px] w-full min-w-0" role="img" aria-label="Column chart of interventions by target month and status">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={interventionStats.byMonth} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
-                            <CartesianGrid vertical={false} stroke="#E8EDF2" />
-                            <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} tickMargin={6} />
-                            <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} width={28} />
-                            <Tooltip content={<ChartTooltip />} cursor={{ fill: '#F1F5F9' }} />
-                            <Bar dataKey="pending" stackId="s" name="Pending" fill={INTERVENTION_STATUS_COLORS.pending} isAnimationActive={false} />
-                            <Bar dataKey="in_progress" stackId="s" name="In progress" fill={INTERVENTION_STATUS_COLORS.in_progress} isAnimationActive={false} />
-                            <Bar dataKey="completed" stackId="s" name="Completed" fill={INTERVENTION_STATUS_COLORS.completed} isAnimationActive={false} />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
+                      <ul className="min-w-0 space-y-2 text-xs">
+                        {interventionStats.statusShare.map((d) => (
+                          <li key={d.key} className="flex items-center gap-2">
+                            <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: INTERVENTION_STATUS_COLORS[d.key] }} aria-hidden="true" />
+                            <span className="text-[#334155]">{d.name}</span>
+                            <span className="ml-auto pl-2 font-semibold tabular-nums text-[#0F2D52]">{Math.round((d.value / interventionStats.total) * 100)}%</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   </div>
-                  <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-[#64748B]">
-                    {[['Pending', 'pending'], ['In progress', 'in_progress'], ['Completed', 'completed']].map(([label, key]) => (
-                      <span key={key} className="inline-flex items-center gap-1.5">
-                        <span className="h-2.5 w-2.5" style={{ background: INTERVENTION_STATUS_COLORS[key] }} aria-hidden="true" />{label}
-                      </span>
-                    ))}
+
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-[#334155]">Due by month</p>
+                    <div className="mt-3 h-[150px] w-full min-w-0" role="img" aria-label="Column chart of interventions by target month and status">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={interventionStats.byMonth} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                          <CartesianGrid vertical={false} stroke="#E8EDF2" />
+                          <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#475569' }} axisLine={false} tickLine={false} tickMargin={6} />
+                          <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: '#475569' }} axisLine={false} tickLine={false} width={24} />
+                          <Tooltip content={<ChartTooltip />} cursor={{ fill: '#F1F5F9' }} />
+                          <Bar dataKey="pending" stackId="s" name="Pending" fill={INTERVENTION_STATUS_COLORS.pending} isAnimationActive={false} />
+                          <Bar dataKey="in_progress" stackId="s" name="In progress" fill={INTERVENTION_STATUS_COLORS.in_progress} isAnimationActive={false} />
+                          <Bar dataKey="completed" stackId="s" name="Completed" fill={INTERVENTION_STATUS_COLORS.completed} isAnimationActive={false} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[#475569]">
+                      {[['Pending', 'pending'], ['In progress', 'in_progress'], ['Completed', 'completed']].map(([label, key]) => (
+                        <span key={key} className="inline-flex items-center gap-1.5">
+                          <span className="h-2.5 w-2.5 rounded-sm" style={{ background: INTERVENTION_STATUS_COLORS[key] }} aria-hidden="true" />{label}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium text-[#475569]">Open interventions, most urgent first</p>
-                  {interventionStats.upNext.length > 0 ? (
-                    <ul className="mt-3 divide-y divide-[#E8EDF2]">
-                      {interventionStats.upNext.map((item) => (
-                        <li key={item.id} className="py-3 first:pt-1 last:pb-0">
-                          <p className="text-xs font-semibold leading-snug text-[#0F2D52]">{item.title}</p>
-                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#64748B]">
-                            <span>{String(item.barangay_name).trim()}</span>
-                            <span>{item.status === 'in_progress' ? 'In progress' : 'Pending'}</span>
+
+                  <div className="min-w-0 md:col-span-2 xl:col-span-1">
+                    <p className="text-xs font-semibold text-[#334155]">Most urgent open interventions</p>
+                    {interventionStats.upNext.length > 0 ? (
+                      <ul className="mt-2 divide-y divide-[#E8EDF2]">
+                        {interventionStats.upNext.map((item) => (
+                          <li key={item.id} className="row-hover -mx-2 flex items-start justify-between gap-3 rounded px-2 py-2.5">
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-semibold text-[#0F2D52]" title={item.title}>{item.title}</p>
+                              <p className="mt-0.5 text-[11px] text-[#64748B]">
+                                {String(item.barangay_name).trim()} · {item.status === 'in_progress' ? 'In progress' : 'Pending'}
+                              </p>
+                            </div>
                             {item.target_date && (
-                              <span className="font-medium" style={{ color: item.late ? '#991B1B' : '#64748B' }}>
-                                {item.late ? 'Overdue since ' : 'Due '}
+                              <span
+                                className="shrink-0 whitespace-nowrap rounded px-2 py-0.5 text-[11px] font-semibold"
+                                style={item.late ? { background: '#FEF2F2', color: '#991B1B' } : { background: '#F1F5F9', color: '#334155' }}
+                              >
+                                {item.late ? 'Overdue · ' : 'Due '}
                                 {new Date(item.target_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                               </span>
                             )}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="py-10 text-center text-xs text-[#64748B]">All planned interventions are completed.</p>
-                  )}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="py-10 text-center text-xs text-[#64748B]">All planned interventions are completed.</p>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
