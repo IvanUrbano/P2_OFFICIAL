@@ -809,3 +809,81 @@ body {
     size: A4 !important;
   }
 }
+
+/* ==================== App Motion ====================
+   Small, quick feedback only. Entrance animations end at `transform: none` so no
+   element is left transformed (a transformed ancestor would trap position:fixed
+   modals and drawers). Clicks use the `scale` property, which composes with any
+   positioning transform a button already has instead of replacing it. */
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes card-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes nav-indicator-in {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes landing-icon-float {
+  0%, 100% { translate: 0 0; }
+  50% { translate: 0 -3px; }
+}
+
+.page-enter {
+  animation: page-enter 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.app-interface button:not(:disabled):active {
+  scale: 0.97;
+}
+
+.dash-card {
+  animation: card-rise 450ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  transition: box-shadow 200ms ease, translate 200ms ease;
+}
+
+.grid > .dash-card:nth-child(2) { animation-delay: 70ms; }
+
+.dash-card:hover {
+  translate: 0 -2px;
+  box-shadow: 0 10px 24px rgba(15, 45, 82, 0.10), 0 2px 6px rgba(15, 45, 82, 0.06);
+}
+
+.dash-card-icon { transition: scale 200ms ease; }
+.dash-card:hover .dash-card-icon { scale: 1.12; }
+
+.kpi-tile { transition: background-color 180ms ease; }
+.kpi-tile i { transition: color 180ms ease, scale 180ms ease; }
+.kpi-tile:hover { background-color: #F8FAFC; }
+.kpi-tile:hover i { color: #2E6FAF !important; scale: 1.15; }
+
+.nav-indicator {
+  transform-origin: center;
+  animation: nav-indicator-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.row-hover { transition: background-color 150ms ease; }
+.row-hover:hover { background-color: #F8FAFC; }
+
+.landing-feature-icon { animation: landing-icon-float 4.5s ease-in-out infinite; }
+.landing-feature-wrap:nth-child(2) .landing-feature-icon { animation-delay: 0.6s; }
+.landing-feature-wrap:nth-child(3) .landing-feature-icon { animation-delay: 1.2s; }
+.landing-feature-wrap:nth-child(4) .landing-feature-icon { animation-delay: 1.8s; }
+.landing-feature-wrap:nth-child(5) .landing-feature-icon { animation-delay: 2.4s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter,
+  .dash-card,
+  .nav-indicator,
+  .landing-feature-icon { animation: none; }
+  .dash-card:hover { translate: none; }
+  .app-interface button:not(:disabled):active { scale: none; }
+  .dash-card:hover .dash-card-icon,
+  .kpi-tile:hover i { scale: none; }
+}

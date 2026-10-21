@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useNavigate, Outlet } from 'react-router-dom';
+import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import Topbar from './Topbar';
 import API from '../src/api/axios';
 
@@ -7,6 +7,7 @@ const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 export default function Layout() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [user, setUser] = useState(null);
   const timerRef = useRef(null);
 
@@ -71,7 +72,8 @@ export default function Layout() {
     <div className="app-interface h-screen relative flex flex-col">
       <div className="no-print"><Topbar user={user} /></div>
       <main className="flex-1 min-h-0 overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
-        <div className="px-6 lg:px-10 pt-6 pb-6">
+        {/* Keyed by path so each page fades in when you navigate to it. */}
+        <div key={location.pathname} className="page-enter px-6 lg:px-10 pt-6 pb-6">
           <Outlet />
         </div>
       </main>

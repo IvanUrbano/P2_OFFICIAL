@@ -381,7 +381,7 @@ export default function Topbar({ user }) {
               <button
                 key={item.path}
                 onClick={() => navigate(item.path)}
-                className="relative flex items-center gap-1.5 whitespace-nowrap text-[12px] font-semibold transition-all duration-200 cursor-pointer"
+                className="group relative flex items-center gap-1.5 whitespace-nowrap text-[12px] font-semibold transition-all duration-200 cursor-pointer"
                 style={{
                   padding: '10px 14px',
                   color: isActive ? '#ffffff' : 'rgba(255,255,255,0.55)',
@@ -401,14 +401,14 @@ export default function Topbar({ user }) {
                 }}
               >
                 <i
-                  className={`${item.icon} text-[13px]`}
+                  className={`${item.icon} text-[13px] transition-transform duration-200 group-hover:-translate-y-px`}
                   style={{ color: isActive ? accent : 'inherit' }}
                 />
                 <span>{item.label}</span>
                 {/* Active indicator line */}
                 {isActive && (
                   <div
-                    className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
+                    className="nav-indicator absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
                     style={{ background: accent }}
                   />
                 )}

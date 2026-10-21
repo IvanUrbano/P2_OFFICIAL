@@ -249,9 +249,9 @@ function SectionCard({ title, description, action, actionTo, insight, children }
   const navigate = useNavigate();
   const icon = SECTION_ICONS[title] || 'ri-bar-chart-box-line';
   return (
-    <section className="flex flex-col overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+    <section className="dash-card flex flex-col overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
       <div className="flex shrink-0 items-start gap-2.5 bg-[#0F2D52] px-5 py-3.5">
-        <i className={`${icon} mt-0.5 shrink-0 text-lg text-[#93C5FD]`} aria-hidden="true" />
+        <i className={`dash-card-icon ${icon} mt-0.5 shrink-0 text-lg text-[#93C5FD]`} aria-hidden="true" />
         <div className="min-w-0">
           <h3 className="text-sm font-bold text-white">{title}</h3>
           {description && <p className="mt-0.5 text-xs leading-snug text-[#CBD5E1]">{description}</p>}
@@ -1173,7 +1173,7 @@ export default function DashboardPage() {
           <div className="rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
             <div className="grid grid-cols-2 lg:grid-cols-6">
               {/* Total TB Cases */}
-              <div className="flex flex-col px-5 py-5 relative">
+              <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-database-2-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Total TB Cases</span>
@@ -1190,7 +1190,7 @@ export default function DashboardPage() {
               </div>
 
               {/* New Cases (latest recorded month) */}
-              <div className="flex flex-col px-5 py-5 relative">
+              <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-calendar-check-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>New Cases</span>
@@ -1215,7 +1215,7 @@ export default function DashboardPage() {
               </div>
 
               {/* Treatment Success Rate */}
-              <div className="flex flex-col px-5 py-5 relative">
+              <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-checkbox-circle-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Success Rate</span>
@@ -1240,7 +1240,7 @@ export default function DashboardPage() {
               </div>
 
               {/* Case Fatality Rate */}
-              <div className="flex flex-col px-5 py-5 relative">
+              <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-heart-pulse-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Fatality Rate</span>
@@ -1265,7 +1265,7 @@ export default function DashboardPage() {
               </div>
 
               {/* City Risk Classification */}
-              <div className="flex flex-col px-5 py-5 relative">
+              <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-alarm-warning-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>City Risk Classification</span>
@@ -1293,7 +1293,7 @@ export default function DashboardPage() {
               </div>
 
               {/* Forecasted Cases */}
-              <div className="flex flex-col px-5 py-5 relative">
+              <div className="kpi-tile flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
                   <i className="ri-line-chart-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Forecasted</span>
@@ -1443,7 +1443,7 @@ export default function DashboardPage() {
                     </thead>
                     <tbody>
                       {topBarangays.map((row) => (
-                        <tr key={row.name} className="border-b border-[#E8EDF2] last:border-0">
+                        <tr key={row.name} className="row-hover border-b border-[#E8EDF2] last:border-0">
                           <td className="px-4 py-3 text-xs tabular-nums text-[#64748B]">{row.rank}</td>
                           <td className="px-4 py-3 text-xs font-medium text-[#0F2D52]">{row.name}</td>
                           <td className="px-4 py-3 text-right text-xs tabular-nums text-[#334155]">{row.cases.toLocaleString()}</td>
