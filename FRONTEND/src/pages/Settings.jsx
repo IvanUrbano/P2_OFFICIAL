@@ -539,7 +539,7 @@ export default function Settings() {
       <div className="rounded-xl overflow-hidden" style={{ background: '#ffffff', boxShadow: '0 2px 16px rgba(15,45,82,0.07), 0 1px 3px rgba(15,45,82,0.04)', border: '1px solid #E2E8F0' }}>
         <div className="px-6 py-4" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Settings</h1>
-          <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
+          <p className="text-xs mt-0.5" style={{ color: '#64748B' }}>
             {visibleTabs.find(tab => tab.key === activeTab)?.desc}
           </p>
         </div>
@@ -552,7 +552,7 @@ export default function Settings() {
                 className="relative px-6 py-3 text-left transition-colors whitespace-nowrap"
                 style={{ background: 'transparent' }}
               >
-                <p className="text-[13px] font-bold" style={{ color: activeTab === tab.key ? '#0F2D52' : '#94A3B8' }}>
+                <p className="text-[13px] font-bold" style={{ color: activeTab === tab.key ? '#0F2D52' : '#64748B' }}>
                   {tab.label}
                 </p>
                 <p className="text-[11px] mt-0.5" style={{ color: activeTab === tab.key ? '#64748B' : '#CBD5E1' }}>
@@ -1059,7 +1059,7 @@ export default function Settings() {
                   <div key={y.year} className="flex items-center gap-2 text-xs">
                     <span className="font-bold w-12" style={{ color: '#0F2D52' }}>{y.year}</span>
                     {y.status === 'skipped' ? (
-                      <span style={{ color: '#94A3B8' }}>Skipped — {y.reason}</span>
+                      <span style={{ color: '#64748B' }}>Skipped — {y.reason}</span>
                     ) : y.status === 'error' ? (
                       <span style={{ color: '#B91C1C' }}>Failed: {y.error}</span>
                     ) : (

@@ -290,7 +290,7 @@ export default function Alert() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <div>
             <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Alerts & Notifications</h1>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Monitor important TB conditions and system activities.</p>
+            <p className="text-xs mt-0.5" style={{ color: '#64748B' }}>Monitor important TB conditions and system activities.</p>
           </div>
           <div className="flex items-center gap-3 shrink-0">
             {isAdmin && (
@@ -315,7 +315,7 @@ export default function Alert() {
             )}
             {summary.unread > 0 && (
               <>
-                <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+                <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>
                   <i className="ri-mail-unread-line mr-1" />
                   {summary.unread} unread
                 </span>
@@ -348,7 +348,7 @@ export default function Alert() {
                 className="relative px-6 py-3 text-left transition-colors"
                 style={{ background: 'transparent' }}
               >
-                <p className="text-[13px] font-bold" style={{ color: filterType === rt.key ? '#0F2D52' : '#94A3B8' }}>
+                <p className="text-[13px] font-bold" style={{ color: filterType === rt.key ? '#0F2D52' : '#64748B' }}>
                   {rt.title}
                 </p>
                 <p className="text-[11px] mt-0.5" style={{ color: filterType === rt.key ? '#64748B' : '#CBD5E1' }}>
@@ -446,7 +446,7 @@ export default function Alert() {
           </div>
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>Unable to Load Notifications</p>
-            <p className="text-xs mt-1 max-w-md" style={{ color: '#94A3B8' }}>{error}</p>
+            <p className="text-xs mt-1 max-w-md" style={{ color: '#64748B' }}>{error}</p>
           </div>
           <button onClick={fetchAlerts} className="px-3 py-1.5 text-xs font-semibold" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}>
             Retry
@@ -466,7 +466,7 @@ export default function Alert() {
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
               <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{summary.critical}</p>
-              <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Require immediate attention</span>
+              <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }}>Require immediate attention</span>
               <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
             </div>
 
@@ -478,7 +478,7 @@ export default function Alert() {
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
               <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{summary.high}</p>
-              <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Unresolved high-severity</span>
+              <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }}>Unresolved high-severity</span>
               <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
             </div>
 
@@ -490,7 +490,7 @@ export default function Alert() {
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
               <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{summary.unread}</p>
-              <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Not yet viewed</span>
+              <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }}>Not yet viewed</span>
               <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
             </div>
 
@@ -502,7 +502,7 @@ export default function Alert() {
               </div>
               <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
               <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{summary.today}</p>
-              <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Generated today</span>
+              <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }}>Generated today</span>
             </div>
           </div>
         </div>
@@ -523,7 +523,7 @@ export default function Alert() {
                 ? 'No Matching Notifications'
                 : 'No Active Alerts'}
             </p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#64748B' }}>
               {filterType !== 'all' || filterSeverity !== 'all' || filterStatus !== 'all' || filterBarangay || filterSource || filterDate !== 'all'
                 ? 'No alerts or notifications match the selected filters.'
                 : 'There are currently no alerts requiring attention.'}
@@ -631,7 +631,7 @@ export default function Alert() {
                     pages.push(totalPages);
                   }
                   return pages.map((pageNum, index) => pageNum === '...' ? (
-                    <span key={`ellipsis-${index}`} className="inline-flex h-8 w-8 items-center justify-center text-xs text-[#94A3B8]">...</span>
+                    <span key={`ellipsis-${index}`} className="inline-flex h-8 w-8 items-center justify-center text-xs text-[#64748B]">...</span>
                   ) : (
                     <button
                       key={pageNum}

@@ -6,7 +6,7 @@
 export default function FilterSelect({ label, value, onChange, children, selectStyle, style }) {
   return (
     <div className="relative flex items-center gap-1.5 shrink-0 rounded-lg px-2.5 py-[7px]" style={{ background: '#ffffff', border: '1px solid #E2E8F0', ...style }}>
-      <span className="text-[11px] whitespace-nowrap pointer-events-none" style={{ color: '#94A3B8' }}>{label}:</span>
+      <span className="text-[11px] whitespace-nowrap pointer-events-none" style={{ color: '#64748B' }}>{label}:</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}

@@ -28,7 +28,7 @@ class ErrorBoundaryInner extends Component {
             </div>
             <h1 className="text-lg font-extrabold mb-2" style={{ color: '#0F2D52' }}>Something went wrong</h1>
             <p className="text-sm mb-1" style={{ color: '#64748B' }}>An unexpected error occurred. Please try refreshing the page.</p>
-            <p className="text-[11px] mb-6" style={{ color: '#94A3B8' }}>{this.state.error?.message}</p>
+            <p className="text-[11px] mb-6" style={{ color: '#64748B' }}>{this.state.error?.message}</p>
             <div className="flex gap-3 justify-center">
               <button
                 onClick={() => window.location.reload()}

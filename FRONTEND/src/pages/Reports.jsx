@@ -475,8 +475,8 @@ function ReportRenderer({ report }) {
         {/* Footer */}
         <div className="pt-3" style={{ borderTop: '1px solid #D1D5DB' }}>
           <div className="flex items-center justify-between">
-            <span className="text-[9px]" style={{ color: '#6B7280' }}>TBInsight &middot; Pasig City Health Office</span>
-            <span className="text-[9px]" style={{ color: '#9CA3AF' }}>{report.footerPeriod}{report.reportRef ? ` · Ref ${report.reportRef}` : ''}</span>
+            <span className="text-[10px]" style={{ color: '#6B7280' }}>TBInsight &middot; Pasig City Health Office</span>
+            <span className="text-[10px]" style={{ color: '#9CA3AF' }}>{report.footerPeriod}{report.reportRef ? ` · Ref ${report.reportRef}` : ''}</span>
           </div>
         </div>
 
@@ -665,11 +665,11 @@ export default function Reports() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <div>
             <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Reports</h1>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Generate and view tuberculosis surveillance reports from TBInsight records.</p>
+            <p className="text-xs mt-0.5" style={{ color: '#64748B' }}>Generate and view tuberculosis surveillance reports from TBInsight records.</p>
           </div>
           <div className="flex items-center gap-3 shrink-0">
             {reportData?.report?.lastSync && (
-              <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+              <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>
                 <i className="ri-time-line mr-1" />
                 Last Updated: {new Date(reportData.report.lastSync).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
               </span>
@@ -691,7 +691,7 @@ export default function Reports() {
                 className="relative px-6 py-3 text-left transition-colors"
                 style={{ background: 'transparent' }}
               >
-                <p className="text-[13px] font-bold" style={{ color: reportType === rt.key ? '#0F2D52' : '#94A3B8' }}>
+                <p className="text-[13px] font-bold" style={{ color: reportType === rt.key ? '#0F2D52' : '#64748B' }}>
                   {rt.title}
                 </p>
                 <p className="text-[11px] mt-0.5" style={{ color: reportType === rt.key ? '#64748B' : '#CBD5E1' }}>
@@ -805,7 +805,7 @@ export default function Reports() {
           </div>
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>Unable to Generate Report</p>
-            <p className="text-xs mt-1 max-w-md" style={{ color: '#94A3B8' }}>{error}</p>
+            <p className="text-xs mt-1 max-w-md" style={{ color: '#64748B' }}>{error}</p>
           </div>
           <div className="flex gap-2">
             <button onClick={handleGenerate} className="px-3 py-1.5 text-xs font-semibold" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; e.currentTarget.style.borderColor = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; e.currentTarget.style.borderColor = '#0F2D52'; }}>
@@ -826,7 +826,7 @@ export default function Reports() {
           </div>
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>Select a report type and click Apply Filters</p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>Choose a report type above, set your filters, and click Apply Filters to create a report.</p>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#64748B' }}>Choose a report type above, set your filters, and click Apply Filters to create a report.</p>
           </div>
         </div>
       )}
@@ -839,7 +839,7 @@ export default function Reports() {
           </div>
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>No TB Records Found</p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>No TB records are available for the selected reporting period and geographic coverage.</p>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#64748B' }}>No TB records are available for the selected reporting period and geographic coverage.</p>
           </div>
           <button onClick={handleReset} className="px-3 py-1.5 text-xs font-medium" style={{ background: '#F3F4F6', color: '#374151', border: '1px solid #D1D5DB', borderRadius: 4, transition: 'background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#E5E7EB'; }} onMouseLeave={e => { e.currentTarget.style.background = '#F3F4F6'; }}>
             Change Filters
@@ -854,7 +854,7 @@ export default function Reports() {
           <div className="flex items-center justify-between no-print">
             <div>
               <p className="text-sm font-bold" style={{ color: '#0F2D52' }}>{report.title}</p>
-              <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Generated report preview</p>
+              <p className="text-[11px] mt-0.5" style={{ color: '#64748B' }}>Generated report preview</p>
             </div>
             <div className="flex items-center gap-2">
               <button onClick={() => { setExportFormat('pdf'); setShowExportModal(true); }}
@@ -987,7 +987,7 @@ export default function Reports() {
             <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: '1px solid #E2E8F0' }}>
               <div>
                 <p className="text-sm font-bold" style={{ color: '#0F2D52' }}>Download &amp; Print Report</p>
-                <p className="text-[11px] mt-0.5" style={{ color: '#94A3B8' }}>Choose a format to download or print</p>
+                <p className="text-[11px] mt-0.5" style={{ color: '#64748B' }}>Choose a format to download or print</p>
               </div>
               <ModalCloseButton onClick={() => { setShowExportModal(false); setExporting(''); }} />
             </div>
@@ -1013,7 +1013,7 @@ export default function Reports() {
                         cursor: 'pointer',
                       }}
                     >
-                      <i className={`${fmt.icon} text-xl`} style={{ color: exportFormat === fmt.key ? fmt.color : '#94A3B8' }} />
+                      <i className={`${fmt.icon} text-xl`} style={{ color: exportFormat === fmt.key ? fmt.color : '#64748B' }} />
                       <span className="text-[11px] font-bold" style={{ color: exportFormat === fmt.key ? '#0F2D52' : '#64748B' }}>{fmt.label}</span>
                     </button>
                   ))}

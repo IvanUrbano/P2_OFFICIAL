@@ -139,7 +139,7 @@ function AiInsightPanel({
             {title}
           </h3>
           {data?.meta?.basedOn && (
-            <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
+            <p className="text-xs mt-1" style={{ color: '#64748B' }}>
               Based on: {data.meta.basedOn}
             </p>
           )}
@@ -193,11 +193,11 @@ function AiInsightPanel({
           className="mt-4 pt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1"
           style={{ borderTop: '1px solid #E2E8F0' }}
         >
-          <p className="text-[10px]" style={{ color: '#94A3B8' }}>
+          <p className="text-[10px]" style={{ color: '#64748B' }}>
             Generated from TBInsight analytical indicators and model outputs
           </p>
           {data?.meta?.generatedAt && (
-            <p className="text-[10px]" style={{ color: '#94A3B8' }}>
+            <p className="text-[10px]" style={{ color: '#64748B' }}>
               Generated {new Date(data.meta.generatedAt).toLocaleString()}
             </p>
           )}

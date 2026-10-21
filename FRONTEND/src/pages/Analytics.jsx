@@ -101,7 +101,7 @@ function EmptyState() {
         <i className="ri-bar-chart-grouped-line text-2xl" style={{ color: '#CBD5E1' }} />
       </div>
       <p className="text-sm font-semibold" style={{ color: '#475569' }}>No Data Available</p>
-      <p className="text-xs text-center max-w-xs" style={{ color: '#94A3B8' }}>
+      <p className="text-xs text-center max-w-xs" style={{ color: '#64748B' }}>
         No TB records match the selected filters. Try adjusting your filters and apply again.
       </p>
     </div>
@@ -841,14 +841,14 @@ export default function Analytics() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <div className="shrink-0">
             <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Analytics</h1>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Analyze tuberculosis trends, case distribution, demographics, and treatment outcomes across Pasig City.</p>
+            <p className="text-xs mt-0.5" style={{ color: '#64748B' }}>Analyze tuberculosis trends, case distribution, demographics, and treatment outcomes across Pasig City.</p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <div className="text-right mr-2">
-              <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+              <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>
                 Last updated: {lastUpdated}
               </span>
-              <p className="text-[10px]" style={{ color: '#CBD5E1' }}>
+              <p className="text-[10px]" style={{ color: '#64748B' }}>
                 Coverage: {dataCoverage.range} • {dataCoverage.brgyCount}/30 barangays
                 {dataCoverage.popAvail && ` • Population: ${dataCoverage.popAvail}`}
               </p>
@@ -926,7 +926,7 @@ export default function Analytics() {
           {activeFilters.map((f) => (
             <span key={f.key} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold" style={{ background: '#F1F5F9', color: '#0F2D52', border: '1px solid #E2E8F0' }}>
               {f.label}: <span className="font-bold">{f.value}</span>
-              <button onClick={() => removeFilter(f.key)} className="inline-flex items-center justify-center w-4 h-4" style={{ color: '#94A3B8' }}>
+              <button onClick={() => removeFilter(f.key)} className="inline-flex items-center justify-center w-4 h-4" style={{ color: '#64748B' }}>
                 ×
               </button>
             </span>
@@ -962,7 +962,7 @@ export default function Analytics() {
                   <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.total.toLocaleString()}</p>
                   {aYear && <TrendBadge current={metrics.total} previous={previousMetrics.total} inverse={true} />}
                 </div>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }}>
                   {aYear ? `Diagnosed in ${aYear}` : availableYears.length > 0 ? `Total across ${availableYears[availableYears.length - 1]}–${availableYears[0]}` : 'Total across available years'}
                 </span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
@@ -979,7 +979,7 @@ export default function Analytics() {
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.incidence == null ? 'N/A' : metrics.incidence}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }}>
                   {!incidenceYear
                     ? 'Select a year — not applicable across combined years'
                     : metrics.incidence == null
@@ -1008,12 +1008,12 @@ export default function Analytics() {
                     <TrendBadge current={Number(metrics.successRate)} previous={Number(previousMetrics.successRate)} inverse={false} />}
                 </div>
                 {tsrData?.cohortTotal != null && (
-                  <span className="text-[10px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                  <span className="text-[10px] font-medium mt-1" style={{ color: '#64748B' }}>
                     Cohort: {tsrData.cohortYear || (aYear ? String(Number(aYear) - 1) : '—')} ({tsrData.cohortTotal.toLocaleString()} patients)
                   </span>
                 )}
                 {(aMonth || aOutcome) && (
-                  <span className="text-[9px] mt-1 flex items-center gap-1" style={{ color: '#94A3B8' }}>
+                  <span className="text-[10px] mt-1 flex items-center gap-1" style={{ color: '#64748B' }}>
                     <i className="ri-information-line" />
                     TSR excludes Month and Outcome filters (annual cohort indicator)
                   </span>
@@ -1039,12 +1039,12 @@ export default function Analytics() {
                     <TrendBadge current={Number(tsrData.ltfuRate)} previous={Number(prevTsrData.ltfuRate)} inverse={true} />}
                 </div>
                 {tsrData?.ltfuRate != null && (
-                  <span className="text-[10px] font-medium mt-1" style={{ color: '#94A3B8' }}>
+                  <span className="text-[10px] font-medium mt-1" style={{ color: '#64748B' }}>
                     {(tsrData.cohortLtfu || 0).toLocaleString()} of {(tsrData.cohortTotal || 0).toLocaleString()} patients
                   </span>
                 )}
                 {(aMonth || aOutcome) && (
-                  <span className="text-[9px] mt-1 flex items-center gap-1" style={{ color: '#94A3B8' }}>
+                  <span className="text-[10px] mt-1 flex items-center gap-1" style={{ color: '#64748B' }}>
                     <i className="ri-information-line" />
                     Excludes Month and Outcome filters (annual cohort indicator)
                   </span>
@@ -1060,14 +1060,14 @@ export default function Analytics() {
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.fatalityRate == null ? 'N/A' : `${metrics.fatalityRate}%`}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Deaths / evaluated terminal outcomes{aYear ? ` — ${aYear} diagnoses` : ''}</span>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }}>Deaths / evaluated terminal outcomes{aYear ? ` — ${aYear} diagnoses` : ''}</span>
                 {cfrData?.total > 0 && cfrData?.evaluated != null && (cfrData.evaluated / cfrData.total) < 0.5 && (
-                  <span className="text-[9px] mt-1" style={{ color: '#D97706' }}>
+                  <span className="text-[10px] mt-1" style={{ color: '#D97706' }}>
                     Only {cfrData.evaluated} of {cfrData.total} cases have reached a terminal outcome. CFR may not be representative.
                   </span>
                 )}
                 {aOutcome && (
-                  <span className="text-[9px] mt-1 flex items-center gap-1" style={{ color: '#94A3B8' }}>
+                  <span className="text-[10px] mt-1 flex items-center gap-1" style={{ color: '#64748B' }}>
                     <i className="ri-information-line" />
                     CFR excludes Outcome filter (outcome is the indicator)
                   </span>
@@ -1087,7 +1087,7 @@ export default function Analytics() {
                 {!metrics.hasRiskData ? (
                   <>
                     <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>N/A</p>
-                    <span className="text-[11px] font-medium mt-1 leading-snug" style={{ color: '#94A3B8' }}>
+                    <span className="text-[11px] font-medium mt-1 leading-snug" style={{ color: '#64748B' }}>
                       No risk assessment available yet
                     </span>
                   </>
@@ -1103,7 +1103,7 @@ export default function Analytics() {
                     >
                       {riskDisplay(metrics.selectedRiskClass)}
                     </p>
-                    <span className="text-[11px] font-medium mt-1 leading-snug" style={{ color: '#94A3B8' }}>
+                    <span className="text-[11px] font-medium mt-1 leading-snug" style={{ color: '#64748B' }}>
                       City-wide breakdown hidden by the barangay filter
                     </span>
                   </>
@@ -1112,7 +1112,7 @@ export default function Analytics() {
                     <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{metrics.highRisk}</p>
                     <span
                       className="text-[11px] font-medium mt-1 leading-snug"
-                      style={{ color: '#94A3B8' }}
+                      style={{ color: '#64748B' }}
                       title={`Pasig barangays classified as High Risk in the ${riskShownYear || 'latest'} assessment.`}
                     >
                       of {metrics.totalBarangays} barangays classified as High Risk
@@ -1145,7 +1145,7 @@ export default function Analytics() {
                   {compareYear && prevYearLabel && previousComparison.available && (
                     <div className="flex shrink-0 items-center gap-1.5">
                       <span className="w-4 h-0 border-t-2" style={{ borderColor: '#CBD5E1', borderStyle: 'dashed' }} />
-                      <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>Previous Year ({prevYearLabel})</span>
+                      <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Previous Year ({prevYearLabel})</span>
                     </div>
                   )}
                 </div>
@@ -1163,8 +1163,8 @@ export default function Analytics() {
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={mergedTrendData} margin={{ top: 10, right: 15, left: -10, bottom: 0 }}>
                       <CartesianGrid vertical={false} stroke="#E8EDF2" />
-                      <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={6} />
-                      <YAxis tick={{ fontSize: 12, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={40} tickMargin={4} />
+                      <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} tickMargin={6} />
+                      <YAxis tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} width={40} tickMargin={4} />
                       <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#E2E8F0', strokeWidth: 1 }} />
                       <Line type="monotone" dataKey="Cases" stroke="#2E6FAF" strokeWidth={2} dot={{ fill: '#2E6FAF', r: 2.5, strokeWidth: 0 }} activeDot={{ r: 4, strokeWidth: 2, stroke: '#ffffff' }} name="Cases" connectNulls={false} isAnimationActive={false} />
                       {compareYear && prevYearLabel && previousComparison.available && (
@@ -1174,11 +1174,11 @@ export default function Analytics() {
                   </ResponsiveContainer>
                 </div>
               ) : (
-                <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No trend data available for the selected filters.</p>
+                <p className="text-sm text-center py-10" style={{ color: '#64748B' }}>No trend data available for the selected filters.</p>
               )}
               <ChartInsight text={trendInsight(trendData, { valueKey: 'Cases', monthKey: 'key', history: trendHistory })} plain />
               {compareYear && aYear && !previousComparison.available && (
-                <p className="text-[11px] mt-2 text-center" style={{ color: '#94A3B8' }}>
+                <p className="text-[11px] mt-2 text-center" style={{ color: '#64748B' }}>
                   <i className="ri-information-line" /> Previous-year comparison unavailable due to incomplete {prevYearLabel} data.
                 </p>
               )}
@@ -1195,17 +1195,17 @@ export default function Analytics() {
                 </div>
               </div>
               <div className="text-right">
-                <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Latest Period Change</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Latest Period Change</p>
                 <p
                   className="text-lg font-extrabold"
-                  style={{ color: caseTrendComparison.latestPeriod?.changePct == null ? '#94A3B8' : caseTrendComparison.latestPeriod.changePct > 0 ? '#DC2626' : caseTrendComparison.latestPeriod.changePct < 0 ? '#047857' : '#64748B' }}
+                  style={{ color: caseTrendComparison.latestPeriod?.changePct == null ? '#64748B' : caseTrendComparison.latestPeriod.changePct > 0 ? '#DC2626' : caseTrendComparison.latestPeriod.changePct < 0 ? '#047857' : '#64748B' }}
                 >
                   {caseTrendComparison.latestPeriod?.changePct == null
                     ? 'N/A'
                     : `${caseTrendComparison.latestPeriod.changePct > 0 ? '+' : ''}${caseTrendComparison.latestPeriod.changePct}%`}
                 </p>
                 {caseTrendComparison.latestPeriod && (
-                  <p className="text-[9px] mt-0.5" style={{ color: '#94A3B8' }}>
+                  <p className="text-[10px] mt-0.5" style={{ color: '#64748B' }}>
                     {caseTrendComparison.latestPeriod.period} {caseTrendComparison.latestPeriod.year} vs{' '}
                     {caseTrendComparison.latestPeriod.period} {caseTrendComparison.latestPeriod.previousYear}
                   </p>
@@ -1234,9 +1234,9 @@ export default function Analytics() {
                           </td>
                           <td className="px-3 py-2 text-right">
                             {!row.comparable ? (
-                              <span className="text-[10px] font-medium" style={{ color: '#94A3B8' }}>Not enough matching coverage</span>
+                              <span className="text-[10px] font-medium" style={{ color: '#64748B' }}>Not enough matching coverage</span>
                             ) : row.changePct == null ? (
-                              <span className="text-[11px] font-bold" style={{ color: '#94A3B8' }}>N/A</span>
+                              <span className="text-[11px] font-bold" style={{ color: '#64748B' }}>N/A</span>
                             ) : (
                               <span className="text-[11px] font-bold" style={{ color: row.changePct > 0 ? '#DC2626' : row.changePct < 0 ? '#047857' : '#64748B' }}>
                                 {row.changePct > 0 ? '+' : ''}{row.changePct}%
@@ -1249,10 +1249,10 @@ export default function Analytics() {
                   </table>
                 </div>
               ) : (
-                <p className="text-sm text-center py-8" style={{ color: '#94A3B8' }}>No case data available for the selected filters.</p>
+                <p className="text-sm text-center py-8" style={{ color: '#64748B' }}>No case data available for the selected filters.</p>
               )}
               <ChartInsight text={caseTrendInsight(caseTrendComparison.rows, caseTrendComparison.latestPeriod)} plain />
-              <p className="text-[9px] mt-2" style={{ color: '#CBD5E1' }}>
+              <p className="text-[10px] mt-2" style={{ color: '#64748B' }}>
                 Changes compare the months with reported cases in each year against those same months in the previous year. A change is shown only when matching month coverage is available.
               </p>
             </div>
@@ -1305,7 +1305,7 @@ export default function Analytics() {
                     <p className="mt-2 text-[11px] text-[#64748B]">{rankedBarangayChartData.length} barangays shown{rankedBarangayChartData.length > 7 ? ' · Scroll for more' : ''}{incidenceViewActive ? ' · N/A means no population data for the selected year' : ''}</p>
                   </>
                 ) : (
-                  <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No barangay data available.</p>
+                  <p className="text-sm text-center py-10" style={{ color: '#64748B' }}>No barangay data available.</p>
                 )}
                 <ChartInsight text={incidenceViewActive ? incidenceInsight(barangayIncidenceData) : rankingInsight(barangayIncidenceData, { valueKey: 'Cases', previous: olderRecords?.barangay })} plain />
               </div>
@@ -1414,13 +1414,13 @@ export default function Analytics() {
                             <span className="h-2.5 w-2.5 shrink-0" style={{ background: entry.name.toLowerCase() === 'male' ? '#2E6FAF' : entry.name.toLowerCase() === 'female' ? '#6B9E8A' : '#94A3B8' }} />
                             <span className="text-xs font-semibold" style={{ color: '#475569' }}>{entry.name}</span>
                             <span className="text-xs font-bold" style={{ color: '#0F2D52' }}>{entry.value.toLocaleString()}</span>
-                            <span className="text-[10px]" style={{ color: '#94A3B8' }}>({totalSex > 0 ? ((entry.value / totalSex) * 100).toFixed(1) : 0}%)</span>
+                            <span className="text-[10px]" style={{ color: '#64748B' }}>({totalSex > 0 ? ((entry.value / totalSex) * 100).toFixed(1) : 0}%)</span>
                           </div>
                         ))}
                       </div>
                     </div>
                   ) : (
-                    <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
+                    <p className="text-sm text-center py-10" style={{ color: '#64748B' }}>No data.</p>
                   )}
                   <ChartInsight text={shareInsight(sexData, { noun: 'sex', previous: olderRecords?.sex })} plain />
                 </div>
@@ -1442,7 +1442,7 @@ export default function Analytics() {
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={ageData} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#E8ECF1" />
-                          <XAxis type="number" tick={{ fontSize: 12, fill: '#94A3B8' }} axisLine={false} tickLine={false} tickMargin={4} />
+                          <XAxis type="number" tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} tickMargin={4} />
                           <YAxis type="category" dataKey="group" tick={{ fontSize: 12, fill: '#64748B', fontWeight: 500 }} axisLine={false} tickLine={false} width={50} tickMargin={4} />
                           <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
                           <Bar dataKey="Cases" radius={[0, 6, 6, 0]} barSize={16} name="Cases">
@@ -1454,7 +1454,7 @@ export default function Analytics() {
                       </ResponsiveContainer>
                     </div>
                   ) : (
-                    <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No age data available for the selected filters.</p>
+                    <p className="text-sm text-center py-10" style={{ color: '#64748B' }}>No age data available for the selected filters.</p>
                   )}
                   <ChartInsight text={shareInsight(ageData, { nameKey: 'group', valueKey: 'Cases', noun: 'age group', previous: olderRecords?.age })} plain />
                 </div>

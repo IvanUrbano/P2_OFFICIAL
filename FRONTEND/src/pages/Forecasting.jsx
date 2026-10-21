@@ -191,7 +191,7 @@ function ModelOverview() {
 
 /** "+29.9%" in green when the forecast beat the 12-month average, red when it did worse. */
 function SkillValue({ skill }) {
-  if (skill == null || !Number.isFinite(Number(skill))) return <span style={{ color: '#94A3B8' }}>—</span>;
+  if (skill == null || !Number.isFinite(Number(skill))) return <span style={{ color: '#64748B' }}>—</span>;
   const v = Number(skill) * 100;
   return (
     <span className="font-bold tabular-nums" style={{ color: v > 0 ? '#047857' : v < 0 ? '#B91C1C' : '#334155' }}>
@@ -464,7 +464,7 @@ function ModelEvaluationPanel({ open, onToggle, record, status, loading, error, 
                   The latest evaluation failed on {failedAt}. These are previous saved results from {savedAt}.
                 </p>
               )}
-              <p className="text-[10px] mt-3" style={{ color: '#94A3B8' }}>Last evaluated: {savedAt}</p>
+              <p className="text-[10px] mt-3" style={{ color: '#64748B' }}>Last evaluated: {savedAt}</p>
             </>
           )}
         </div>
@@ -1259,7 +1259,7 @@ export default function Forecasting() {
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             {lastUpdated && (
-              <span className="text-[11px] font-medium mr-2" style={{ color: '#94A3B8' }}>
+              <span className="text-[11px] font-medium mr-2" style={{ color: '#64748B' }}>
                 Last updated: {lastUpdated.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
               </span>
             )}
@@ -1444,7 +1444,7 @@ export default function Forecasting() {
                 <div className="flex flex-wrap items-center gap-4 pt-3" style={{ borderTop: '1px solid #E2E8F0' }}>
                   <div className="flex items-center gap-1.5">
                     <span className="text-[11px] font-semibold" style={{ color: '#64748B' }}>Random Forest:</span>
-                    <span className="text-[11px] font-extrabold" style={{ color: MODEL_STATUS_COLORS[pipelineStatus?.rf_status] || '#94A3B8' }}>
+                    <span className="text-[11px] font-extrabold" style={{ color: MODEL_STATUS_COLORS[pipelineStatus?.rf_status] || '#64748B' }}>
                       {formatModelStatus(pipelineStatus?.rf_status)}
                     </span>
                   </div>
@@ -1484,7 +1484,7 @@ export default function Forecasting() {
             <p className="text-sm font-bold" style={{ color: '#475569' }}>
               No Forecast Loaded
             </p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#64748B' }}>
               Select a historical period, barangay, and forecast horizon, then click View
               Forecast to load the current projections.
             </p>
@@ -1501,7 +1501,7 @@ export default function Forecasting() {
             <p className="text-sm font-bold" style={{ color: '#475569' }}>
               Couldn't Load Forecast
             </p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#64748B' }}>
               {viewErrorMessage || 'The request failed. Check your connection and try again.'}
             </p>
             <button
@@ -1524,7 +1524,7 @@ export default function Forecasting() {
             <p className="text-sm font-bold" style={{ color: '#475569' }}>
               No Forecast Available
             </p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#64748B' }}>
               There is no persisted forecast or historical data for the selected barangay and period.
               Try different filters, or ask an admin to run the analysis pipeline.
             </p>
@@ -1546,7 +1546,7 @@ export default function Forecasting() {
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{historicalCases != null ? historicalCases.toLocaleString() : 'N/A'}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{appliedStartYear} – {appliedEndYear} period</span>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }}>{appliedStartYear} – {appliedEndYear} period</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
@@ -1558,7 +1558,7 @@ export default function Forecasting() {
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{totalForecasted != null ? Math.round(totalForecasted).toLocaleString() : 'N/A'}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>Next {appliedMonths} month{Number(appliedMonths) === 1 ? '' : 's'}</span>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }}>Next {appliedMonths} month{Number(appliedMonths) === 1 ? '' : 's'}</span>
                 <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />
               </div>
 
@@ -1594,7 +1594,7 @@ export default function Forecasting() {
                 <div className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-semibold" style={{ color: '#64748B' }}>GIS risk</span>
-                    <span className="text-[11px] font-extrabold" style={{ color: MODEL_STATUS_COLORS[pipelineStatus?.rf_status] || '#94A3B8' }}>
+                    <span className="text-[11px] font-extrabold" style={{ color: MODEL_STATUS_COLORS[pipelineStatus?.rf_status] || '#64748B' }}>
                       {formatModelStatus(pipelineStatus?.rf_status)}
                     </span>
                   </div>
@@ -1775,7 +1775,7 @@ export default function Forecasting() {
                       For each past month the model predicted the cases using only earlier records; the chart puts that prediction next to the cases actually reported.
                     </p>
                     {backtestEvaluatedAt && (
-                      <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>
+                      <p className="text-[10px] mt-0.5" style={{ color: '#64748B' }}>
                         From the model test saved {new Date(backtestEvaluatedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}.
                       </p>
                     )}
@@ -1909,7 +1909,7 @@ export default function Forecasting() {
                             <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#1E293B' }}>
                               {row.periodLabel}
                               {row.isHistorical && (
-                                <span className="ml-2 text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded" style={{ background: '#E2E8F0', color: '#64748B' }}>Actual</span>
+                                <span className="ml-2 text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded" style={{ background: '#E2E8F0', color: '#64748B' }}>Actual</span>
                               )}
                             </td>
                             <td className="px-5 py-3 text-xs font-medium" style={{ color: '#1E293B' }}>
@@ -1923,7 +1923,7 @@ export default function Forecasting() {
                             <td className="px-5 py-3">
                               {showCI ? (
                                 <div className="flex items-center gap-3 min-w-[160px]">
-                                  <span className="text-[11px] font-medium tabular-nums" style={{ color: '#94A3B8', minWidth: 28 }}>
+                                  <span className="text-[11px] font-medium tabular-nums" style={{ color: '#64748B', minWidth: 28 }}>
                                     {row.ci_lower.toLocaleString()}
                                   </span>
                                   <div className="relative flex-1 h-2 rounded-full" style={{ background: '#E2E8F0' }}
@@ -1942,17 +1942,17 @@ export default function Forecasting() {
                                       style={{ background: '#6B9E8A', left: `${forecastPos}%`, transform: 'translate(-50%, -50%)' }}
                                     />
                                   </div>
-                                  <span className="text-[11px] font-medium tabular-nums" style={{ color: '#94A3B8', minWidth: 28 }}>
+                                  <span className="text-[11px] font-medium tabular-nums" style={{ color: '#64748B', minWidth: 28 }}>
                                     {row.ci_upper.toLocaleString()}
                                   </span>
                                 </div>
                               ) : !row.isHistorical && row.forecasted != null ? (
-                                <span className="text-[11px]" style={{ color: '#94A3B8' }}>—</span>
+                                <span className="text-[11px]" style={{ color: '#64748B' }}>—</span>
                               ) : (
-                                <span className="text-[11px]" style={{ color: '#94A3B8' }}>{"\u2014"}</span>
+                                <span className="text-[11px]" style={{ color: '#64748B' }}>{"\u2014"}</span>
                               )}
                             </td>
-                            <td className="px-5 py-3 text-xs font-semibold" style={{ color: gr != null ? (gr >= 0 ? '#EF4444' : '#10B981') : '#94A3B8' }}>
+                            <td className="px-5 py-3 text-xs font-semibold" style={{ color: gr != null ? (gr >= 0 ? '#EF4444' : '#10B981') : '#64748B' }}>
                               {!row.isHistorical && gr != null ? `${gr >= 0 ? '+' : ''}${gr.toFixed(1)}%` : '\u2014'}
                             </td>
                             <td className="px-5 py-3">
@@ -1962,7 +1962,7 @@ export default function Forecasting() {
                                   <span className="text-xs font-semibold" style={{ color: '#1E293B' }}>{modelLabel}</span>
                                 </div>
                               ) : (
-                                <span className="text-[11px]" style={{ color: '#94A3B8' }}>{"\u2014"}</span>
+                                <span className="text-[11px]" style={{ color: '#64748B' }}>{"\u2014"}</span>
                               )}
                             </td>
                           </tr>

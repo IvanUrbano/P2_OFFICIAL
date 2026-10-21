@@ -61,7 +61,7 @@ export default function RiskClassificationGuide({ thresholds, source, percentile
         </h3>
         <span
           className="text-[10px]"
-          style={{ color: '#94A3B8' }}
+          style={{ color: '#64748B' }}
           title={tooltip}
           aria-label={`How is this calculated? ${tooltip}`}
           role="img"
@@ -70,7 +70,7 @@ export default function RiskClassificationGuide({ thresholds, source, percentile
           ⓘ How is this calculated?
         </span>
       </div>
-      <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>
+      <p className="text-[10px] mt-0.5" style={{ color: '#64748B' }}>
         TB incidence per 100,000. The risk level above comes from the Random Forest, which also weighs trends, neighbouring barangays and long-term history, so it can differ from these ranges.
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-3 gap-y-1 mt-1">

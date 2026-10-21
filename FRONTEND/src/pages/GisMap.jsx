@@ -781,7 +781,7 @@ export default function GisMap() {
         // predicted class \u2014 only shown when it actually came from RF.
         const confidenceRow = p.model_type === 'random_forest' && p.classification_confidence != null
           ? `<div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
-              <span style="font-size: 12px; color: #94A3B8;">Model confidence</span>
+              <span style="font-size: 12px; color: #64748B;">Model confidence</span>
               <span style="font-size: 12px; font-weight: 600; color: #0F2D52;">${Math.round(p.classification_confidence * 100)}%</span>
             </div>`
           : '';
@@ -789,16 +789,16 @@ export default function GisMap() {
           <div style="font-family: 'Public Sans', 'Segoe UI', sans-serif; min-width: 220px; padding: 2px;">
             <div style="font-size: 13px; font-weight: 700; color: #0F2D52; margin-bottom: 4px;">${escapeHtml(p.name) || 'Unknown'}</div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
-              <span style="font-size: 12px; color: #94A3B8;">Risk</span>
+              <span style="font-size: 12px; color: #64748B;">Risk</span>
               <span style="font-size: 12px; font-weight: 700; color: ${riskColor};">${escapeHtml(p.risk_class) || 'No Data'}</span>
             </div>
             ${confidenceRow}
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
-              <span style="font-size: 12px; color: #94A3B8;">Trend</span>
+              <span style="font-size: 12px; color: #64748B;">Trend</span>
               <span style="font-size: 12px; font-weight: 600; color: #0F2D52;">${trendArrow} ${escapeHtml(p.trend_direction) || 'Stable'}</span>
             </div>
             <div style="display: flex; justify-content: space-between;">
-              <span style="font-size: 12px; color: #94A3B8;">Cases</span>
+              <span style="font-size: 12px; color: #64748B;">Cases</span>
               <span style="font-size: 12px; font-weight: 600; color: #0F2D52;">${formatNum(p.total_cases)}</span>
             </div>
           </div>
@@ -985,7 +985,7 @@ export default function GisMap() {
           <div style={{ height: 450, background: '#F1F5F9' }} className="flex items-center justify-center">
             <div className="flex flex-col items-center gap-3">
               <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#DBEAFE', borderTopColor: '#2563EB' }} />
-              <p className="text-xs font-medium" style={{ color: '#94A3B8' }}>Loading map data...</p>
+              <p className="text-xs font-medium" style={{ color: '#64748B' }}>Loading map data...</p>
             </div>
           </div>
         </div>
@@ -1008,7 +1008,7 @@ export default function GisMap() {
         <div className="text-center">
           <i className="ri-error-warning-line text-4xl mb-2 block" style={{ color: '#EF4444' }} />
           <p style={{ color: '#EF4444' }}>Failed to load map</p>
-          <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>{error}</p>
+          <p className="text-sm mt-1" style={{ color: '#64748B' }}>{error}</p>
         </div>
       </div>
     );
@@ -1037,7 +1037,7 @@ export default function GisMap() {
           <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2">
             <div>
               <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>GIS Mapping</h1>
-              <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Visualize TB cases across Pasig City and identify barangays with higher TB risk.</p>
+              <p className="text-xs mt-0.5" style={{ color: '#64748B' }}>Visualize TB cases across Pasig City and identify barangays with higher TB risk.</p>
             </div>
             {/* GIS Year selects the snapshot trained on that year's data.
                 Assessment year and prediction period are shown separately. */}
@@ -1460,7 +1460,7 @@ export default function GisMap() {
               <div className="flex items-center justify-center py-20">
                 <div className="flex flex-col items-center gap-3">
                   <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#DBEAFE', borderTopColor: '#2563EB' }} />
-                  <p className="text-xs font-medium" style={{ color: '#94A3B8' }}>Loading barangay data...</p>
+                  <p className="text-xs font-medium" style={{ color: '#64748B' }}>Loading barangay data...</p>
                 </div>
               </div>
             )}
@@ -1685,7 +1685,7 @@ export default function GisMap() {
                           </div>
                         </>
                       ) : (
-                        <p className="text-[11px] leading-relaxed" style={{ color: '#94A3B8' }}>
+                        <p className="text-[11px] leading-relaxed" style={{ color: '#64748B' }}>
                           No indicator values were recorded for this classification, so there is nothing to break down.
                         </p>
                       )}
@@ -1735,7 +1735,7 @@ export default function GisMap() {
                           );
                         })}
                       </div>
-                      <p className="text-[10px] leading-relaxed" style={{ color: '#94A3B8' }}>
+                      <p className="text-[10px] leading-relaxed" style={{ color: '#64748B' }}>
                         <i className="ri-information-line mr-0.5" />
                         Each label is that barangay&apos;s own assessment for this period; it does not indicate TB
                         transmission between barangays.
@@ -1875,7 +1875,7 @@ export default function GisMap() {
                   {!barangayDetail && !barangayDetailLoading && (
                     <div className="text-center py-10">
                       <i className="ri-information-line text-3xl mb-2 block" style={{ color: '#CBD5E1' }} />
-                      <p className="text-xs" style={{ color: '#94A3B8' }}>No data available for this barangay.</p>
+                      <p className="text-xs" style={{ color: '#64748B' }}>No data available for this barangay.</p>
                     </div>
                   )}
                 </div>

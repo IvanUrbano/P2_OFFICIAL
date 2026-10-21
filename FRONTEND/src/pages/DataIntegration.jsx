@@ -142,7 +142,7 @@ export default function DataIntegrationPage() {
         <div className="flex flex-col justify-between gap-3 border-b border-[#DBEAFE] px-6 py-3.5 sm:flex-row sm:items-center">
           <div>
             <h1 className="text-lg font-extrabold tracking-tight text-[#0F2D52]">Data Integration</h1>
-            <p className="mt-0.5 text-xs text-[#94A3B8]">Monitor data received from PASIG TB-IS and processed by TBInsight.</p>
+            <p className="mt-0.5 text-xs text-[#64748B]">Monitor data received from PASIG TB-IS and processed by TBInsight.</p>
           </div>
           <button type="button" onClick={handleRefresh} disabled={refreshing}
             className="inline-flex shrink-0 items-center justify-center gap-1.5 self-start rounded border border-[#0F2D52] bg-[#0F2D52] px-4 py-2 text-xs font-semibold text-white hover:bg-[#174A7E] disabled:cursor-wait disabled:opacity-70 sm:self-auto">
@@ -189,7 +189,7 @@ export default function DataIntegrationPage() {
               </div>
               <div className="my-3 h-px bg-[#E2E8F0]" />
               <p className="text-2xl font-extrabold tabular-nums text-[#0F2D52] lg:text-3xl">{kpi.value == null ? '—' : Number(kpi.value).toLocaleString()}</p>
-              <span className="mt-1 text-[11px] font-medium text-[#94A3B8]">{kpi.note}</span>
+              <span className="mt-1 text-[11px] font-medium text-[#64748B]">{kpi.note}</span>
               {index < 4 && <div className="absolute right-0 top-1/2 hidden h-10 w-px -translate-y-1/2 bg-[#E2E8F0] lg:block" aria-hidden="true" />}
             </div>
           ))}
@@ -250,7 +250,7 @@ export default function DataIntegrationPage() {
                   key={log.id}
                   className="border-b border-[#E2E8F0] even:bg-[#F8FAFC] hover:bg-[#EDF4FB]"
                 >
-                  <td className="px-5 py-3 text-xs" style={{ color: '#94A3B8' }}>
+                  <td className="px-5 py-3 text-xs" style={{ color: '#64748B' }}>
                     <div>{formatDate(log.received_at)}</div>
                     <div className="text-[10px]">{formatTime(log.received_at)}</div>
                   </td>
@@ -295,7 +295,7 @@ export default function DataIntegrationPage() {
               <tbody>
                 {undoHistory.map((entry) => (
                   <tr key={entry.id} className="border-b border-[#E2E8F0] even:bg-[#F8FAFC] hover:bg-[#EDF4FB]">
-                    <td className="px-5 py-3 text-xs" style={{ color: '#94A3B8' }}>
+                    <td className="px-5 py-3 text-xs" style={{ color: '#64748B' }}>
                       <div>{formatDate(entry.created_at)}</div>
                       <div className="text-[10px]">{formatTime(entry.created_at)}</div>
                     </td>
@@ -347,7 +347,7 @@ export default function DataIntegrationPage() {
                     {batch.rejected.toLocaleString()}
                   </td>
                   <td className="px-5 py-3"><SyncStatusBadge status={batch.status} /></td>
-                  <td className="px-5 py-3 text-xs" style={{ color: '#94A3B8' }}>{formatDate(batch.receivedAt)}</td>
+                  <td className="px-5 py-3 text-xs" style={{ color: '#64748B' }}>{formatDate(batch.receivedAt)}</td>
                 </tr>
               ))}
             </tbody>
@@ -363,12 +363,12 @@ export default function DataIntegrationPage() {
             <p className="text-[11px] font-medium uppercase tracking-wide text-[#64748B]">Source</p>
             <p className="mt-1 text-sm font-semibold text-[#0F2D52]">PASIG TB-IS</p>
           </div>
-          <span className="text-sm text-[#94A3B8] max-sm:pl-1 sm:text-lg" aria-hidden="true"><span className="sm:hidden">↓</span><span className="hidden sm:inline">→</span></span>
+          <span className="text-sm text-[#64748B] max-sm:pl-1 sm:text-lg" aria-hidden="true"><span className="sm:hidden">↓</span><span className="hidden sm:inline">→</span></span>
           <div className="min-w-0">
             <p className="text-[11px] font-medium uppercase tracking-wide text-[#64748B]">Transfer</p>
             <p className="mt-1 text-sm font-semibold text-[#0F2D52]">Verified secure webhook</p>
           </div>
-          <span className="text-sm text-[#94A3B8] max-sm:pl-1 sm:text-lg" aria-hidden="true"><span className="sm:hidden">↓</span><span className="hidden sm:inline">→</span></span>
+          <span className="text-sm text-[#64748B] max-sm:pl-1 sm:text-lg" aria-hidden="true"><span className="sm:hidden">↓</span><span className="hidden sm:inline">→</span></span>
           <div className="min-w-0">
             <p className="text-[11px] font-medium uppercase tracking-wide text-[#64748B]">Destination</p>
             <p className="mt-1 text-sm font-semibold text-[#0F2D52]">TBInsight records and analytics</p>

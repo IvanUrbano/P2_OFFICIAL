@@ -101,7 +101,7 @@ export default function Notifications() {
         <div className="flex items-center justify-between px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <div>
             <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Notifications</h1>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>System notifications and activity updates.</p>
+            <p className="text-xs mt-0.5" style={{ color: '#64748B' }}>System notifications and activity updates.</p>
           </div>
           {unreadCount > 0 && (
             <div className="flex items-center gap-3 shrink-0">
@@ -148,7 +148,7 @@ export default function Notifications() {
           </div>
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>Unable to Load Notifications</p>
-            <p className="text-xs mt-1 max-w-md" style={{ color: '#94A3B8' }}>{error}</p>
+            <p className="text-xs mt-1 max-w-md" style={{ color: '#64748B' }}>{error}</p>
           </div>
           <button onClick={fetchNotifications} className="px-3 py-1.5 text-xs font-semibold" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4, transition: 'background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background = '#174A7E'; }} onMouseLeave={e => { e.currentTarget.style.background = '#0F2D52'; }}>
             Retry
@@ -193,7 +193,7 @@ export default function Notifications() {
                 ? 'No Matching Notifications'
                 : 'No Notifications'}
             </p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#64748B' }}>
               {filterStatus !== 'all' || filterSource || filterDate !== 'all'
                 ? 'No notifications match the selected filters.'
                 : 'No system notifications at this time. You\'re all caught up!'}
@@ -241,7 +241,7 @@ export default function Notifications() {
                   )}
                 </div>
                 <p className="text-xs" style={{ color: '#64748B' }}>{n.message}</p>
-                <div className="flex items-center gap-3 mt-1.5 text-[11px]" style={{ color: '#94A3B8' }}>
+                <div className="flex items-center gap-3 mt-1.5 text-[11px]" style={{ color: '#64748B' }}>
                   <span className="flex items-center gap-1">
                     <i className="ri-time-line" />
                     {timeAgo(n.created_at)}
@@ -265,7 +265,7 @@ export default function Notifications() {
       {/* ─── Pagination ─── */}
       {!loading && !error && notifications.length > 0 && pagination.totalPages > 1 && (
         <div className="flex items-center justify-between px-4 py-3 rounded-xl" style={{ background: '#ffffff', border: '1px solid #E2E8F0' }}>
-          <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+          <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>
             Showing {(page - 1) * 20 + 1}\u2013{Math.min(page * 20, pagination.total)} of {pagination.total}
           </span>
           <div className="flex items-center gap-1.5">
@@ -332,14 +332,14 @@ export default function Notifications() {
                       { label: 'Type', value: selectedNotif.alert_type },
                     ].filter(f => f.value).map(field => (
                       <div key={field.label} className="flex items-start gap-3">
-                        <span className="text-[11px] font-semibold w-24 shrink-0 pt-0.5" style={{ color: '#94A3B8' }}>{field.label}</span>
+                        <span className="text-[11px] font-semibold w-24 shrink-0 pt-0.5" style={{ color: '#64748B' }}>{field.label}</span>
                         <span className="text-xs font-medium" style={{ color: '#0F2D52' }}>{field.value}</span>
                       </div>
                     ))}
                   </div>
 
                   <div>
-                    <p className="text-[11px] font-semibold mb-1.5" style={{ color: '#94A3B8' }}>Message</p>
+                    <p className="text-[11px] font-semibold mb-1.5" style={{ color: '#64748B' }}>Message</p>
                     <p className="text-xs leading-relaxed" style={{ color: '#334155' }}>{selectedNotif.message}</p>
                   </div>
                 </div>

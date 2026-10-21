@@ -121,7 +121,7 @@ export default function LandingPage() {
                   <h4 className="text-[11.5px] font-bold leading-tight" style={{ color: '#1E3A5F' }}>
                     {f.title}
                   </h4>
-                  <p className="text-[10px] leading-snug px-1" style={{ color: '#94A3B8' }}>
+                  <p className="text-[10px] leading-snug px-1" style={{ color: '#64748B' }}>
                     {f.desc}
                   </p>
                 </div>
@@ -132,7 +132,7 @@ export default function LandingPage() {
             ))}
           </div>
 
-          <p className="text-center text-[9.5px] mt-3" style={{ color: '#CBD5E1' }}>
+          <p className="text-center text-[10px] mt-3" style={{ color: '#64748B' }}>
             &copy; 2026 TBInsight &mdash; Pasig City Tuberculosis Surveillance System
             {' · '}
             <button type="button" onClick={() => setNotice('review')} className="underline hover:text-[#64748B]">Privacy Notice</button>

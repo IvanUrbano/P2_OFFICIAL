@@ -157,7 +157,7 @@ function DashboardInsightCard({
 
         {/* Footer */}
         <div className="mt-4 pt-3" style={{ borderTop: '1px solid #E2E8F0' }}>
-          <p className="text-[10px]" style={{ color: '#94A3B8' }}>
+          <p className="text-[10px]" style={{ color: '#64748B' }}>
             Generated from calculated TBInsight model results
           </p>
         </div>

@@ -39,7 +39,7 @@ export default function OutcomeStatusPanel({ outcomes = {}, diagnosed = 0, onTre
             </ResponsiveContainer>
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
               <span className={`text-lg leading-none ${plain ? 'font-semibold' : 'font-extrabold'}`} style={{ color: '#0F2D52' }}>{total.toLocaleString()}</span>
-              <span className={plain ? 'mt-1 text-[10px]' : 'mt-1 text-[9px] uppercase tracking-wider'} style={{ color: '#64748B' }}>{plain ? 'final outcomes' : 'with outcome'}</span>
+              <span className={plain ? 'mt-1 text-[10px]' : 'mt-1 text-[10px] uppercase tracking-wider'} style={{ color: '#64748B' }}>{plain ? 'final outcomes' : 'with outcome'}</span>
             </div>
           </div>
           <ul className="space-y-1.5 min-w-[190px] flex-1 max-w-[260px]">
@@ -47,11 +47,11 @@ export default function OutcomeStatusPanel({ outcomes = {}, diagnosed = 0, onTre
               <li key={r.key} className="flex items-center justify-between gap-3 text-[11px]">
                 <span className="flex items-center gap-2 min-w-0">
                   <span className={`w-2.5 h-2.5 shrink-0 ${plain ? '' : 'rounded-sm'}`} style={{ background: OUTCOME_COLORS[r.key] || '#94A3B8' }} />
-                  <span className="truncate" style={{ color: r.value ? '#334155' : '#94A3B8' }}>{r.name}</span>
+                  <span className="truncate" style={{ color: r.value ? '#334155' : '#64748B' }}>{r.name}</span>
                 </span>
                 <span className="tabular-nums whitespace-nowrap">
-                  <span className="font-bold" style={{ color: r.value ? '#0F2D52' : '#94A3B8' }}>{r.value.toLocaleString()}</span>
-                  <span className="ml-1.5 inline-block w-11 text-right" style={{ color: '#94A3B8' }}>{r.value ? pct(r.value) : ''}</span>
+                  <span className="font-bold" style={{ color: r.value ? '#0F2D52' : '#64748B' }}>{r.value.toLocaleString()}</span>
+                  <span className="ml-1.5 inline-block w-11 text-right" style={{ color: '#64748B' }}>{r.value ? pct(r.value) : ''}</span>
                 </span>
               </li>
             ))}
@@ -67,7 +67,7 @@ export default function OutcomeStatusPanel({ outcomes = {}, diagnosed = 0, onTre
       <div className={plain ? 'border-t border-[#E2E8F0] pt-4' : 'rounded-lg px-4 py-3'} style={plain ? undefined : { background: '#F8FAFC', border: '1px solid #EEF2F7' }}>
         <div className="flex items-center justify-between gap-3 mb-2">
           <p className={plain ? 'text-[11px] font-semibold text-[#0F2D52]' : 'text-[10px] font-bold uppercase tracking-wider text-[#64748B]'}>{plain ? 'Current case status' : 'Case status'}</p>
-          <p className={plain ? 'text-[10px] text-[#64748B]' : 'text-[10px] text-[#94A3B8]'}>No final outcome yet</p>
+          <p className={plain ? 'text-[10px] text-[#64748B]' : 'text-[10px] text-[#64748B]'}>No final outcome yet</p>
         </div>
         <div className="grid grid-cols-2 gap-3">
           {statuses.map((s) => (

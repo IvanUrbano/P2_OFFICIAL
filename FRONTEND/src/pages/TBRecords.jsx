@@ -51,7 +51,7 @@ function StatusBadge({ status, kind = 'outcome' }) {
       {/* Mark values outside the seven treatment outcome categories. */}
       {unverified && (
         <span
-          className="ml-0.5 text-[9px] font-extrabold"
+          className="ml-0.5 text-[10px] font-extrabold"
           style={{ color: '#B45309' }}
           title="Not a recognized treatment outcome; shown as stored for review"
         >
@@ -83,7 +83,7 @@ const DetailRow = ({ label, value }) => {
     : value;
   return (
     <div className="flex items-center justify-between gap-4">
-      <span className="text-xs" style={{ color: '#94A3B8' }}>{label}</span>
+      <span className="text-xs" style={{ color: '#64748B' }}>{label}</span>
       <span className="text-xs font-semibold text-right" style={{ color: '#0F2D52' }}>{displayValue != null ? displayValue : "—"}</span>
     </div>
   );
@@ -584,7 +584,7 @@ export default function TBRecords() {
           </div>
         </div>
         {(selectedCaseStatus || selectedOutcomeStatus) && (
-          <p className="mt-2 px-1 text-[11px]" style={{ color: '#94A3B8' }}>
+          <p className="mt-2 px-1 text-[11px]" style={{ color: '#64748B' }}>
             The cards cover all records matching your other filters. The table below is narrowed to {formatChipValue(selectedCaseStatus ? 'status' : 'outcome', selectedCaseStatus || selectedOutcomeStatus)}.
           </p>
         )}
@@ -599,12 +599,12 @@ export default function TBRecords() {
             {/* Left: Title */}
             <div>
               <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>TB Records</h1>
-              <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Manage and monitor tuberculosis records efficiently.</p>
+              <p className="text-xs mt-0.5" style={{ color: '#64748B' }}>Manage and monitor tuberculosis records efficiently.</p>
             </div>
             {/* Right: Search + Advanced Filters */}
             <div className="flex items-center gap-2">
               <div className="relative">
-                <i className="ri-search-line pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm" style={{ color: '#94A3B8' }} />
+                <i className="ri-search-line pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm" style={{ color: '#64748B' }} />
                 <input
                   type="text"
                   placeholder="Search records..."
@@ -614,7 +614,7 @@ export default function TBRecords() {
                   style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', color: '#0F2D52' }}
                 />
                 {searchTerm && searchTerm !== debouncedSearch && (
-                  <i className="ri-loader-4-line absolute right-3 top-1/2 -translate-y-1/2 text-xs animate-spin" style={{ color: '#94A3B8' }} />
+                  <i className="ri-loader-4-line absolute right-3 top-1/2 -translate-y-1/2 text-xs animate-spin" style={{ color: '#64748B' }} />
                 )}
               </div>
               <button
@@ -626,7 +626,7 @@ export default function TBRecords() {
               >
                 <i className="ri-filter-3-line" />
                 {activeFilterCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold" style={{ background: '#3B82F6', color: '#ffffff' }}>
+                  <span className="absolute -top-1.5 -right-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold" style={{ background: '#3B82F6', color: '#ffffff' }}>
                     {activeFilterCount}
                   </span>
                 )}
@@ -658,7 +658,7 @@ export default function TBRecords() {
                   <button
                     onClick={() => removeFilter(f.key)}
                     className="inline-flex h-4 w-4 items-center justify-center text-[10px]"
-                    style={{ color: '#94A3B8', borderRadius: 4 }}
+                    style={{ color: '#64748B', borderRadius: 4 }}
                     aria-label={`Remove ${f.label} filter`}
                   >
                     ×
@@ -751,7 +751,7 @@ export default function TBRecords() {
                   </tr>
                 ) : records.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-5 py-12 text-center text-sm" style={{ color: '#94A3B8' }}>
+                    <td colSpan={11} className="px-5 py-12 text-center text-sm" style={{ color: '#64748B' }}>
                       No records found matching your filters.
                     </td>
                   </tr>
@@ -762,7 +762,7 @@ export default function TBRecords() {
                       <td className="pl-6 pr-3 py-2" style={{ borderRight: '1px solid #E2E8F0' }}>
                         {record.source_case_id
                           ? <span className="font-bold" style={{ color: '#0F2D52' }}>{record.source_case_id}</span>
-                          : <span className="italic" style={{ color: '#94A3B8' }}>No Case ID</span>}
+                          : <span className="italic" style={{ color: '#64748B' }}>No Case ID</span>}
                       </td>
                       <td className="px-3 py-2" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.barangay_name || residenceLabel(record) || '—'}</td>
                       <td className="px-3 py-2" style={{ color: '#334155', borderRight: '1px solid #E2E8F0' }}>{record.age}</td>
@@ -806,7 +806,7 @@ export default function TBRecords() {
           {/* -- Pagination -- */}
           <div className="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between" style={{ borderTop: '1px solid #E2E8F0' }}>
             <div className="flex items-center gap-3">
-              <p className="text-xs font-semibold" style={{ color: '#94A3B8' }}>
+              <p className="text-xs font-semibold" style={{ color: '#64748B' }}>
                 {loading ? (
                   <span className="inline-flex items-center gap-1.5">
                     <i className="ri-loader-4-line text-xs animate-spin" /> Loading records...
@@ -816,7 +816,7 @@ export default function TBRecords() {
                 )}
               </p>
               <div className="flex items-center gap-1.5">
-                <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>Per page:</span>
+                <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>Per page:</span>
                 <select
                   value={pagination.limit}
                   onChange={(e) => { setPagination(prev => ({ ...prev, limit: Number(e.target.value) })); setCurrentPage(1); }}
@@ -855,7 +855,7 @@ export default function TBRecords() {
                 }
                 return pages.map((page, idx) =>
                   page === '...' ? (
-                    <span key={`e-${idx}`} className="inline-flex h-8 w-8 items-center justify-center text-xs" style={{ color: '#94A3B8' }}>...</span>
+                    <span key={`e-${idx}`} className="inline-flex h-8 w-8 items-center justify-center text-xs" style={{ color: '#64748B' }}>...</span>
                   ) : (
                     <button key={page} onClick={() => setCurrentPage(page)}
                       className="inline-flex h-8 w-8 items-center justify-center text-xs font-semibold"
@@ -1013,8 +1013,8 @@ export default function TBRecords() {
             </div>
             <div className="px-6 py-5 space-y-6">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Case ID</p>
-                <p className="text-2xl font-extrabold mt-0.5" style={selectedRecord.source_case_id ? { color: '#0F2D52' } : { color: '#94A3B8', fontStyle: 'italic' }}>{selectedRecord.source_case_id || 'No Case ID'}</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case ID</p>
+                <p className="text-2xl font-extrabold mt-0.5" style={selectedRecord.source_case_id ? { color: '#0F2D52' } : { color: '#64748B', fontStyle: 'italic' }}>{selectedRecord.source_case_id || 'No Case ID'}</p>
                 {selectedRecord.case_no && <p className="text-xs text-slate-400 mt-1">System Reference: {selectedRecord.case_no}</p>}
                 <div className="mt-2 flex gap-2"><StatusBadge status={selectedRecord.case_status} kind="status" />{selectedRecord.treatment_outcome ? <StatusBadge status={selectedRecord.treatment_outcome} /> : <span className="text-xs text-slate-400 self-center cursor-help" title={selectedRecord.case_status === 'DIAGNOSED' ? 'Diagnosed, not yet on treatment — no final outcome yet' : 'Still on treatment — no final outcome yet'}>—</span>}</div>
                 <p className="text-xs text-slate-400 mt-1">Original source value: {selectedRecord.outcome_status_raw || '—'}</p>
@@ -1031,7 +1031,7 @@ export default function TBRecords() {
                     className="px-3 py-2 text-[11px] font-bold -mb-px"
                     style={detailTab === key
                       ? { color: '#0F2D52', borderBottom: '2px solid #0F2D52' }
-                      : { color: '#94A3B8', borderBottom: '2px solid transparent' }}
+                      : { color: '#64748B', borderBottom: '2px solid transparent' }}
                   >
                     {label}
                   </button>
@@ -1091,7 +1091,7 @@ export default function TBRecords() {
                   <h3 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#0F2D52' }}>
                     Case History
                   </h3>
-                  <p className="text-[11px] mb-3" style={{ color: '#94A3B8' }}>
+                  <p className="text-[11px] mb-3" style={{ color: '#64748B' }}>
                     Changes recorded against this Case ID. A later episode for the same
                     patient is a separate Case with its own history.
                   </p>
@@ -1122,7 +1122,7 @@ export default function TBRecords() {
                             <div className="mt-1 space-y-0.5" style={{ color: '#475569' }}>
                               {lines.map((line) => <p key={line}>{line}</p>)}
                             </div>
-                            <p className="mt-2 text-[10px]" style={{ color: '#94A3B8' }}>
+                            <p className="mt-2 text-[10px]" style={{ color: '#64748B' }}>
                               {formatHistoryTimestamp(entry.changed_at)} · {entry.source || 'system'} · {historyActorLabel(entry)}
                             </p>
                           </li>

@@ -313,7 +313,7 @@ export default function InterventionPlanning() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-3.5" style={{ borderBottom: '1px solid #DBEAFE' }}>
           <div>
             <h1 className="text-lg font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Intervention & Action Planning</h1>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Create and manage TB interventions for Pasig City barangays.</p>
+            <p className="text-xs mt-0.5" style={{ color: '#64748B' }}>Create and manage TB interventions for Pasig City barangays.</p>
           </div>
           <button
             onClick={() => { setForm(EMPTY_FORM); setShowCreateModal(true); }}
@@ -337,25 +337,25 @@ export default function InterventionPlanning() {
                 className="relative px-6 py-3 text-left transition-colors whitespace-nowrap"
                 style={{ background: 'transparent' }}
               >
-                <p className="text-[13px] font-bold" style={{ color: filterStatus === tab.key ? '#0F2D52' : '#94A3B8' }}>
+                <p className="text-[13px] font-bold" style={{ color: filterStatus === tab.key ? '#0F2D52' : '#64748B' }}>
                   {tab.title}
                   {tab.key === 'pending' && summary.pending > 0 && (
-                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[9px] font-bold px-1.5" style={{ background: '#FFFBEB', color: '#92400E' }}>
+                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[10px] font-bold px-1.5" style={{ background: '#FFFBEB', color: '#92400E' }}>
                       {summary.pending}
                     </span>
                   )}
                   {tab.key === 'in_progress' && summary.in_progress > 0 && (
-                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[9px] font-bold px-1.5" style={{ background: '#EFF6FF', color: '#1E40AF' }}>
+                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[10px] font-bold px-1.5" style={{ background: '#EFF6FF', color: '#1E40AF' }}>
                       {summary.in_progress}
                     </span>
                   )}
                   {tab.key === 'completed' && summary.completed > 0 && (
-                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[9px] font-bold px-1.5" style={{ background: '#ECFDF5', color: '#047857' }}>
+                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[10px] font-bold px-1.5" style={{ background: '#ECFDF5', color: '#047857' }}>
                       {summary.completed}
                     </span>
                   )}
                   {tab.key === 'overdue' && summary.overdue > 0 && (
-                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[9px] font-bold px-1.5" style={{ background: '#FEF2F2', color: '#991B1B' }}>
+                     <span className="ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 rounded-full text-[10px] font-bold px-1.5" style={{ background: '#FEF2F2', color: '#991B1B' }}>
                       {summary.overdue}
                     </span>
                   )}
@@ -447,7 +447,7 @@ export default function InterventionPlanning() {
           </div>
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>Unable to Load Interventions</p>
-            <p className="text-xs mt-1 max-w-md" style={{ color: '#94A3B8' }}>{error}</p>
+            <p className="text-xs mt-1 max-w-md" style={{ color: '#64748B' }}>{error}</p>
           </div>
           <button onClick={fetchInterventions} className="px-3 py-1.5 text-xs font-semibold" style={{ background: '#0F2D52', color: '#ffffff', border: '1px solid #0F2D52', borderRadius: 4 }}>
             Retry
@@ -473,7 +473,7 @@ export default function InterventionPlanning() {
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
                 <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>{card.value}</p>
-                <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>{card.subtitle}</span>
+                <span className="text-[11px] font-medium mt-1" style={{ color: '#64748B' }}>{card.subtitle}</span>
                 {idx < 4 && <div className="hidden lg:block absolute right-0 top-1/2 -translate-y-1/2 w-px h-10" style={{ background: '#E2E8F0' }} />}
               </div>
             ))}
@@ -489,7 +489,7 @@ export default function InterventionPlanning() {
           </div>
           <div className="text-center">
             <p className="text-sm font-bold" style={{ color: '#475569' }}>No Interventions Found</p>
-            <p className="text-xs mt-1 max-w-sm" style={{ color: '#94A3B8' }}>
+            <p className="text-xs mt-1 max-w-sm" style={{ color: '#64748B' }}>
               {filterStatus !== 'all' || filterPriority !== 'all' || filterBarangay || filterType || searchQuery
                 ? 'No interventions match the selected filters.'
                 : 'Create your first intervention to start tracking TB response actions.'}
@@ -540,7 +540,7 @@ export default function InterventionPlanning() {
                       </td>
                       <td className="px-4 py-3">
                         <span className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: '#64748B' }}>
-                          <i className={`${typeInfo.icon} text-sm`} style={{ color: '#94A3B8' }} />
+                          <i className={`${typeInfo.icon} text-sm`} style={{ color: '#64748B' }} />
                           {typeInfo.label}
                         </span>
                       </td>
@@ -551,7 +551,7 @@ export default function InterventionPlanning() {
                         {item.assigned_to || '\u2014'}
                       </td>
                       <td className="px-4 py-3">
-                         <span className="text-[11px] font-medium" style={{ color: overdue ? '#991B1B' : '#94A3B8' }}>
+                         <span className="text-[11px] font-medium" style={{ color: overdue ? '#991B1B' : '#64748B' }}>
                           {overdue && <i className="ri-alarm-warning-line mr-1" />}
                           {formatDate(item.target_date)}
                         </span>
@@ -584,7 +584,7 @@ export default function InterventionPlanning() {
           {/* Pagination */}
           {pagination.totalPages > 1 && (
             <div className="flex items-center justify-between px-4 py-3" style={{ borderTop: '1px solid #F1F5F9' }}>
-              <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+              <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>
                 Showing {(page - 1) * 20 + 1}\u2013{Math.min(page * 20, pagination.total)} of {pagination.total}
               </span>
               <div className="flex items-center gap-1.5">
@@ -787,7 +787,7 @@ export default function InterventionPlanning() {
               )}
               {/* Title */}
               <div>
-                <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#94A3B8' }}>Title *</label>
+                <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#64748B' }}>Title *</label>
                 <input
                   type="text"
                   value={form.title}
@@ -801,7 +801,7 @@ export default function InterventionPlanning() {
               {/* Type + Barangay */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#94A3B8' }}>Type *</label>
+                  <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#64748B' }}>Type *</label>
                   <select
                     value={form.intervention_type}
                     onChange={e => setForm(f => ({ ...f, intervention_type: e.target.value }))}
@@ -812,7 +812,7 @@ export default function InterventionPlanning() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#94A3B8' }}>Barangay *</label>
+                  <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#64748B' }}>Barangay *</label>
                   <select
                     value={form.barangay_name}
                     onChange={e => setForm(f => ({ ...f, barangay_name: e.target.value }))}
@@ -827,7 +827,7 @@ export default function InterventionPlanning() {
 
               {/* Priority */}
               <div>
-                <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#94A3B8' }}>Priority</label>
+                <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#64748B' }}>Priority</label>
                 <select
                   value={form.priority}
                   onChange={e => setForm(f => ({ ...f, priority: e.target.value }))}
@@ -843,7 +843,7 @@ export default function InterventionPlanning() {
               {/* Assigned To + Team */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#94A3B8' }}>Assigned To</label>
+                  <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#64748B' }}>Assigned To</label>
                   <input
                     type="text"
                     value={form.assigned_to}
@@ -854,7 +854,7 @@ export default function InterventionPlanning() {
                   />
                 </div>
                 <div>
-                  <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#94A3B8' }}>Team</label>
+                  <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#64748B' }}>Team</label>
                   <input
                     type="text"
                     value={form.team}
@@ -868,7 +868,7 @@ export default function InterventionPlanning() {
 
               {/* Target Date */}
               <div>
-                <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#94A3B8' }}>Target Date</label>
+                <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#64748B' }}>Target Date</label>
                 <input
                   type="date"
                   value={form.target_date}
@@ -880,7 +880,7 @@ export default function InterventionPlanning() {
 
               {/* Description */}
               <div>
-                <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#94A3B8' }}>Description / Reason</label>
+                <label className="text-[11px] font-semibold block mb-1.5" style={{ color: '#64748B' }}>Description / Reason</label>
                 <textarea
                   value={form.description}
                   onChange={e => setForm(f => ({ ...f, description: e.target.value }))}

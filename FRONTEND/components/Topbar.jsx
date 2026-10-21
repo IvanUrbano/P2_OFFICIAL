@@ -154,7 +154,7 @@ export default function Topbar({ user }) {
               <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: 'rgba(59,130,246,0.2)' }}>
                 <i className="ri-refresh-line text-[11px]" style={{ color: '#60A5FA' }} />
               </div>
-              <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
+              <span className="text-[11px] font-medium" style={{ color: '#64748B' }}>
                 Last Synced: <span style={{ color: '#CBD5E1' }}>{formatSyncStamp(lastSynced, { failed: syncFailed })}</span>
               </span>
             </div>
@@ -201,7 +201,7 @@ export default function Topbar({ user }) {
                     <div>
                       <p className="text-xs font-bold" style={{ color: '#0F2D52' }}>Notifications</p>
                       {unreadCount > 0 && (
-                        <p className="text-[10px] mt-0.5" style={{ color: '#94A3B8' }}>{unreadCount} unread</p>
+                        <p className="text-[10px] mt-0.5" style={{ color: '#64748B' }}>{unreadCount} unread</p>
                       )}
                     </div>
                     <button
@@ -216,7 +216,7 @@ export default function Topbar({ user }) {
                   {recentNotifs.length === 0 ? (
                     <div className="px-4 py-8 text-center">
                       <i className="ri-notification-off-line text-xl" style={{ color: '#CBD5E1' }} />
-                      <p className="text-[11px] mt-2" style={{ color: '#94A3B8' }}>No new notifications</p>
+                      <p className="text-[11px] mt-2" style={{ color: '#64748B' }}>No new notifications</p>
                     </div>
                   ) : (
                     <div className="max-h-72 overflow-y-auto">
@@ -249,7 +249,7 @@ export default function Topbar({ user }) {
                                 </span>
                               </div>
                               <p className="text-[10px] mt-0.5 line-clamp-2" style={{ color: '#64748B' }}>{n.message}</p>
-                              <p className="text-[9px] mt-1" style={{ color: '#94A3B8' }}>
+                              <p className="text-[10px] mt-1" style={{ color: '#64748B' }}>
                                 {n.created_at ? (() => {
                                   const d = new Date(n.created_at);
                                   const mins = Math.floor((new Date() - d) / 60000);

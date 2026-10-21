@@ -101,13 +101,13 @@ export default function LoginPage() {
             />
             <div className="mt-2">
               <h1 className="text-[15px] font-extrabold leading-tight" style={{ color: '#0F2D52' }}>TBInsight</h1>
-              <p className="mt-0.5 text-[11px]" style={{ color: '#94A3B8' }}>Pasig City TB Surveillance</p>
+              <p className="mt-0.5 text-[11px]" style={{ color: '#64748B' }}>Pasig City TB Surveillance</p>
             </div>
           </div>
 
           <div className="mb-4">
             <h2 className="text-xl font-extrabold tracking-tight" style={{ color: '#0F2D52' }}>Welcome Back</h2>
-            <p className="text-[13px] mt-1" style={{ color: '#94A3B8' }}>Sign in to access TBInsight</p>
+            <p className="text-[13px] mt-1" style={{ color: '#64748B' }}>Sign in to access TBInsight</p>
           </div>
 
           {error && (
@@ -159,9 +159,9 @@ export default function LoginPage() {
                 />
                 <button type="button" onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-0 top-1/2 -translate-y-1/2 transition-colors"
-                  style={{ color: '#94A3B8' }}
+                  style={{ color: '#64748B' }}
                   onMouseEnter={(e) => e.currentTarget.style.color = '#0F2D52'}
-                  onMouseLeave={(e) => e.currentTarget.style.color = '#94A3B8'}>
+                  onMouseLeave={(e) => e.currentTarget.style.color = '#64748B'}>
                   <i className={`${showPassword ? 'ri-eye-off-line' : 'ri-eye-line'} text-[15px]`} />
                 </button>
               </div>
@@ -219,8 +219,8 @@ export default function LoginPage() {
           </a>
 
           <div className="mt-5 text-center">
-            <p className="text-[10px] font-semibold" style={{ color: '#94A3B8' }}>Authorized users only</p>
-            <p className="text-[9px] mt-1" style={{ color: '#CBD5E1' }}>&copy; 2026 TBInsight</p>
+            <p className="text-[10px] font-semibold" style={{ color: '#64748B' }}>Authorized users only</p>
+            <p className="text-[10px] mt-1" style={{ color: '#64748B' }}>&copy; 2026 TBInsight</p>
           </div>
         </div>
       </div>
