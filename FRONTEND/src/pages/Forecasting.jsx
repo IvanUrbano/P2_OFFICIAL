@@ -981,6 +981,14 @@ export default function Forecasting() {
     return [...pointsByMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
   }, [aggregatedMonthly, filteredForecasts, comparisonForecasts]);
 
+  /** Actual cases in the same months one year before the forecast months (an older record to compare with). */
+  const forecastLastYear = useMemo(() => {
+    const actualByMonth = new Map(forecastChartData.filter((r) => r.Actual != null).map((r) => [r.month, Number(r.Actual)]));
+    const wanted = forecastChartData.filter((r) => r.isForecast).map((r) => `${Number(r.month.slice(0, 4)) - 1}${r.month.slice(4, 7)}`);
+    if (wanted.length === 0 || !wanted.every((m) => actualByMonth.has(m))) return null;
+    return { label: `the same months a year earlier`, value: wanted.reduce((t, m) => t + actualByMonth.get(m), 0) };
+  }, [forecastChartData]);
+
   /** First forecast label for the ReferenceLine */
   const forecastStartLabel = useMemo(() => {
     const first = forecastChartData.find((r) => r.isForecast);
@@ -1695,7 +1703,7 @@ export default function Forecasting() {
               ) : (
                 <p className="py-12 text-center text-xs text-[#64748B]">No forecast chart data available.</p>
               )}
-              <ChartInsight text={forecastInsight(forecastChartData, { methodLabel: forecastMethodLabel })} plain />
+              <ChartInsight text={forecastInsight(forecastChartData, { methodLabel: forecastMethodLabel, previous: forecastLastYear })} plain />
             </div>
           </div>
 

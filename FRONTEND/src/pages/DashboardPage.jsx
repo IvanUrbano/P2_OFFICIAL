@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Cell, Line, LineChart,
   CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie,
+  PieChart, Pie, BarChart, Bar,
 } from 'recharts';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -49,6 +49,8 @@ const normName = (s) => String(s ?? '').trim().toLowerCase();
 
 // `highlight` is the set of barangays the dashboard filter is scoped to (null = no filter):
 // everything else is faded so the selected barangays stand out.
+const INTERVENTION_STATUS_COLORS = { pending: '#D97706', in_progress: '#2E6FAF', completed: '#0D9488' };
+
 function riskStyle(feature, highlight = null) {
   const risk = feature.properties?.risk_class || 'No Data';
   const dimmed = highlight && !highlight.has(normName(feature.properties?.name));
@@ -332,6 +334,7 @@ export default function DashboardPage() {
   const [cfrData, setCfrData] = useState(null);
   const [forecastsAll, setForecastsAll] = useState([]);
   const [alertsAll, setAlertsAll] = useState([]);
+  const [interventionsAll, setInterventionsAll] = useState([]);
   // Total unresolved alerts from pagination.total — the displayed rows are a
   // capped slice, so their length is not the unresolved count.
   const [alertsTotal, setAlertsTotal] = useState(null);
@@ -400,6 +403,7 @@ export default function DashboardPage() {
   const filterKey = JSON.stringify([filters.year, scopeNames]);
   const filtersActive = Boolean(filters.year || filters.scope);
 
+  const [previousScoped, setPreviousScoped] = useState(null); // { year, demographics, outcomes, risk } of the year before the chosen one
   const [riskForYear, setRiskForYear] = useState(null);   // { year, rows } — risk snapshot of the chosen year
   const [scopedKey, setScopedKey] = useState(null);       // filter set the server figures currently belong to
   const scopedSeq = useRef(0);
@@ -424,7 +428,10 @@ export default function DashboardPage() {
     const yearOnly = filterQuery({ year: f.year }, { withBarangays: false });
     const full = filterQuery({ year: f.year, barangays: names });
 
-    const [outcomesRes, demoRes, statusRes, tsrRes, cfrRes, riskRes] = await Promise.all([
+    // Older records: the same figures one year earlier, so each interpretation can say what changed.
+    const prevYear = f.year ? String(Number(f.year) - 1) : '';
+    const prevOnly = prevYear ? filterQuery({ year: prevYear }, { withBarangays: false }) : '';
+    const [outcomesRes, demoRes, statusRes, tsrRes, cfrRes, riskRes, prevOutcomesRes, prevDemoRes, prevRiskRes] = await Promise.all([
       settle(`/api/tb/dashboard/outcomes${yearOnly}`),
       settle(`/api/tb/dashboard/demographics${yearOnly}`),
       // Case status counts (Diagnosed / On Treatment) for the outcomes panel
@@ -433,8 +440,17 @@ export default function DashboardPage() {
       settle(`/api/tb/treatment-success-rate${full}`),
       settle(`/api/tb/case-fatality-rate${full}`),
       f.year ? settle(`/api/tb/gis/choropleth${yearOnly}`) : Promise.resolve(null),
+      prevYear ? settle(`/api/tb/dashboard/outcomes${prevOnly}`) : Promise.resolve(null),
+      prevYear ? settle(`/api/tb/dashboard/demographics${prevOnly}`) : Promise.resolve(null),
+      prevYear ? settle(`/api/tb/gis/choropleth${prevOnly}`) : Promise.resolve(null),
     ]);
     if (seq !== scopedSeq.current) return null;
+    setPreviousScoped(prevYear ? {
+      year: prevYear,
+      outcomes: prevOutcomesRes?.ok ? prevOutcomesRes.data?.outcomes || [] : null,
+      demographics: prevDemoRes?.ok ? prevDemoRes.data?.demographics || [] : null,
+      risk: prevRiskRes?.ok ? prevRiskRes.data?.choropleth || [] : null,
+    } : null);
 
     setFailed((prev) => ({
       ...prev,
@@ -458,7 +474,7 @@ export default function DashboardPage() {
   const loadAll = useCallback(async () => {
     setError(null);
     // Settle every request independently; nothing here can reject.
-    const [monthlyRes, forecastsRes, alertsRes, riskRes, pipelineRes, freshRes, scopedOk] =
+    const [monthlyRes, forecastsRes, alertsRes, riskRes, pipelineRes, freshRes, interventionsRes, scopedOk] =
       await Promise.all([
         settle('/api/tb/dashboard/monthly'),
         settle('/api/tb/forecasts'),
@@ -470,6 +486,7 @@ export default function DashboardPage() {
         settle('/api/tb/gis/choropleth'),
         settle('/api/tb/pipeline/status'),
         settle('/api/tb/data-freshness'),
+        settle('/api/tb/interventions?limit=100'),
         loadScoped(filtersRef.current),
       ]);
 
@@ -482,6 +499,7 @@ export default function DashboardPage() {
       risk: filtersRef.current.year ? prev.risk : !riskRes.ok,
       pipeline: !pipelineRes.ok,
       freshness: !freshRes.ok,
+      interventions: !interventionsRes.ok,
     }));
 
     setMonthlyAll(monthlyRes.data?.monthly || []);
@@ -491,6 +509,7 @@ export default function DashboardPage() {
     setRiskAll(riskRes.data?.choropleth || []);
     setPipelineStatus(pipelineRes.data?.latest_run || null);
     setFreshness(freshRes.data || null);
+    setInterventionsAll(interventionsRes.data?.interventions || []);
 
     // Only a total outage is a page-level error: if nothing at all loaded
     // there is genuinely nothing to show. A partial failure keeps the page
@@ -528,6 +547,40 @@ export default function DashboardPage() {
   const outcomesData = useMemo(() => scopeByBarangay(outcomesAll, scopeNames), [outcomesAll, scopeNames]);
   const demographicsData = useMemo(() => scopeByBarangay(demographicsAll, scopeNames), [demographicsAll, scopeNames]);
   const alertsData = useMemo(() => scopeByBarangay(alertsAll, scopeNames), [alertsAll, scopeNames]);
+  // Interventions are plans, not dated cases, so only the barangay scope applies (not the year).
+  const interventionStats = useMemo(() => {
+    const rows = scopeByBarangay(interventionsAll, scopeNames);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const isLate = (r) => r.status !== 'completed' && r.target_date && new Date(r.target_date) < today;
+    const monthKey = (r) => String(r.target_date || '').slice(0, 7);
+    const months = [...new Set(rows.map(monthKey).filter(Boolean))].sort().slice(0, 6);
+    const byMonth = months.map((m) => {
+      const mine = rows.filter((r) => monthKey(r) === m);
+      return {
+        label: new Date(`${m}-01T00:00:00`).toLocaleDateString('en-US', { month: 'short' }),
+        pending: mine.filter((r) => r.status === 'pending').length,
+        in_progress: mine.filter((r) => r.status === 'in_progress').length,
+        completed: mine.filter((r) => r.status === 'completed').length,
+      };
+    });
+    const statusShare = [
+      { key: 'pending', name: 'Pending', value: rows.filter((r) => r.status === 'pending').length },
+      { key: 'in_progress', name: 'In progress', value: rows.filter((r) => r.status === 'in_progress').length },
+      { key: 'completed', name: 'Completed', value: rows.filter((r) => r.status === 'completed').length },
+    ].filter((d) => d.value > 0);
+    const open = rows.filter((r) => r.status !== 'completed')
+      .sort((a, b) => (Boolean(isLate(b)) - Boolean(isLate(a))) || String(a.target_date || '9999').localeCompare(String(b.target_date || '9999')));
+    return {
+      total: rows.length,
+      pending: rows.filter((r) => r.status === 'pending').length,
+      inProgress: rows.filter((r) => r.status === 'in_progress').length,
+      completed: rows.filter((r) => r.status === 'completed').length,
+      overdue: rows.filter(isLate).length,
+      byMonth,
+      statusShare,
+      upNext: open.slice(0, 5).map((r) => ({ ...r, late: Boolean(isLate(r)) })),
+    };
+  }, [interventionsAll, scopeNames]);
   const highlightSet = useMemo(
     () => (scopeNames ? new Set(scopeNames.map(normName)) : null),
     [scopeNames]
@@ -872,6 +925,49 @@ export default function DashboardPage() {
   }, [outcomesData]);
 
   const outcomeChartData = outcomeChart.data;
+
+  /* ── Older records for the interpretations ──
+   * Built only when a year is chosen: the figures of the year before, under the same barangay
+   * scope. A request that failed (null) or an empty year gives no comparison, never a zero. */
+  const olderRecords = useMemo(() => {
+    if (!filters.year || !previousScoped || previousScoped.year !== String(Number(filters.year) - 1)) return null;
+    const label = previousScoped.year;
+    const demo = previousScoped.demographics ? scopeByBarangay(previousScoped.demographics, scopeNames) : null;
+    const sexTotals = {};
+    const ageTotals = {};
+    (demo || []).forEach((r) => {
+      if (r.sex === 'Male' || r.sex === 'Female') sexTotals[r.sex] = (sexTotals[r.sex] || 0) + Number(r.total || 0);
+      const age = r.age_group || 'Unknown';
+      ageTotals[age] = (ageTotals[age] || 0) + Number(r.total || 0);
+    });
+    const outcomeTotals = {};
+    (previousScoped.outcomes ? scopeByBarangay(previousScoped.outcomes, scopeNames) : []).forEach((r) => {
+      const st = normalizeDisplayOutcome(r.outcome_status);
+      if (st) outcomeTotals[st] = (outcomeTotals[st] || 0) + Number(r.total || 0);
+    });
+    // Cases in the same calendar months of the year before (for the trend and the forecast).
+    const monthTotal = (monthStarts) => {
+      const wanted = new Set(monthStarts);
+      return scopeByBarangay(monthlyAll, scopeNames)
+        .filter((r) => r.month && wanted.has(String(r.month).slice(0, 7)))
+        .reduce((t, r) => t + Number(r.case_count || 0), 0);
+    };
+    const shiftBack = (key) => `${Number(key.slice(0, 4)) - 1}${key.slice(4, 7)}`;
+    const trendMonths = trendChartData.filter((d) => !d.missing).map((d) => shiftBack(String(d.month).slice(0, 7)));
+    const trendTotal = trendMonths.length ? monthTotal(trendMonths) : null;
+    const forecastMonths = forecastChartData.filter((d) => d.projected != null).map((d) => shiftBack(String(d.month).slice(0, 7)));
+    const forecastTotal = forecastMonths.length ? monthTotal(forecastMonths) : null;
+    const nonEmpty = (obj) => Object.keys(obj).length > 0;
+    return {
+      label,
+      trend: trendTotal ? { label, value: trendTotal } : null,
+      forecast: forecastTotal ? { label: `the same months of ${label}`, value: forecastTotal } : null,
+      sex: demo && nonEmpty(sexTotals) ? { label, items: Object.entries(sexTotals).map(([name, value]) => ({ name, value })) } : null,
+      age: demo && nonEmpty(ageTotals) ? { label, items: Object.entries(ageTotals).map(([age_group, total]) => ({ age_group, total })) } : null,
+      outcome: nonEmpty(outcomeTotals) ? { label, items: Object.entries(outcomeTotals).map(([name, Cases]) => ({ name, Cases })) } : null,
+      risk: previousScoped.risk ? { label: `${label}`, items: scopeByBarangay(previousScoped.risk, scopeNames, 'name') } : null,
+    };
+  }, [filters.year, previousScoped, scopeNames, monthlyAll, trendChartData, forecastChartData]);
 
   /* ── Recent Alerts ──
    * Reads persisted alert rows only — the Dashboard never evaluates or
@@ -1229,7 +1325,7 @@ export default function DashboardPage() {
             {/* TB Cases Trend */}
             <SectionCard
               title="TB case trend"
-              insight={trendInsight(trendChartData, { valueKey: 'cases' })}
+              insight={trendInsight(trendChartData, { valueKey: 'cases', previous: olderRecords?.trend })}
               description="Monthly tuberculosis cases based on recorded TB data."
               action="View analytics"
               actionTo="/analytics"
@@ -1264,7 +1360,7 @@ export default function DashboardPage() {
             {/* Barangay Risk Overview — GIS Map */}
             <SectionCard
               title="Barangay risk overview"
-              insight={riskInsight(riskData)}
+              insight={riskInsight(riskData, { previous: olderRecords?.risk })}
               description="Current risk classification across Pasig City barangays."
               action="View GIS map"
               actionTo="/gis-map"
@@ -1334,7 +1430,7 @@ export default function DashboardPage() {
             {/* Age Group Distribution */}
             <SectionCard
               title="Age distribution"
-              insight={shareInsight(ageData, { nameKey: 'age_group', valueKey: 'total', noun: 'age group' })}
+              insight={shareInsight(ageData, { nameKey: 'age_group', valueKey: 'total', noun: 'age group', previous: olderRecords?.age })}
               description="TB cases by age group."
             >
               {failed.demographics ? (
@@ -1368,7 +1464,7 @@ export default function DashboardPage() {
             {/* Sex Distribution */}
             <SectionCard
               title="Sex distribution"
-              insight={shareInsight(Object.entries(sexData).map(([name, value]) => ({ name, value })), { noun: 'sex' })}
+              insight={shareInsight(Object.entries(sexData).map(([name, value]) => ({ name, value })), { noun: 'sex', previous: olderRecords?.sex })}
               description="Male vs female TB case distribution."
             >
               {failed.demographics ? (
@@ -1429,6 +1525,7 @@ export default function DashboardPage() {
             <SectionCard
               title="Treatment outcomes and case status"
               insight={outcomeInsight(outcomeChartData, {
+                previous: olderRecords?.outcome,
                 nameKey: 'outcome',
                 valueKey: 'count',
                 scope: filtersActive ? 'recorded outcomes in this view' : 'recorded outcomes across all years',
@@ -1513,11 +1610,11 @@ export default function DashboardPage() {
                           </LineChart>
                         </ResponsiveContainer>
                       </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-[#64748B]">
+                      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-[#64748B]">
                         <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 bg-[#2E6FAF]" aria-hidden="true" />Reported</span>
                         <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 border-t-2 border-dashed border-[#0D9488]" aria-hidden="true" />Forecasted</span>
                       </div>
-                      <ChartInsight text={forecastInsight(forecastChartData, { actualKey: 'actual', forecastKey: 'projected', methodLabel: forecastSummary.tierLabel })} plain />
+                      <ChartInsight text={forecastInsight(forecastChartData, { actualKey: 'actual', forecastKey: 'projected', methodLabel: forecastSummary.tierLabel, previous: olderRecords?.forecast })} plain />
                     </div>
                   )}
                 </>
@@ -1564,6 +1661,108 @@ export default function DashboardPage() {
               )}
             </SectionCard>
           </div>
+
+          {/* ─── 9. Interventions ─── */}
+          <SectionCard
+            title="Interventions"
+            description={
+              failed.interventions
+                ? 'Interventions could not be loaded'
+                : `${interventionStats.total} planned action${interventionStats.total !== 1 ? 's' : ''}${scopeNames ? ' in the selected barangays' : ' across Pasig'}`
+            }
+            action="Open planning"
+            actionTo="/interventions"
+          >
+            {failed.interventions ? (
+              <p className="py-14 text-center text-xs text-[#991B1B]">Interventions could not be loaded.</p>
+            ) : interventionStats.total === 0 ? (
+              <p className="py-14 text-center text-xs text-[#64748B]">No interventions have been planned for this view.</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-8 xl:grid-cols-2">
+                <div>
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-4">
+                    {[
+                      { label: 'Pending', value: interventionStats.pending, color: INTERVENTION_STATUS_COLORS.pending },
+                      { label: 'In progress', value: interventionStats.inProgress, color: INTERVENTION_STATUS_COLORS.in_progress },
+                      { label: 'Completed', value: interventionStats.completed, color: INTERVENTION_STATUS_COLORS.completed },
+                      { label: 'Overdue', value: interventionStats.overdue, color: '#991B1B' },
+                    ].map((k) => (
+                      <div key={k.label} className="border-l-2 pl-3" style={{ borderColor: k.color }}>
+                        <dt className="text-[11px] text-[#64748B]">{k.label}</dt>
+                        <dd className="mt-0.5 text-xl font-semibold tabular-nums text-[#0F2D52]">{k.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-[180px_minmax(0,1fr)]">
+                    <div>
+                      <p className="text-[11px] font-medium text-[#475569]">Status share</p>
+                      <div className="relative mx-auto mt-2 h-[170px] w-full max-w-[220px] md:max-w-none" role="img" aria-label="Donut chart of intervention status share">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie data={interventionStats.statusShare} dataKey="value" nameKey="name" innerRadius={44} outerRadius={68} paddingAngle={2} stroke="none" isAnimationActive={false}>
+                              {interventionStats.statusShare.map((d) => <Cell key={d.key} fill={INTERVENTION_STATUS_COLORS[d.key]} />)}
+                            </Pie>
+                            <Tooltip content={<ChartTooltip />} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                          <span className="text-lg font-semibold tabular-nums text-[#0F2D52]">{interventionStats.total}</span>
+                          <span className="text-[10px] text-[#64748B]">planned</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-medium text-[#475569]">Target dates by month</p>
+                      <div className="mt-2 h-[190px] w-full min-w-0" role="img" aria-label="Column chart of interventions by target month and status">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={interventionStats.byMonth} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                            <CartesianGrid vertical={false} stroke="#E8EDF2" />
+                            <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} tickMargin={6} />
+                            <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} width={28} />
+                            <Tooltip content={<ChartTooltip />} cursor={{ fill: '#F1F5F9' }} />
+                            <Bar dataKey="pending" stackId="s" name="Pending" fill={INTERVENTION_STATUS_COLORS.pending} isAnimationActive={false} />
+                            <Bar dataKey="in_progress" stackId="s" name="In progress" fill={INTERVENTION_STATUS_COLORS.in_progress} isAnimationActive={false} />
+                            <Bar dataKey="completed" stackId="s" name="Completed" fill={INTERVENTION_STATUS_COLORS.completed} isAnimationActive={false} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-[#64748B]">
+                    {[['Pending', 'pending'], ['In progress', 'in_progress'], ['Completed', 'completed']].map(([label, key]) => (
+                      <span key={key} className="inline-flex items-center gap-1.5">
+                        <span className="h-2.5 w-2.5" style={{ background: INTERVENTION_STATUS_COLORS[key] }} aria-hidden="true" />{label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[11px] font-medium text-[#475569]">Open interventions, most urgent first</p>
+                  {interventionStats.upNext.length > 0 ? (
+                    <ul className="mt-3 divide-y divide-[#E8EDF2]">
+                      {interventionStats.upNext.map((item) => (
+                        <li key={item.id} className="py-3 first:pt-1 last:pb-0">
+                          <p className="text-xs font-semibold leading-snug text-[#0F2D52]">{item.title}</p>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#64748B]">
+                            <span>{String(item.barangay_name).trim()}</span>
+                            <span>{item.status === 'in_progress' ? 'In progress' : 'Pending'}</span>
+                            {item.target_date && (
+                              <span className="font-medium" style={{ color: item.late ? '#991B1B' : '#64748B' }}>
+                                {item.late ? 'Overdue since ' : 'Due '}
+                                {new Date(item.target_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                              </span>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="py-10 text-center text-xs text-[#64748B]">All planned interventions are completed.</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </SectionCard>
         </>
       )}
     </div>

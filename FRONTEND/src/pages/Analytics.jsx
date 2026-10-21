@@ -716,6 +716,42 @@ export default function Analytics() {
       .map((name) => ({ name, Cases: byOutcome[name] }));
   }, [filteredCases]);
 
+  /* ── Older records for the interpretations ──
+     The same measures, built from the previous year's cases under the same filters, so each
+     interpretation can say how the picture changed. Empty unless a year is selected. */
+  const olderRecords = useMemo(() => {
+    if (!aYear || previousYearCases.length === 0) return null;
+    const label = String(Number(aYear) - 1);
+    const count = (keyOf) => {
+      const by = {};
+      previousYearCases.forEach((c) => { const k = keyOf(c); if (k) by[k] = (by[k] || 0) + 1; });
+      return by;
+    };
+    const sexBy = count((c) => {
+      const sex = (c.sex || 'Unknown').trim();
+      return sex.charAt(0).toUpperCase() + sex.slice(1).toLowerCase();
+    });
+    const ageBy = count((c) => categorizeAge(c.age));
+    const outcomeBy = count((c) => {
+      const raw = (c.outcome_status || '').toUpperCase();
+      return OUTCOME_ORDER.includes(raw) ? raw : null;
+    });
+    const monthKeys = new Set(trendData.map((r) => r.key.slice(5)));
+    const sameMonths = previousYearCases.filter((c) => {
+      const d = new Date(c.date_of_diagnosis);
+      return !isNaN(d.getTime()) && monthKeys.has(String(d.getMonth() + 1).padStart(2, '0'));
+    });
+    return {
+      label,
+      trend: { label, value: sameMonths.length },
+      barangay: { label, items: Object.entries(count((c) => c.barangay_name)).map(([name, Cases]) => ({ name, Cases })) },
+      facility: { label, items: Object.entries(count((c) => c.screening_facility || c.treatment_facility)).map(([name, Cases]) => ({ name, Cases })) },
+      sex: { label, items: Object.entries(sexBy).map(([name, value]) => ({ name, value })) },
+      age: { label, items: Object.entries(ageBy).map(([group, Cases]) => ({ group, Cases })) },
+      outcome: { label, items: Object.entries(outcomeBy).map(([name, Cases]) => ({ name, Cases })) },
+    };
+  }, [aYear, previousYearCases, trendData]);
+
   /* ── Active Filter Chips ── */
   const activeFilters = useMemo(() => {
     const chips = [];
@@ -1145,7 +1181,7 @@ export default function Analytics() {
               ) : (
                 <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No trend data available for the selected filters.</p>
               )}
-              <ChartInsight text={trendInsight(trendData, { valueKey: 'Cases' })} plain />
+              <ChartInsight text={trendInsight(trendData, { valueKey: 'Cases', previous: olderRecords?.trend })} plain />
               {compareYear && aYear && !previousComparison.available && (
                 <p className="text-[11px] mt-2 text-center" style={{ color: '#94A3B8' }}>
                   <i className="ri-information-line" /> Previous-year comparison unavailable due to incomplete {prevYearLabel} data.
@@ -1276,7 +1312,7 @@ export default function Analytics() {
                 ) : (
                   <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No barangay data available.</p>
                 )}
-                <ChartInsight text={incidenceViewActive ? incidenceInsight(barangayIncidenceData) : rankingInsight(barangayIncidenceData, { valueKey: 'Cases' })} plain />
+                <ChartInsight text={incidenceViewActive ? incidenceInsight(barangayIncidenceData) : rankingInsight(barangayIncidenceData, { valueKey: 'Cases', previous: olderRecords?.barangay })} plain />
               </div>
             </div>
 
@@ -1315,7 +1351,7 @@ export default function Analytics() {
                     </ResponsiveContainer>
                     </div>
                   </div>
-                  <ChartInsight text={rankingInsight(facilityData, { valueKey: 'Cases', noun: 'facility' })} plain />
+                  <ChartInsight text={rankingInsight(facilityData, { valueKey: 'Cases', noun: 'facility', previous: olderRecords?.facility })} plain />
                 </div>
               </div>
             )}
@@ -1337,7 +1373,7 @@ export default function Analytics() {
                     onTreatment={statusCounts.onTreatment}
                     plain
                   />
-                  <ChartInsight text={outcomeInsight(outcomeData)} plain />
+                  <ChartInsight text={outcomeInsight(outcomeData, { previous: olderRecords?.outcome })} plain />
                 </div>
               </div>
             </div>
@@ -1391,7 +1427,7 @@ export default function Analytics() {
                   ) : (
                     <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No data.</p>
                   )}
-                  <ChartInsight text={shareInsight(sexData, { noun: 'sex' })} plain />
+                  <ChartInsight text={shareInsight(sexData, { noun: 'sex', previous: olderRecords?.sex })} plain />
                 </div>
               </div>
 
@@ -1425,7 +1461,7 @@ export default function Analytics() {
                   ) : (
                     <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No age data available for the selected filters.</p>
                   )}
-                  <ChartInsight text={shareInsight(ageData, { nameKey: 'group', valueKey: 'Cases', noun: 'age group' })} plain />
+                  <ChartInsight text={shareInsight(ageData, { nameKey: 'group', valueKey: 'Cases', noun: 'age group', previous: olderRecords?.age })} plain />
                 </div>
               </div>
             </div>

@@ -2929,12 +2929,82 @@ router.get('/reports/summary', async (req, res) => {
       LIMIT 25
     `, intParams);
 
+    // Older records: the same breakdowns for the same period one year earlier, so the report
+    // can say how the picture changed. Any failure leaves `older` null (the report then simply
+    // omits the comparison sentences).
+    let older = null;
+    try {
+      const prevConditions = [
+        `c.date_of_diagnosis >= $1::date - INTERVAL '1 year'`,
+        `c.date_of_diagnosis <= $2::date - INTERVAL '1 year'`,
+        countedCases('c'),
+      ];
+      if (barangay) prevConditions.push('TRIM(c.barangay_name) = $3');
+      const prevWhere = 'WHERE ' + prevConditions.join(' AND ');
+      const [pSummary, pOutcomes, pSex, pAge, pBrgy, pTsr, pCfr] = await Promise.all([
+        pool.query(`SELECT COUNT(*)::INTEGER AS total_cases FROM tb_cases c ${prevWhere}`, params),
+        pool.query(`SELECT treatment_outcome AS outcome_status, COUNT(*)::INTEGER AS count FROM tb_cases c ${prevWhere} AND treatment_outcome IS NOT NULL GROUP BY treatment_outcome`, params),
+        pool.query(`SELECT sex, COUNT(*)::INTEGER AS count FROM tb_cases c ${prevWhere} GROUP BY sex`, params),
+        pool.query(`
+          SELECT CASE WHEN age IS NULL THEN 'Unknown' WHEN age <= 14 THEN '0-14' WHEN age <= 24 THEN '15-24'
+                      WHEN age <= 34 THEN '25-34' WHEN age <= 44 THEN '35-44' WHEN age <= 54 THEN '45-54'
+                      WHEN age <= 64 THEN '55-64' ELSE '65+' END AS age_group, COUNT(*)::INTEGER AS count
+          FROM tb_cases c ${prevWhere} GROUP BY age_group`, params),
+        barangay ? Promise.resolve({ rows: [] }) : pool.query(`
+          SELECT TRIM(barangay_name) AS barangay_name, COUNT(*)::INTEGER AS cases
+          FROM tb_cases c
+          WHERE date_of_diagnosis >= $1::date - INTERVAL '1 year' AND date_of_diagnosis <= $2::date - INTERVAL '1 year'
+            AND ${pasigResidentOnly('c')}
+          GROUP BY TRIM(barangay_name)`, [startDate, endDate]),
+        computeTreatmentSuccessRate(pool, { year: yr - 1, barangay }),
+        computeCaseFatalityRate(pool, { year: yr - 1, barangay }),
+      ]);
+      const prevTotal = pSummary.rows[0]?.total_cases || 0;
+      if (prevTotal > 0) {
+        const prevFolded = foldOutcomeCounts(pOutcomes.rows, { labelKey: 'outcome_status', countKey: 'count' });
+        older = {
+          label: comparison.yearAgoLabel,
+          totalCases: prevTotal,
+          successRate: pTsr.successRate ?? null,
+          fatalityRate: pCfr.rate ?? null,
+          outcomes: prevFolded.categories.map(c => ({ outcome_status: c.outcome_status, count: c.count })),
+          sex: pSex.rows.map(r => ({ sex: r.sex || 'Unknown', count: r.count })),
+          ageGroups: pAge.rows.map(r => ({ age_group: r.age_group, count: r.count })),
+          barangayDistribution: pBrgy.rows.map(r => ({ barangay: r.barangay_name, cases: r.cases })),
+        };
+      }
+    } catch (olderErr) {
+      console.warn('Report older-records comparison failed:', olderErr.message);
+    }
+
+    // Audit trail: who generated this report, when, and for what scope.
+    const generatedAt = new Date();
+    const reportRef = `RPT-${generatedAt.toISOString().slice(0, 10).replace(/-/g, '')}-${require('crypto').randomBytes(3).toString('hex').toUpperCase()}`;
+    let generatedBy = { username: req.user?.username || 'unknown', fullName: null, role: req.user?.role || null };
+    try {
+      const u = await pool.query('SELECT full_name FROM users WHERE id = $1', [req.user?.id]);
+      generatedBy.fullName = u.rows[0]?.full_name || null;
+    } catch (nameErr) {
+      console.warn('Report author lookup failed:', nameErr.message);
+    }
+    const { logAuditEvent } = require('../utils/auditLogger');
+    await logAuditEvent({
+      userId: req.user?.id,
+      username: req.user?.username,
+      action: 'REPORT_GENERATED',
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+      details: { reportRef, type, period: periodLabel, coverage, year: yr, month: month || null, quarter: quarter || null, barangay: barangay || null },
+    });
+
     res.json({
       report: {
         type,
         period: periodLabel,
         coverage,
-        generatedAt: new Date().toISOString(),
+        generatedAt: generatedAt.toISOString(),
+        reportRef,
+        generatedBy,
         lastSync,
         startDate,
         endDate,
@@ -2950,6 +3020,7 @@ router.get('/reports/summary', async (req, res) => {
       riskSummary,
       forecast,
       comparison,
+      older,
       alerts: alertsRes.rows,
       interventions: interventionsRes.rows,
       barangayProfile,
