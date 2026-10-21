@@ -198,16 +198,15 @@ export default function DashboardWelcomeInsightsSection({
 
       {/* The welcome panel determines the desktop row height; insight text scrolls inside it. */}
       <div className="relative min-w-0 md:col-span-5 lg:col-span-4">
-        <section className="flex h-[360px] min-w-0 flex-col overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)] md:absolute md:inset-0 md:h-auto" aria-label="Overall TB insights">
-          <div className="flex shrink-0 items-start justify-between gap-3 bg-[#0F2D52] px-5 py-3.5">
+        <section className="flex h-[360px] min-w-0 flex-col overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)] md:absolute md:inset-0 md:h-auto" aria-label="Overall TB insights">
+          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[#E2E8F0] px-5 py-3.5">
             <div className="flex min-w-0 items-start gap-2.5">
-              <i className="ri-lightbulb-line mt-0.5 shrink-0 text-lg text-[#93C5FD]" aria-hidden="true" />
               <div className="min-w-0">
-                <h3 className="text-sm font-bold text-white">Overall TB insights</h3>
-                <p className="mt-0.5 text-xs text-[#CBD5E1]">Current data summary</p>
+                <h3 className="text-sm font-semibold text-[#0F2D52]">Overall TB insights</h3>
+                <p className="mt-0.5 text-xs text-[#64748B]">Current data summary</p>
               </div>
             </div>
-            <span className="shrink-0 rounded-full bg-white/10 px-2.5 py-1 text-xs font-semibold text-[#D9E9F8]" aria-label={`Insight ${activeSlide + 1} of ${slides.length}`}>
+            <span className="shrink-0 rounded-full bg-[#F1F5F9] px-2.5 py-1 text-xs font-semibold text-[#475569]" aria-label={`Insight ${activeSlide + 1} of ${slides.length}`}>
               {activeSlide + 1} of {slides.length}
             </span>
           </div>

@@ -234,28 +234,14 @@ function RiskBadge({ risk }) {
   );
 }
 
-const SECTION_ICONS = {
-  'TB case trend': 'ri-line-chart-line',
-  'Barangay risk overview': 'ri-map-pin-line',
-  'Priority barangays': 'ri-alarm-warning-line',
-  'Age distribution': 'ri-group-line',
-  'Sex distribution': 'ri-user-3-line',
-  'Treatment outcomes and case status': 'ri-heart-pulse-line',
-  'Forecast summary': 'ri-bar-chart-grouped-line',
-  'Recent alerts': 'ri-notification-3-line',
-};
 
 function SectionCard({ title, description, action, actionTo, insight, children }) {
   const navigate = useNavigate();
-  const icon = SECTION_ICONS[title] || 'ri-bar-chart-box-line';
   return (
-    <section className="flex flex-col overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
-      <div className="flex shrink-0 items-start gap-2.5 bg-[#0F2D52] px-5 py-3.5">
-        <i className={`${icon} mt-0.5 shrink-0 text-lg text-[#93C5FD]`} aria-hidden="true" />
-        <div className="min-w-0">
-          <h3 className="text-sm font-bold text-white">{title}</h3>
-          {description && <p className="mt-0.5 text-xs leading-snug text-[#CBD5E1]">{description}</p>}
-        </div>
+    <section className="flex flex-col overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+      <div className="shrink-0 border-b border-[#E2E8F0] px-5 py-3.5">
+        <h3 className="text-sm font-semibold text-[#0F2D52]">{title}</h3>
+        {description && <p className="mt-0.5 text-xs leading-snug text-[#64748B]">{description}</p>}
       </div>
       <div className="flex-1 px-5 py-5">{children}<ChartInsight text={insight} plain /></div>
       {action && (
@@ -297,8 +283,8 @@ function YearTag({ label, title }) {
 
 function SkeletonCard() {
   return (
-    <div className="overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
-      <div className="bg-[#0F2D52] px-5 py-4"><SkeletonBlock className="h-4 w-32" /></div>
+    <div className="overflow-hidden rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+      <div className="border-b border-[#E2E8F0] px-5 py-4"><SkeletonBlock className="h-4 w-32" /></div>
       <div className="px-5 py-5"><SkeletonBlock className="h-48 w-full" /></div>
     </div>
   );
@@ -1170,17 +1156,17 @@ export default function DashboardPage() {
       ) : (
         <>
           {/* ─── 3. Key Metric Cards ─── */}
-          <div className="rounded-xl" style={{ background: '#ffffff', boxShadow: '0 4px 24px rgba(15,45,82,0.12), 0 2px 8px rgba(15,45,82,0.08)' }}>
+          <div className="rounded-[10px] border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
             <div className="grid grid-cols-2 lg:grid-cols-6">
               {/* Total TB Cases */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-database-2-line text-sm" style={{ color: '#6B7FA3' }} />
+                  <i className="ri-database-2-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Total TB Cases</span>
                   <YearTag label={failed.monthly ? '' : casesYearSpan} title="Years of diagnosis included in this total" />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
+                <p className="text-2xl font-bold tabular-nums lg:text-3xl" style={{ color: '#0F2D52' }}>
                   {failed.monthly ? 'Unavailable' : animatedTotalCases.toLocaleString()}
                 </p>
                 <span className="text-[11px] font-medium mt-1" style={{ color: '#94A3B8' }}>
@@ -1192,12 +1178,12 @@ export default function DashboardPage() {
               {/* New Cases (latest recorded month) */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-calendar-check-line text-sm" style={{ color: '#B8956A' }} />
+                  <i className="ri-calendar-check-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>New Cases</span>
                   <YearTag label={failed.monthly || !monthOverMonth.month ? '' : String(monthOverMonth.month).slice(0, 4)} title="Year of the latest month with recorded cases" />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
+                <p className="text-2xl font-bold tabular-nums lg:text-3xl" style={{ color: '#0F2D52' }}>
                   {failed.monthly ? 'Unavailable' : animatedNewCases.toLocaleString()}
                 </p>
                 <div className="flex items-center gap-1.5 mt-1">
@@ -1217,12 +1203,12 @@ export default function DashboardPage() {
               {/* Treatment Success Rate */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-checkbox-circle-line text-sm" style={{ color: '#6B9E8A' }} />
+                  <i className="ri-checkbox-circle-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Treatment Success Rate</span>
                   <YearTag label={failed.tsr || !successRate.cohortYear ? '' : `${successRate.cohortYear} cohort`} title={successRate.cohortYear ? `Patients who started treatment in ${successRate.cohortYear}` : undefined} />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
+                <p className="text-2xl font-bold tabular-nums lg:text-3xl" style={{ color: '#0F2D52' }}>
                   {failed.tsr ? 'Unavailable' : successRate.rate == null ? 'N/A' : `${animatedSuccessRate}%`}
                 </p>
                 <span
@@ -1242,12 +1228,12 @@ export default function DashboardPage() {
               {/* Case Fatality Rate */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-heart-pulse-line text-sm" style={{ color: '#B07070' }} />
+                  <i className="ri-heart-pulse-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Case Fatality Rate</span>
                   <YearTag label={failed.cfr ? '' : casesYearSpan} title="Years of diagnosis included in this rate" />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
+                <p className="text-2xl font-bold tabular-nums lg:text-3xl" style={{ color: '#0F2D52' }}>
                   {failed.cfr ? 'Unavailable' : caseFatalityRate.rate == null ? 'N/A' : `${animatedFatalityRate}%`}
                 </p>
                 <span
@@ -1267,7 +1253,7 @@ export default function DashboardPage() {
               {/* City Risk Classification */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-alarm-warning-line text-sm" style={{ color: '#C4886A' }} />
+                  <i className="ri-alarm-warning-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>City Risk Classification</span>
                   <YearTag
                     label={failed.risk || !riskYears?.data_year ? '' : String(riskYears.data_year)}
@@ -1275,7 +1261,7 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
+                <p className="text-2xl font-bold tabular-nums lg:text-3xl" style={{ color: '#0F2D52' }}>
                   {failed.risk ? 'Unavailable' : highRiskCount == null ? 'N/A' : animatedHighRisk}
                 </p>
                 <span
@@ -1295,12 +1281,12 @@ export default function DashboardPage() {
               {/* Forecasted Cases */}
               <div className="flex flex-col px-5 py-5 relative">
                 <div className="flex items-center gap-2">
-                  <i className="ri-line-chart-line text-sm" style={{ color: '#6B9E9E' }} />
+                  <i className="ri-line-chart-line text-sm" style={{ color: '#94A3B8' }} />
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#64748B' }}>Forecasted</span>
                   <YearTag label={failed.forecasts || forecastSummary.tier === 'insufficient_data' ? '' : forecastYear} title={forecastSummary.period ? `Forecast for ${forecastSummary.period}` : undefined} />
                 </div>
                 <div className="h-px my-3" style={{ background: '#E2E8F0' }} />
-                <p className="text-2xl lg:text-3xl font-extrabold" style={{ color: '#0F2D52' }}>
+                <p className="text-2xl font-bold tabular-nums lg:text-3xl" style={{ color: '#0F2D52' }}>
                   {failed.forecasts || forecastSummary.tier === 'insufficient_data' || !forecastSummary.period
                     ? 'N/A'
                     : animatedForecasted.toLocaleString()}
@@ -1458,98 +1444,6 @@ export default function DashboardPage() {
               )}
             </SectionCard>
 
-            {/* Age Group Distribution */}
-            <SectionCard
-              title="Age distribution"
-              description="TB cases by age group."
-            >
-              {failed.demographics ? (
-                <p className="py-14 text-center text-xs text-[#991B1B]">Age data could not be loaded.</p>
-              ) : ageData.length > 0 ? (
-                <div className="space-y-3 pt-1">
-                  {(() => {
-                    const maxTotal = Math.max(...ageData.map(a => a.total), 1);
-                    return ageData.map((item) => {
-                      const pct = ((item.total / maxTotal) * 100).toFixed(0);
-                      return (
-                        <div key={item.age_group} className="flex items-center gap-3">
-                          <span className="w-12 shrink-0 text-[11px] font-medium text-[#475569]">{item.age_group}</span>
-                          <div className="h-3 flex-1 bg-[#E8EDF2]" role="img" aria-label={`${item.age_group}: ${item.total.toLocaleString()} cases`}>
-                            <div className="h-full rounded-r-md bg-[#2E6FAF]" style={{ width: `${pct}%` }} />
-                          </div>
-                          <span className="w-12 shrink-0 text-right text-[11px] font-semibold tabular-nums text-[#0F2D52]">{item.total.toLocaleString()}</span>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-              ) : (
-                <p className="py-14 text-center text-xs text-[#64748B]">No age data is available for this view.</p>
-              )}
-            </SectionCard>
-          </div>
-
-          {/* ─── 7. Demographics — Sex + Treatment Outcomes ─── */}
-          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-            {/* Sex Distribution */}
-            <SectionCard
-              title="Sex distribution"
-              description="Male vs female TB case distribution."
-            >
-              {failed.demographics ? (
-                <p className="py-14 text-center text-xs text-[#991B1B]">Sex distribution could not be loaded.</p>
-              ) : (sexData.Male + sexData.Female) > 0 ? (
-                <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-4">
-                  <div className="relative h-[160px] w-[160px] shrink-0" role="img" aria-label={`Male: ${sexData.Male.toLocaleString()} cases; Female: ${sexData.Female.toLocaleString()} cases`}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={[
-                            { name: 'Male', value: sexData.Male },
-                            { name: 'Female', value: sexData.Female },
-                          ]}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={40}
-                          outerRadius={70}
-                          paddingAngle={1}
-                          dataKey="value"
-                          isAnimationActive={false}
-                        >
-                          <Cell fill="#2E6FAF" />
-                          <Cell fill="#94A3B8" />
-                        </Pie>
-                        <Tooltip formatter={(value) => value.toLocaleString()} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                      <span className="text-lg font-semibold tabular-nums text-[#0F2D52]">{(sexData.Male + sexData.Female).toLocaleString()}</span>
-                      <span className="text-[10px] text-[#64748B]">cases</span>
-                    </div>
-                  </div>
-                  <div className="min-w-[170px] space-y-2">
-                    {[
-                      { label: 'Male', value: sexData.Male, color: '#2E6FAF' },
-                      { label: 'Female', value: sexData.Female, color: '#94A3B8' },
-                    ].map((item) => {
-                      const total = sexData.Male + sexData.Female;
-                      const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : 0;
-                      return (
-                        <div key={item.label} className="flex items-center gap-2 text-xs">
-                          <span className="h-2.5 w-2.5 shrink-0" style={{ background: item.color }} aria-hidden="true" />
-                          <span className="flex-1 text-[#475569]">{item.label}</span>
-                          <span className="font-semibold tabular-nums text-[#0F2D52]">{item.value.toLocaleString()}</span>
-                          <span className="w-11 text-right tabular-nums text-[#64748B]">{pct}%</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <p className="py-14 text-center text-xs text-[#64748B]">No sex distribution data is available for this view.</p>
-              )}
-            </SectionCard>
-
             {/* Treatment Outcomes */}
             <SectionCard
               title="Treatment outcomes and case status"
@@ -1587,7 +1481,7 @@ export default function DashboardPage() {
             </SectionCard>
           </div>
 
-          {/* ─── 8. Forecasting Summary + Recent Alerts ─── */}
+          {/* ─── 7. Forecasting Summary + Recent Alerts ─── */}
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             {/* Forecasting Summary */}
             <SectionCard
@@ -1690,6 +1584,96 @@ export default function DashboardPage() {
               )}
             </SectionCard>
           </div>
+
+          {/* ─── 8. Age and Sex ─── */}
+          <SectionCard
+            title="Age and sex"
+            description="TB cases by age group and by sex."
+          >
+            <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
+              <div>
+                <p className="mb-3 text-[11px] font-medium text-[#475569]">Age group</p>
+                {failed.demographics ? (
+                  <p className="py-14 text-center text-xs text-[#991B1B]">Age data could not be loaded.</p>
+                ) : ageData.length > 0 ? (
+                  <div className="space-y-3 pt-1">
+                    {(() => {
+                      const maxTotal = Math.max(...ageData.map(a => a.total), 1);
+                      return ageData.map((item) => {
+                        const pct = ((item.total / maxTotal) * 100).toFixed(0);
+                        return (
+                          <div key={item.age_group} className="flex items-center gap-3">
+                            <span className="w-12 shrink-0 text-[11px] font-medium text-[#475569]">{item.age_group}</span>
+                            <div className="h-3 flex-1 bg-[#E8EDF2]" role="img" aria-label={`${item.age_group}: ${item.total.toLocaleString()} cases`}>
+                              <div className="h-full rounded-r-md bg-[#2E6FAF]" style={{ width: `${pct}%` }} />
+                            </div>
+                            <span className="w-12 shrink-0 text-right text-[11px] font-semibold tabular-nums text-[#0F2D52]">{item.total.toLocaleString()}</span>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                ) : (
+                  <p className="py-14 text-center text-xs text-[#64748B]">No age data is available for this view.</p>
+                )}
+              </div>
+              <div>
+                <p className="mb-3 text-[11px] font-medium text-[#475569]">Sex</p>
+                {failed.demographics ? (
+                  <p className="py-14 text-center text-xs text-[#991B1B]">Sex distribution could not be loaded.</p>
+                ) : (sexData.Male + sexData.Female) > 0 ? (
+                  <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-4">
+                    <div className="relative h-[160px] w-[160px] shrink-0" role="img" aria-label={`Male: ${sexData.Male.toLocaleString()} cases; Female: ${sexData.Female.toLocaleString()} cases`}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={[
+                              { name: 'Male', value: sexData.Male },
+                              { name: 'Female', value: sexData.Female },
+                            ]}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={40}
+                            outerRadius={70}
+                            paddingAngle={1}
+                            dataKey="value"
+                            isAnimationActive={false}
+                          >
+                            <Cell fill="#2E6FAF" />
+                            <Cell fill="#94A3B8" />
+                          </Pie>
+                          <Tooltip formatter={(value) => value.toLocaleString()} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                        <span className="text-lg font-semibold tabular-nums text-[#0F2D52]">{(sexData.Male + sexData.Female).toLocaleString()}</span>
+                        <span className="text-[10px] text-[#64748B]">cases</span>
+                      </div>
+                    </div>
+                    <div className="min-w-[170px] space-y-2">
+                      {[
+                        { label: 'Male', value: sexData.Male, color: '#2E6FAF' },
+                        { label: 'Female', value: sexData.Female, color: '#94A3B8' },
+                      ].map((item) => {
+                        const total = sexData.Male + sexData.Female;
+                        const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : 0;
+                        return (
+                          <div key={item.label} className="flex items-center gap-2 text-xs">
+                            <span className="h-2.5 w-2.5 shrink-0" style={{ background: item.color }} aria-hidden="true" />
+                            <span className="flex-1 text-[#475569]">{item.label}</span>
+                            <span className="font-semibold tabular-nums text-[#0F2D52]">{item.value.toLocaleString()}</span>
+                            <span className="w-11 text-right tabular-nums text-[#64748B]">{pct}%</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="py-14 text-center text-xs text-[#64748B]">No sex distribution data is available for this view.</p>
+                )}
+              </div>
+            </div>
+          </SectionCard>
 
           {/* ─── 9. Interventions ─── */}
           <SectionCard
