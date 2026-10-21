@@ -577,7 +577,13 @@ export default function DashboardPage() {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const isLate = (r) => r.status !== 'completed' && r.target_date && new Date(r.target_date) < today;
     const monthKey = (r) => String(r.target_date || '').slice(0, 7);
-    const months = [...new Set(rows.map(monthKey).filter(Boolean))].sort().slice(0, 6);
+    // Six months around today (two back, three ahead) so the current and upcoming work stays in view;
+    // if nothing is due in that window, fall back to the six latest months that have interventions.
+    const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const window6 = [-2, -1, 0, 1, 2, 3].map((k) => ym(new Date(today.getFullYear(), today.getMonth() + k, 1)));
+    const months = rows.some((r) => window6.includes(monthKey(r)))
+      ? window6
+      : [...new Set(rows.map(monthKey).filter(Boolean))].sort().slice(-6);
     const byMonth = months.map((m) => {
       const mine = rows.filter((r) => monthKey(r) === m);
       return {
