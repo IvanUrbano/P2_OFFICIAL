@@ -1,8 +1,11 @@
 /**
  * Validation work queue — what puts a record in each Validation tab.
  *
- *   READY             no unresolved issue: not a pending match, location resolved, facility
- *                     names mapped (or blank)
+ *   READY             nothing holds the record back: not a pending match, location resolved.
+ *                     An unmapped facility name does not hold it out of Ready, just as it does
+ *                     not hold it back from TBInsight — so Ready matches what TBInsight's Data
+ *                     Integration counts as imported. The name stays listed under Needs
+ *                     Assignment -> Facility (counted by name) until it is mapped.
  *   POSSIBLE MATCHES  match_status = 'pending' — sub-classified (categorizeMatch):
  *                     duplicate / case update / changed outcome / possible new episode
  *   NEEDS ASSIGNMENT  location (no / unknown / non-Pasig barangay, not yet decided) or
@@ -12,8 +15,9 @@
  *   DATA ISSUES       rows that failed validation (validation_issues.status = 'open'):
  *                     missing required values, invalid dates, invalid values
  *
- * A record can need assignment for both location and facility; it leaves the queue only
- * when both are resolved. All SQL fragments use the validated_tb_cases alias `v`.
+ * A record can need assignment for both location and facility; it leaves the location
+ * queue when its location is decided, and its facility name leaves the facility list when
+ * the name is mapped. All SQL fragments use the validated_tb_cases alias `v`.
  */
 
 const { UPDATE_FIELDS } = require('./matchResolution');
@@ -43,7 +47,7 @@ const NEEDS_FACILITY = `(v.match_status <> 'pending' AND (
   OR (NULLIF(trim(v.screening_facility), '') IS NOT NULL AND v.screening_facility_id IS NULL)))`;
 
 const MATCH_PENDING = `v.match_status = 'pending'`;
-const READY = `(v.match_status <> 'pending' AND NOT ${NEEDS_LOCATION} AND NOT ${NEEDS_FACILITY})`;
+const READY = `(v.match_status <> 'pending' AND NOT ${NEEDS_LOCATION})`;
 
 /** A Pasig residence: resolved onto a Pasig barangay in a Pasig city. */
 const SENDS_PASIG_RESIDENCE = `(v.barangay_id IS NOT NULL AND ${PASIG_CITY})`;

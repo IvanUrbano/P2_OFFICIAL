@@ -16,6 +16,7 @@ const { startBackgroundSync, SYNC_STARTED } = require('../services/backgroundSyn
 const { NEEDS_LOCATION, NEEDS_FACILITY } = require('../services/validationQueue');
 const { logReviews, resyncSyncedCases } = require('../services/caseFollowUp');
 const pinService = require('../services/pinService');
+const { previouslyTreatedSql, getPatientEpisodes, treatmentHistoryGroup, LIVE_EPISODE } = require('../services/episodes');
 const { withUserNames } = require('../services/userNames');
 const config = require('../config');
 
@@ -672,7 +673,7 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 50), 200);
     const offset = (page - 1) * limit;
-    const view = ['all', 'matches', 'unassigned', 'archived'].includes(req.query.view) ? req.query.view : 'all';
+    const view = ['all', 'matches', 'unassigned', 'archived', 'previously_treated'].includes(req.query.view) ? req.query.view : 'all';
     const isAdmin = req.user.role === 'admin';
     if (view === 'unassigned' && !isAdmin) {
       return res.status(403).json({ error: 'Needs Assignment is available to admins only.' });
@@ -692,6 +693,9 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
       // Validation page, not per record here.
       unassigned: `v.is_archived = false AND v.match_status <> 'pending' AND v.merged_into_case_no IS NULL AND ${NEEDS_LOCATION}`,
       archived: 'v.is_archived = true',
+      // Returning patients: registered as previously treated (Relapse, treatment after
+      // failure / lost to follow-up, previous outcome unknown) or with an earlier episode on file.
+      previously_treated: `v.is_archived = false AND ${TB_RECORDS_LISTED} AND ${previouslyTreatedSql('v')}`,
     };
 
     let filters = '';
@@ -754,10 +758,13 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
     const countView = async (key) =>
       (await db.pool.query(`SELECT COUNT(*)::int AS n ${from} WHERE ${base} AND ${viewSql[key]}`,
         scope.params)).rows[0].n;
-    const [countResult, dataResult, allCount, matchCount, unassignedCount, archivedCount] = await Promise.all([
+    const [countResult, dataResult, allCount, matchCount, unassignedCount, archivedCount, previouslyTreatedCount] = await Promise.all([
       db.pool.query(`SELECT COUNT(*)::int AS total ${from} WHERE ${where}`, params),
       db.pool.query(
-        `SELECT v.*, p.patient_no ${from} WHERE ${where}
+        `SELECT v.*, p.patient_no,
+                (SELECT COUNT(*) FROM validated_tb_cases o
+                  WHERE o.patient_id = v.patient_id AND o.id <> v.id AND ${LIVE_EPISODE('o')})::int AS other_episodes
+         ${from} WHERE ${where}
          ORDER BY ${orderBy} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, limit, offset]
       ),
@@ -765,12 +772,15 @@ router.get('/records', authenticate, authorizeRoles('admin', 'staff'), async (re
       countView('matches'),
       isAdmin ? countView('unassigned') : Promise.resolve(null),
       countView('archived'),
+      countView('previously_treated'),
     ]);
-    const counts = { all: allCount, matches: matchCount, unassigned: unassignedCount, archived: archivedCount };
+    const counts = { all: allCount, matches: matchCount, unassigned: unassignedCount, archived: archivedCount, previously_treated: previouslyTreatedCount };
 
     // Each row carries the user's permissions on it (policies/permissions.js), including
     // why they can see it (permissions.basis: primary / referred_in / referred_out).
-    let records = dataResult.rows.map(r => ({ ...r, permissions: casePermissions(req.user, userScope, r) }));
+    let records = dataResult.rows.map(r => ({
+      ...r, treatment_history: treatmentHistoryGroup(r.registration_group), permissions: casePermissions(req.user, userScope, r),
+    }));
 
     // Possible matches: attach the existing case each one resembles
     if (view === 'matches' && records.length > 0) {
@@ -868,6 +878,9 @@ router.get('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
       ? ((await db.pool.query('SELECT filename FROM import_batches WHERE id = $1', [record.batch_id])).rows[0] || {}).filename || null
       : null;
     const fullRecord = { ...record, responsible_barangay_effective: responsibleBarangay(record), source_file: sourceFile };
+    // The patient's TB episodes (same Patient #). Episodes the user may not open show only
+    // their year, outcome and barangay.
+    const episodes = await getPatientEpisodes(db.pool, record, (r) => casePermissions(req.user, userScope, r).view);
     res.json({
       record: pinService.protectIdentity(req, fullRecord),
       identityUnlocked: pinService.isUnlocked(req),
@@ -876,6 +889,7 @@ router.get('/records/:id', authenticate, authorizeRoles('admin', 'staff'), async
       permissions,
       transfers: referrals,
       history,
+      episodes,
     });
   } catch (error) {
     console.error('Error fetching record detail:', error);

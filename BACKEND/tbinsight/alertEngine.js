@@ -6,13 +6,14 @@
  */
 
 const pool = require('../db');
-const { NORMALIZE_OUTCOME_SQL, SUCCESS_OUTCOMES, EVALUATED_TERMINAL_OUTCOMES } = require('./outcomeNormalization');
+const { TREATMENT_SUCCESS_TARGET } = require('./targets');
+const { computeTreatmentSuccessRate } = require('./treatmentSuccessRate');
 
 // ── Thresholds ──────────────────────────────────────────────────────────────
 const THRESHOLDS = {
   CASE_INCREASE_PERCENT: 20,
   FORECAST_INCIDENCE: 4200,  // Annual incidence per 100k (was 350 monthly × 12)
-  TREATMENT_SUCCESS_TARGET: 85,
+  TREATMENT_SUCCESS_TARGET,
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -108,7 +109,12 @@ async function evaluateHotspotAlerts(poolOrClient, period) {
   await deleteStaleAlerts(poolOrClient, { alertType: 'high_risk_hotspot', period });
 
   const result = await poolOrClient.query(
-    `SELECT barangay_name, risk_score, incidence_per_100k
+    // The same 12-month rate as the High risk alert (scoring.alertRateByName), read as text
+    // and converted below so one malformed stored value cannot fail the query. Not
+    // incidence_per_100k: a legacy latest-month x 12 figure (Santa Rosa read 2301.1 here
+    // while the High risk alert said 1150.5). Not risk_score either: the legacy weighted index
+    // does not decide the risk level and disagrees with it (a High barangay scored 6.0).
+    `SELECT barangay_name, features->>'rolling_12m_incidence' AS rate_12m
      FROM barangay_risk_scores
      WHERE period = $1 AND risk_class = 'High'`,
     [period]
@@ -116,20 +122,21 @@ async function evaluateHotspotAlerts(poolOrClient, period) {
 
   if (result.rows.length === 0) return created;
 
-  const sorted = result.rows.sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0));
-  const maxScore = Math.max(...sorted.map(r => r.risk_score || 0));
-  const severity = maxScore >= 80 ? 'critical' : 'high';
+  const rate = r => (r.rate_12m != null && r.rate_12m !== '' && Number.isFinite(Number(r.rate_12m)) ? Number(r.rate_12m) : null);
+  // Highest 12-month rate first, like the High risk alert; a barangay without a rate goes last.
+  const sorted = result.rows.sort((a, b) => (rate(b) ?? -1) - (rate(a) ?? -1));
+  const severity = 'high';
 
-  const topList = sorted.slice(0, 5).map(r =>
-    `${r.barangay_name} (score: ${r.risk_score?.toFixed(1)}, incidence: ${r.incidence_per_100k?.toFixed(1)}/100k)`
-  ).join('; ');
+  const top = sorted.slice(0, 5);
+  const topList = top.map(r => (rate(r) != null ? `${r.barangay_name} (${rate(r).toFixed(1)}/100k)` : r.barangay_name)).join('; ');
+  const rateNote = top.some(r => rate(r) != null) ? ' Rates are cases per 100,000 over the past 12 months.' : '';
   const suffix = sorted.length > 5 ? ` and ${sorted.length - 5} more` : '';
 
   const id = await insertAlert(poolOrClient, {
     alertType: 'high_risk_hotspot',
     severity,
     title: sorted.length === 1 ? 'High-Priority Barangay Detected' : `${sorted.length} High-Priority Barangays Detected`,
-    message: `${sorted.length} barangay${sorted.length > 1 ? 's' : ''} classified as High priority for TB: ${topList}${suffix}.`,
+    message: `${sorted.length} barangay${sorted.length > 1 ? 's' : ''} classified as High priority for TB: ${topList}${suffix}.${rateNote}`,
     recommendation: `Increase surveillance and resource allocation in affected barangays. Review TB case management and contact tracing activities.`,
     barangayName: null,
     metadata: { affected_barangays: sorted.map(row => row.barangay_name) },
@@ -313,27 +320,22 @@ async function evaluateForecastAlerts(poolOrClient, period) {
 
 /**
  * Treatment Success Rate Below Target
- * Calculates overall treatment success rate from outcome_summary.
+ * City-wide cohort Treatment Success Rate (computeTreatmentSuccessRate), against
+ * TREATMENT_SUCCESS_TARGET.
  */
 async function evaluateTreatmentAlerts(poolOrClient, period) {
   const created = [];
   // Clean up stale alerts for this type/period before re-evaluating
   await deleteStaleAlerts(poolOrClient, { alertType: 'low_treatment_success', period });
 
-  const result = await poolOrClient.query(
-    `SELECT
-       SUM(CASE WHEN ${NORMALIZE_OUTCOME_SQL} = ANY($2) THEN case_count ELSE 0 END) AS success_count,
-       SUM(CASE WHEN ${NORMALIZE_OUTCOME_SQL} = ANY($3) THEN case_count ELSE 0 END) AS total_count
-     FROM outcome_summary
-     WHERE month = $1`,
-    [period, SUCCESS_OUTCOMES, EVALUATED_TERMINAL_OUTCOMES]
-  );
+  // The same cohort Treatment Success Rate the Dashboard card shows: no year, so patients who
+  // started treatment in the previous calendar year. Not the year of `period` — the pipeline's
+  // forecast month — which in December points at January and would judge a cohort still on
+  // treatment. It used to read one month of outcome_summary for `period` (no outcomes yet), so it
+  // never fired, and its own formula (finished outcomes only) disagreed with the cards.
+  const { successRate, cohortYear } = await computeTreatmentSuccessRate(poolOrClient, {});
+  if (successRate == null) return created;
 
-  if (!result.rows.length) return created;
-  const { success_count, total_count } = result.rows[0];
-  if (!total_count || total_count === 0) return created;
-
-  const successRate = (success_count / total_count) * 100;
   if (successRate < THRESHOLDS.TREATMENT_SUCCESS_TARGET) {
     const diff = THRESHOLDS.TREATMENT_SUCCESS_TARGET - successRate;
     const severity = successRate < 70 ? 'critical' : 'high';
@@ -341,7 +343,7 @@ async function evaluateTreatmentAlerts(poolOrClient, period) {
       alertType: 'low_treatment_success',
       severity,
       title: 'Treatment Success Rate Below Target',
-      message: `Treatment success rate for the reporting period is ${successRate.toFixed(1)}%, which is below the ${THRESHOLDS.TREATMENT_SUCCESS_TARGET}% target (difference: ${diff.toFixed(1)} percentage points).`,
+      message: `Treatment success for the ${cohortYear} treatment cohort is ${successRate.toFixed(1)}%, below the ${THRESHOLDS.TREATMENT_SUCCESS_TARGET}% target (difference: ${diff.toFixed(1)} percentage points).`,
       recommendation: `Review treatment adherence programs. Identify patients lost to follow-up and initiate re-engagement measures.`,
       barangayName: null,
       period,

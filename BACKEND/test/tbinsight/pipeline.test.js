@@ -16,6 +16,8 @@ const {
   computeHistoricalBias,
   classifyTrend,
   generateAlerts,
+  alertRateByName,
+  monthLabel,
 } = require('../../tbinsight/scoring');
 
 // ==================== SCORING TESTS ====================
@@ -245,5 +247,37 @@ describe('generateAlerts', () => {
     const danger = alerts.find(a => a.severity === 'danger');
     assert.match(danger.message, /Beta \(900\.0\/100k\); Alpha \(300\.0\/100k\); Gamma\./);
     assert.doesNotMatch(danger.message, /N\/A/);
+  });
+});
+
+describe('alert wording: 12-month rate and month names', () => {
+  it('alertRateByName reads the 12-month rate, not the legacy latest-month figure', () => {
+    const rates = alertRateByName([
+      { barangay_name: 'Bagong Katipunan', incidence_per_100k: 0, features: { rolling_12m_incidence: 816.8 } },
+      { barangay_name: 'NoFeatures', incidence_per_100k: 500, features: null },
+    ]);
+    assert.deepStrictEqual(rates, { 'Bagong Katipunan': 816.8, NoFeatures: null });
+  });
+
+  it('monthLabel turns a period date into a month name', () => {
+    assert.strictEqual(monthLabel('2026-10-01'), 'October 2026');
+    assert.strictEqual(monthLabel('2024-01-01'), 'January 2024');
+    assert.strictEqual(monthLabel('not a date'), 'not a date');
+  });
+
+  it('alert messages name the month and say what the rate is', () => {
+    const alerts = generateAlerts({
+      forecasts: [],
+      classifications: [{ barangay_name: 'Ugong', risk_class: 'High', incidence_per_100k: 816.8 }],
+      barangayList: [{ name: 'Ugong' }],
+      prevRiskClasses: { Ugong: 'Medium' },
+      period: '2026-10-01',
+    });
+    for (const a of alerts) {
+      assert.ok(!a.message.includes('2026-10-01'), a.message);
+      assert.match(a.message, /October 2026/);
+    }
+    const danger = alerts.find((a) => a.severity === 'danger');
+    assert.match(danger.message, /per 100,000 over the past 12 months/);
   });
 });

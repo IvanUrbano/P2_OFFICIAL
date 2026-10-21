@@ -125,14 +125,12 @@ export default function Analytics() {
   const [barangays, setBarangays] = useState([]);
   const [riskData, setRiskData] = useState([]);
   const [riskYear, setRiskYear] = useState(null);
-  const [facilities, setFacilities] = useState([]);
   const [filterOptions, setFilterOptions] = useState({ sex: [], bacteriological_status: [], outcome_status: [] });
 
   /* Filter state */
   const [filterYear, setFilterYear] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
   const [filterBarangay, setFilterBarangay] = useState('');
-  const [filterFacility, setFilterFacility] = useState('');
   const [filterOutcome, setFilterOutcome] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterSex, setFilterSex] = useState('');
@@ -144,7 +142,6 @@ export default function Analytics() {
   const [aYear, setAYear] = useState('');
   const [aMonth, setAMonth] = useState('');
   const [aBarangay, setABarangay] = useState('');
-  const [aFacility, setAFacility] = useState('');
   const [aOutcome, setAOutcome] = useState('');
   const [aStatus, setAStatus] = useState('');
   const [aSex, setASex] = useState('');
@@ -174,12 +171,11 @@ export default function Analytics() {
     try {
       setError(null);
       // Every case, but only the fields this page computes from (no identifiers).
-      const [allCasesRes, brgyRes, riskRes, filterRes, facilityRes] = await Promise.all([
+      const [allCasesRes, brgyRes, riskRes, filterRes] = await Promise.all([
         API.get('/api/tb/cases/analytics-dataset'),
         API.get('/api/tb/barangays'),
         API.get('/api/tb/gis/choropleth'),
         API.get('/api/tb/filter-options').catch(() => ({ data: {} })),
-        API.get('/api/tb/facilities').catch(() => ({ data: { facilities: [] } })),
       ]);
       setAllCases(allCasesRes.data.cases || []);
       setBarangays(brgyRes.data.barangays || brgyRes.data || []);
@@ -190,7 +186,6 @@ export default function Analytics() {
       // not an all-time count.
       setRiskYear(riskRes.data.assessment_year ?? riskRes.data.year ?? null);
       setFilterOptions(filterRes.data || {});
-      setFacilities(facilityRes.data.facilities || []);
     } catch (err) {
       if (import.meta.env.DEV) console.error('Analytics fetch error:', err);
       setError('Failed to load analytics data. Make sure the backend is running.');
@@ -210,20 +205,18 @@ export default function Analytics() {
     setAYear(filterYear);
     setAMonth(filterMonth);
     setABarangay(filterBarangay);
-    setAFacility(filterFacility);
     setAOutcome(filterOutcome);
     setAStatus(filterStatus);
     setASex(filterSex);
     setAAgeGroup(filterAgeGroup);
     setABact(filterBact);
     setApplied(true);
-  }, [filterYear, filterMonth, filterBarangay, filterFacility, filterOutcome, filterStatus, filterSex, filterAgeGroup, filterBact]);
+  }, [filterYear, filterMonth, filterBarangay, filterOutcome, filterStatus, filterSex, filterAgeGroup, filterBact]);
 
   const handleClear = useCallback(() => {
     setFilterYear('');
     setFilterMonth('');
     setFilterBarangay('');
-    setFilterFacility('');
     setFilterOutcome('');
     setFilterStatus('');
     setFilterSex('');
@@ -232,7 +225,6 @@ export default function Analytics() {
     setAYear('');
     setAMonth('');
     setABarangay('');
-    setAFacility('');
     setAOutcome('');
     setAStatus('');
     setASex('');
@@ -250,7 +242,6 @@ export default function Analytics() {
         year: aYear,
         month: aMonth,
         barangay: aBarangay,
-        facility: aFacility,
         outcome: aOutcome,
         status: aStatus,
         sex: aSex,
@@ -264,7 +255,7 @@ export default function Analytics() {
     } finally {
       setInsightLoading(false);
     }
-  }, [insightLoading, aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
+  }, [insightLoading, aYear, aMonth, aBarangay, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Header refresh: reload EVERYTHING — base data (loadAll), the metric
    * cards (refreshTick re-fires their effects), and a fresh NLG insight
@@ -296,7 +287,6 @@ export default function Analytics() {
         if (aBarangay) params.barangay = aBarangay;
         if (aSex) params.sex = aSex;
         if (aAgeGroup) params.ageGroup = aAgeGroup;
-        if (aFacility) params.facility = aFacility;
         if (aBact) params.bacteriological = aBact;
         const res = await API.get('/api/tb/treatment-success-rate', { params });
         if (!cancelled) setTsrData(res.data);
@@ -308,7 +298,7 @@ export default function Analytics() {
       }
     })();
     return () => { cancelled = true; };
-  }, [aYear, aBarangay, aSex, aAgeGroup, aFacility, aBact, refreshTick]);
+  }, [aYear, aBarangay, aSex, aAgeGroup, aBact, refreshTick]);
 
   /* ── Case Fatality Rate — shared backend calculation ──
    * GET /api/tb/case-fatality-rate: DIED / evaluated terminal outcomes,
@@ -324,7 +314,6 @@ export default function Analytics() {
         if (aBarangay) params.barangay = aBarangay;
         if (aSex) params.sex = aSex;
         if (aAgeGroup) params.ageGroup = aAgeGroup;
-        if (aFacility) params.facility = aFacility;
         if (aBact) params.bacteriological = aBact;
         const res = await API.get('/api/tb/case-fatality-rate', { params });
         if (!cancelled) setCfrData(res.data);
@@ -336,7 +325,7 @@ export default function Analytics() {
       }
     })();
     return () => { cancelled = true; };
-  }, [aYear, aMonth, aBarangay, aSex, aAgeGroup, aFacility, aBact, refreshTick]);
+  }, [aYear, aMonth, aBarangay, aSex, aAgeGroup, aBact, refreshTick]);
 
   // Previous year's TSR, for the YoY trend badge — only meaningful when a
   // specific year is selected (mirrors previousMetrics' own aYear gate).
@@ -349,7 +338,6 @@ export default function Analytics() {
         if (aBarangay) params.barangay = aBarangay;
         if (aSex) params.sex = aSex;
         if (aAgeGroup) params.ageGroup = aAgeGroup;
-        if (aFacility) params.facility = aFacility;
         if (aBact) params.bacteriological = aBact;
         const res = await API.get('/api/tb/treatment-success-rate', { params });
         if (!cancelled) setPrevTsrData(res.data);
@@ -361,7 +349,7 @@ export default function Analytics() {
       }
     })();
     return () => { cancelled = true; };
-  }, [aYear, aBarangay, aSex, aAgeGroup, aFacility, aBact, refreshTick]);
+  }, [aYear, aBarangay, aSex, aAgeGroup, aBact, refreshTick]);
 
   /* ── Year-matched population (for Incidence per 100k) ──
    * Incidence must divide a year's cases by THAT SAME year's population
@@ -402,7 +390,6 @@ export default function Analytics() {
       year: () => { setFilterYear(''); setAYear(''); },
       month: () => { setFilterMonth(''); setAMonth(''); },
       barangay: () => { setFilterBarangay(''); setABarangay(''); },
-      facility: () => { setFilterFacility(''); setAFacility(''); },
       outcome: () => { setFilterOutcome(''); setAOutcome(''); },
       status: () => { setFilterStatus(''); setAStatus(''); },
       sex: () => { setFilterSex(''); setASex(''); },
@@ -443,7 +430,6 @@ export default function Analytics() {
     return allCases.filter((c) => {
       if (!matchesNonYearFilters(c, {
         barangay: aBarangay,
-        facility: aFacility,
         outcome: aOutcome,
         status: aStatus,
         sex: aSex,
@@ -458,7 +444,7 @@ export default function Analytics() {
       }
       return true;
     });
-  }, [allCases, applied, aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
+  }, [allCases, applied, aYear, aMonth, aBarangay, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Previous year cases (for trend indicators) ──
      Non-year filters go through the SAME `matchesNonYearFilters` predicate
@@ -474,7 +460,6 @@ export default function Analytics() {
       if (aMonth && (d.getMonth() + 1) !== Number(aMonth)) return false;
       return matchesNonYearFilters(c, {
         barangay: aBarangay,
-        facility: aFacility,
         outcome: aOutcome,
         status: aStatus,
         sex: aSex,
@@ -482,7 +467,7 @@ export default function Analytics() {
         bacteriological: aBact,
       });
     });
-  }, [allCases, aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
+  }, [allCases, aYear, aMonth, aBarangay, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Summary Metrics ── */
   const metrics = useMemo(() => {
@@ -569,7 +554,6 @@ export default function Analytics() {
       month: aMonth,
       filters: {
         barangay: aBarangay,
-        facility: aFacility,
         outcome: aOutcome,
         status: aStatus,
         sex: aSex,
@@ -577,7 +561,7 @@ export default function Analytics() {
         bacteriological: aBact,
       },
     });
-  }, [compareYear, aYear, aMonth, allCases, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
+  }, [compareYear, aYear, aMonth, allCases, aBarangay, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Merged YoY trend data ──
      Merges by remapped month key ("2023-10" → "2024-10") and stores the
@@ -595,14 +579,13 @@ export default function Analytics() {
   const caseTrendComparison = useMemo(() => buildCaseTrendComparison(allCases, {
     filters: {
       barangay: aBarangay,
-      facility: aFacility,
       outcome: aOutcome,
       status: aStatus,
       sex: aSex,
       ageGroup: aAgeGroup,
       bacteriological: aBact,
     },
-  }), [allCases, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
+  }), [allCases, aBarangay, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── TB Cases by Barangay ──
    * Only Pasig residents appear here. A Non-Pasig resident treated at a Pasig
@@ -758,14 +741,13 @@ export default function Analytics() {
     if (aYear) chips.push({ key: 'year', label: 'Year', value: aYear });
     if (aMonth) chips.push({ key: 'month', label: 'Month', value: new Date(2000, Number(aMonth) - 1, 1).toLocaleDateString('en-US', { month: 'long' }) });
     if (aBarangay) chips.push({ key: 'barangay', label: 'Barangay', value: aBarangay });
-    if (aFacility) chips.push({ key: 'facility', label: 'Facility', value: aFacility });
     if (aOutcome) chips.push({ key: 'outcome', label: 'Treatment Outcome', value: aOutcome });
     if (aStatus) chips.push({ key: 'status', label: 'Case Status', value: aStatus });
     if (aSex) chips.push({ key: 'sex', label: 'Sex', value: aSex });
     if (aAgeGroup) chips.push({ key: 'age', label: 'Age Group', value: aAgeGroup });
     if (aBact) chips.push({ key: 'bacterio', label: 'Bacterio', value: aBact });
     return chips;
-  }, [aYear, aMonth, aBarangay, aFacility, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
+  }, [aYear, aMonth, aBarangay, aOutcome, aStatus, aSex, aAgeGroup, aBact]);
 
   /* ── Last updated ── */
   const lastUpdated = useMemo(() => {
@@ -882,10 +864,6 @@ export default function Analytics() {
             <FilterSelect label="Barangay" value={filterBarangay} onChange={setFilterBarangay} selectStyle={{ maxWidth: 140 }}>
               <option value="">All Barangays</option>
               {barangayNames.map((n) => <option key={n} value={n}>{n}</option>)}
-            </FilterSelect>
-            <FilterSelect label="Facility" value={filterFacility} onChange={setFilterFacility} selectStyle={{ maxWidth: 140 }}>
-              <option value="">All Facilities</option>
-              {facilities.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
             </FilterSelect>
             <FilterSelect label="Treatment Outcome" value={filterOutcome} onChange={setFilterOutcome} selectStyle={{ maxWidth: 150 }}>
               <option value="">All</option>

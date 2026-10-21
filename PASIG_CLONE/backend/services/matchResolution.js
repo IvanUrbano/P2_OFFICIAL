@@ -12,6 +12,7 @@
  */
 const { formatPatientNo, formatCaseNo } = require('./patientIdentity');
 const { normalizeCaseId } = require('./caseIds');
+const { recordNewEpisode, LIVE_EPISODE } = require('./episodes');
 
 // Every clinical value a later report of the same case may correct. Location is absent
 // on purpose: a barangay change goes through Validation -> Needs Assignment, which also
@@ -55,12 +56,13 @@ function ymd(v) {
 /**
  * @param client  pg client inside an open transaction
  * @param row     the pending validated_tb_cases row
+ * @param options.source  case_history source for a new episode ('review' or 'manual')
  * @param options.authorizeExistingCase  called with the existing case before "same case"
  *        writes onto it; must throw (with .status) if the user may not edit that case.
  *        Required: "same case" changes a DIFFERENT case than the one being resolved.
  * @returns { resolution, caseNo }  caseNo = the case this record now belongs to
  */
-async function resolveMatch(client, row, resolution, userId, { authorizeExistingCase } = {}) {
+async function resolveMatch(client, row, resolution, userId, { authorizeExistingCase, source = 'review' } = {}) {
   if (!RESOLUTIONS.includes(resolution)) {
     throw Object.assign(new Error('Choose: same case, new episode, or different person.'), { status: 400 });
   }
@@ -130,6 +132,21 @@ async function resolveMatch(client, row, resolution, userId, { authorizeExisting
     `UPDATE validated_tb_cases SET ${resolvedCols}, patient_id = $4, case_no = $5 WHERE id = $1`,
     [row.id, resolution, userId, patientId, caseNo]
   );
+  if (resolution === 'new_episode') {
+    // Case History on both sides: the new case names its previous episode, and every
+    // earlier episode of this patient names the new case.
+    const earlier = await client.query(
+      `SELECT id, case_no, source_case_id, patient_id, batch_id, date_of_diagnosis, outcome_status, date_of_outcome
+         FROM validated_tb_cases v
+        WHERE v.patient_id = $1 AND v.id <> $2 AND ${LIVE_EPISODE('v')}`,
+      [patientId, row.id]
+    );
+    await recordNewEpisode(client, {
+      newCase: { id: row.id, case_no: caseNo, source_case_id: row.source_case_id, patient_id: patientId,
+        batch_id: row.batch_id, date_of_diagnosis: row.date_of_diagnosis },
+      earlierCases: earlier.rows, userId, source,
+    });
+  }
   return { resolution, caseNo };
 }
 

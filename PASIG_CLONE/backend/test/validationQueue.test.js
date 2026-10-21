@@ -110,8 +110,14 @@ describe('queue predicates', () => {
     assert.ok(NEEDS_LOCATION.includes('location_resolution IS NULL'));
     assert.ok(NEEDS_LOCATION.includes('barangay_id IS NULL'));
   });
-  it('ready excludes pending matches and both assignment kinds', () => {
-    assert.ok(READY.includes("match_status <> 'pending'") && READY.includes('NOT'));
+  it('ready excludes pending matches and undecided locations', () => {
+    assert.ok(READY.includes("match_status <> 'pending'"));
+    assert.ok(READY.includes(`NOT ${NEEDS_LOCATION}`));
+  });
+  it('an unmapped facility name does not hold a record out of Ready (it is sent to TBInsight anyway)', () => {
+    // Otherwise Ready shows fewer records than TBInsight's Data Integration "Imported".
+    assert.ok(!READY.includes('treatment_facility_id'), READY);
+    assert.ok(!READY.includes('screening_facility_id'), READY);
   });
 });
 

@@ -14,6 +14,21 @@ export default function LoginPage() {
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [showPasswordResetNotice, setShowPasswordResetNotice] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  // True once a sign-in has been waiting a few seconds: the free hosting puts the server to
+  // sleep after 15 minutes without use, and waking it takes up to a minute.
+  const [slowSignIn, setSlowSignIn] = useState(false);
+
+  // Start waking the server as soon as the login page opens, so it is usually ready by the
+  // time the user has typed. Public health check; the result is not needed.
+  useEffect(() => {
+    API.get('/api/health').catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!loading) return undefined;
+    const timer = setTimeout(() => setSlowSignIn(true), 5000);
+    return () => { clearTimeout(timer); setSlowSignIn(false); };
+  }, [loading]);
 
   useEffect(() => {
     const savedEmail = localStorage.getItem('pasig_remember_me');
@@ -62,7 +77,12 @@ export default function LoginPage() {
     } catch (err) {
       const status = err.response?.status;
       const data = err.response?.data;
-      setError(data?.error || 'Invalid credentials. Please try again.');
+      // No response at all: the server is down or still starting, not a wrong password.
+      if (!err.response) {
+        setError('Cannot reach the server. It may still be starting up. Wait a moment and try again.');
+        return;
+      }
+      setError(data?.error || (status >= 500 ? 'The server had a problem. Please try again.' : 'Invalid credentials. Please try again.'));
       if ((status === 429 || status === 423) && data?.retryAfter) setLockoutSeconds(data.retryAfter);
     } finally {
       setLoading(false);
@@ -153,8 +173,13 @@ export default function LoginPage() {
               className="w-full py-3 rounded-lg font-bold text-[13px] transition-all duration-200 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ background: lockoutSeconds > 0 ? '#F59E0B' : '#0F2D52', color: '#ffffff', boxShadow: '0 4px 14px rgba(15,45,82,0.25)' }}>
               {lockoutSeconds > 0 ? (<><i className="ri-lock-line text-sm" /> Locked ({formatLockoutTime(lockoutSeconds)})</>)
-                : loading ? (<><i className="ri-loader-4-line text-sm animate-spin" /> Signing in...</>) : 'Sign In'}
+                : loading ? (<><i className="ri-loader-4-line text-sm animate-spin" /> {slowSignIn ? 'Starting the server…' : 'Signing in...'}</>) : 'Sign In'}
             </button>
+            {slowSignIn && (
+              <p className="text-center text-[11px] text-gray-500" role="status">
+                The server was asleep and is starting up. This can take up to a minute; please keep this page open.
+              </p>
+            )}
           </form>
 
           <div className="mt-5 text-center">

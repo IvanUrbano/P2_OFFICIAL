@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  dataYears, barangayNames, scopeByBarangay, scopeMonthly, filterQuery, recommendFilters,
+  dataYears, yearSpan, barangayNames, scopeByBarangay, scopeMonthly, filterQuery, recommendFilters,
 } from '../src/utils/dashboardFilters.js';
 
 // 8 calendar months: 2025-05 .. 2025-12. "Last 3" = Oct-Dec, "the 3 before" = Jul-Sep.
@@ -88,4 +88,11 @@ test('the query string repeats barangay for each name, and can leave barangays o
   assert.equal(filterQuery({}), '');
   assert.equal(filterQuery({ year: '2025', barangays: ['A', 'B C'] }), '?year=2025&barangay=A&barangay=B+C');
   assert.equal(filterQuery({ year: '2025', barangays: ['A'] }, { withBarangays: false }), '?year=2025');
+});
+
+test('yearSpan labels the years the rows cover', () => {
+  assert.equal(yearSpan(monthly), '2024–2025');
+  assert.equal(yearSpan(scopeMonthly(monthly, { year: '2025' })), '2025');
+  assert.equal(yearSpan([]), '');
+  assert.equal(yearSpan(undefined), '');
 });

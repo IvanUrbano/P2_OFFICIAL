@@ -1,9 +1,12 @@
 const rateLimit = require('express-rate-limit');
 
-// Rate limiter specifically for login attempts
+// Rate limiter specifically for login attempts. Only failed logins count: counting successful
+// ones locked people out after a few normal sign-ins (and everyone behind one office IP shares
+// the allowance), while password guessing is still limited.
 const loginLimiter = rateLimit({
   windowMs: (parseInt(process.env.LOGIN_LIMIT_WINDOW_MINS, 10) || 15) * 60 * 1000,
   max: parseInt(process.env.LOGIN_LIMIT_MAX, 10) || 5,
+  skipSuccessfulRequests: true,
   requestPropertyName: 'rateLimit',
   standardHeaders: true,
   legacyHeaders: false,
@@ -19,13 +22,14 @@ const loginLimiter = rateLimit({
   }
 });
 
-// Lightweight status checks the open pages poll on a timer (Topbar alert bell every 30 s,
-// GIS map every 4 s while a pipeline runs). Counting them used up most of the 300-request
+// Lightweight status checks the open pages poll on a timer (Topbar alert bell every 30 s and
+// Last Synced every 60 s, GIS map every 4 s while a pipeline runs). Counting them used up most of the 300-request
 // budget by themselves — and everyone behind one office IP shares that budget — so
 // normal clicks started failing with 429. They still require a logged-in user.
 const POLLING_PATHS = new Set([
   '/api/tb/pipeline/status',
   '/api/tb/alerts/unread-count',
+  '/api/tb/data-freshness',
 ]);
 
 const isPollingRequest = (req) =>

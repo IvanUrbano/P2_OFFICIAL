@@ -48,12 +48,32 @@ const ACCESS_NOTE = {
 const transferRoute = (t) => `${t.from_barangay || t.from_facility_name || 'Unassigned'} → `;
 const transferTarget = (t) => t.to_barangay || t.to_facility_name || '—';
 
-const RECORD_TABS = [['overview', 'Overview'], ['history', 'Case History'], ['referrals', 'Referrals']];
+const RECORD_TABS = [['overview', 'Overview'], ['episodes', 'TB Episodes'], ['history', 'Case History'], ['referrals', 'Referrals']];
+
+const caseLabel = (e) => e.case_id || 'Case ID not recorded';
+
+// Returning patient notice for the Overview (null when this is the patient's only episode
+// and the registration group does not say previously treated).
+function returningNote(ep) {
+  if (!ep) return null;
+  if (ep.total > 1 && ep.previous) {
+    const prev = ep.previous.restricted
+      ? `an episode in ${ep.previous.diagnosis_year ?? 'an earlier year'} (${ep.previous.barangay_name || 'another barangay'})`
+      : caseLabel(ep.previous);
+    const outcome = ep.previous.outcome_status ? `, ended ${ep.previous.outcome_status}` : '';
+    return `Returning patient: TB episode ${ep.current_number} of ${ep.total}. Previous episode: ${prev}${outcome}.`;
+  }
+  if (ep.total > 1) return `This patient has ${ep.total} TB episodes on file. This is episode ${ep.current_number}.`;
+  if (ep.registered_as) return `Registered as ${ep.registered_as}. The earlier episode is not recorded in this system.`;
+  return null;
+}
 
 // One history entry (case_history + case_review_history) → a line staff can read.
 function describeEntry(h) {
   const f = h.changed_fields || {};
   if (h.kind === 'change') {
+    if (h.change_type === 'new_episode') return { title: 'New TB Episode', detail: h.notes || '' };
+    if (h.change_type === 'episode_linked') return { title: 'Patient Returned with a New TB Episode', detail: h.notes || '' };
     if (h.change_type === 'transferred' && f.responsible_barangay) {
       return { title: 'Responsibility Changed', detail: `${f.responsible_barangay.old ?? '—'} → ${f.responsible_barangay.new ?? '—'}` };
     }
@@ -75,7 +95,7 @@ function describeEntry(h) {
 }
 
 // initialMode: 'view' (default) | 'edit' (opens the edit form) | 'refer' (opens the referral form)
-export default function RecordDetailDrawer({ recordId, facilities, barangays, onClose, onChanged, initialMode = 'view' }) {
+export default function RecordDetailDrawer({ recordId, facilities, barangays, onClose, onChanged, onOpenRecord, initialMode = 'view' }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -109,6 +129,8 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
   const r = data?.record;
   const transfers = data?.transfers || [];
   const history = data?.history || [];
+  const episodes = data?.episodes || null;
+  const episodeNote = returningNote(episodes);
   const basis = accessBasis(data);
   const hasPendingTransfer = transfers.some(t => t.status === 'pending');
   const barangayOptions = (barangays || []).filter(b => b?.id != null);
@@ -202,7 +224,7 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
               {RECORD_TABS.map(([key, label]) => (
                 <button key={key} onClick={() => { setTab(key); setMsg(null); }} className="relative -mb-px px-3 py-2 text-[11px] font-bold"
                   style={{ color: tab === key ? '#0F2D52' : '#94A3B8' }}>
-                  {label}
+                  {label}{key === 'episodes' && episodes?.total > 1 ? ` (${episodes.total})` : ''}
                   {tab === key && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#0F2D52]" aria-hidden="true" />}
                 </button>
               ))}
@@ -221,6 +243,13 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
 
             {tab === 'overview' && !editing && (
               <>
+            {episodeNote && (
+              <div className="px-3 py-2 rounded text-[11px] leading-relaxed flex items-start justify-between gap-3"
+                style={{ background: '#F5F3FF', color: '#5B21B6', borderLeft: '3px solid #6D28D9' }}>
+                <span>{episodeNote}</span>
+                <button type="button" onClick={() => setTab('episodes')} className="shrink-0 font-bold underline">See TB Episodes</button>
+              </div>
+            )}
             <section>
               <p className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: '#64748B' }}>Patient</p>
               <div className="grid grid-cols-2 gap-3">
@@ -262,6 +291,58 @@ export default function RecordDetailDrawer({ recordId, facilities, barangays, on
               </div>
             </section>
               </>
+            )}
+
+            {tab === 'episodes' && (
+              <section>
+                <p className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: '#64748B' }}>TB Episodes</p>
+                <p className="text-[11px] mb-3" style={{ color: '#64748B' }}>
+                  Every TB episode of this patient (same Patient #{r?.patient_no ? ` ${r.patient_no}` : ''}), newest first.
+                  {episodes?.registered_as ? ` This case is registered as ${episodes.registered_as}.` : ''}
+                </p>
+                {!episodes || episodes.total <= 1 ? (
+                  <p className="text-xs p-3 rounded-lg" style={{ background: '#F8FAFC', color: '#64748B', border: '1px solid #E2E8F0' }}>
+                    {episodes?.registered_as
+                      ? `Registered as ${episodes.registered_as}, but the earlier episode is not recorded in this system. It may have been treated before these records were kept or at another facility.`
+                      : 'This is the only TB episode of this patient on file.'}
+                  </p>
+                ) : (
+                  <ol className="space-y-3">
+                    {episodes.episodes.map(e => (
+                      <li key={e.number} className="p-3 rounded-lg text-xs"
+                        style={{ border: `1px solid ${e.is_current ? '#0F2D52' : '#E2E8F0'}`, background: e.is_current ? '#F8FAFC' : '#ffffff' }}>
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="font-bold" style={{ color: '#0F2D52' }}>
+                            Episode {e.number}{e.is_current ? ' · this case' : ''}
+                            {!e.restricted && <span className="ml-2 font-mono font-semibold" style={{ color: '#475569' }}>{caseLabel(e)}</span>}
+                          </p>
+                          {!e.restricted && !e.is_current && onOpenRecord && (
+                            <button type="button" onClick={() => onOpenRecord(e.id)} className="shrink-0 text-[11px] font-bold underline" style={{ color: '#0F2D52' }}>Open</button>
+                          )}
+                        </div>
+                        {e.restricted ? (
+                          <p className="mt-1" style={{ color: '#475569' }}>
+                            Diagnosed {e.diagnosis_year ?? '—'} · {e.barangay_name || 'another barangay'}{e.outcome_status ? ` · Outcome: ${e.outcome_status}` : ''}
+                            <span className="block mt-0.5 text-[10px]" style={{ color: '#94A3B8' }}>Handled by a barangay outside your access, so details are not shown.</span>
+                          </p>
+                        ) : (
+                          <>
+                            <p className="mt-1" style={{ color: '#475569' }}>
+                              Diagnosed {fmtDate(e.date_of_diagnosis)} · Registration group: {e.registration_group || '—'} · {e.barangay_name || '—'}
+                            </p>
+                            <p className="mt-0.5" style={{ color: '#475569' }}>
+                              {[e.anatomical_site, e.bacteriological_status].filter(Boolean).join(' · ') || '—'}
+                            </p>
+                            <p className="mt-0.5 font-semibold" style={{ color: '#0F2D52' }}>
+                              {e.outcome_status ? `Outcome: ${e.outcome_status}${e.date_of_outcome ? ` (${fmtDate(e.date_of_outcome)})` : ''}` : 'No outcome yet'}
+                            </p>
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
             )}
 
             {tab === 'history' && (

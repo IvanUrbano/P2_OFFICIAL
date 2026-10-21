@@ -12,7 +12,7 @@
  * Alerts: rule-based, generated after each pipeline run.
  *   - high_risk_escalation: forecast enters High band
  *   - critical_surge: currently High risk (the case-increase surge rule is in alertEngine.js)
- *   - low_success_rate: treatment success < 60%
+ *   (the low treatment success alert is in alertEngine.js)
  */
 
 const { neighboursOf } = require('./barangayAdjacency');
@@ -242,7 +242,7 @@ function generateAlerts({ forecasts, classifications, barangayList, prevRiskClas
       period,
       alert_type: 'high_risk_escalation',
       severity: 'warning',
-      message: `${escalated.length} barangay${escalated.length > 1 ? 's' : ''} escalated to High risk in ${period}: ${topList}${suffix}.`,
+      message: `${escalated.length} barangay${escalated.length > 1 ? 's' : ''} escalated to High risk in ${monthLabel(period)}: ${topList}${suffix}.`,
       recommendation: `Consider increasing resource allocation and surveillance in affected barangays. Review TB case management and contact tracing activities.`,
     });
   }
@@ -259,12 +259,38 @@ function generateAlerts({ forecasts, classifications, barangayList, prevRiskClas
       period,
       alert_type: 'high_risk_escalation',
       severity: 'danger',
-      message: `${highRisk.length} barangay${highRisk.length > 1 ? 's' : ''} classified High risk for ${period}: ${topList}${suffix}.`,
+      message: `${highRisk.length} barangay${highRisk.length > 1 ? 's' : ''} classified High risk for ${monthLabel(period)}: ${topList}${suffix}.${highRisk.some(h => h.incidence != null) ? ' Rates are cases per 100,000 over the past 12 months.' : ''}`,
       recommendation: `Immediate intervention recommended. Deploy additional DOTS workers, increase case finding frequency, and ensure drug supply adequacy.`,
     });
   }
 
   return alerts;
+}
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+  'August', 'September', 'October', 'November', 'December'];
+
+/** '2026-10-01' → 'October 2026' for alert text; anything else is returned unchanged. */
+function monthLabel(period) {
+  const m = /^(\d{4})-(\d{2})/.exec(String(period ?? ''));
+  const month = m ? Number(m[2]) : 0;
+  return month >= 1 && month <= 12 ? `${MONTH_NAMES[month - 1]} ${m[1]}` : String(period);
+}
+
+/**
+ * Rate shown next to each High Risk barangay in the alert text: the Random Forest's
+ * rolling_12m_incidence (annualised cases per 100k over the 12 months before the
+ * assessment) — the rate the GIS page explains. Not incidence_per_100k, a legacy
+ * latest-month × 12 figure that reads 0 for a High barangay with no cases that month.
+ *
+ * @param {Array} riskScores - this run's risk score rows ({ barangay_name, features })
+ * @returns {Object<string, number|null>}
+ */
+function alertRateByName(riskScores) {
+  return Object.fromEntries((riskScores || []).map((r) => {
+    const rate = r.features?.rolling_12m_incidence;
+    return [r.barangay_name, rate != null && Number.isFinite(Number(rate)) ? Number(rate) : null];
+  }));
 }
 
 /**
@@ -426,5 +452,7 @@ module.exports = {
   computeHistoricalBias,
   classifyTrend,
   generateAlerts,
+  alertRateByName,
+  monthLabel,
   storeResults,
 };

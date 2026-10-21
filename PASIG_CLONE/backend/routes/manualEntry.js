@@ -218,6 +218,7 @@ router.post('/manual-entry', authenticate, authorizeRoles('admin', 'staff'), asy
       identity = candidate
         ? await resolveMatch(client, recRes.rows[0], resolution, req.user.id, {
           authorizeExistingCase: (existing) => assertCaseAction(req.user, scopeForMatch, ACTIONS.CASE_EDIT, existing),
+          source: 'manual',
         })
         : { resolution: null, caseNo: newIdentity.caseNo };
 

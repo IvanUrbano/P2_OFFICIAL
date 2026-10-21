@@ -33,6 +33,7 @@ const {
   computeHistoricalBias,
   classifyTrend,
   generateAlerts,
+  alertRateByName,
   storeResults,
 } = require('./scoring');
 const { getPopulationMap, calculateAnnualizedIncidence, GEOJSON_REFERENCE_YEAR } = require('./populationService');
@@ -647,9 +648,9 @@ async function runPipeline({
         // first run — no previous data
       }
 
-      // The classifier returns classes only; the incidence shown in the alert text
-      // comes from this run's risk scores.
-      const incidenceByName = Object.fromEntries(riskScores.map(r => [r.barangay_name, r.incidence_per_100k]));
+      // The classifier returns classes only; the rate shown in the alert text is this run's
+      // 12-month rate (see alertRateByName), not the legacy latest-month figure.
+      const incidenceByName = alertRateByName(riskScores);
       alerts = generateAlerts({
         forecasts: forecastResults,
         classifications: classifyResults.map(c => ({ ...c, incidence_per_100k: incidenceByName[c.barangay_name] ?? null })),
