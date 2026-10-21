@@ -2,208 +2,229 @@
  * Template-based, per-chart interpretations (deterministic — no AI model). Each function
  * takes the exact data a chart draws, so the sentence always matches what is shown,
  * including any active filters. Returns null when there isn't enough data to say anything.
+ *
+ * Kept to one or two sentences. Where a check on the data supports it (trend, risk, outcomes,
+ * forecast) the sentence says what the figures mean; it never states a cause, and never a
+ * prediction the forecast model did not make. Without enough data for the check it falls back
+ * to a short factual line.
  */
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const pct = (part, whole) => (whole ? Math.round((part / whole) * 1000) / 10 : 0);
 const sum = (arr) => arr.reduce((s, v) => s + v, 0);
 const avg = (arr) => (arr.length ? sum(arr) / arr.length : 0);
-const titleCase = (s) => String(s || '').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/* -- Comparison with older records --
- * Each chart function accepts an optional `previous` argument describing the same measure
- * for an earlier period ({ label, items } for lists, { label, value } for totals). With no
- * previous data the sentence is simply left out - nothing is ever compared with a made-up zero. */
-const signed = (n) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${fmt(Math.abs(n))}`;
+/** Same number as TREATMENT_SUCCESS_TARGET in BACKEND/tbinsight/targets.js (alerts and reports). */
+export const TREATMENT_SUCCESS_TARGET = 85;
 
-/** "Compared with 2025, cases are 12% higher (80 -> 90)." for a total against an earlier total. */
-function totalChange(now, then, label, noun = 'cases') {
-  if (then == null || !Number.isFinite(Number(then))) return '';
-  if (Number(then) === 0) return now > 0 ? `${label} had no recorded ${noun}, so there is no earlier figure to compare with.` : '';
-  const change = Math.round(((now - then) / then) * 100);
-  const phrase = Math.abs(change) < 3 ? 'about the same' : `${Math.abs(change)}% ${change > 0 ? 'higher' : 'lower'}`;
-  return `Compared with ${label}, ${noun} are ${phrase} (${fmt(then)} → ${fmt(now)}).`;
+/* Functions accept an optional `previous` describing the same measure for an earlier period
+ * ({ label, items } for lists, { label, value } for totals). With no previous data the
+ * comparison is left out - nothing is ever compared with a made-up zero. */
+
+/** "YYYY-MM" from a "YYYY-MM" key or a date value, read on local parts like the charts do. */
+function ymOf(value) {
+  if (value == null || value === '') return null;
+  const s = String(value);
+  if (/^\d{4}-\d{2}$/.test(s)) return s;
+  const d = value instanceof Date ? value : new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+function shiftYm(ym, months) {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, m - 1 + months, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+/** "Jul–Sep 2026", or "Nov 2025–Jan 2026" across a year end. */
+function spanLabel(first, last) {
+  const [y1, m1] = first.split('-').map(Number);
+  const [y2, m2] = last.split('-').map(Number);
+  if (first === last) return `${MONTHS[m1 - 1]} ${y1}`;
+  return y1 === y2 ? `${MONTHS[m1 - 1]}–${MONTHS[m2 - 1]} ${y2}` : `${MONTHS[m1 - 1]} ${y1}–${MONTHS[m2 - 1]} ${y2}`;
 }
 
-/** Monthly trend: direction over the last few months, peak month, latest month. */
-export function trendInsight(points, { valueKey = 'cases', labelKey = 'label', unit = 'cases', window = 3, previous = null } = {}) {
-  const pts = (points || []).filter((p) => p && p[valueKey] != null);
-  if (pts.length < 2) return null;
-  const v = (p) => Number(p[valueKey]);
-  const last = pts[pts.length - 1];
-  const peak = pts.reduce((a, b) => (v(b) > v(a) ? b : a));
-  let direction = '';
-  if (pts.length >= window * 2) {
-    const recent = avg(pts.slice(-window).map(v));
-    const before = avg(pts.slice(-window * 2, -window).map(v));
-    if (before > 0) {
-      const change = Math.round(((recent - before) / before) * 100);
-      direction = Math.abs(change) < 5
-        ? `Cases were about the same in the last ${window} months as in the ${window} months before. `
-        : `The last ${window} months averaged ${Math.abs(change)}% ${change > 0 ? 'more' : 'fewer'} cases than the ${window} months before. `;
+/**
+ * Is the gap between two case counts larger than chance? Under an unchanged rate each case
+ * is equally likely to fall in either period, so the gap is compared with its counting noise
+ * (normal approximation to the binomial, continuity-corrected, two-sided 5%).
+ */
+function beyondChance(now, then) {
+  const n = now + then;
+  return n > 0 && (Math.abs(now - then) - 1) / Math.sqrt(n) > 1.96;
+}
+
+/**
+ * Monthly trend. Compares the last 3 complete months with the same months a year earlier
+ * and says whether the difference is beyond normal variation; when the rise or fall from the
+ * 3 months before also happened in the same months last year, it is called the usual seasonal
+ * pattern. `history` ([{ month, cases }], any number of rows per month) is the same scope
+ * across all years, needed for the year-earlier months; the current calendar month is left
+ * out because it is not finished. Falls back to the latest and busiest month.
+ */
+export function trendInsight(points, { valueKey = 'cases', labelKey = 'label', monthKey = 'month', history = null, previous = null, today = new Date() } = {}) {
+  const current = ymOf(today);
+  const series = (points || [])
+    .filter((p) => p && p[valueKey] != null && !p.missing)
+    .map((p) => ({ ym: ymOf(p[monthKey]), label: p[labelKey], v: Number(p[valueKey]) }))
+    .filter((p) => !p.ym || p.ym < current);
+  if (series.length === 0) return null;
+
+  const byMonth = new Map();
+  for (const r of history || series.map((p) => ({ month: p.ym, cases: p.v }))) {
+    const ym = ymOf(r.month);
+    if (ym) byMonth.set(ym, (byMonth.get(ym) || 0) + Number(r.cases || 0));
+  }
+  const total = (months) => (months.every((m) => byMonth.has(m)) ? sum(months.map((m) => byMonth.get(m))) : null);
+
+  const last = series[series.length - 1];
+  if (last.ym) {
+    const recent = [-2, -1, 0].map((k) => shiftYm(last.ym, k));
+    const yearBefore = recent.map((m) => shiftYm(m, -12));
+    const now = total(recent);
+    const then = total(yearBefore);
+    if (now != null && then) {
+      const change = Math.round(((now - then) / then) * 100);
+      const nowSpan = spanLabel(recent[0], recent[2]);
+      const thenSpan = spanLabel(yearBefore[0], yearBefore[2]);
+      const amount = Math.abs(change) < 1 ? 'about the same as' : `${Math.abs(change)}% ${change > 0 ? 'more than' : 'fewer than'}`;
+      if (beyondChance(now, then)) {
+        return `${nowSpan} had ${fmt(now)} cases, ${amount} ${thenSpan} (${fmt(then)}). The difference is larger than normal variation, so this is a real ${change > 0 ? 'increase' : 'decrease'}.`;
+      }
+      let text = `${nowSpan} had ${fmt(now)} cases, ${amount} ${thenSpan} (${fmt(then)}), within normal variation.`;
+      const before = total(recent.map((m) => shiftYm(m, -3)));
+      const beforeThen = total(yearBefore.map((m) => shiftYm(m, -3)));
+      if (before && beforeThen) {
+        const move = (now - before) / before;
+        const moveThen = (then - beforeThen) / beforeThen;
+        if (Math.abs(move) >= 0.1 && Math.abs(moveThen) >= 0.1 && Math.sign(move) === Math.sign(moveThen)) {
+          text += ` The ${move > 0 ? 'rise' : 'drop'} from the months before also happened last year, so it is the usual seasonal pattern.`;
+        }
+      }
+      return text;
     }
   }
-  const lowest = pts.reduce((a, b) => (v(b) < v(a) ? b : a));
-  const total = sum(pts.map(v));
-  let text = `${direction}${peak[labelKey]} had the most ${unit} (${fmt(v(peak))}) and ${lowest[labelKey]} the fewest (${fmt(v(lowest))}). The latest month, ${last[labelKey]}, had ${fmt(v(last))}`;
-  const mean = avg(pts.map(v));
-  if (mean > 0) {
-    const gap = Math.round(((v(last) - mean) / mean) * 100);
-    text += Math.abs(gap) < 5 ? ', close to the monthly average' : `, ${Math.abs(gap)}% ${gap > 0 ? 'above' : 'below'} the monthly average of ${fmt(Math.round(mean))}`;
+
+  // A report passes the same date range a year earlier as one total: compare all months shown with it.
+  if (previous && Number(previous.value) > 0) {
+    const now = sum((points || []).filter((p) => p && p[valueKey] != null && !p.missing).map((p) => Number(p[valueKey])));
+    const then = Number(previous.value);
+    const change = Math.round(((now - then) / then) * 100);
+    const amount = Math.abs(change) < 1 ? 'about the same as' : `${Math.abs(change)}% ${change > 0 ? 'more than' : 'fewer than'}`;
+    return beyondChance(now, then)
+      ? `This period had ${fmt(now)} cases, ${amount} ${previous.label} (${fmt(then)}). The difference is larger than normal variation, so this is a real ${change > 0 ? 'increase' : 'decrease'}.`
+      : `This period had ${fmt(now)} cases, ${amount} ${previous.label} (${fmt(then)}), within normal variation.`;
   }
-  text += `. Across the ${pts.length} months shown there were ${fmt(total)} ${unit} in total.`;
-  const cmp = previous && totalChange(total, previous.value, previous.label, unit);
-  return cmp ? `${text} ${cmp}` : text;
+
+  const peak = series.reduce((a, b) => (b.v > a.v ? b : a));
+  return peak === last
+    ? `${last.label} had ${fmt(last.v)} cases, the highest month shown.`
+    : `${last.label} had ${fmt(last.v)} cases; the highest month shown was ${peak.label} (${fmt(peak.v)}).`;
 }
 
-/** Ranking (barangays, facilities): highest, lowest, and how concentrated the top 3 are. */
+/** Ranking (barangays, facilities): the leader's share and how concentrated the top 3 are. */
 export function rankingInsight(items, { nameKey = 'name', valueKey = 'Cases', noun = 'barangay', unit = 'cases', previous = null } = {}) {
   const rows = (items || []).filter((r) => r && Number(r[valueKey]) > 0 && r[nameKey] && r[nameKey] !== 'Unknown');
   if (rows.length === 0) return null;
   const sorted = [...rows].sort((a, b) => Number(b[valueKey]) - Number(a[valueKey]));
   const total = sum(sorted.map((r) => Number(r[valueKey])));
   const top = sorted[0];
-  const low = sorted[sorted.length - 1];
-  let text = `${top[nameKey]} has the most ${unit}: ${fmt(top[valueKey])} (${pct(top[valueKey], total)}% of those shown).`;
-  if (sorted.length > 1) text += ` ${low[nameKey]} has the fewest (${fmt(low[valueKey])}).`;
+  let text = `${top[nameKey]} has the most ${unit} (${fmt(top[valueKey])}, ${pct(top[valueKey], total)}% of the total).`;
   if (sorted.length >= 6) {
     const top3 = sum(sorted.slice(0, 3).map((r) => Number(r[valueKey])));
-    text += ` The top 3 ${noun === 'barangay' ? 'barangays' : `${noun}s`} account for ${pct(top3, total)}% of all ${unit} shown.`;
+    text += ` The top 3 ${noun === 'barangay' ? 'barangays' : `${noun === 'facility' ? 'facilities' : `${noun}s`}`} account for ${pct(top3, total)}%.`;
   }
   const prevRows = previous ? (previous.items || []).filter((r) => r && Number(r[valueKey]) > 0 && r[nameKey] && r[nameKey] !== 'Unknown') : [];
-  if (previous && prevRows.length > 0) {
-    const prevSorted = [...prevRows].sort((a, b) => Number(b[valueKey]) - Number(a[valueKey]));
-    const prevTotal = sum(prevSorted.map((r) => Number(r[valueKey])));
-    const prevTop = prevSorted[0];
-    text += prevTop[nameKey] === top[nameKey]
-      ? ` ${top[nameKey]} also had the most ${unit} in ${previous.label} (${fmt(prevTop[valueKey])}).`
-      : ` In ${previous.label}, ${prevTop[nameKey]} had the most ${unit} (${fmt(prevTop[valueKey])}); ${top[nameKey]} has since moved to the top.`;
-    const prevMap = new Map(prevSorted.map((r) => [r[nameKey], Number(r[valueKey])]));
-    const moves = sorted.filter((r) => prevMap.has(r[nameKey])).map((r) => ({ name: r[nameKey], diff: Number(r[valueKey]) - prevMap.get(r[nameKey]) }));
-    const up = moves.reduce((a, b) => (b.diff > (a?.diff ?? 0) ? b : a), null);
-    const down = moves.reduce((a, b) => (b.diff < (a?.diff ?? 0) ? b : a), null);
-    if (up && up.diff > 0) text += ` The largest increase since ${previous.label} is in ${up.name} (${signed(up.diff)}).`;
-    if (down && down.diff < 0) text += ` The largest decrease is in ${down.name} (${signed(down.diff)}).`;
-    const cmp = totalChange(total, prevTotal, previous.label, unit);
-    if (cmp) text += ` ${cmp.replace(/^Compared with [^,]+, /, 'Overall, ')}`;
+  if (prevRows.length > 0) {
+    const prevTop = [...prevRows].sort((a, b) => Number(b[valueKey]) - Number(a[valueKey]))[0];
+    if (prevTop[nameKey] !== top[nameKey]) text += ` In ${previous.label}, ${prevTop[nameKey]} had the most (${fmt(prevTop[valueKey])}).`;
   }
   return text;
 }
 
 /** Incidence ranking (cases per 100,000) — only when a year with population data is selected. */
-export function incidenceInsight(items, { nameKey = 'name', valueKey = 'Incidence', previous = null } = {}) {
+export function incidenceInsight(items, { nameKey = 'name', valueKey = 'Incidence' } = {}) {
   const rows = (items || []).filter((r) => r && r[valueKey] != null);
   if (rows.length < 2) return null;
   const sorted = [...rows].sort((a, b) => b[valueKey] - a[valueKey]);
-  let text = `${sorted[0][nameKey]} has the highest rate (${sorted[0][valueKey]} cases per 100,000 people). ${sorted[sorted.length - 1][nameKey]} has the lowest (${sorted[sorted.length - 1][valueKey]} per 100,000). These rates account for population size.`;
-  const prevRows = previous ? (previous.items || []).filter((r) => r && r[valueKey] != null) : [];
-  if (prevRows.length > 1) {
-    const prevMap = new Map(prevRows.map((r) => [r[nameKey], Number(r[valueKey])]));
-    const prevTop = [...prevRows].sort((a, b) => b[valueKey] - a[valueKey])[0];
-    text += prevTop[nameKey] === sorted[0][nameKey]
-      ? ` ${prevTop[nameKey]} also had the highest rate in ${previous.label} (${prevTop[valueKey]} per 100,000).`
-      : ` In ${previous.label} the highest rate was in ${prevTop[nameKey]} (${prevTop[valueKey]} per 100,000).`;
-    const own = prevMap.get(sorted[0][nameKey]);
-    if (own != null) text += ` ${sorted[0][nameKey]} is ${Math.abs(sorted[0][valueKey] - own) < 0.5 ? 'unchanged' : `${sorted[0][valueKey] > own ? 'up' : 'down'} from ${own}`} since then.`;
-  }
-  return text;
+  const top = sorted[0];
+  const low = sorted[sorted.length - 1];
+  return `${top[nameKey]} has the highest rate (${top[valueKey]} cases per 100,000 people) and ${low[nameKey]} the lowest (${low[valueKey]}).`;
 }
 
-/** Share of a total across categories (sex, age group): largest and smallest groups. */
+/** Share of a total across categories (sex, age group): the largest group, with last year's share. */
 export function shareInsight(items, { nameKey = 'name', valueKey = 'value', noun = 'group', format = (s) => s, previous = null } = {}) {
   const rows = (items || []).filter((r) => r && Number(r[valueKey]) > 0 && r[nameKey] !== 'Unknown');
   if (rows.length === 0) return null;
   const total = sum(rows.map((r) => Number(r[valueKey])));
-  const sorted = [...rows].sort((a, b) => Number(b[valueKey]) - Number(a[valueKey]));
-  const [first, second] = sorted;
-  const label = noun === 'age group' ? `The ${format(first[nameKey])} age group` : format(first[nameKey]);
-  let text = `${label} accounts for the largest share: ${fmt(first[valueKey])} cases (${pct(first[valueKey], total)}%).`;
-  if (second) text += ` Next is ${format(second[nameKey])} (${pct(second[valueKey], total)}%).`;
-  if (second && rows.length >= 3) text += ` Together the two largest ${noun === 'age group' ? 'age groups' : `${noun}s`} make up ${pct(Number(first[valueKey]) + Number(second[valueKey]), total)}% of cases.`;
+  const [first, second] = [...rows].sort((a, b) => Number(b[valueKey]) - Number(a[valueKey]));
   const prevRows = previous ? (previous.items || []).filter((r) => r && Number(r[valueKey]) > 0 && r[nameKey] !== 'Unknown') : [];
+  const prevTotal = sum(prevRows.map((r) => Number(r[valueKey])));
+  const was = prevRows.find((r) => r[nameKey] === first[nameKey]);
+  const share = `${pct(first[valueKey], total)}%${was && prevTotal ? `; ${pct(was[valueKey], prevTotal)}% in ${previous.label}` : ''}`;
+  if (noun === 'age group') {
+    return `The ${format(first[nameKey])} age group has the most cases (${share})${second ? `, followed by ${format(second[nameKey])} (${pct(second[valueKey], total)}%)` : ''}.`;
+  }
+  if (noun === 'sex') return `${format(first[nameKey])} patients make up most cases (${share}).`;
+  return `${format(first[nameKey])} accounts for the largest share of cases (${share}).`;
+}
+
+/**
+ * Treatment outcomes. With `tsr` ({ rate, cohortYear }: the cohort Treatment Success Rate the
+ * page shows) it is judged against the programme target; the target is defined on a treatment
+ * cohort, so it is never applied to the mix of recorded outcomes. Then the loss-to-follow-up
+ * share, with last year's when known.
+ */
+export function outcomeInsight(items, { nameKey = 'name', valueKey = 'Cases', scope = 'recorded outcomes', tsr = null, previous = null } = {}) {
+  const rows = (items || []).filter((r) => r && Number(r[valueKey]) > 0);
+  if (rows.length === 0) return null;
+  const total = sum(rows.map((r) => Number(r[valueKey])));
+  const get = (list, ...names) => sum(list.filter((r) => names.includes(String(r[nameKey]).toUpperCase())).map((r) => Number(r[valueKey])));
+  const rate = tsr && tsr.rate != null && Number.isFinite(Number(tsr.rate)) ? Number(tsr.rate) : null;
+  let text;
+  if (rate != null) {
+    const gap = Math.round((TREATMENT_SUCCESS_TARGET - rate) * 10) / 10;
+    const cohort = tsr.cohortYear ? `The ${tsr.cohortYear} treatment cohort` : 'The treatment cohort';
+    text = `${cohort} reached ${rate}% success, ${gap > 0 ? `${gap} points below` : 'meeting'} the ${TREATMENT_SUCCESS_TARGET}% target.`;
+  } else {
+    text = `${pct(get(rows, 'CURED', 'TREATMENT COMPLETED'), total)}% of ${scope} were cured or completed treatment.`;
+  }
+  const lNow = pct(get(rows, 'LOST TO FOLLOW-UP'), total);
+  const prevRows = previous ? (previous.items || []).filter((r) => r && Number(r[valueKey]) > 0) : [];
   if (prevRows.length > 0) {
-    const prevTotal = sum(prevRows.map((r) => Number(r[valueKey])));
-    const prevSorted = [...prevRows].sort((a, b) => Number(b[valueKey]) - Number(a[valueKey]));
-    const prevOf = (name) => prevRows.find((r) => r[nameKey] === name);
-    const was = prevOf(first[nameKey]);
-    const lead = (name) => (noun === 'age group' ? `the ${format(name)} age group` : format(name));
-    if (prevSorted[0][nameKey] === first[nameKey]) {
-      const before = pct(was[valueKey], prevTotal);
-      const now = pct(first[valueKey], total);
-      const diff = Math.round((now - before) * 10) / 10;
-      text += ` It was also the largest in ${previous.label}, when it made up ${before}%, so its share is ${Math.abs(diff) < 1 ? 'about the same' : `${diff > 0 ? 'up' : 'down'} ${Math.abs(diff)} percentage points`}.`;
-    } else {
-      text += ` In ${previous.label} the largest was ${lead(prevSorted[0][nameKey])} (${pct(prevSorted[0][valueKey], prevTotal)}%), so the leading ${noun} has changed.`;
-    }
-    const shifts = rows.filter((r) => prevOf(r[nameKey]))
-      .map((r) => ({ name: r[nameKey], diff: pct(r[valueKey], total) - pct(prevOf(r[nameKey])[valueKey], prevTotal) }))
-      .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
-    if (shifts[0] && Math.abs(shifts[0].diff) >= 3 && shifts[0].name !== first[nameKey]) {
-      text += ` The biggest shift in share is ${lead(shifts[0].name)}, ${shifts[0].diff > 0 ? 'up' : 'down'} ${Math.abs(Math.round(shifts[0].diff * 10) / 10)} percentage points.`;
-    }
-    const cmp = totalChange(total, prevTotal, previous.label);
-    if (cmp) text += ` ${cmp.replace(/^Compared with [^,]+, /, 'Overall, ')}`;
+    const lThen = pct(get(prevRows, 'LOST TO FOLLOW-UP'), sum(prevRows.map((r) => Number(r[valueKey]))));
+    const word = Math.abs(lNow - lThen) < 1 ? 'about the same as' : lNow > lThen ? 'up from' : 'down from';
+    text += ` Loss to follow-up is ${lNow}% of ${scope}, ${word} ${lThen}% in ${previous.label}.`;
+  } else if (lNow) {
+    text += ` ${lNow}% of ${scope} were lost to follow-up.`;
   }
   return text;
 }
 
-/**
- * Final treatment outcomes only; current case status is a separate measure.
- * `scope` says what the percentages cover (default "recorded outcomes"); `note` adds a closing
- * sentence, e.g. to explain why this differs from the cohort-based Treatment Success Rate.
- */
-export function outcomeInsight(items, { nameKey = 'name', valueKey = 'Cases', scope = 'recorded outcomes', note = '', previous = null } = {}) {
-  const rows = (items || []).filter((r) => r && Number(r[valueKey]) > 0);
-  if (rows.length === 0) return null;
-  const total = sum(rows.map((r) => Number(r[valueKey])));
-  const get = (...names) => sum(rows.filter((r) => names.includes(String(r[nameKey]).toUpperCase())).map((r) => Number(r[valueKey])));
-  const top = [...rows].sort((a, b) => Number(b[valueKey]) - Number(a[valueKey]))[0];
-  const success = get('CURED', 'TREATMENT COMPLETED');
-  const ltfu = get('LOST TO FOLLOW-UP');
-  let text = `${titleCase(top[nameKey])} is the most common outcome (${pct(top[valueKey], total)}% of ${scope}). `;
-  text += `${pct(success, total)}% of ${scope} were cured or completed treatment`;
-  if (ltfu) text += `; ${pct(ltfu, total)}% were lost to follow-up`;
-  const died = get('DIED');
-  text += '.';
-  if (died) text += ` ${pct(died, total)}% of ${scope} ended in death.`;
-  const prevRows = previous ? (previous.items || []).filter((r) => r && Number(r[valueKey]) > 0) : [];
-  if (prevRows.length > 0) {
-    const prevTotal = sum(prevRows.map((r) => Number(r[valueKey])));
-    const prevGet = (...names) => sum(prevRows.filter((r) => names.includes(String(r[nameKey]).toUpperCase())).map((r) => Number(r[valueKey])));
-    const sNow = pct(success, total);
-    const sThen = pct(prevGet('CURED', 'TREATMENT COMPLETED'), prevTotal);
-    const sDiff = Math.round((sNow - sThen) * 10) / 10;
-    text += ` In ${previous.label}, ${sThen}% were cured or completed treatment, so success is ${Math.abs(sDiff) < 1 ? 'about the same' : `${sDiff > 0 ? 'up' : 'down'} ${Math.abs(sDiff)} percentage points`}.`;
-    const lThen = pct(prevGet('LOST TO FOLLOW-UP'), prevTotal);
-    const lNow = pct(ltfu, total);
-    if (lThen || lNow) {
-      const lDiff = Math.round((lNow - lThen) * 10) / 10;
-      text += ` Loss to follow-up went from ${lThen}% to ${lNow}%${Math.abs(lDiff) < 1 ? ' (little change)' : lDiff > 0 ? ' (worse)' : ' (better)'}.`;
-    }
-  }
-  return `${text}${note ? ` ${note}` : ''}`;
-}
-
-/** Risk classification counts. Risk levels are relative (Pasig's barangays ranked by incidence: bottom 40% Low, top third High). */
+/** Risk levels: how many barangays are High, and whether they are the same ones as in the previous assessment. */
 export function riskInsight(rows, { nameKey = 'name', classKey = 'risk_class', previous = null } = {}) {
   const list = (rows || []).filter((r) => r && r[classKey] && String(r[classKey]).toLowerCase() !== 'no data');
   if (list.length === 0) return null;
-  const count = (c) => list.filter((r) => String(r[classKey]).toLowerCase() === c).length;
-  const high = list.filter((r) => String(r[classKey]).toLowerCase() === 'high').map((r) => r[nameKey]);
-  let text = `Among ${list.length} assessed barangays, ${count('high')} are high risk, ${count('medium')} moderate risk, and ${count('low')} low risk.`;
-  if (high.length) text += ` High risk includes ${high.slice(0, 4).join(', ')}${high.length > 4 ? ` and ${high.length - 4} more` : ''}.`;
-  text += ' These levels compare barangays within Pasig; they are not official national risk levels.';
-  const prevList = previous ? (previous.items || []).filter((r) => r && r[classKey] && String(r[classKey]).toLowerCase() !== 'no data') : [];
-  if (prevList.length > 0) {
-    const level = (r) => String(r[classKey]).toLowerCase();
-    const prevHigh = prevList.filter((r) => level(r) === 'high').map((r) => r[nameKey]);
-    const nowHigh = new Set(high);
-    const newlyHigh = high.filter((n) => !prevHigh.includes(n));
-    const noLonger = prevHigh.filter((n) => !nowHigh.has(n) && list.some((r) => r[nameKey] === n));
-    text += ` In the ${previous.label} assessment, ${prevHigh.length} barangay${prevHigh.length === 1 ? ' was' : 's were'} high risk (now ${high.length}).`;
-    if (newlyHigh.length) text += ` Newly high risk: ${newlyHigh.slice(0, 4).join(', ')}${newlyHigh.length > 4 ? ` and ${newlyHigh.length - 4} more` : ''}.`;
-    if (noLonger.length) text += ` No longer high risk: ${noLonger.slice(0, 4).join(', ')}${noLonger.length > 4 ? ` and ${noLonger.length - 4} more` : ''}.`;
-    if (!newlyHigh.length && !noLonger.length) text += ' The same barangays are high risk in both assessments.';
+  const level = (r) => String(r[classKey]).toLowerCase();
+  const names = (arr) => `${arr.slice(0, 3).join(', ')}${arr.length > 3 ? ` and ${arr.length - 3} more` : ''}`;
+  const high = list.filter((r) => level(r) === 'high').map((r) => r[nameKey]);
+  let text = high.length
+    ? `${high.length} of ${list.length} barangays are High risk: ${names(high)}.`
+    : `None of the ${list.length} assessed barangays is High risk.`;
+  const prevList = previous ? (previous.items || []).filter((r) => r && r[classKey] && level(r) !== 'no data') : [];
+  if (prevList.length > 0 && high.length) {
+    const prevHigh = new Set(prevList.filter((r) => level(r) === 'high').map((r) => r[nameKey]));
+    const stayed = high.filter((n) => prevHigh.has(n));
+    const newly = high.filter((n) => !prevHigh.has(n));
+    if (newly.length === 0) {
+      text += ` All ${high.length === 1 ? 'of them were' : `${high.length} were`} also High in the ${previous.label} assessment, so the burden stays in the same barangays.`;
+    } else if (stayed.length === 0) {
+      text += ` None of them was High in the ${previous.label} assessment.`;
+    } else {
+      text += ` ${stayed.length} ${stayed.length === 1 ? 'was' : 'were'} also High in ${previous.label}; newly High: ${names(newly)}.`;
+    }
+  } else {
+    text += ' Levels rank barangays against each other within Pasig.';
   }
   return text;
 }
@@ -220,27 +241,22 @@ export function caseTrendInsight(rows, latestPeriod) {
   return text;
 }
 
-/** Forecast chart: projected next period(s) vs the latest actual month. */
-export function forecastInsight(points, { actualKey = 'Actual', forecastKey = 'Forecast', labelKey = 'label', methodLabel, previous = null } = {}) {
+/** Forecast: the projected total against the same months a year earlier, else against the latest actual month. */
+export function forecastInsight(points, { actualKey = 'Actual', forecastKey = 'Forecast', labelKey = 'label', previous = null } = {}) {
   const actual = (points || []).filter((p) => p[actualKey] != null);
   const fc = (points || []).filter((p) => p[forecastKey] != null);
   if (fc.length === 0) return null;
+  const projected = Math.round(sum(fc.map((p) => Number(p[forecastKey]))));
+  const span = fc.length > 1 ? `${fc[0][labelKey]}–${fc[fc.length - 1][labelKey]}` : fc[0][labelKey];
+  if (previous && Number(previous.value) > 0) {
+    const change = Math.round(((projected - previous.value) / previous.value) * 100);
+    const amount = Math.abs(change) < 3 ? 'about the same as' : `${Math.abs(change)}% ${change > 0 ? 'more than' : 'fewer than'}`;
+    return `The model projects about ${fmt(projected)} cases for ${span}, ${amount} ${previous.label} (${fmt(previous.value)}).`;
+  }
   const lastActual = actual[actual.length - 1];
-  const first = fc[0];
-  let text = `About ${fmt(first[forecastKey])} cases are projected for ${first[labelKey]}`;
-  if (fc.length > 1) text += `, and ${fmt(sum(fc.map((p) => Number(p[forecastKey]))))} across ${fc.length} months through ${fc[fc.length - 1][labelKey]}`;
-  if (lastActual && Number(lastActual[actualKey]) > 0) {
-    const change = Math.round(((first[forecastKey] - lastActual[actualKey]) / lastActual[actualKey]) * 100);
-    text += `, ${Math.abs(change) < 5 ? 'about the same as' : `${Math.abs(change)}% ${change > 0 ? 'above' : 'below'}`} the latest actual month (${lastActual[labelKey]}: ${fmt(lastActual[actualKey])})`;
-  }
-  text += '.';
-  if (previous && previous.value != null) {
-    const cmp = totalChange(sum(fc.map((p) => Number(p[forecastKey]))), previous.value, previous.label);
-    if (cmp) text += ` ${cmp.replace(' cases are ', ' the projected cases are ')}`;
-  }
-  if (methodLabel) text += ` This uses ${methodLabel}.`;
-  return `${text} Forecasts are estimates based on past cases.`;
+  return `The model projects about ${fmt(projected)} cases for ${span}${lastActual ? `; the latest actual month, ${lastActual[labelKey]}, had ${fmt(lastActual[actualKey])}` : ''}.`;
 }
+
 
 /** Month-by-month forecast table: use the underlying period order, not the user's current table sort. */
 export function monthByMonthForecastInsight(rows) {

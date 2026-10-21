@@ -12,7 +12,7 @@ import DashboardWelcomeInsightsSection from '../components/DashboardWelcomeInsig
 import OutcomeStatusPanel from '../components/OutcomeStatusPanel';
 import RecommendedFilters from '../components/RecommendedFilters';
 import ChartInsight from '../components/ChartInsight';
-import { trendInsight, riskInsight, shareInsight, outcomeInsight, forecastInsight } from '../utils/chartInsights';
+import { trendInsight, riskInsight, outcomeInsight, forecastInsight } from '../utils/chartInsights';
 import { getDashboardInsight } from '../services/insightService';
 import {
   dataYears, yearSpan, barangayNames, scopeByBarangay, scopeMonthly, filterQuery, recommendFilters,
@@ -960,48 +960,46 @@ export default function DashboardPage() {
 
   const outcomeChartData = outcomeChart.data;
 
+  // Every month of the same barangay scope across all years, so the trend interpretation can
+  // compare the latest months with the same months a year earlier even when a year is chosen.
+  const trendHistory = useMemo(
+    () => scopeByBarangay(monthlyAll, scopeNames).map((r) => ({ month: r.month, cases: Number(r.case_count || 0) })),
+    [monthlyAll, scopeNames]
+  );
+
   /* ── Older records for the interpretations ──
    * Built only when a year is chosen: the figures of the year before, under the same barangay
    * scope. A request that failed (null) or an empty year gives no comparison, never a zero. */
   const olderRecords = useMemo(() => {
     if (!filters.year || !previousScoped || previousScoped.year !== String(Number(filters.year) - 1)) return null;
     const label = previousScoped.year;
-    const demo = previousScoped.demographics ? scopeByBarangay(previousScoped.demographics, scopeNames) : null;
-    const sexTotals = {};
-    const ageTotals = {};
-    (demo || []).forEach((r) => {
-      if (r.sex === 'Male' || r.sex === 'Female') sexTotals[r.sex] = (sexTotals[r.sex] || 0) + Number(r.total || 0);
-      const age = r.age_group || 'Unknown';
-      ageTotals[age] = (ageTotals[age] || 0) + Number(r.total || 0);
-    });
     const outcomeTotals = {};
     (previousScoped.outcomes ? scopeByBarangay(previousScoped.outcomes, scopeNames) : []).forEach((r) => {
       const st = normalizeDisplayOutcome(r.outcome_status);
       if (st) outcomeTotals[st] = (outcomeTotals[st] || 0) + Number(r.total || 0);
     });
-    // Cases in the same calendar months of the year before (for the trend and the forecast).
-    const monthTotal = (monthStarts) => {
-      const wanted = new Set(monthStarts);
-      return scopeByBarangay(monthlyAll, scopeNames)
-        .filter((r) => r.month && wanted.has(String(r.month).slice(0, 7)))
-        .reduce((t, r) => t + Number(r.case_count || 0), 0);
-    };
-    const shiftBack = (key) => `${Number(key.slice(0, 4)) - 1}${key.slice(4, 7)}`;
-    const trendMonths = trendChartData.filter((d) => !d.missing).map((d) => shiftBack(String(d.month).slice(0, 7)));
-    const trendTotal = trendMonths.length ? monthTotal(trendMonths) : null;
-    const forecastMonths = forecastChartData.filter((d) => d.projected != null).map((d) => shiftBack(String(d.month).slice(0, 7)));
-    const forecastTotal = forecastMonths.length ? monthTotal(forecastMonths) : null;
-    const nonEmpty = (obj) => Object.keys(obj).length > 0;
     return {
       label,
-      trend: trendTotal ? { label, value: trendTotal } : null,
-      forecast: forecastTotal ? { label: `the same months of ${label}`, value: forecastTotal } : null,
-      sex: demo && nonEmpty(sexTotals) ? { label, items: Object.entries(sexTotals).map(([name, value]) => ({ name, value })) } : null,
-      age: demo && nonEmpty(ageTotals) ? { label, items: Object.entries(ageTotals).map(([age_group, total]) => ({ age_group, total })) } : null,
-      outcome: nonEmpty(outcomeTotals) ? { label, items: Object.entries(outcomeTotals).map(([name, Cases]) => ({ name, Cases })) } : null,
+      outcome: Object.keys(outcomeTotals).length > 0 ? { label, items: Object.entries(outcomeTotals).map(([name, Cases]) => ({ name, Cases })) } : null,
       risk: previousScoped.risk ? { label: `${label}`, items: scopeByBarangay(previousScoped.risk, scopeNames, 'name') } : null,
     };
-  }, [filters.year, previousScoped, scopeNames, monthlyAll, trendChartData, forecastChartData]);
+  }, [filters.year, previousScoped, scopeNames]);
+
+  // Actual cases in the same calendar months a year before the projected ones, for the forecast
+  // interpretation. Month identity on local parts, as in trendChartData. Null unless every one of
+  // those months has records, so a partial year is never compared.
+  const forecastLastYear = useMemo(() => {
+    const ym = (v) => { const d = new Date(v); return `${d.getFullYear()}-${d.getMonth()}`; };
+    const byMonth = new Map();
+    trendHistory.forEach((r) => { if (r.month) byMonth.set(ym(r.month), (byMonth.get(ym(r.month)) || 0) + r.cases); });
+    const wanted = forecastChartData.filter((d) => d.projected != null && d.month).map((d) => {
+      const m = new Date(d.month);
+      return ym(new Date(m.getFullYear() - 1, m.getMonth(), 1));
+    });
+    if (wanted.length === 0 || !wanted.every((k) => byMonth.has(k))) return null;
+    const year = new Date(forecastChartData.find((d) => d.projected != null).month).getFullYear() - 1;
+    return { label: `the same months of ${year}`, value: wanted.reduce((t, k) => t + byMonth.get(k), 0) };
+  }, [trendHistory, forecastChartData]);
 
   /* ── Recent Alerts ──
    * Reads persisted alert rows only — the Dashboard never evaluates or
@@ -1358,7 +1356,7 @@ export default function DashboardPage() {
             {/* TB Cases Trend */}
             <SectionCard
               title="TB case trend"
-              insight={trendInsight(trendChartData, { valueKey: 'cases', previous: olderRecords?.trend })}
+              insight={trendInsight(trendChartData, { valueKey: 'cases', history: trendHistory })}
               description="Monthly tuberculosis cases based on recorded TB data."
               action="View analytics"
               actionTo="/analytics"
@@ -1463,7 +1461,6 @@ export default function DashboardPage() {
             {/* Age Group Distribution */}
             <SectionCard
               title="Age distribution"
-              insight={shareInsight(ageData, { nameKey: 'age_group', valueKey: 'total', noun: 'age group', previous: olderRecords?.age })}
               description="TB cases by age group."
             >
               {failed.demographics ? (
@@ -1497,7 +1494,6 @@ export default function DashboardPage() {
             {/* Sex Distribution */}
             <SectionCard
               title="Sex distribution"
-              insight={shareInsight(Object.entries(sexData).map(([name, value]) => ({ name, value })), { noun: 'sex', previous: olderRecords?.sex })}
               description="Male vs female TB case distribution."
             >
               {failed.demographics ? (
@@ -1562,7 +1558,7 @@ export default function DashboardPage() {
                 nameKey: 'outcome',
                 valueKey: 'count',
                 scope: filtersActive ? 'recorded outcomes in this view' : 'recorded outcomes across all years',
-                note: 'The Treatment Success Rate above is measured on a single treatment-start year, so the two figures differ.',
+                tsr: failed.tsr ? null : { rate: successRate.rate, cohortYear: successRate.cohortYear },
               })}
               description="Final treatment outcomes, with cases still diagnosed or on treatment shown separately."
               action="View analytics"
@@ -1647,7 +1643,7 @@ export default function DashboardPage() {
                         <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 bg-[#2E6FAF]" aria-hidden="true" />Reported</span>
                         <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 border-t-2 border-dashed border-[#0D9488]" aria-hidden="true" />Forecasted</span>
                       </div>
-                      <ChartInsight text={forecastInsight(forecastChartData, { actualKey: 'actual', forecastKey: 'projected', methodLabel: forecastSummary.tierLabel, previous: olderRecords?.forecast })} plain />
+                      <ChartInsight text={forecastInsight(forecastChartData, { actualKey: 'actual', forecastKey: 'projected', previous: forecastLastYear })} plain />
                     </div>
                   )}
                 </>

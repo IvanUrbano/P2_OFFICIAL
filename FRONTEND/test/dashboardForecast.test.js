@@ -95,15 +95,16 @@ test('unassessed barangays sort last and are never shown as Low', () => {
 });
 
 // ---- Outcome sentence: say what its percentage covers ----
-test('the outcome sentence states its scope and can point out the success-rate difference', () => {
+test('the outcome sentence states its scope, and judges only the cohort rate against the target', () => {
   const items = [
     { name: 'CURED', Cases: 2883 }, { name: 'TREATMENT COMPLETED', Cases: 8984 }, { name: 'LOST TO FOLLOW-UP', Cases: 1021 },
     { name: 'DIED', Cases: 255 }, { name: 'TREATMENT FAILED', Cases: 15 }, { name: 'NOT EVALUATED', Cases: 5 }, { name: 'EXCLUDED', Cases: 29 },
   ];
   const plain = outcomeInsight(items);
-  assert.match(plain, /90% of recorded outcomes were cured or completed treatment; 7\.7% were lost to follow-up\./);
+  assert.equal(plain, '90% of recorded outcomes were cured or completed treatment. 7.7% of recorded outcomes were lost to follow-up.');
+  assert.doesNotMatch(plain, /target/);
 
-  const dash = outcomeInsight(items, { scope: 'recorded outcomes across all years', note: 'The Treatment Success Rate above covers a single treatment-start year, so the two figures differ.' });
-  assert.match(dash, /90% of recorded outcomes across all years/);
-  assert.match(dash, /Treatment Success Rate above covers a single treatment-start year/);
+  const dash = outcomeInsight(items, { scope: 'recorded outcomes across all years', tsr: { rate: '84.2', cohortYear: 2025 } });
+  assert.match(dash, /^The 2025 treatment cohort reached 84.2% success, 0.8 points below the 85% target\./);
+  assert.match(dash, /7\.7% of recorded outcomes across all years were lost to follow-up/);
 });

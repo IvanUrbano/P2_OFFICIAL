@@ -277,7 +277,7 @@ function buildReport(data, config) {
     const perMonth = total / monthsInReport;
     if (forecast.forecastedCases != null && perMonth > 0) {
       const pctDiff = Math.round(((forecast.forecastedCases - perMonth) / perMonth) * 100);
-      interpret('forecast', `${forecast.forecastedCases} case${forecast.forecastedCases === 1 ? ' is' : 's are'} projected for ${forecast.period}, ${Math.abs(pctDiff) < 5 ? 'about the same as' : `${Math.abs(pctDiff)}% ${pctDiff > 0 ? 'above' : 'below'}`} this report's monthly average of ${Number(perMonth.toFixed(1))}. Forecasts are estimates based on past cases.`);
+      interpret('forecast', `${forecast.forecastedCases} case${forecast.forecastedCases === 1 ? ' is' : 's are'} projected for ${forecast.period}, ${Math.abs(pctDiff) < 5 ? 'about the same as' : `${Math.abs(pctDiff)}% ${pctDiff > 0 ? 'above' : 'below'}`} this report's monthly average of ${Number(perMonth.toFixed(1))}.`);
     }
   }
 

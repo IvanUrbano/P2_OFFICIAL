@@ -536,6 +536,12 @@ export default function Analytics() {
 
   /* ── TB Cases Trend (monthly, current selection) ── */
   const trendData = useMemo(() => buildMonthlySeries(filteredCases), [filteredCases]);
+  // This year's and last year's months under the same filters, so the trend interpretation can
+  // compare the latest months with the same months a year earlier.
+  const trendHistory = useMemo(
+    () => buildMonthlySeries([...filteredCases, ...previousYearCases]).map((r) => ({ month: r.key, cases: r.Cases })),
+    [filteredCases, previousYearCases]
+  );
 
   /* ── Previous year trend (for YoY comparison) ──
      Built from the FULL `allCases` list — never from `filteredCases`,
@@ -719,21 +725,15 @@ export default function Analytics() {
       const raw = (c.outcome_status || '').toUpperCase();
       return OUTCOME_ORDER.includes(raw) ? raw : null;
     });
-    const monthKeys = new Set(trendData.map((r) => r.key.slice(5)));
-    const sameMonths = previousYearCases.filter((c) => {
-      const d = new Date(c.date_of_diagnosis);
-      return !isNaN(d.getTime()) && monthKeys.has(String(d.getMonth() + 1).padStart(2, '0'));
-    });
     return {
       label,
-      trend: { label, value: sameMonths.length },
       barangay: { label, items: Object.entries(count((c) => c.barangay_name)).map(([name, Cases]) => ({ name, Cases })) },
       facility: { label, items: Object.entries(count((c) => c.screening_facility || c.treatment_facility)).map(([name, Cases]) => ({ name, Cases })) },
       sex: { label, items: Object.entries(sexBy).map(([name, value]) => ({ name, value })) },
       age: { label, items: Object.entries(ageBy).map(([group, Cases]) => ({ group, Cases })) },
       outcome: { label, items: Object.entries(outcomeBy).map(([name, Cases]) => ({ name, Cases })) },
     };
-  }, [aYear, previousYearCases, trendData]);
+  }, [aYear, previousYearCases]);
 
   /* ── Active Filter Chips ── */
   const activeFilters = useMemo(() => {
@@ -1159,7 +1159,7 @@ export default function Analytics() {
               ) : (
                 <p className="text-sm text-center py-10" style={{ color: '#94A3B8' }}>No trend data available for the selected filters.</p>
               )}
-              <ChartInsight text={trendInsight(trendData, { valueKey: 'Cases', previous: olderRecords?.trend })} plain />
+              <ChartInsight text={trendInsight(trendData, { valueKey: 'Cases', monthKey: 'key', history: trendHistory })} plain />
               {compareYear && aYear && !previousComparison.available && (
                 <p className="text-[11px] mt-2 text-center" style={{ color: '#94A3B8' }}>
                   <i className="ri-information-line" /> Previous-year comparison unavailable due to incomplete {prevYearLabel} data.
@@ -1351,7 +1351,7 @@ export default function Analytics() {
                     onTreatment={statusCounts.onTreatment}
                     plain
                   />
-                  <ChartInsight text={outcomeInsight(outcomeData, { previous: olderRecords?.outcome })} plain />
+                  <ChartInsight text={outcomeInsight(outcomeData, { previous: olderRecords?.outcome, tsr: { rate: metrics.successRate, cohortYear: tsrData?.cohortYear } })} plain />
                 </div>
               </div>
             </div>
