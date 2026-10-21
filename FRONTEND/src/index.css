@@ -123,29 +123,6 @@ body {
   }
 }
 
-/* ==================== Dark Mode Overrides ==================== */
-/* Toggled via document.documentElement data-theme (src/theme.jsx).
-   Overrides the @theme tokens so CSS classes (glass-card, body, etc.)
-   follow the active mode. */
-[data-theme='dark'] {
-  --color-bg: #0B1220;
-  --color-surface: #111928;
-  --color-text: #E2E8F0;
-  --color-desc: #94A3B8;
-  --color-muted: #64748B;
-  --glass-bg: rgba(17, 25, 40, 0.85);
-  --glass-border: rgba(148, 163, 184, 0.15);
-  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-}
-
-[data-theme='dark'] ::-webkit-scrollbar-track {
-  background: rgba(148, 163, 184, 0.05);
-}
-
-[data-theme='dark'] ::-webkit-scrollbar-thumb {
-  background: rgba(96, 165, 250, 0.3);
-}
-
 /* ==================== Scrollbar (Clean Clinical Slate style) ==================== */
 ::-webkit-scrollbar {
   width: 5px;

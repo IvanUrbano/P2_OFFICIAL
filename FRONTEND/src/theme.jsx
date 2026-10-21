@@ -1,7 +1,7 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect } from 'react';
 
 /**
- * Theme system — light/dark mode with localStorage persistence.
+ * Theme tokens for the app's single (light) appearance.
  *
  * Pages consume tokens via useTheme() instead of hardcoded light colors:
  *
@@ -31,44 +31,22 @@ const palettes = {
     blob1: '#2E6FAF',
     blob2: '#4FD1C5',
   },
-  dark: {
-    pageBg: 'linear-gradient(135deg, #0B1220 0%, #0E1628 50%, #0A101E 100%)',
-    card: 'rgba(17,25,40,0.85)',
-    cardSolid: '#111928',
-    panel: 'rgba(13,20,34,0.6)',
-    border: 'rgba(148,163,184,0.10)',
-    borderStrong: 'rgba(148,163,184,0.18)',
-    text: '#E2E8F0',
-    textSecondary: '#94A3B8',
-    textMuted: '#64748B',
-    inputBg: '#0F172A',
-    inputBorder: 'rgba(148,163,184,0.22)',
-    tableStripe: 'rgba(148,163,184,0.05)',
-    chartGrid: 'rgba(148,163,184,0.14)',
-    blob1: 'rgba(46,111,175,0.35)',
-    blob2: 'rgba(79,209,197,0.25)',
-  },
 };
 
 const ThemeContext = createContext(null);
 
 export function ThemeProvider({ children }) {
-  // The app has no theme switch, so it always opens light. A 'dark' value saved by an
-  // older version (key 'tb-theme') would otherwise lock a browser in dark mode.
-  const [mode, setMode] = useState('light');
-
+  // The app has one light appearance. Clear the 'tb-theme' key an older version saved, and the
+  // data-theme attribute, so no browser is left in the removed dark mode.
   useEffect(() => {
     try {
       localStorage.removeItem('tb-theme');
     } catch { /* storage unavailable */ }
-    // Drive CSS variable overrides in index.css ([data-theme='dark'])
-    document.documentElement.setAttribute('data-theme', mode);
-  }, [mode]);
-
-  const toggle = () => setMode((m) => (m === 'dark' ? 'light' : 'dark'));
+    document.documentElement.removeAttribute('data-theme');
+  }, []);
 
   return (
-    <ThemeContext.Provider value={{ mode, toggle, t: palettes[mode] || palettes.light }}>
+    <ThemeContext.Provider value={{ mode: 'light', t: palettes.light }}>
       {children}
     </ThemeContext.Provider>
   );
