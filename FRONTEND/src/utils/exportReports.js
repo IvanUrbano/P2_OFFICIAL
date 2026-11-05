@@ -285,6 +285,7 @@ export function saveToRecentReports(reportData, filters = {}) {
     period: reportData.report?.period || '',
     coverage: reportData.report?.coverage || '',
     generatedAt: reportData.report?.generatedAt || new Date().toISOString(),
+    generatedBy: reportData.report?.generatedBy || null,
     filters: {
       reportType: filters.reportType || reportData.report?.type || 'monthly',
       year: filters.year || '',
